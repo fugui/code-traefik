@@ -17,7 +17,14 @@
 
 ---
 
-## 2. 阶段一执行指令（生成或细化 `docs/01-features/01-feature-matrix.md`）
+## 2. 核心业务背景与三大架构聚焦点
+1. **嵌入式原生 eBPF（摒弃 Keploy）**：不再使用外部 Keploy 工具链，直接在 `code-traefik-server` 中内嵌 `github.com/cilium/ebpf` 内核探针，实现内核态透明流量拦截、BPF Map 实时遥测、`monitor_pid` 防自环死锁豁免及探针自动卸载，并支持无特权环境平滑降级。
+2. **基于系统 PID 的目标进程监控（非固定 Demo 进程）**：监控对象不再是硬编码的演示进程，而是通过宿主机系统 **PID**（结合 `/proc/<pid>` 进程探查与端口规则）动态指定与纳管的真实业务进程，在内核 eBPF 层按目标 `PID` 精准过滤入站（Ingress）与出站（Egress）流量。
+3. **私有网络协议 + Protobuf 字节码通信协议**：聚焦原生 TCP 之上 **24 字节定长大端二进制帧头（Magic/Version/OpCode/Flags/Status/RequestID/PayloadLen/CRC32）+ Protobuf 序列化字节码载荷** 的私有协议栈；支持动态注册 `.pb`（`FileDescriptorSet`）字节码描述集与 `OpCode` 映射字典，实现粘包/半包流式拆帧、Protobuf 明文 JSON 解码、动态 `RequestID` 重写、`CRC32` 自愈离线回放与字段级 Diff 断言。
+
+---
+
+## 3. 阶段一执行指令（生成或细化 `docs/01-features/01-feature-matrix.md`）
 请结合具体业务诉求，在 `docs/01-features/01-feature-matrix.md` 中输出详尽、结构化、可直接指导后续架构设计与 TDD 验收的**特性清单矩阵与范围界定规范**：
 
 1. **系统愿景与核心价值主张**：明确 `业务流量监控与重放` 解决的核心业务痛点与目标用户角色。
