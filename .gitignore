@@ -1,0 +1,29 @@
+# 构建产物与可执行二进制
+code-traefik-server
+code-template-server
+*-server
+bin/
+dist/
+frontend/dist/
+frontend/node_modules/
+package-lock.json
+frontend/package-lock.json
+frontend/public/version.json
+public/version.json
+*.tsbuildinfo
+frontend/vite.config.js
+frontend/vite.config.d.ts
+
+# 本地运行时配置与日志（切勿提交含真实密钥的 config.yaml）
+config.yaml
+*.log
+*.db
+*.sqlite
+
+# 系统与编辑器临时文件
+.DS_Store
+.idea/
+*.swp
+*.swo
+tmp/
+coverage.out

@@ -1,0 +1,47 @@
+# ==============================================================================
+# Code-Traefik 微前端业务子系统配置示例
+# 使用说明：本地或生产部署时请复制为 config.yaml 并按需修改（config.yaml 已加入 .gitignore）
+# ==============================================================================
+
+server:
+  port: ":8091"                         # 子系统 HTTP 监听端口（推荐扩展模块从 :8090 起递增分配）
+  gin_log: true                         # 是否打印 Gin 请求访问日志
+  read_timeout: 120s                    # HTTP 读取超时时间
+  write_timeout: 120s                   # HTTP 写入超时时间
+  idle_timeout: 180s                    # Keep-Alive 空闲连接超时时间
+  external_url: "http://127.0.0.1:8091" # 独立运行时的外部基准地址
+
+# ── 数据库配置 (PostgreSQL，默认与 CodeBench 共享统一实例以复用用户/部门与审计表) ──
+database:
+  driver: "postgres"
+  host: "127.0.0.1"
+  port: 5432
+  user: "postgres"
+  password: "YOUR_POSTGRES_PASSWORD"    # 生产环境建议通过安全配置中心或受控文件注入，切勿提交明文密码
+  dbname: "code_shield"                 # 与平台共享的核心数据库名（业务表统一加 traefik_ 前缀防冲突）
+  sslmode: "disable"                    # 生产环境建议开启 require / verify-full
+  timezone: "Asia/Shanghai"
+  max_open_conns: 30
+  max_idle_conns: 5
+
+# ── 认证与鉴权配置 ──
+auth:
+  # 必须与 code-bench/config.yaml 中的 auth.jwt_secret 完全一致，以实现微前端无感单点鉴权！
+  # 若留空，系统启动时会自动生成一次性密码学随机密钥（仅限单实例独立调试使用）。
+  jwt_secret: ""
+  standalone_mode: true                 # 是否允许独立调试模式下的本地账密登录（生产环境嵌入 CodeBench 时建议设为 false）
+  password_login_enabled: false         # 非 standalone 模式下是否额外开放账密登录
+
+  # ── 独立部署时的可选 OAuth2 / OIDC 配置（嵌入 CodeBench 运行时由宿主统一完成 SSO，无需开启） ──
+  oauth2:
+    enabled: false
+    client_id: "code-traefik"
+    client_secret: ""
+    auth_url: ""
+    token_url: ""
+    userinfo_url: ""
+    redirect_url: ""
+    scopes:
+      - "openid"
+      - "profile"
+      - "email"
