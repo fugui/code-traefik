@@ -1,7 +1,7 @@
 # 业务流量监控与重放 (`code-traefik`) 特性清单与需求范围界定规范 (Feature Matrix & Scope)
 
 - **文档编号**：`01-feature-matrix.md`
-- **文档版本**：v2.3.0
+- **文档版本**：v2.4.0
 - **更新日期**：2026-10-28
 - **当前阶段**：阶段一：特性清单与边界明确
 - **状态**：定稿待审 (Ready for Review)
@@ -15,9 +15,10 @@
 
 为了解耦平台控制中心与业务运行机器的部署拓扑，并将内核特权与依赖收敛至最小边界，系统采用 **「控制面主框架 (`code-traefik-server`) + 独立纯二进制数据面代理 (`code-traefik-agent` / Sidecar)」同仓双二进制主从分离架构**：
 
-1. **主框架控制面（`code-traefik`，保持在 `code-bench` 大家族内）**：
-   - 作为全系统的统一操作入口与元数据大脑，提供微前端控制台（`/traefik`），独占管理**三层架构元素（子系统/域 -> 服务节点 [`ascServiceName`] -> 部署实例）** 与 **接口契约/文档（Protobuf `.pb` 描述集及 `(ascServiceName, ascOperation)` 接口映射）**，据此构建**静态系统架构图与动态服务调用拓扑**。
-   - 承担**多进程协同录制编排**、**Payload 明文解码**、**业务拓扑关系验证**与**流量重放/回归报告界面**职责：面向实际业务录制“单次聚焦执行一个业务任务、同时开启链路上多个进程录制”的高信噪比场景，主动连接本地或远端的 `Agent`，批量或按实例供给纯网络与进程级监控元信息（目标进程 PID 列表/监听端口、下游依赖 `IP:Port` 列表等，**无需下发 `.pb`**），完整收集多进程调用关系并校验架构拓扑；重放时针对选定目标进程下发二进制重放包，并对回传结果执行双层 Diff 断言。
+1. **主框架控制面（`code-traefik`，保持在 `code-bench` 大家族内，架构元素 SSOT 单一真实源）**：
+   - **架构元素权威来源与独立内建决策**：经对研发平台现有子系统的全面评估，`code-proto` 专精于 Protobuf 仓库管理、`.proto` IDL 解析、接口变更 MR 追踪与兼容性检测，不具备系统级-功能组-功能模块概念，更无运行态进程映射；`code-bench` 作为综合门户底座，主要管理全局用户（`users`）、组织（`departments`）与审计，不感知各微服务的底层进程及接口级架构关系；外部系统均无法作为可靠的单一真实源（SSOT）。因此，**`code-traefik` 独立闭环维护完整的架构元素资产与拓扑元数据**。
+   - **三级逻辑架构元素与多模块进程承载**：控制面统一纳管**三级逻辑架构元素（子系统 -> 功能组 [支持多级自嵌套树形结构] -> 功能模块）**；**核心接口契约建立在功能模块层面**（定义功能模块的**供给接口**与**依赖接口**，绑定 CROS RPC 的 `(ascServiceName, ascOperation)` 集合）；在部署运行态，明确**一个操作系统进程包含多个功能模块（`1 OS Process : N Functional Modules`）**，据此构建出高精度的**静态逻辑架构拓扑图、物理部署映射图与实测动态调用拓扑**。
+   - 承担**多进程协同录制编排**、**Payload 明文解码**、**业务拓扑关系验证**与**流量重放/回归报告界面**职责：面向实际业务录制“单次聚焦执行一个业务任务、同时开启链路上多个进程录制”的高信噪比场景，主动连接本地或远端的 `Agent`，批量供给纯网络与进程级监控元信息（目标进程 PID 列表/监听端口、下游依赖 `IP:Port` 列表等，**无需下发 `.pb`**），完整收集多进程调用关系，通过报文服务名穿透物理进程定位功能模块并校验架构拓扑；重放时针对选定目标进程下发二进制重放包，并对回传结果执行双层 Diff 断言。
 2. **流量监测与重放执行端（`code-traefik-agent` / Sidecar，支持单机多进程并发监控的独立应用）**：
    - 与主框架位于同一代码仓库（`cmd/agent`），编译为**零前端、零数据库、零 `.pb` Schema 依赖**的极简独立守护应用，每台业务机器仅需运行 **1 个 `Agent` 实例**即可**同时监控与录制该机器上的多个业务进程（`1 Agent : N Processes`）**。
    - **受控连接边界**：仅接受来自本地（`127.0.0.1`）和远程 `code-traefik` 主控发起的 **HTTP + SSE / WebSocket** 连接（*第一阶段暂不实现动态 Token 鉴权，基于部署 IP 保密假设并辅以轻量源 IP 白名单校验；预留第二阶段 Token 授权机制*）。
@@ -25,7 +26,7 @@
 
 ### 1.2 核心价值主张 (Core Value Propositions)
 1. **主从解耦与单机多进程纯二进制 Agent（`1 Agent : N Processes`, Zero Schema）**：同一代码仓构建 `code-traefik-server` 与 `code-traefik-agent`；单台业务机仅需部署 1 个零 `.pb` 依赖的轻量 `Agent` 即可并发监控本机多个 CROS RPC 进程，资源占用极低且免除跨机同步 `.pb` 的负担。
-2. **任务级多进程协同录制与业务拓扑完整性验证**：契合“单次执行单一业务任务、数据量精炼可控”的真实录制模式，支持一键开启同机/跨机多个关联进程的协同录制，一次性完整收集全链路上下游交互数据，自动还原真实业务调用关系并与静态架构图进行拓扑一致性比对验证，同时为链路上每个进程沉淀可独立回放的资产。
+2. **架构元素独立闭环 (SSOT) 与模块级拓扑一致性验证**：自主维护「子系统 -> 功能组(树) -> 功能模块」三级架构元素与「1 进程包含多模块」映射，以功能模块为核心契约主体声明接口供给与依赖；协同录制时通过报文 `ascServiceName:ascOperation` 穿透物理进程精准归属至功能模块，自动还原真实业务调用关系并与静态架构中声明的模块接口依赖进行比对验证。
 3. **100% 原生契合 `CROS RPC` 协议规范（零冗余协议扩展）**：严格遵循 CROS RPC 线性报文规范，原生解析 `"CSE.TCP" + ucProtocol` 魔术字、大端 `ullSNO` / `uiLength` / `usHeadLen` 分帧、多版本兼容会话头（自动提取 `ascServiceName`、`ascOperation`、同步/异步/Oneway 类型、状态码 `uiStatusCode`/`ullStatusCode` 与三段收发时间戳）以及扩展头（`TraceID`/`SpanID`/`FatherSpanID` 与服务端入队时间戳）。
 4. **Agent 本地嵌入式 `cilium/ebpf` 多 PID 引擎与防死锁自环豁免**：摒弃外部 Keploy 工具依赖，在 `Agent` 内挂载单套 `cilium/ebpf` 探针，基于 BPF Hash Map 实现多目标 `PID` 的 `O(1)` 并发过滤与动态热启停，内置 `monitor_pid`（Agent 自身 PID）内核态自环豁免，确保同机多进程互调录制与透传零死锁。
 5. **Agent 纯二进制闭环重放与 `ullSNO` 偏移级自愈**：利用 CROS RPC 将所有每次运行变化的协议元数据集中在 `24 + usHeadLen` 之前的头部这一结构特性，Agent 在无需 `.pb` 的前提下直接通过会话头 `(ascServiceName, ascOperation)` + Payload 二进制切片（及录制调用次序）匹配 Mock，实时覆写应答公共头 Offset `8..15` 的 `ullSNO`，并由主控完成最终字段级回归 Diff 报告。
@@ -34,17 +35,20 @@
 
 ## 2. 系统目标拓扑与工作原理 (Target Architecture Overview)
 
+### 2.1 主从运行架构与网络交互拓扑
+
 ```mermaid
 flowchart TB
     subgraph Portal["🖥️ CodeBench 微前端控制台 (/traefik | :5181 -> :8091)"]
-        UI_Arch["架构元素管理、静态架构图与动态调用拓扑画布"]
+        UI_Arch["三级架构元素管理、多模块进程映射与拓扑画布"]
         UI_Doc["Protobuf (.pb) 契约与 CROS RPC 接口文档中心"]
         UI_Monitor["流量监控操作台与 CROS RPC 四段报文解剖抽屉"]
         UI_Replay["流量重放编排台与 Protobuf 字段级 Diff 报告"]
     end
 
-    subgraph ControlPlane["🏛️ code-traefik 主框架控制面 (cmd/server :8091 | 无内核特权)"]
-        Arch_Mgr["三层架构元素与拓扑构建引擎 (域 / 服务 ascServiceName / 实例)"]
+    subgraph ControlPlane["🏛️ code-traefik 主框架控制面 (cmd/server :8091 | 架构元素 SSOT)"]
+        Arch_Mgr["三级架构元素与接口供给依赖建模 (子系统/功能组树/功能模块/接口契约)"]
+        Proc_Map["多模块进程物理映射与端口管理 (1 操作系统进程 : N 功能模块)"]
         Proto_Center["Protobuf (.pb) 解析器与 (ServiceName, Operation) 接口文档引擎"]
         Agent_Hub["Agent 连接编排器 (HTTP 下发元信息/重放 + SSE/WS 接收流量)"]
         Diff_Eng["双层回归断言引擎 (CROS RPC 状态码校验 + Protobuf 字段级 Diff)"]
@@ -60,13 +64,13 @@ flowchart TB
 
     subgraph BizHost["⚙️ 业务机器内核与被监控的多个 CROS RPC 业务进程"]
         BPF_Hook["Linux Kernel eBPF (cgroup/connect4 匹配 BPF Hash Map 中多个 target_pid)"]
-        TargetProc["同机 1..N 个目标业务进程 (PID 1..N | 各自监听端口 & 同机互调/调下游)"]
+        TargetProc["同机 1..N 个目标业务进程 (PID 1..N | 各自承载多个功能模块 & 监听端口 & 同机互调/调下游)"]
         Downstream["下游依赖 CROS RPC 服务 (离线重放时可关闭或物理隔离)"]
     end
 
     Portal == "REST API (JWT + RBAC) & 前端 SSE 实时推送" ==> ControlPlane
     ControlPlane --> Store
-    Arch_Mgr & Proto_Center --> Agent_Hub
+    Arch_Mgr & Proc_Map & Proto_Center --> Agent_Hub
 
     Agent_Hub == "1. HTTP 下发多进程监控元信息列表 (PID集合/监听端口/下游IP:Port) 或重放包" ==> Agent_Srv
     Agent_Srv == "2. SSE / WebSocket 多路复用回传带进程标签的原始 CROS RPC 二进制报文" ==> Agent_Hub
@@ -83,6 +87,91 @@ flowchart TB
     Replay_Worker -. "5b. [重放态] 本地二进制匹配 Mock + 覆写固定偏移 ullSNO 返回应答" .-> TargetProc
 ```
 
+### 2.2 架构元素来源、层级体系与多模块进程数据模型 (Architecture Data Model & Process Mapping)
+
+```mermaid
+erDiagram
+    TRAEFIK_SUBSYSTEMS ||--o{ TRAEFIK_FUNCTIONAL_GROUPS : "包含 (1:N)"
+    TRAEFIK_FUNCTIONAL_GROUPS ||--o{ TRAEFIK_FUNCTIONAL_GROUPS : "自包含多级嵌套 (parent_id 1:N)"
+    TRAEFIK_FUNCTIONAL_GROUPS ||--o{ TRAEFIK_MODULES : "包含叶子模块 (1:N)"
+    
+    TRAEFIK_MODULES ||--o{ TRAEFIK_MODULE_INTERFACES : "定义 (1:N)"
+    TRAEFIK_MODULE_INTERFACES {
+        bigint id PK "自增主键"
+        bigint module_id FK "所属功能模块"
+        string relation_type "PROVIDE (供给) | DEPEND (依赖)"
+        string service_name "CROS RPC ascServiceName (最大 64B)"
+        string operation "CROS RPC ascOperation (最大 64B)"
+        bigint proto_schema_id FK "关联 Protobuf 描述集 ID"
+        text description "接口说明"
+    }
+
+    TRAEFIK_PROCESSES ||--o{ TRAEFIK_MODULES : "部署承载 (1 进程 : N 功能模块)"
+    TRAEFIK_PROCESSES {
+        bigint id PK "自增主键"
+        bigint agent_id FK "所属 Agent / 主机"
+        string name "进程标识/应用名"
+        string host_ip "宿主机 IP"
+        int listen_port "监听端口 (该进程所含所有模块供给接口的网络入口)"
+        int pid "操作系统实时 PID"
+        string cmd_pattern "特征匹配规则 (/proc 命令行模式)"
+        string status "ONLINE | OFFLINE | RECORDING | REPLAYING"
+    }
+
+    TRAEFIK_SUBSYSTEMS {
+        bigint id PK "自增主键"
+        string code UK "子系统编码"
+        string name "子系统名称"
+        string owner "负责人"
+        text description "描述"
+    }
+
+    TRAEFIK_FUNCTIONAL_GROUPS {
+        bigint id PK "自增主键"
+        bigint subsystem_id FK "所属子系统 ID"
+        bigint parent_id FK "父功能组 ID (支持递归自包含树)"
+        string code "功能组编码"
+        string name "功能组名称"
+        int level "层级深度"
+        string path "树路径 /1/3/"
+    }
+
+    TRAEFIK_MODULES {
+        bigint id PK "自增主键"
+        bigint subsystem_id FK "冗余所属子系统 ID"
+        bigint group_id FK "所属功能组 ID"
+        bigint process_id FK "部署绑定的操作系统进程 ID"
+        string code UK "模块唯一编码"
+        string name "模块名称"
+        string owner "负责人"
+    }
+```
+
+#### 数据模型与运行映射机制详细规范：
+1. **架构元素权威来源决策 (SSOT，Single Source of Truth)**：
+   - 经全面评估，`code-proto` 专精于 Protobuf 仓库管理、`.proto` IDL 解析、接口变更 MR 追踪与兼容性检测，不具备系统级-功能组-功能模块概念，更无运行态进程映射；`code-bench` 作为综合门户底座，主要管理全局用户（`users`）、组织（`departments`）与审计，不感知各微服务的底层进程及接口级架构关系；外部系统均无法作为可靠的单一真实源。
+   - **`code-traefik` 独立闭环维护完整的架构元素资产与拓扑元数据**，所有实体均通过主框架自身的 PostgreSQL 表（冠以 `traefik_` 前缀）进行持久化，自主完成全生命周期管理与拓扑推导，杜绝跨系统不可靠依赖。
+2. **三级逻辑架构元素体系 (Logical Architecture 3-Level Hierarchy)**：
+   - **第一级：子系统 (`traefik_subsystems`)**：业务系统的顶层边界划分（如订单子系统、支付结算子系统、调度子系统），承载业务大类与管理权责；
+   - **第二级：功能组 (`traefik_functional_groups`)**：归属于子系统，**支持自包含递归嵌套（功能组包含功能组，`parent_id` 树形结构）**。支持从粗到细的多层级业务聚合（例如：结算子系统 -> 清算功能组 -> 账务处理子组），支持根据 `level` 与 `path` 进行多级树形展示；
+   - **第三级：功能模块 (`traefik_modules`)**：架构树的逻辑叶子节点，归属于特定的功能组，是承载具体业务功能、代码实现与契约边界的最小架构单元。
+3. **核心契约：接口供给与依赖均在功能模块层面 (Provided & Dependent Interfaces)**：
+   - **契约主体收敛至功能模块**：微服务的暴露与消费在本质上是以功能模块为责任主体的。`code-traefik` 明确将接口的供给（Publish）与依赖（Consume）直接绑定在功能模块层面（`traefik_module_interfaces`）；
+   - **供给接口 (`relation_type = 'PROVIDE'`)**：功能模块对外发布并实现的 CROS RPC 接口，指定其服务名 `ascServiceName` 与操作名 `ascOperation`，并关联对应的 Protobuf Schema 描述集（`.pb`）；
+   - **依赖接口 (`relation_type = 'DEPEND'`)**：功能模块在处理业务逻辑时必须调用下游的 CROS RPC 接口，指定所依赖的下游 `ascServiceName` 与 `ascOperation`；
+   - **静态逻辑依赖拓扑自动推导**：系统自动将任意模块 A 的 `DEPEND` 接口与全网模块的 `PROVIDE` 接口进行比对匹配，若模块 B 供给该接口，则自动确立逻辑调用依赖边 `Module_A -> Module_B`。
+4. **物理部署映射：一个操作系统进程包含多个功能模块 (`1 OS Process : N Functional Modules`)**：
+   - **物理承载关系**：在实际业务服务构建中，通常一个编译出的可执行文件在操作系统中作为一个进程（OS Process）启动，该进程内通过模块化组合同时集成了多个功能模块；
+   - **网络入口与物理端口**：操作系统进程拥有唯一的监听端口（`listen_port`，CROS RPC TCP 端口），**该监听端口即为该进程所包含的所有功能模块对外供给接口的网络物理入口**；该进程建立的对外 TCP 连接，即承载内部各功能模块对外发起的依赖调用；
+   - **单机多进程与 Agent 纳管**：单台业务机器仅部署 1 个 `code-traefik-agent`，该 Agent 并发纳管本机上的 1..N 个操作系统进程，各进程监听端口严格互斥。
+5. **动态报文穿透与架构一致性验证机制 (Runtime Traffic Alignment)**：
+   - **报文服务名穿透物理进程**：当 Agent 在多进程协同录制中捕获 CROS RPC 原始报文时，从会话头明文中解析出 `ascServiceName` 与 `ascOperation`；由于接口供给在功能模块层面严格唯一归属，主控能够**直接通过 `ascServiceName:ascOperation` 穿透物理进程，精准定位到接收该报文的具体目标功能模块**；
+   - **端到端调用链拼装**：结合调用发起端进程上下文与 TraceID，精准还原出发起调用的来源功能模块，拼装出**实测功能模块级调用链拓扑**：`Module_A (in Process_1) -> Module_B (in Process_2)`；
+   - **双层架构比对与设计漂移报警**：实测调用链与静态架构中功能模块声明的供给/依赖关系进行自动比对：
+     - **已验证合规依赖边（Verified）**：实测调用符合功能模块声明的依赖接口；
+     - **隐式/未声明违规调用边（Violation / Hidden Edge）**：实测发生了跨模块调用，但源模块未声明依赖该接口（架构设计漂移或违规横向调用报警）；
+     - **未触发静态依赖边（Uncovered）**：静态声明了依赖，但在本次录制场景中未被触发。
+
 ---
 
 ## 3. 需求功能矩阵 (Feature Matrix)
@@ -98,9 +187,9 @@ flowchart TB
 
 | 编号 | 特性名称 | 涉及组件 | 优先级 | 功能描述与技术规范 | TDD 验收指标 / 衡量标准 |
 | :--- | :--- | :---: | :---: | :--- | :--- |
-| **F-01** | **三层架构元素建模与多实例共享 Agent 纳管 (`traefik_domains` / `traefik_services` / `traefik_instances`)** | `Server`<br>`Frontend`<br>`Models` | **P0** | 在 `code-traefik` 主框架建立完整的业务架构资产台账，采用三层粒度建模：<br>1. **子系统/域 (`traefik_domains`)**：划分业务领域、归属负责人与描述；<br>2. **服务节点 (`traefik_services` & `traefik_service_edges`)**：定义逻辑服务并与 CROS RPC 会话头中的 **`ascServiceName`（最大 64 字节目的服务名）** 绑定，维护关联 `.pb` 契约及**声明式上下游服务依赖关系**；<br>3. **部署实例 (`traefik_instances`)**：支持**多个不同服务实例关联绑定同一台机器上的同一个 `Agent` 接入地址（`host:port`，`1 Agent : N Instances`）**，各实例独立维护自身的目标进程定位策略（`PID` 或互斥监听端口 `listen_port` / 进程名特征）及下游真实 `IP:Port` 列表，支持 URL 分页与多维筛选。 | 1. 三层架构元素及依赖边的 CRUD、`ascServiceName`/编码唯一性冲突拦截（`409`）、同一 `Agent` 下多实例注册与监听端口冲突校验单测 100% 通过。<br>2. 删除仍处于录制或重放中的服务实例时安全拦截提示。 |
-| **F-02** | **Protobuf (`.pb`) 契约注册与 CROS RPC 接口文档中心 (`traefik_proto_schemas`)** | `Server`<br>`Frontend`<br>`Models` | **P0** | 集中纳管 CROS RPC 接口层（`RPC_IDL_MSG_TYPE_PB`）使用的 Protobuf 编译描述集（`FileDescriptorSet` / `.pb`）并生成结构化接口文档：<br>1. 支持上传/更新 `.pb` 二进制描述文件（严格校验体积上限与 `protodesc` 结构合法性）；<br>2. **原生 `(ascServiceName, ascOperation)` 契约映射**：支持从 `.pb` 的 `ServiceDescriptor` / `MethodDescriptor` 自动推导或显式配置 **`(ascServiceName, ascOperation)` -> `(Req Message FullName, Rsp Message FullName)`** 映射表；<br>3. **结构化接口文档浏览**：自动反射提取服务接口列表、入参/出参 Message 嵌套树、字段名、Tag 编号、数据类型（含 `repeated`、`map`、`enum` 枚举值）及接口说明。 | 1. 上传合法 `.pb` 文件后，接口文档 API 准确返回按 `ascServiceName` / `ascOperation` 组织的接口清单与字段结构树；损坏或超限文件立即返回 `400`。<br>2. 未配置 `.pb` 或 `isPacked=0` 的报文在监控时自动保留完整 CROS RPC 头解析并降级展示 Payload Raw Hex，不中断链路。 |
-| **F-03** | **可视化架构图、多进程实测调用拓扑收集与一致性验证 (`Architecture & Topology Verification`)** | `Server`<br>`Frontend` | **P0** | 基于架构元素、接口契约与多进程同时录制的 CROS RPC 报文构建双视角拓扑及关系验证：<br>1. **静态架构图**：根据子系统、服务节点（`ascServiceName`）、部署实例与依赖边生成可视化架构关系图；<br>2. **动态拓扑收集与架构一致性验证**：当针对一次业务任务同时开启多个进程录制后，自动融合各进程捕获的 CROS RPC 报文头（`ascServiceName`、`ascOperation`、收发时间戳、状态码）与 DOTR 扩展头（`TraceID`/`SpanID`/`FatherSpanID`）还原**完整实测调用链拓扑**，并与静态架构声明的依赖边自动比对（区分展示：**已验证吻合的依赖边**、**实测新发现但架构未声明的隐藏调用边**、**未触发的静态边**），支持点击节点一键跳转接口文档、录制批次或重放台。 | 1. 输入包含上中下游多进程协同录制流量的数据集（含一条未在静态架构声明的隐藏调用），拓扑验证接口准确还原完整调用边并标记出隐藏依赖差异。<br>2. 拓扑画布严格使用 `--color-*` 语义 Token 适配亮/暗双模主题。 |
+| **F-01** | **三级架构元素独立建模、模块接口供给依赖契约与多模块进程纳管 (`traefik_subsystems` / `traefik_functional_groups` / `traefik_modules` / `traefik_processes` / `traefik_module_interfaces`)** | `Server`<br>`Frontend`<br>`Models` | **P0** | 在 `code-traefik` 主框架建立完整的业务架构资产台账（SSOT 单一真实源，不依赖外部系统），采用三级逻辑架构与多模块进程映射：<br>1. **第一级：子系统 (`traefik_subsystems`)**：业务系统顶层划分，维护编码 `code`、名称 `name`、负责人 `owner` 与描述；<br>2. **第二级：功能组 (`traefik_functional_groups`)**：归属子系统，**支持自包含递归嵌套（功能组包含功能组，`parent_id` 树形结构）**，维护所属子系统、父功能组、深度 `level`、树路径 `path` 与排序；<br>3. **第三级：功能模块 (`traefik_modules`)**：架构逻辑叶子节点，归属于特定功能组与子系统，承载具体业务功能与契约边界；<br>4. **核心契约：模块级接口供给与依赖 (`traefik_module_interfaces`)**：**接口的供给与依赖全部建立在功能模块层面**：<br>   - **供给接口 (`PROVIDE`)**：功能模块声明对外暴露的 CROS RPC 服务与接口集合（绑定 `ascServiceName` 与 `ascOperation`，关联 `.pb` 契约）；<br>   - **依赖接口 (`DEPEND`)**：功能模块在业务逻辑中需要向下游调用的 CROS RPC 接口集合（指定下游 `ascServiceName` 与 `ascOperation`）；<br>   - **静态逻辑拓扑自动推导**：系统自动将模块 A 的 `DEPEND` 接口与模块 B 的 `PROVIDE` 接口进行比对匹配，自动计算生成功能模块间的静态调用依赖边（`Module_A -> Module_B`）；<br>5. **物理部署映射：操作系统进程承载多模块 (`traefik_processes`)**：<br>   - **1 个操作系统进程包含多个功能模块 (`1 OS Process : N Functional Modules`)**：每个功能模块关联绑定其部署运行的 OS 进程；<br>   - **物理网络入口**：操作系统进程拥有唯一的监听端口（`listen_port`），**该监听端口即为该进程内所有功能模块供给接口的网络物理入口**；<br>   - **单机多进程与端口互斥**：支持同一台业务机上的同一个 `Agent` 统一纳管本机上的多个 OS 进程，各进程独立维护 `PID` 或特征模式（`/proc` 反查），监听端口严格校验互斥。 | 1. 三级架构元素、自嵌套功能组树、功能模块及进程映射的 CRUD 单测通过率 100%；递归删除非空功能组或已绑定进程的功能模块时提供安全拦截；<br>2. 模块接口供给与依赖联合唯一校验（同一模块下同向接口不重）、模块间静态依赖边自动推导单测 100% 通过；<br>3. 一个操作系统进程绑定多个功能模块的映射关系与端口冲突校验测试 100% 通过；删除正处于录制或重放中的进程时安全拦截提示。 |
+| **F-02** | **Protobuf (`.pb`) 契约注册与 CROS RPC 接口文档中心 (`traefik_proto_schemas`)** | `Server`<br>`Frontend`<br>`Models` | **P0** | 集中纳管 CROS RPC 接口层（`RPC_IDL_MSG_TYPE_PB`）使用的 Protobuf 编译描述集（`FileDescriptorSet` / `.pb`）并生成结构化接口文档，与功能模块接口紧密绑定：<br>1. 支持上传/更新 `.pb` 二进制描述文件（严格校验体积上限 `<= 4MB` 与 `protodesc` 结构合法性）；<br>2. **原生 `(ascServiceName, ascOperation)` 契约映射**：支持从 `.pb` 的 `ServiceDescriptor` / `MethodDescriptor` 自动推导或显式配置 **`(ascServiceName, ascOperation)` -> `(Req Message FullName, Rsp Message FullName)`** 映射表，直接关联至功能模块的供给或依赖接口；<br>3. **结构化接口文档浏览**：自动反射提取服务接口列表、入参/出参 Message 嵌套树、字段名、Tag 编号、数据类型（含 `repeated`、`map`、`enum` 枚举值）及接口说明，支持从功能模块详情一键穿透查阅关联接口定义。 | 1. 上传合法 `.pb` 文件后，接口文档 API 准确返回按 `ascServiceName` / `ascOperation` 组织的接口清单与字段结构树；损坏或超限文件立即返回 `400`。<br>2. 未配置 `.pb` 或 `isPacked=0` 的报文在监控时自动保留完整 CROS RPC 头解析并降级展示 Payload Raw Hex，不中断链路。 |
+| **F-03** | **可视化架构图、多进程实测调用拓扑收集与一致性验证 (`Architecture & Topology Verification`)** | `Server`<br>`Frontend` | **P0** | 基于架构元素、接口契约与多进程协同录制的 CROS RPC 报文构建双视角拓扑及架构一致性验证：<br>1. **静态架构双重视角**：<br>   - **逻辑架构视角**：根据「子系统 -> 功能组树 -> 功能模块」树形层级展开，基于功能模块的供给接口与依赖接口自动绘制模块间逻辑有向调用网络；<br>   - **物理部署视角**：展示「Agent (主机) -> 操作系统进程 -> 内部承载的 1..N 个功能模块」的部署归属拓扑图；<br>2. **实测动态拓扑穿透与架构一致性验证**：当针对一次业务任务同时开启多个进程录制后，自动融合各进程捕获的 CROS RPC 报文头（`ascServiceName`、`ascOperation`、收发时间戳、状态码）与 DOTR 扩展头（`TraceID`/`SpanID`/`FatherSpanID`）：<br>   - **报文穿透物理进程定位功能模块**：利用报文头携带的 `(ascServiceName, ascOperation)` 供给契约穿透物理进程，精准映射至对应的目的**功能模块**；<br>   - **还原端到端实测模块调用链**：结合调用方进程上下文还原出完整的 `Module_A (in Process_1) -> Module_B (in Process_2)` 调用链；<br>   - **架构一致性比对断言**：将实测调用链与静态架构声明的模块依赖关系自动比对，三色标注：**已验证吻合的合规依赖边（Verified）**、**实测发现但架构未声明的隐式越权调用边（Violation / Hidden Edge，架构漂移报警）**、**未触发的静态依赖边（Uncovered）**。 | 1. 输入包含上中下游多进程协同录制流量的数据集（含一条未在静态架构声明的隐藏调用），拓扑验证接口准确通过 `ascServiceName` 穿透至功能模块还原调用边并标记出隐藏依赖差异。<br>2. 拓扑画布严格使用 `--color-*` 语义 Token 适配亮/暗双模主题。 |
 
 ---
 
@@ -109,7 +198,7 @@ flowchart TB
 | 编号 | 特性名称 | 涉及组件 | 优先级 | 功能描述与技术规范 | TDD 验收指标 / 衡量标准 |
 | :--- | :--- | :---: | :---: | :--- | :--- |
 | **F-04** | **同仓独立 `Agent/Sidecar` 应用与 HTTP + SSE/WebSocket 受控信道** | `Server`<br>`Agent` | **P0** | 同一代码仓库下提供 `cmd/server`（主控）与 `cmd/agent`（独立采集重放应用）双构建入口：<br>1. `Agent` 运行于业务机器，只接受来自本地（`127.0.0.1`）和远程 `code-traefik` 主控的连接；<br>2. **通信协议**：采用 **HTTP REST**（主控下发心跳探活、宿主机进程探查、监控元信息配置、重放任务启停）+ **SSE / WebSocket**（Agent 向主控实时流式推送捕获的 CROS RPC 报文事件与重放结果）；<br>3. **第一阶段连接控制**：首期暂不启用 Token 认证（视部署 IP 保密），内置轻量级源 IP 白名单中间件（`--allow-ips`，默认仅放行 `127.0.0.1` 及指定的 `code-traefik` 主机 IP），并在协议头预留鉴权扩展位（标注 `TODO(security)`）。 | 1. 本地集成单测中（强制监听 `127.0.0.1`），`Server` 通过 HTTP 下发指令并建立 SSE/WS 流，100% 实时接收 `Agent` 事件并支持断线状态感知。<br>2. 非白名单源 IP 请求访问 `Agent` 控制接口时返回 `403 Forbidden`。 |
-| **F-05** | **多进程监控元信息编排供给与目标进程动态定位** | `Server`<br>`Agent` | **P0** | 支持主控按录制任务一次性勾选**同机或跨机的多个服务实例（多进程）**批量启动协同录制，或单独增删某个进程的监控：<br>1. **多进程元信息列表 (`[]ProcessMonitorSpec`)**：主控按所属 `Agent` 聚合下发各目标进程的实例 ID、`PID`（或监听端口 `listen_port` / 进程名，由 Agent 在本机扫描 `/proc` 自动反查各自实时 `PID`）、监听入口地址及下游依赖 `IP:Port` 列表（**无需下发 `.pb`**）；<br>2. **多路复用打标回传**：Agent 通过单条 SSE/WebSocket 信道回传所有活跃监控进程的原始二进制包，外层携带轻量信封头（`session_id`、`instance_id`、`pid`、`direction`、源/目地址与采集时间戳），精确区分不同进程流量；<br>3. **远程进程批量探查**：支持主控请求 Agent 扫描探查业务机器上的候选进程列表与各绑定 `PID` 的实时存活状态。 | 1. 主控向同一 Agent 一次性下发 3 个不同监听端口的目标进程元信息，Agent 准确解析出 3 个进程的真实 `PID` 并同时进入录制态；动态停止其中 1 个进程不影响其余 2 个进程持续采集。<br>2. 任一目标进程退出或端口不存在时，Agent 精准上报对应实例的诊断状态。 |
+| **F-05** | **多进程监控元信息编排供给与目标进程动态定位** | `Server`<br>`Agent` | **P0** | 支持主控按录制任务一次性勾选**同机或跨机的多个操作系统进程（及其包含的功能模块）**批量启动协同录制，或单独增删某个进程的监控：<br>1. **多进程元信息列表 (`[]ProcessMonitorSpec`)**：主控按所属 `Agent` 聚合下发各目标进程的进程 ID、`PID`（或监听端口 `listen_port` / 进程名模式，由 Agent 在本机扫描 `/proc` 自动反查各自实时 `PID`）、监听入口地址及下游依赖 `IP:Port` 列表（**无需下发 `.pb`**）；<br>2. **多路复用打标回传**：Agent 通过单条 SSE/WebSocket 信道回传所有活跃监控进程的原始二进制包，外层携带轻量信封头（`session_id`、`process_id`、`pid`、`direction`、源/目地址与采集时间戳），精确区分不同进程流量；<br>3. **远程进程批量探查**：支持主控请求 Agent 扫描探查业务机器上的候选进程列表与各绑定 `PID` 的实时存活状态。 | 1. 主控向同一 Agent 一次性下发 3 个不同监听端口的目标进程元信息，Agent 准确解析出 3 个进程的真实 `PID` 并同时进入录制态；动态停止其中 1 个进程不影响其余 2 个进程持续采集。<br>2. 任一目标进程退出或端口不存在时，Agent 精准上报对应进程的诊断状态。 |
 | **F-06** | **Agent 远程连接 Token 授权安全加固（阶段二演进）** | `Server`<br>`Agent`<br>`Frontend` | **P1** | *（第一阶段暂不实现，列为阶段二演进）* 在 `code-traefik-agent` 中启用访问授权 Token 机制：<br>1. Agent 通过环境变量或安全配置加载高强度 Token（严禁代码硬编码）；<br>2. 主控纳管实例时配置对应凭据，所有 HTTP 控制指令与 SSE/WebSocket 握手均强制校验 `X-Traefik-Agent-Token`（常量时间比对 `subtle.ConstantTimeCompare`）。 | 启用 Token 开关后，未携带 Token 或携带错误 Token 的连接请求 100% 返回 `401 Unauthorized`。 |
 
 ---
@@ -127,7 +216,7 @@ flowchart TB
 
 | 编号 | 特性名称 | 涉及组件 | 优先级 | 功能描述与技术规范 | TDD 验收指标 / 衡量标准 |
 | :--- | :--- | :---: | :---: | :--- | :--- |
-| **F-09** | **任务级多进程协同录制、调用关系拼装与主控解码落盘 (`traefik_recording_sessions` & `traefik_traffic_records`)** | `Agent`<br>`Server`<br>`Models` | **P0** | 面向“单次执行单一业务任务、同时录制链路多进程”的高信噪比采集场景，引入**录制任务批次 (`traefik_recording_sessions`)**：<br>1. **多进程并发纯二进制收集**：录制任务激活后，关联的一个或多个 `Agent` 同时捕获所有参与进程的入站（`INGRESS`）与出站下游（`EGRESS`）**原始二进制报文**，打上进程/实例标签流式回传主控；<br>2. **全链路拼装与主控 `.pb` 解码**：主控解析三层协议头，同连接内按 **`ullSNO`** 配对 `REQ` 与 `RSP`（兼容 `ucReqType=3` Oneway 及 `RSP_SEG` 分片），利用扩展头 `TraceID`/`SpanID`/`FatherSpanID`（及跨进程调用地址/时序）将该业务任务下多个进程的入站与出站报文拼接为完整端到端业务调用图谱，并结合 `.pb` 字典反序列化为 **Protobuf JSON 明文**；<br>3. **单次多进程录制、按节点独立回放**：同一录制批次沉淀的多进程报文按 `session_id` + `instance_id` 结构化落盘，既可用于全局业务关系验证，亦可从中任选任意单个进程抽取其 `INGRESS` 激励与 `EGRESS` Mock 独立发起 `F-10` 离线重放。 | 1. 创建包含上下游 2 个进程的协同录制批次并触发 1 次业务请求，两个进程的入站/出站二进制帧 100% 按各自 `instance_id` 归档至同一 `session_id`，主控准确完成 `.pb` 解码与跨进程链路关联。<br>2. 支持按录制批次、服务节点、实例、`ascServiceName`、`ascOperation`、`ullSNO`、`TraceID` URL 分页检索。 |
+| **F-09** | **任务级多进程协同录制、调用关系拼装与主控解码落盘 (`traefik_recording_sessions` & `traefik_traffic_records`)** | `Agent`<br>`Server`<br>`Models` | **P0** | 面向“单次执行单一业务任务、同时录制链路多进程”的高信噪比采集场景，引入**录制任务批次 (`traefik_recording_sessions`)**：<br>1. **多进程并发纯二进制收集**：录制任务激活后，关联的一个或多个 `Agent` 同时捕获所有参与进程的入站（`INGRESS`）与出站下游（`EGRESS`）**原始二进制报文**，打上进程标签流式回传主控；<br>2. **全链路拼装与功能模块定位**：主控解析三层协议头，同连接内按 **`ullSNO`** 配对 `REQ` 与 `RSP`（兼容 `ucReqType=3` Oneway 及 `RSP_SEG` 分片），利用扩展头 `TraceID`/`SpanID`/`FatherSpanID`（及跨进程调用地址/时序）将该业务任务下多个进程的入站与出站报文拼接为完整端到端业务调用链，**根据报文头 `ascServiceName:ascOperation` 将流量精准穿透定位到具体的供给/依赖功能模块**，并结合 `.pb` 字典反序列化为 **Protobuf JSON 明文**；<br>3. **单次多进程录制、按进程独立回放**：同一录制批次沉淀的多进程报文按 `session_id` + `process_id` 结构化落盘，既可用于全局功能模块业务关系验证，亦可从中任选任意单个进程抽取其 `INGRESS` 激励与 `EGRESS` Mock 独立发起 `F-10` 离线重放。 | 1. 创建包含上下游 2 个进程的协同录制批次并触发 1 次业务请求，两个进程的入站/出站二进制帧 100% 按各自 `process_id` 归档至同一 `session_id`，主控准确完成功能模块穿透定位、`.pb` 解码与跨进程链路关联。<br>2. 支持按录制批次、子系统、功能模块、进程、`ascServiceName`、`ascOperation`、`ullSNO`、`TraceID` URL 分页检索。 |
 | **F-10** | **主控重放编排与 Agent 纯二进制实际重放 (`traefik_replay_tasks`)** | `Server`<br>`Agent`<br>`Frontend` | **P0** | 在**真实下游 CROS RPC 服务已关闭或物理隔离**的前提下，由主控编排二进制重放包、**`Agent` 在业务机本地实际执行重放**：<br>1. 主控将待重放的入站 CROS RPC **原始二进制请求报文**、关联的下游录制 **二进制 Mock 应答集合**（含必要的 `RPC_MNG_HEAD_S` 握手应答与业务 `RSP`/`RSP_SEG` 二进制帧）及目标监听端口下发给目标 `Agent`（无需下发 `.pb`）；<br>2. `Agent` 在业务机器本地向目标进程监听端口建立连接（自动完成必要的管理消息二进制握手）并写入重放请求字节流；<br>3. 当目标进程向下游 `IP:Port` 发起调用时，被 `Agent` 本地 eBPF/代理透明拦截并由本地二进制 Mock 引擎闭环应答；<br>4. `Agent` 收集目标进程返回的实际二进制应答报文（支持单包 `RSP` 或多段 `RSP_SEG`）与下游 Mock 命中明细原样回传主控。 | 在完全关闭模拟下游服务的情况下，通过主控触发重放任务，Agent 仅凭二进制重放包完成连接握手、请求注入与下游 Mock 拦截应答，命中率达 100%，目标进程正常返回业务应答。 |
 | **F-11** | **Agent 零 `.pb` 二进制 Mock 匹配与固定偏移 `ullSNO` 自愈** | `Agent`<br>(`pkg/replay`) | **P0** | 利用 CROS RPC **“所有协议层动态变化字段均位于 `24 + usHeadLen` 之前的头部，业务 Payload 位于 `24 + usHeadLen` 之后”** 的线性结构特征，使 Agent 在**完全不知晓 `.pb` 内容**的前提下实现智能 Mock 自愈：<br>1. **管理消息握手自动应答**：对目标进程连接下游初期发送的 `RPC_MNG_HEAD_S`（`ucMsgType=5/6/7` 鉴权/UUID 协商请求），自动匹配对应二进制管理应答并覆写匹配的 `ullSNO`；<br>2. **固定头寻址 + Payload 字节切片匹配**：提取下游请求会话头明文的 **`(ascServiceName, ascOperation)`** 与偏移 `24 + usHeadLen` 之后的 **Payload 原始二进制切片哈希** 匹配 Mock（天然跳过每次运行变化的公共头 `ullSNO`、会话头时间戳/UUID/幂等序号及扩展头动态 Trace/时间戳；若同一接口 Payload 含动态业务参数未精确命中，则按同接口录制调用次序兜底匹配）；<br>3. **固定偏移实时自愈重写**：命中二进制 Mock 应答帧后，Agent 直接在字节数组 Offset `8..15` 覆写当前下游请求的实际大端 **`ullSNO`**（并按固定偏移同步回填会话头 `aucTraceBuff` / `ullClientSendTime`）后写回目标进程 Socket。 | 即使目标进程在回放时生成全新的随机 `ullSNO`（如 `0x000000010009A2B3`）、新 TraceID 与新发送时间戳发起下游调用，Agent 在零 `.pb` 依赖下依然 100% 命中二进制 Mock 并返回携带一致 `ullSNO` 的应答帧，成功唤醒业务客户端。 |
 | **F-12** | **CROS RPC 协议头级 + Protobuf 字段级双层回归 Diff 断言器** | `Server`<br>`Frontend` | **P0** | 主控端收到 `Agent` 回传的重放实际应答报文（`Actual`）后，与录制基线报文（`Expected`）执行双层回归比对：<br>1. **第一层（CROS RPC 协议头与状态码校验）**：比对 `ucMsgType`、应答头返回码 `uiStatusCode` / `ullStatusCode`、分片序号 `usRspMsgNo`、`isPacked` 及 Payload 原始字节；<br>2. **第二层（Protobuf 语义字段级 Diff）**：当 Payload 字节存在差异时，自动反序列化为 JSON 结构树逐字段计算 `[]FieldDiff{FieldPath, ExpectedValue, ActualValue}`，自动豁免会话头/扩展头固有动态时间戳（`ullServerRecvTime`、`ullServerSendTime`、`ullServerEnqueueTime`）并支持配置忽略业务层动态字段。 | 当目标进程业务逻辑发生突变（如应答 `uiStatusCode` 变为非零错误码，或 Protobuf 字段 `discount_cents` 由 `6500` 变为 `6600`）时，重放报告精准判定 `FAILED` 并定位具体变异的头字段或 Protobuf 字段路径。 |
@@ -138,8 +227,8 @@ flowchart TB
 
 | 编号 | 特性名称 | 涉及组件 | 优先级 | 功能描述与技术规范 | TDD 验收指标 / 衡量标准 |
 | :--- | :--- | :---: | :---: | :--- | :--- |
-| **F-13** | **一体化微前端控制台（架构拓扑 / 接口文档 / CROS RPC 解剖台 / 重放台）** | `Frontend`<br>`Server` | **P0** | 保持在 `code-bench` 微前端体系内（暴露 `./App` 与 `./menu`，兼容嵌入与独立双模运行），提供四大核心操作视图：<br>1. **架构与调用拓扑中心**：三层架构元素管理、服务架构图、基于 CROS RPC 流量的动态调用拓扑与 Agent 状态看板；<br>2. **CROS RPC 接口文档中心**：按 `ascServiceName` / `ascOperation` 检索 `.pb` 接口定义与 Message 字段树；<br>3. **流量监控台与 CROS RPC 四段报文解剖抽屉**：通过主控 `/api/events` SSE 实时展示监控流量，点击滑出右侧 `Drawer` 分段可视化呈现：**① 24B 公共头 (`RPC_COMM_HEAD_S` 偏移位图)**、**② 会话头 (`Req/Rsp/Mng` 字段明细与收发耗时拆解)**、**③ 扩展头 (`TraceID/SpanID/FatherSpanID` & 入队时间)**、**④ Protobuf JSON 明文与 16B 对齐 Raw Hex 对照**；<br>4. **流量重放操作台**：编排下发 Agent 重放任务，高亮展示协议头与 Protobuf 字段级回归 Diff。 | 1. 主控 `GET /api/health` 返回 `200 OK`；前端 `tsc --noEmit` 与 `eslint` 零警告通过。<br>2. 所有页面、拓扑画布与解剖抽屉 100% 使用 `theme.css` 的 `--color-*` 语义变量适配亮/暗双模主题，列表统一采用标准 5 页滑动窗口 URL 分页器。 |
-| **F-14** | **多级 RBAC 权限守卫与全量字段级 Diff 操作审计** | `Server`<br>`Frontend` | **P0** | 1. **RBAC 权限隔离**：集成 `commonAuth.AuthMiddleware` 与 `RequireAdmin("traefik_admin")`；普通认证用户可查看架构拓扑、查阅接口文档、观测流量及执行授权范围内的重放测试；架构元素增删改、Agent 实例配置与监控元信息下发、`.pb` 字典变更及全局设置（`/admin/settings`）仅限 `traefik_admin` 或 `super_admin` 操作；<br>2. **字段级操作审计**：主控侧所有写操作统一接入 `commonAudit.RecordDiff` 记录变更前后字段级 Diff。 | 1. 未认证请求返回 `401`；普通用户调用 `traefik_admin` 专属接口返回 `403 Forbidden`。<br>2. 修改架构元素、实例 Agent 配置或系统设置后，`audit_logs` 准确落盘字段级 Old/New Diff。 |
+| **F-13** | **一体化微前端控制台（架构拓扑 / 接口文档 / CROS RPC 解剖台 / 重放台）** | `Frontend`<br>`Server` | **P0** | 保持在 `code-bench` 微前端体系内（暴露 `./App` 与 `./menu`，兼容嵌入与独立双模运行），提供四大核心操作视图：<br>1. **架构与调用拓扑中心**：三级架构元素（子系统/自嵌套功能组/功能模块）管理、模块级接口供给与依赖维护、1 进程包含多模块物理映射、逻辑架构图与实测动态调用拓扑及 Agent 状态看板；<br>2. **CROS RPC 接口文档中心**：按 `ascServiceName` / `ascOperation` 检索 `.pb` 接口定义与 Message 字段树，直观查看归属的功能模块；<br>3. **流量监控台与 CROS RPC 四段报文解剖抽屉**：通过主控 `/api/events` SSE 实时展示监控流量，点击滑出右侧 `Drawer` 分段可视化呈现：**① 24B 公共头 (`RPC_COMM_HEAD_S` 偏移位图)**、**② 会话头 (`Req/Rsp/Mng` 字段明细与收发耗时拆解)**、**③ 扩展头 (`TraceID/SpanID/FatherSpanID` & 入队时间)**、**④ Protobuf JSON 明文与 16B 对齐 Raw Hex 对照**；<br>4. **流量重放操作台**：编排下发 Agent 重放任务，高亮展示协议头与 Protobuf 字段级回归 Diff。 | 1. 主控 `GET /api/health` 返回 `200 OK`；前端 `tsc --noEmit` 与 `eslint` 零警告通过。<br>2. 所有页面、拓扑画布与解剖抽屉 100% 使用 `theme.css` 的 `--color-*` 语义变量适配亮/暗双模主题，列表统一采用标准 5 页滑动窗口 URL 分页器。 |
+| **F-14** | **多级 RBAC 权限守卫与全量字段级 Diff 操作审计** | `Server`<br>`Frontend` | **P0** | 1. **RBAC 权限隔离**：集成 `commonAuth.AuthMiddleware` 与 `RequireAdmin("traefik_admin")`；普通认证用户可查看架构拓扑、查阅接口文档、观测流量及执行授权范围内的重放测试；架构元素增删改、Agent 实例配置与监控元信息下发、`.pb` 字典变更及全局设置（`/admin/settings`）仅限 `traefik_admin` 或 `super_admin` 操作；<br>2. **字段级操作审计**：主控侧所有写操作统一接入 `commonAudit.RecordDiff` 记录变更前后字段级 Diff。 | 1. 未认证请求返回 `401`；普通用户调用 `traefik_admin` 专属接口返回 `403 Forbidden`。<br>2. 修改架构元素、进程配置或系统设置后，`audit_logs` 准确落盘字段级 Old/New Diff。 |
 
 ---
 
@@ -150,10 +239,10 @@ flowchart TB
 | 场景编号 | 场景名称 | 触发条件与输入特征 | 预期行为与 TDD 断言 |
 | :--- | :--- | :--- | :--- |
 | **SC-01** | **免密探针、未认证拦截与 RBAC 越权防护** | 1. 请求主控 `GET /api/health`<br>2. 无 JWT 请求受保护接口<br>3. 普通用户请求新增架构服务节点或修改 `.pb` 字典 | 1. 返回 `200 OK` 且 `service: "Code-Traefik"`<br>2. 返回 `401 Unauthorized`<br>3. 管理员守卫拦截返回 `403 Forbidden` |
-| **SC-02** | **架构元素建模、`.pb` 接口文档解析与架构拓扑生成** | 管理员创建业务域与服务节点（绑定 `ascServiceName`），上传 `.pb` 描述文件映射 `ascOperation` 入参/出参 Message，绑定部署实例与 Agent 地址后查询拓扑与接口文档 | 成功返回按 `(ascServiceName, ascOperation)` 组织的结构化 Message 字段树；拓扑接口准确输出包含上下游有向依赖边的架构图数据，`RecordDiff` 记录创建审计 |
-| **SC-03** | **主控连接 Agent 与纯网络/进程监控元信息下发** | 启动独立 `code-traefik-agent`（监听 `127.0.0.1`），主控从架构实例提取「目标进程/监听端口 + 下游 `IP:Port` 列表」（不下发 `.pb`）通过 HTTP 下发给 Agent 并建立 SSE/WS 流；同时模拟非白名单 IP 连接 Agent | 主控与 Agent 握手成功，Agent 准确加载监控元信息并定位目标进程 `PID`；非白名单源 IP 连接被 Agent 拒绝返回 `403` |
+| **SC-02** | **架构元素独立建模、接口供给依赖声明与多模块进程拓扑推导** | 管理员在 `code-traefik` 独立创建子系统、自嵌套功能组、功能模块，在模块层面声明供给接口与依赖接口（绑定 `ascServiceName:ascOperation`），并将功能模块归属至操作系统进程（1 进程包含多个模块）；上传 `.pb` 描述文件生成接口文档树并查询拓扑 | 成功返回按 `(ascServiceName, ascOperation)` 组织的结构化 Message 字段树；拓扑接口准确根据模块接口供给与依赖推导出逻辑依赖边，同时呈现 1 进程包含多模块的物理映射，`RecordDiff` 记录创建审计 |
+| **SC-03** | **主控连接 Agent 与纯网络/进程监控元信息下发** | 启动独立 `code-traefik-agent`（监听 `127.0.0.1`），主控从进程模型提取「目标进程/监听端口 + 下游 `IP:Port` 列表」（不下发 `.pb`）通过 HTTP 下发给 Agent 并建立 SSE/WS 流；同时模拟非白名单 IP 连接 Agent | 主控与 Agent 握手成功，Agent 准确加载监控元信息并定位目标进程 `PID`；非白名单源 IP 连接被 Agent 拒绝返回 `403` |
 | **SC-04** | **`CROS RPC` 二进制流分帧、会话/扩展头解析与主控 `.pb` 解码** | 向共享 `pkg/crosrpc` 输入：带前序脏字节的 `"CSE.TCP"` 流、1 Byte 碎片半包流、多包粘连流、V1/V5 不同 `usHeadLen` 会话头、含 DOTR Trace 扩展头报文，以及 `usHeadLen > uiLength` 的畸形包 | `pkg/crosrpc` 在零 `.pb` 依赖下精准切出完整二进制包并提取 `ullSNO`、`ascServiceName`、`ascOperation`、`TraceID`，主控侧准确反序列化 Payload JSON；畸形报文被安全丢弃拦截 |
-| **SC-05** | **单 Agent 多进程同时录制、业务拓扑关系验证与节点资产抽取** | 在同一 `Agent` 下创建协同录制任务，同时纳入上游进程 `PID_A` 与下游进程 `PID_B`，执行单次端到端业务请求（`外部 -> PID_A -> PID_B`） | Agent 同步捕获并区分回传 `PID_A` 与 `PID_B` 的入站/出站原始二进制帧（`monitor_pid` 豁免零死锁），主控完成 `.pb` 解码、拼接完整调用链并验证 `Service_A -> Service_B` 拓扑关系，且支持从中单独选择 `PID_A` 或 `PID_B` 发起离线重放 |
+| **SC-05** | **单 Agent 多进程同时录制、功能模块调用拓扑验证与节点资产抽取** | 在同一 `Agent` 下创建协同录制任务，同时纳入包含不同功能模块的两个进程 `Process_A`（含 `Module_A`）与 `Process_B`（含 `Module_B`），执行单次端到端业务请求（`外部 -> Process_A -> Process_B`） | Agent 同步捕获并区分回传两进程的原始二进制帧（`monitor_pid` 豁免零死锁），主控完成 `.pb` 解码，通过 `ascServiceName:ascOperation` 穿透物理进程精准归属到 `Module_A -> Module_B` 调用链，验证与模块接口依赖声明的一致性，且支持按进程抽取资产独立发起离线重放 |
 | **SC-06** | **主控编排二进制重放包、Agent 零 `.pb` 实际重放与 `ullSNO` 自愈** | 关闭真实下游依赖服务，在主控对录制记录发起重放任务（目标进程在回放时生成全新随机下游 `ullSNO` 与发送时间戳） | 主控下发纯二进制重放请求与 Mock 集合；Agent 在本地注入请求并拦截目标进程出站调用，按 `(ascServiceName, ascOperation)` + Payload 二进制切片命中 Mock，覆写应答头 Offset `8..15` 的 `ullSNO`，回放判定 `PASS` |
 | **SC-07** | **目标进程业务逻辑突变与双层回归 Diff 检出** | 目标业务进程的应答状态码 `uiStatusCode` 异常或 Protobuf 计算结果发生突变（如折扣字段偏移），主控下发 Agent 执行重放验证 | Agent 回传实际应答报文后，主控双层断言器精准判定 `FAILED`，忽略固有的服务端收发时间戳差异，准确定位突变的状态码或具体 Protobuf 字段路径与期望/实际值 |
 
@@ -169,6 +258,7 @@ flowchart TB
 - **Non-Goal 4（彻底摒弃外部 Keploy 工具链与重复 Git Webhook 建设）**：不引入外部 Keploy 二进制；不重复建设代码仓 MR 接口变更 Webhook 追踪（该职责归属工作区既有的 `code-proto` 模块）。
 - **Non-Goal 5（Agent 绝不直连数据库、不感知 `.pb` Schema，主控严守表前缀隔离）**：`code-traefik-agent` 保持纯无状态与零业务 Schema 感知（不连接 PostgreSQL、不持有任何数据库凭据、不接收或解析 `.pb` 文件，仅收集与重放原始二进制数据）；主控 `code-traefik-server` 在共享库中创建的所有业务表强制冠以 `traefik_` 前缀。
 - **Non-Goal 6（不污染业务宿主机全局网络）**：Agent 内嵌 eBPF 探针严禁无差别劫持宿主机全局连接，严格限定在主控元信息指定的活跃监控目标 `PID` 集合与下游 `IP:Port` 列表范围内。
+- **Non-Goal 7（不依赖外部系统架构元数据同步）**：明确 `code-traefik` 自身作为架构元素与拓扑的权威单一真实源（SSOT）。`code-proto` 仅作为 Protobuf 文件与 MR 变更追踪，`code-bench` 仅提供用户与权限，`code-traefik` 不与外部建立脆弱的跨系统元数据轮询或分布式强同步机制，所有三级架构元素、多模块进程映射与接口供给/依赖契约均在 `code-traefik` 自身内建的数据库表中闭环管理。
 
 ---
 
