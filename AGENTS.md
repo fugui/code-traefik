@@ -9,7 +9,7 @@
 | 契约项 | 规范值 | 强约束说明 |
 | :--- | :--- | :--- |
 | **模块标识 (`ModuleKey`)** | `traefik` | 门户路由前缀 `/traefik`，Vite Federation 名称 `name: 'traefik'` |
-| **服务与二进制名** | `Code-Traefik` / `code-traefik-server` | Go Module: `code-traefik` |
+| **服务与二进制名** | `Code-Traefik` / `code-traefik-server` + `code-traefik-agent` | Go Module: `code-traefik`；同仓双入口 `cmd/server`、`cmd/agent` |
 | **端口分配** | 后端 `:8091` / 前端 `5181` | 验证完毕后必须主动关闭进程释放端口 |
 | **数据库表前缀 (`TablePrefix`)** | `traefik_` | 本模块所有 GORM 模型 `TableName()` 必须以 `traefik_` 开头 |
 | **管理员角色 (`AdminRole`)** | `traefik_admin` | 管理接口必须挂载 `commonAuth.RequireAdmin("traefik_admin")` |
@@ -21,6 +21,11 @@
 ```text
 code-traefik/
 ├── docs/                # SDD + TDD 规范文档库 (00-prompt ~ 06-ops)
+├── cmd/server/          # (规划) 主控控制面入口 code-traefik-server
+├── cmd/agent/           # (规划) 数据面 Agent 入口 code-traefik-agent（零数据库、零 .pb 依赖）
+├── pkg/crosrpc/         # (规划) CROS RPC 分帧与头解析库（主控与 Agent 共用）
+├── pkg/ebpf/            # (规划) Agent 嵌入式 cilium/ebpf 采集引擎
+├── pkg/replay/          # (规划) Agent 二进制 Mock 匹配与 ullSNO 自愈
 ├── config/              # 配置加载与模块常量定义
 ├── models/              # GORM 数据模型（强制 traefik_ 表前缀隔离）
 ├── handlers/            # HTTP 控制器、RBAC 守卫、审计 Diff 与 *_test.go 隔离单测
