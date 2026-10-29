@@ -28,11 +28,18 @@ type AuthSection struct {
 	OAuth2               commonModels.OAuth2Config `yaml:"oauth2"`
 }
 
+// AgentHubSection 定义主控与数据面 Agent 管控信道配置
+type AgentHubSection struct {
+	DevAllowLoopback     bool `yaml:"dev_allow_loopback"`     // 仅本地开发与自动化测试允许连接 127.0.0.0/8 Agent
+	HeartbeatIntervalSec int  `yaml:"heartbeat_interval_sec"` // 心跳与双向租约对账周期（默认 10s）
+}
+
 // Config 定义模块全局配置结构
 type Config struct {
 	Server   configutil.ServerConfig     `yaml:"server"`
 	Database commonModels.DatabaseConfig `yaml:"database"`
 	Auth     AuthSection                 `yaml:"auth"`
+	AgentHub AgentHubSection             `yaml:"agent_hub"`
 }
 
 // AppConfig 全局运行时配置单例

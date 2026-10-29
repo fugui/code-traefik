@@ -11,6 +11,8 @@ import (
 	commonServer "code-common/backend/server"
 	"code-traefik/config"
 	"code-traefik/handlers"
+	"code-traefik/internal/server/decoder"
+	"code-traefik/internal/server/hub"
 	"code-traefik/models"
 
 	"github.com/gin-gonic/gin"
@@ -37,11 +39,24 @@ func securityHeadersMiddleware() gin.HandlerFunc {
 
 // buildAuthMiddleware 构建统一 JWT 鉴权中间件（支持纯 Claims 模式与 DB 关联模式）
 func buildAuthMiddleware() gin.HandlerFunc {
-	return commonAuth.AuthMiddleware(commonAuth.AuthConfig{
-		JWTSecretGetter: func() string { return config.AppConfig.Auth.JWTSecret },
-		DB:              models.DB,
-		PreloadAssocs:   []string{"Department"},
-	})
+	return func(c *gin.Context) {
+		commonAuth.AuthMiddleware(commonAuth.AuthConfig{
+			JWTSecretGetter: func() string { return config.AppConfig.Auth.JWTSecret },
+			DB:              models.DB,
+			PreloadAssocs:   []string{"Department"},
+		})(c)
+	}
+}
+
+// rejectQueryTokenMiddleware 严格拦截在 URL Query 中传递敏感 Token 的行为
+func rejectQueryTokenMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if c.Query("token") != "" {
+			c.AbortWithStatusJSON(401, gin.H{"error": "严禁在 URL Query 参数中传递 Token，必须使用 Authorization: Bearer 标头"})
+			return
+		}
+		c.Next()
+	}
 }
 
 // RegisterAPIRoutes 集中注册所有开放路由、受保护业务路由与模块管理员路由（同时供单元测试直接挂载）
@@ -58,19 +73,73 @@ func RegisterAPIRoutes(r *gin.Engine) {
 
 	// 2. 受保护业务路由 (Protected - 需携带合法平台 JWT)
 	protected := r.Group("/api")
+	protected.Use(rejectQueryTokenMiddleware())
 	protected.Use(buildAuthMiddleware())
+	protected.Use(commonAudit.Middleware(config.ServiceName))
 	{
 		protected.GET("/me", handlers.GetMe)
 		protected.PATCH("/password", handlers.UpdatePassword)
 		protected.GET("/users", handlers.SearchUsers)
 
-		// 3. 模块管理员专属路由 (RequireAdmin - 仅 super_admin 或 <module_key>_admin 可访问)
+		requireAdmin := commonAuth.RequireAdmin(config.AdminRole)
+
+		// 3. 模块管理员专属路由 (Settings)
 		admin := protected.Group("/admin")
-		admin.Use(commonAuth.RequireAdmin(config.AdminRole))
+		admin.Use(requireAdmin)
 		{
 			admin.GET("/settings", handlers.GetModuleSettings)
 			admin.PUT("/settings", handlers.UpdateModuleSettings)
 		}
+
+		// 4. 三级架构元素与静态拓扑域 (F-01, F-02, F-04)
+		protected.GET("/arch/subsystems", handlers.ListSubsystems)
+		protected.POST("/arch/subsystems", requireAdmin, handlers.CreateSubsystem)
+		protected.PUT("/arch/subsystems/:id", requireAdmin, handlers.UpdateSubsystem)
+		protected.DELETE("/arch/subsystems/:id", requireAdmin, handlers.DeleteSubsystem)
+
+		protected.GET("/arch/functional-groups/tree", handlers.GetFunctionalGroupTree)
+		protected.POST("/arch/functional-groups", requireAdmin, handlers.CreateFunctionalGroup)
+		protected.PUT("/arch/functional-groups/:id", requireAdmin, handlers.UpdateFunctionalGroup)
+		protected.PATCH("/arch/functional-groups/:id/move", requireAdmin, handlers.MoveFunctionalGroup)
+		protected.DELETE("/arch/functional-groups/:id", requireAdmin, handlers.DeleteFunctionalGroup)
+
+		protected.GET("/arch/modules", handlers.ListModules)
+		protected.GET("/arch/modules/:id", handlers.GetModule)
+		protected.POST("/arch/modules", requireAdmin, handlers.CreateModule)
+		protected.PUT("/arch/modules/:id", requireAdmin, handlers.UpdateModule)
+		protected.DELETE("/arch/modules/:id", requireAdmin, handlers.DeleteModule)
+
+		protected.GET("/arch/modules/:id/interfaces", handlers.ListModuleInterfaces)
+		protected.POST("/arch/modules/:id/interfaces", requireAdmin, handlers.CreateModuleInterface)
+		protected.PUT("/arch/module-interfaces/:ifaceId", requireAdmin, handlers.UpdateModuleInterface)
+		protected.DELETE("/arch/module-interfaces/:ifaceId", requireAdmin, handlers.DeleteModuleInterface)
+
+		protected.GET("/arch/topology/static", handlers.GetStaticTopology)
+
+		// 5. Protobuf 描述集与方法映射域 (F-03)
+		protected.GET("/proto-schemas", handlers.ListProtoSchemas)
+		protected.POST("/proto-schemas", requireAdmin, handlers.UploadProtoSchema)
+		protected.POST("/proto-schemas/:id/activate", requireAdmin, handlers.ActivateProtoSchema)
+		protected.DELETE("/proto-schemas/:id", requireAdmin, handlers.DeleteProtoSchema)
+		protected.GET("/proto-operations", handlers.ListProtoOperations)
+
+		// 6. 公私域 Agent 纳管与排他租约管控域 (F-06, F-08)
+		protected.GET("/agents", handlers.ListAgents)
+		protected.GET("/agents/:id", handlers.GetAgent)
+		protected.POST("/agents", handlers.RegisterAgent)
+		protected.PUT("/agents/:id", handlers.UpdateAgent)
+		protected.DELETE("/agents/:id", handlers.DeleteAgent)
+		protected.POST("/agents/:id/handshake", handlers.HandshakeAgent)
+		protected.GET("/agents/:id/discover-processes", handlers.DiscoverAgentProcesses)
+		protected.POST("/agents/:id/lease/force-unlock", requireAdmin, handlers.ForceUnlockAgentLease)
+
+		// 7. 业务进程部署映射域 (F-02)
+		protected.GET("/processes", handlers.ListProcesses)
+		protected.GET("/processes/:id", handlers.GetProcess)
+		protected.POST("/processes", handlers.CreateProcess)
+		protected.PUT("/processes/:id", handlers.UpdateProcess)
+		protected.DELETE("/processes/:id", handlers.DeleteProcess)
+		protected.GET("/processes/:id/downstreams", handlers.GetProcessDownstreams)
 	}
 }
 
@@ -95,9 +164,29 @@ func main() {
 	// 3. 初始化异步操作审计引擎
 	commonAudit.Init(models.DB)
 
-	// 4. 基于 code-common/backend/server 启动服务（自动处理 /<ModuleKey> 网关前缀剥离与前端静态产物内嵌托管）
+	// 4. 初始化 Protobuf 解码注册中心与 Agent 调度中枢
+	decoderReg, err := decoder.NewRegistry(models.DB)
+	if err != nil {
+		log.Printf("[%s] 初始化 Protobuf 解码中心警告: %v", config.ServiceName, err)
+	} else {
+		handlers.ResetGlobalDecoderRegistry(decoderReg)
+	}
+
+	hubMgr := hub.NewManager(models.DB, &config.AppConfig)
+	handlers.ResetGlobalHubManager(hubMgr)
+
+	// 5. 执行主控启动恢复流水线与后台心跳探活 (ADR-03)
+	rootCtx, rootCancel := context.WithCancel(context.Background())
+	defer rootCancel()
+
+	if recErr := hubMgr.ServerRecoveryPipeline(rootCtx); recErr != nil {
+		log.Printf("[%s] 主控恢复流水线执行警告: %v", config.ServiceName, recErr)
+	}
+	hubMgr.StartHeartbeatLoop(rootCtx)
+
+	// 6. 基于 code-common/backend/server 启动服务（自动处理 /<ModuleKey> 网关前缀剥离与前端静态产物内嵌托管）
 	// TODO(security): 若独立直接暴露于公网环境，请在网关层配置严格 CORS 白名单与全局 API 速率限制
-	err := commonServer.Run(commonServer.Options{
+	err = commonServer.Run(commonServer.Options{
 		ServiceName:       config.ServiceName,
 		Prefix:            config.ModuleKey,
 		Port:              config.AppConfig.Server.Port,
@@ -114,6 +203,7 @@ func main() {
 			commonAudit.Middleware(config.ModuleKey),
 		},
 		OnShutdown: func(ctx context.Context) {
+			rootCancel()
 			if closeErr := commonAudit.Close(ctx); closeErr != nil {
 				log.Printf("[%s] 关闭审计引擎出现异常: %v", config.ServiceName, closeErr)
 			}

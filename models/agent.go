@@ -15,7 +15,9 @@ type Agent struct {
 	Scope           string     `gorm:"size:16;not null;default:'SHARED';index:idx_traefik_agents_scope_owner,priority:1;check:chk_traefik_agents_scope,scope IN ('SHARED','PRIVATE')" json:"scope"`
 	OwnerID         *uint      `gorm:"index:idx_traefik_agents_scope_owner,priority:2" json:"owner_id,omitempty"` // SHARED 为 nil；PRIVATE 必填创建人
 	Owner           *User      `gorm:"foreignKey:OwnerID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"owner,omitempty"`
+	ClaimCode       string     `gorm:"size:128;not null;default:''" json:"-"` // 个人 Agent 认领鉴权码 (凭证绝密存储，禁止对外序列化)
 	Status          string     `gorm:"size:32;not null;default:'OFFLINE';index:idx_traefik_agents_status" json:"status"`
+	BootID          string     `gorm:"size:64;not null;default:''" json:"boot_id,omitempty"`
 	AgentVersion    string     `gorm:"size:64;not null;default:''" json:"agent_version"`
 	ProtocolVersion string     `gorm:"size:32;not null;default:''" json:"protocol_version"` // 如 "1.0"
 	KernelVersion   string     `gorm:"size:128;not null;default:''" json:"kernel_version"`

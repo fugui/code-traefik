@@ -39,7 +39,20 @@ const (
 	// RefKind 资产类型
 	RefKindRecordingSession = uint8(0)
 	RefKindReplayTask       = uint8(1)
+
+	// 主从握手与双向租约对账 HTTP Header 名称
+	HeaderClaimCode         = "X-Claim-Code"
+	HeaderExpectedLeaseType = "X-Expected-Lease-Type"
+	HeaderExpectedLeaseRef  = "X-Expected-Lease-Ref"
 )
+
+// DiscoveredProcess 宿主机探查到的候选 IPv4 TCP LISTEN 业务进程
+type DiscoveredProcess struct {
+	PID        uint32 `json:"pid"`
+	ListenPort uint16 `json:"listen_port"`
+	Cmdline    string `json:"cmdline"`
+	ExeName    string `json:"exe_name"`
+}
 
 var (
 	ErrInvalidEnvelopeMagic   = errors.New("agentproto: invalid envelope magic")
