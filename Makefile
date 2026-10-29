@@ -1,4 +1,5 @@
 BINARY          := code-traefik-server
+AGENT_BINARY    := code-traefik-agent
 FRONTEND_DIR    := frontend
 DIST_DIR        := $(FRONTEND_DIR)/dist
 NODE_MODULES    := $(FRONTEND_DIR)/node_modules
@@ -15,13 +16,13 @@ COMMON_SRCS     := $(shell find $(COMMON_DIR) -type f 2>/dev/null)
 FRONTEND_SRCS   := $(shell find $(FRONTEND_DIR) -type f -not -path "*/node_modules/*" -not -path "*/dist/*" 2>/dev/null) $(COMMON_SRCS)
 BACKEND_SRCS    := $(shell find . -type f \( -name "*.go" -o -name "go.mod" -o -name "go.sum" \) -not -path "*/$(FRONTEND_DIR)/*" -not -path "*/.git/*")
 
-.PHONY: all build install frontend backend clean run test lint
+.PHONY: all build install frontend backend agent clean run test lint
 
 # 默认运行目标
 all: build
 
-# 完整打包构建（前端 dist + 内嵌单二进制）
-build: $(BINARY)
+# 完整打包构建（前端 dist + 内嵌 Server 单二进制 + Agent 单二进制）
+build: $(BINARY) $(AGENT_BINARY)
 
 # 安装前端依赖
 install: $(NODE_MODULES)
@@ -44,9 +45,15 @@ $(BINARY): $(BACKEND_SRCS) $(DIST_DIR)
 	go mod tidy
 	go build -ldflags "$(LDFLAGS)" -o $(BINARY)
 
+# 编译数据面 Agent 单二进制
+agent: $(AGENT_BINARY)
+
+$(AGENT_BINARY): $(BACKEND_SRCS)
+	go build -ldflags "$(LDFLAGS)" -o $(AGENT_BINARY) ./cmd/agent
+
 # 清理构建产物
 clean:
-	rm -rf $(DIST_DIR) $(BINARY)
+	rm -rf $(DIST_DIR) $(BINARY) $(AGENT_BINARY)
 
 # 运行 Go 单元测试（支持在未构建 frontend/dist 前独立执行，自动过滤 node_modules 下的无关文件）
 test:

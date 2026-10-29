@@ -1,0 +1,77 @@
+syntax = "proto3";
+
+package demo.order;
+option go_package = "code-traefik/demo/pkg/proto/orderpb";
+
+// 订单综合服务契约 (Service: demo.order-OrderService)
+service OrderService {
+  // 综合聚合查询：同时查询用户资产与商品实时库存行情
+  rpc GetCompositeQuote(CompositeQuoteReq) returns (CompositeQuoteRsp);
+  // 提交订单（触发分布式编排：预占库存 -> 扣减余额 -> 确认库存）
+  rpc CreateOrder(CreateOrderReq) returns (CreateOrderRsp);
+  // 查询订单状态及履约明细
+  rpc GetOrderDetail(OrderDetailReq) returns (OrderDetailRsp);
+  // 取消订单（触发补偿回滚：退回余额 -> 释放库存）
+  rpc CancelOrder(CancelOrderReq) returns (CancelOrderRsp);
+}
+
+message CompositeQuoteReq {
+  string user_id = 1;
+  string sku_id = 2;
+}
+
+message CompositeQuoteRsp {
+  int32 code = 1;              // 0=成功, 其它=错误码
+  string message = 2;
+  string user_id = 3;
+  int64 balance_cents = 4;     // 用户当前可用余额 (分)
+  string sku_id = 5;
+  string sku_name = 6;
+  int64 unit_price_cents = 7;  // 商品单价 (分)
+  int32 available_stock = 8;   // 当前剩余可售库存
+}
+
+message CreateOrderReq {
+  string user_id = 1;
+  string sku_id = 2;
+  int32 quantity = 3;          // 购买数量
+  string client_order_ref = 4; // 客户端防重幂等号
+}
+
+message CreateOrderRsp {
+  int32 code = 1;
+  string message = 2;
+  string order_id = 3;
+  int64 total_amount_cents = 4;
+  string status = 5;           // SUCCESS, FAILED_STOCK, FAILED_BALANCE
+  int64 created_at_unix = 6;
+}
+
+message OrderDetailReq {
+  string order_id = 1;
+}
+
+message OrderDetailRsp {
+  int32 code = 1;
+  string message = 2;
+  string order_id = 3;
+  string user_id = 4;
+  string sku_id = 5;
+  int32 quantity = 6;
+  int64 total_amount_cents = 7;
+  string status = 8;
+  int64 created_at_unix = 9;
+}
+
+message CancelOrderReq {
+  string order_id = 1;
+  string reason = 2;
+}
+
+message CancelOrderRsp {
+  int32 code = 1;
+  string message = 2;
+  string order_id = 3;
+  int64 refunded_amount_cents = 4;
+  int32 released_stock = 5;
+}

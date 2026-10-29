@@ -4,7 +4,9 @@ go 1.26.1
 
 require (
 	code-common/backend v0.0.0
+	github.com/cilium/ebpf v0.22.0
 	github.com/gin-gonic/gin v1.12.0
+	github.com/gorilla/websocket v1.5.3
 	golang.org/x/crypto v0.53.0
 	google.golang.org/protobuf v1.36.10
 	gopkg.in/yaml.v3 v3.0.1

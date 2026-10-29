@@ -1,0 +1,66 @@
+syntax = "proto3";
+
+package demo.inventory;
+option go_package = "code-traefik/demo/pkg/proto/inventorypb";
+
+// 库存履约服务契约 (Service: demo.inventory-InventoryService)
+service InventoryService {
+  // 查询 SKU 详情及可售库存
+  rpc GetItemStock(GetItemStockReq) returns (GetItemStockRsp);
+  // 阶段 1：预占/锁定库存
+  rpc LockStock(LockStockReq) returns (LockStockRsp);
+  // 阶段 2A：确认扣减库存（订单支付成功）
+  rpc ConfirmStock(ConfirmStockReq) returns (ConfirmStockRsp);
+  // 阶段 2B：释放预占库存（支付失败或取消补偿）
+  rpc ReleaseStock(ReleaseStockReq) returns (ReleaseStockRsp);
+}
+
+message GetItemStockReq {
+  string sku_id = 1;
+}
+
+message GetItemStockRsp {
+  int32 code = 1;              // 0=成功, 3001=商品不存在
+  string message = 2;
+  string sku_id = 3;
+  string sku_name = 4;
+  int64 unit_price_cents = 5;  // 单价 (分)
+  int32 total_stock = 6;       // 总物理库存
+  int32 locked_stock = 7;      // 当前已预占锁定量
+  int32 available_stock = 8;   // 可用量 = total - locked
+}
+
+message LockStockReq {
+  string sku_id = 1;
+  int32 quantity = 2;          // 锁定件数
+  string biz_order_id = 3;     // 关联订单号
+}
+
+message LockStockRsp {
+  int32 code = 1;              // 0=成功, 3002=库存不足
+  string message = 2;
+  string lock_id = 3;          // 锁定授权凭证
+  int32 locked_quantity = 4;
+}
+
+message ConfirmStockReq {
+  string lock_id = 1;
+  string biz_order_id = 2;
+}
+
+message ConfirmStockRsp {
+  int32 code = 1;
+  string message = 2;
+  int32 remaining_stock = 3;
+}
+
+message ReleaseStockReq {
+  string lock_id = 1;
+  string reason = 2;
+}
+
+message ReleaseStockRsp {
+  int32 code = 1;
+  string message = 2;
+  int32 restored_stock = 3;
+}

@@ -1,0 +1,68 @@
+syntax = "proto3";
+
+package demo.account;
+option go_package = "code-traefik/demo/pkg/proto/accountpb";
+
+// 账户资产服务契约 (Service: demo.account-AccountService)
+service AccountService {
+  // 查询用户账户信息与可用余额
+  rpc GetBalance(GetBalanceReq) returns (GetBalanceRsp);
+  // 扣减账户余额
+  rpc DeductBalance(DeductBalanceReq) returns (DeductBalanceRsp);
+  // 退还/增加账户余额
+  rpc RefundBalance(RefundBalanceReq) returns (RefundBalanceRsp);
+  // 充值/资金增加
+  rpc DepositBalance(DepositBalanceReq) returns (DepositBalanceRsp);
+}
+
+message GetBalanceReq {
+  string user_id = 1;
+}
+
+message GetBalanceRsp {
+  int32 code = 1;              // 0=成功, 2001=用户不存在
+  string message = 2;
+  string user_id = 3;
+  string user_name = 4;
+  int64 balance_cents = 5;
+}
+
+message DeductBalanceReq {
+  string user_id = 1;
+  int64 amount_cents = 2;      // 扣减金额 (分)
+  string biz_order_id = 3;     // 业务订单关联号
+}
+
+message DeductBalanceRsp {
+  int32 code = 1;              // 0=成功, 2002=余额不足
+  string message = 2;
+  string user_id = 3;
+  int64 remaining_balance = 4; // 扣减后剩余余额
+  string tx_serial_no = 5;     // 交易记账流水号
+}
+
+message RefundBalanceReq {
+  string user_id = 1;
+  int64 amount_cents = 2;
+  string biz_order_id = 3;
+  string reason = 4;
+}
+
+message RefundBalanceRsp {
+  int32 code = 1;
+  string message = 2;
+  string user_id = 3;
+  int64 current_balance = 4;
+  string refund_serial_no = 5;
+}
+
+message DepositBalanceReq {
+  string user_id = 1;
+  int64 amount_cents = 2;
+}
+
+message DepositBalanceRsp {
+  int32 code = 1;
+  string message = 2;
+  int64 current_balance = 3;
+}
