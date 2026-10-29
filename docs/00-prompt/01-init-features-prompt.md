@@ -19,11 +19,11 @@
 ---
 
 ## 2. 核心业务背景与架构聚焦点
-1. **只支持 DOPHI CROS RPC 协议**：`24B 公共头 RPC_COMM_HEAD_S`（`"CSE.TCP"` 魔术字、大端 `ullSNO`/`uiLength`/`usHeadLen`）+ 多版本会话头（REQ/RSP/MNG）+ `0..N` 段扩展头（Trace 信息）+ Protobuf Payload；首期只覆盖 IPv4 TCP 明文。
+1. **只支持 DOPHI CROS RPC 协议**：详见项目内置参考规范 [`docs/07-references/01-cros-rpc-protocol-spec.md`](../07-references/01-cros-rpc-protocol-spec.md)。`24B 公共头 RPC_COMM_HEAD_S`（`"CSE.TCP"` 魔术字、大端 `ullSNO`/`uiLength`/`usHeadLen`）+ 多版本会话头（REQ/RSP/MNG）+ `0..N` 段扩展头（Trace 信息）+ Protobuf Payload；首期只覆盖 IPv4 TCP 明文；服务名映射为 package 前缀全名 `{package}_{serviceName}`，方法名为 `ascOperation`。
 2. **控制面 / 数据面分离**：主控负责架构元素 SSOT、Agent 纳管、录制编排、`.pb` 解码、架构一致性验证、重放编排与双层 Diff；Agent（每台业务机 1 个，同时监控 N 个进程）零 `.pb` 依赖，负责采集与本地重放。信道为 HTTP（主控下发）+ WebSocket 二进制帧（Agent 回传）。
 3. **嵌入式 `cilium/ebpf`**：入站按「PID + 监听端口」被动旁路复制；出站经 `cgroup/connect4` 透明重定向到 Agent；Agent 自身 PID 豁免防自环；长连接场景需在下发监控后重启或重连目标进程。
 4. **架构元素建模**：子系统 → 功能组（自嵌套树）→ 功能模块；接口 `PROVIDE` / `DEPEND` 在模块层面声明，`PROVIDE` 全局唯一；1 个进程（单监听端口）承载 N 个模块，每个模块只部署 1 份。
-5. **零 `.pb` 二进制重放**：Agent 以 `(ascServiceName, ascOperation)` + Payload 字节哈希匹配下游 Mock，覆写公共头偏移 `8..15` 的 `ullSNO`；重放只在测试环境执行。
+5. **零 `.pb` 二进制重放**：Agent 以 `(ascServiceName, ascOperation)` + Payload 字节哈希匹配下游 Mock，自愈覆写公共头偏移 `8..15` 的 `ullSNO` 及应答头 `aucTraceBuff`、`ullClientSendTime`；重放只在测试环境执行。
 
 ---
 

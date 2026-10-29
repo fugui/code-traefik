@@ -1,11 +1,11 @@
 # 业务流量监控与重放 (`code-traefik`) 特性清单与需求范围界定规范 (Feature Matrix & Scope)
 
 - **文档编号**：`01-feature-matrix.md`
-- **文档版本**：v2.5.0
-- **更新日期**：2026-10-28
+- **文档版本**：v2.5.1
+- **更新日期**：2026-10-29
 - **当前阶段**：阶段一：特性清单与边界明确
 - **状态**：定稿待审 (Ready for Review)
-- **协议依据**：《DOPHI CROS RPC 协议规范》（文档编号 / 版本：`TODO` 待补充；本文所有字段名、偏移与取值均以该规范原文为准）
+- **协议依据**：详见项目内置参考文档 [`docs/07-references/01-cros-rpc-protocol-spec.md`](../07-references/01-cros-rpc-protocol-spec.md)（文档编号：`01-cros-rpc-protocol-spec.md` v1.0.0，基于 DOPHI 平台 `cros_rpccore.ph` / `cros_rpctcp` 规范，本文所有字段名、偏移与取值均以该规范原文为准）
 
 ### 修订记录
 
@@ -17,6 +17,7 @@
 | v2.3.0 | 2026-10-28 | 支持单 Agent 多进程并发监控与任务级协同录制 |
 | v2.4.0 | 2026-10-28 | 明确架构元素 SSOT、三级模型、模块级接口契约与多模块进程映射 |
 | v2.5.0 | 2026-10-28 | 依据阶段一出口检视修订：新增「关键业务假设」；补充入站旁路采集与长连接前置条件；新增 Agent 实例纳管；PROVIDE 全局唯一与来源模块判定规则；重放结果状态与 Mock 未命中策略；`.pb` 版本管理；信道收敛为 HTTP + WebSocket；重排 P0/P1/P2；补充性能、存储保留与 eBPF 测试策略 NFR；补充术语表 |
+| v2.5.1 | 2026-10-29 | 挂载项目内置协议规范 (docs/07-references/01-cros-rpc-protocol-spec.md)；明确服务名映射为 package 前缀全名 ({package}_{serviceName})；依据协议原文固化 F-13 应答头回填字段清单 (ullSNO/aucTraceBuff/ullClientSendTime) 与精准偏移 |
 
 ---
 
@@ -61,7 +62,7 @@
 | **A-04** | 同一进程内的功能模块之间走**进程内函数调用**，不经过网络 | F-02、F-05 |
 | **A-05** | 同一 `(ascServiceName, ascOperation)` **只由 1 个功能模块供给**（全局唯一） | F-02、F-03、F-05 |
 | **A-06** | 重放**只在测试环境**执行；目标进程对 DB / MQ 等非 CROS RPC 依赖的副作用首期不处理（DB 中主要是很少变化的元数据） | F-12、Non-Goal 8 |
-| **A-07** | `ascServiceName` / `ascOperation` 与 `.pb` 中的 Service / Method 名称**字符串直接相等**，不做任何转换 | F-03、F-10 |
+| **A-07** | 服务名匹配 Protobuf 的 package 前缀全名：`ascServiceName` 格式为 `{package}_{serviceName}`（中间以下划线连接；若 package 含 `.` 则替换为 `_`）；`ascOperation` 与 Method 名称**字符串直接相等** | F-03、F-10 |
 | **A-08** | 首期聚焦 REQ / RSP 业务调用；MNG 管理消息（`ucMsgType=5/6/7`）只做解析展示与原样回放，不做握手语义仿真 | F-12、F-13、Non-Goal 9 |
 
 ### 2.2 主从运行架构与网络交互拓扑
@@ -157,7 +158,7 @@ erDiagram
     }
     TRAEFIK_PROTO_OPERATIONS {
         bigint schema_id FK
-        string service_name "与 Service 名字符串直接相等"
+        string service_name "格式为 {package}_{serviceName} (下划线连接)"
         string operation "与 Method 名字符串直接相等"
         string req_message
         string rsp_message
@@ -166,7 +167,7 @@ erDiagram
 
 关键约束：
 1. **三级逻辑架构**：子系统是顶层边界；功能组归属子系统，支持多级自嵌套（`parent_id` + `path` + `level`）；功能模块是最小契约单元，可挂在**任意层级**的功能组下。
-2. **接口契约在功能模块层面**：`PROVIDE` 为模块对外实现的 CROS RPC 接口，`DEPEND` 为模块需要调用的下游接口，均以 `(ascServiceName, ascOperation)` 字符串表示。**`PROVIDE` 的 `(service_name, operation)` 全局唯一 (A-05)**。
+2. **接口契约在功能模块层面**：`PROVIDE` 为模块对外实现的 CROS RPC 接口，`DEPEND` 为模块需要调用的下游接口，均以 `(ascServiceName, ascOperation)` 字符串表示。**`PROVIDE` 的 `(service_name, operation)` 全局唯一 (A-05)**；其中 `ascServiceName` 为 `{package}_{serviceName}`（下划线连接全名），`ascOperation` 为方法名。
 3. **物理部署**：1 个进程承载 N 个模块，每个模块只属于 1 个进程 (A-03)；进程只有 1 个监听端口 (A-02)，同一 Agent 下端口互斥；PID 不落库为权威数据，由 Agent 按端口或 `cmd_pattern` 实时反查。
 4. **`.pb` 与接口解耦**：模块接口不直接外键引用 `.pb`，解码时按 `(service_name, operation)` 查找当前生效的映射；每条流量记录保存解码所用的 schema 版本。
 
@@ -187,7 +188,7 @@ erDiagram
 | :--- | :--- | :---: | :---: | :--- | :--- |
 | **F-01** | **三级架构元素建模**（`traefik_subsystems` / `traefik_functional_groups` / `traefik_modules`） | `Server`<br>`Frontend` | **P0** | 1. 子系统：编码（全局唯一）、名称、负责人、描述；<br>2. 功能组：归属子系统，支持多级自嵌套，维护 `parent_id`、`level`、`path`、排序；编码在同一子系统内唯一；最大深度 8 级；<br>3. 功能模块：编码全局唯一，挂在任意层级的功能组下，冗余记录所属子系统；<br>4. 移动功能组时级联更新子孙节点的 `path` / `level`。 | 1. 三类元素 CRUD 单测全部通过；<br>2. 把功能组移到自身或其子孙下返回 `400`；超过最大深度返回 `400`；<br>3. 移动功能组后，所有子孙的 `path` / `level` 正确；<br>4. 删除非空功能组、或删除已声明接口的模块返回 `409`；<br>5. 编码重复返回 `409`。 |
 | **F-02** | **进程部署映射与模块接口契约**（`traefik_processes` / `traefik_module_interfaces`） | `Server`<br>`Frontend` | **P0** | 1. 进程：归属 1 个 Agent，维护名称、唯一监听端口 (A-02)、`/proc` 命令行匹配规则；每个模块绑定 0..1 个进程 (A-03)；<br>2. 模块接口：`PROVIDE` / `DEPEND` 两类，以 `(ascServiceName, ascOperation)` 字符串声明；<br>3. 约束：同一模块内 `(relation_type, service, operation)` 唯一；**`PROVIDE` 的 `(service, operation)` 全局唯一** (A-05)；<br>4. 静态依赖推导：模块 A 的 `DEPEND` 匹配到模块 B 的 `PROVIDE` 时生成边 `A → B`；匹配不到任何 `PROVIDE` 的 `DEPEND` 归入「外部 / 未登记系统」占位节点。 | 1. 同一 Agent 下监听端口重复返回 `409`；<br>2. 第二个模块声明已被供给的 `PROVIDE` 接口返回 `409`；<br>3. 静态依赖推导单测：正常边、外部占位边、同进程内两模块之间的边（标记为「进程内」）均正确；<br>4. 删除正在录制或重放中的进程返回 `409`。 |
-| **F-03** | **Protobuf 描述集注册与接口映射**（`traefik_proto_schemas` / `traefik_proto_operations`） | `Server`<br>`Frontend` | **P0** | 1. 上传 `.pb`（`FileDescriptorSet`），校验体积 `<= 4MB` 与 `protodesc` 合法性；同名描述集每次上传生成新版本，可切换生效版本；<br>2. 从 `ServiceDescriptor` / `MethodDescriptor` 自动生成 `(ascServiceName, ascOperation) → (Req, Rsp Message)` 映射，名称**字符串直接相等、不做转换** (A-07)；<br>3. 生效映射中 `(service, operation)` 全局唯一，冲突时拒绝激活；<br>4. 流量记录保存解码所用的 schema 版本，切换版本不改写历史解码结果（可手动重新解码）。 | 1. 合法 `.pb` 上传后，映射接口返回正确的 `(service, operation)` 清单；<br>2. 损坏文件或超过 4MB 返回 `400`；<br>3. 激活与其他生效描述集存在 `(service, operation)` 冲突的版本返回 `409`；<br>4. 切换版本后，历史记录的 schema 版本字段保持不变。 |
+| **F-03** | **Protobuf 描述集注册与接口映射**（`traefik_proto_schemas` / `traefik_proto_operations`） | `Server`<br>`Frontend` | **P0** | 1. 上传 `.pb`（`FileDescriptorSet`），校验体积 `<= 4MB` 与 `protodesc` 合法性；同名描述集每次上传生成新版本，可切换生效版本；<br>2. 从 `ServiceDescriptor` / `MethodDescriptor` 自动生成 `(ascServiceName, ascOperation) → (Req, Rsp Message)` 映射：服务名匹配 package 前缀全名，**`ascServiceName` 格式为 `{package}_{serviceName}`**（中间以下划线连接；若 package 含 `.` 则替换为 `_`），**`ascOperation` 与 Method 名称直接对应** (A-07)；<br>3. 生效映射中 `(service, operation)` 全局唯一，冲突时拒绝激活；<br>4. 流量记录保存解码所用的 schema 版本，切换版本不改写历史解码结果（可手动重新解码）。 | 1. 合法 `.pb` 上传后，映射接口返回正确的 `(service, operation)` 清单（服务名包含 package 前缀下划线连接全名）；<br>2. 损坏文件或超过 4MB 返回 `400`；<br>3. 激活与其他生效描述集存在 `(service, operation)` 冲突的版本返回 `409`；<br>4. 切换版本后，历史记录的 schema 版本字段保持不变。 |
 | **F-04** | **静态架构拓扑视图** | `Server`<br>`Frontend` | **P0** | 1. 逻辑视角：按「子系统 → 功能组树 → 功能模块」展开，绘制 F-02 推导的模块依赖边（含外部占位节点）；<br>2. 物理视角：「Agent（主机）→ 进程 → 承载的模块」部署归属图。 | 1. 拓扑 API 对给定建模数据返回期望的节点与边集合；<br>2. 画布只使用 `--color-*` 语义 Token，适配亮 / 暗主题。 |
 | **F-05** | **实测调用拓扑还原与架构一致性验证** | `Server`<br>`Frontend` | **P0** | 基于一次录制批次 (F-11) 的报文：<br>1. **目的模块定位**：按 `(ascServiceName, ascOperation)` 查唯一的 `PROVIDE` 模块；查不到时归为「未登记接口」；<br>2. **来源模块判定**（进程承载多个模块时）依次采用：① 出站请求的 `FatherSpanID` 关联到同进程某条入站请求所在的模块；② 该进程内**只有一个**模块声明了对应 `DEPEND`；③ 以上都不满足时，标记为「进程级归属」并给出候选模块集合；<br>3. **比对结果分类**：`Verified`（实测且已声明）、`Violation`（实测但未声明，架构漂移告警）、`Uncovered`（已声明但本次未触发）、`Not Observable`（同进程内两模块之间的依赖，A-04 决定网络上不可见，不计入 Uncovered）、`Unattributed`（来源只能归到进程级）。 | 1. 输入预置的上中下游三进程录制数据集（含 1 条未声明调用、1 条同进程内依赖、1 条无 Trace 且多模块声明同一 `DEPEND` 的调用），验证 API 分别标出 `Violation`、`Not Observable`、`Unattributed`，其余边为 `Verified` / `Uncovered`；<br>2. 每类结果都有独立的单测用例。 |
 
@@ -208,7 +209,7 @@ erDiagram
 | 编号 | 特性名称 | 涉及组件 | 优先级 | 功能描述与技术规范 | TDD 验收指标 |
 | :--- | :--- | :---: | :---: | :--- | :--- |
 | **F-09** | **Agent 嵌入式 `cilium/ebpf` 采集引擎**（`pkg/ebpf`） | `Agent` | **P0** | 基于 `github.com/cilium/ebpf` 在 Agent 内挂载单套探针，服务本机多个目标进程：<br>1. **多 PID 过滤**：BPF Hash Map 保存目标 PID 集合、监听端口与下游规则，`O(1)` 查找，支持运行期热增删；未命中的进程与连接原样放行；<br>2. **入站被动旁路复制**：对「目标 PID + 监听端口」上的连接复制收发字节到用户态（ring buffer），不代理、不改变入站链路；<br>3. **出站透明重定向**：`cgroup/connect4` 把目标 PID 访问已登记下游 `IP:Port` 的新建连接重定向到 Agent 本地代理，并保留原始目的地址；<br>4. **自环豁免**：Agent 自身 PID 写入 Map，内核态识别后直接放行并累计 `stat_bypassed_self`，保证同机被监控进程互调（`PID_A → PID_B`）不死锁，并同时录到 A 的出站与 B 的入站；<br>5. **特权要求与自洁**：必须具备 `CAP_BPF` + `CAP_NET_ADMIN`，否则拒绝开始录制并上报原因；全部监控停止或 Agent 退出（含 `SIGTERM`）时卸载全部钩子。 | 1. 同机运行 `PID_A`、`PID_B`（`A → B` 调用）与无关进程 `PID_C`：A 的出站、B 的入站都被录到，不死锁，`PID_C` 无任何重定向；<br>2. `stat_bypassed_self` 正确累加；<br>3. 无特权环境下开始录制返回明确错误；<br>4. 监控停止后 `Attached == false`，Agent 收到 `SIGTERM` 后无残留钩子。 |
-| **F-10** | **CROS RPC 分帧与头解析库（`pkg/crosrpc`）及主控 Protobuf 解码** | `Server`<br>`Agent` | **P0** | 1. **共享分帧与头解析库**（Agent 与主控共用，零 `.pb` 依赖）：<br>   - 公共头：识别 8B `unMagicInfo`（7B `"CSE.TCP"` + 1B `ucProtocol`），遇到前序脏字节时逐字节扫描重新同步；大端解析 `ullSNO`、`uiLength`、`usHeadLen`、`ucMsgType`、`isPacked`；校验 `usHeadLen >= 会话头最小长度`、`usHeadLen <= uiLength <= RPC_PAYLOAD_MAX_LEN (32MB - 4KB) + usHeadLen`、`ucMsgType ∈ [2, RPC_MSG_TYPE_MNG_BUTT)`；正确处理粘包与半包；<br>   - 会话头与扩展头：按 `#pragma pack(4)` 与 `usHeadLen` 长度判定版本（前 / 后向兼容），解析 `RPC_REQ_HEAD_S`（V00~V05：`ascServiceName[64]`、`ascOperation[64]`、`ucReqType` 等）、`RPC_RSP_HEAD_S`（V00~V04：`uiStatusCode` / `ullStatusCode`、收发时间戳、`usRspMsgNo`）、`RPC_MNG_HEAD_S`，以及 `0..N` 段扩展头（`TraceID` / `SpanID` / `FatherSpanID`、入队时间戳）；<br>2. **主控 Protobuf 解码**（只在主控引入 `dynamicpb`）：按 F-03 生效映射，对 `24 + usHeadLen` 之后的 Payload 做 JSON 解码与重编码；无映射或不可解码时保留完整头解析并以 Raw Hex 展示，不中断链路。 | 1. 单测覆盖：前序脏字节重新同步、逐字节碎片流、多包粘连流、V01 与 V05/V04 会话头、扩展头解析；<br>2. 非法 `ucMsgType`、超限 `uiLength`、`usHeadLen > uiLength`、`usHeadLen` 小于最小长度的报文全部被拒绝，无 panic、无超量分配（fuzz 测试运行 ≥ 60s 无崩溃）；<br>3. `cmd/agent` 的依赖图中不包含 `dynamicpb` / `protoregistry`；<br>4. 无 `.pb` 映射的报文解码结果为 Raw Hex，头字段完整。 |
+| **F-10** | **CROS RPC 分帧与头解析库（`pkg/crosrpc`）及主控 Protobuf 解码** | `Server`<br>`Agent` | **P0** | 1. **共享分帧与头解析库**（Agent 与主控共用，零 `.pb` 依赖）：<br>   - 公共头：识别 8B `unMagicInfo`（7B `"CSE.TCP"` + 1B `ucProtocol`），遇到前序脏字节时逐字节扫描重新同步；大端解析 `ullSNO`、`uiLength`、`usHeadLen`、`ucMsgType`、`isPacked`；校验 `usHeadLen >= 会话头最小长度`、`usHeadLen <= uiLength <= RPC_PAYLOAD_MAX_LEN (32MB - 4KB) + usHeadLen`、`ucMsgType ∈ [2, RPC_MSG_TYPE_MNG_BUTT)`；正确处理粘包与半包；<br>   - 会话头与扩展头：按 `#pragma pack(4)` 与 `usHeadLen` 长度判定版本（前 / 后向兼容），解析 `RPC_REQ_HEAD_S`（V00~V05：`ascServiceName[64]`、`ascOperation[64]`、`ucReqType` 等）、`RPC_RSP_HEAD_S`（V00~V04：`uiStatusCode` / `ullStatusCode`、收发时间戳、`usRspMsgNo`）、`RPC_MNG_HEAD_S`，以及 `0..N` 段扩展头（`TraceID` / `SpanID` / `FatherSpanID`、入队时间戳）；<br>2. **主控 Protobuf 解码**（只在主控引入 `dynamicpb`）：依据会话头中的 `ascServiceName`（格式为 `{package}_{serviceName}`）与 `ascOperation` 匹配 F-03 生效映射，对 `24 + usHeadLen` 之后的 Payload 做 JSON 解码与重编码；无映射或不可解码时保留完整头解析并以 Raw Hex 展示，不中断链路。 | 1. 单测覆盖：前序脏字节重新同步、逐字节碎片流、多包粘连流、V01 与 V05/V04 会话头、扩展头解析；<br>2. 非法 `ucMsgType`、超限 `uiLength`、`usHeadLen > uiLength`、`usHeadLen` 小于最小长度的报文全部被拒绝，无 panic、无超量分配（fuzz 测试运行 ≥ 60s 无崩溃）；<br>3. `cmd/agent` 的依赖图中不包含 `dynamicpb` / `protoregistry`；<br>4. 无 `.pb` 映射的报文解码结果为 Raw Hex，头字段完整。 |
 
 ---
 
@@ -218,7 +219,7 @@ erDiagram
 | :--- | :--- | :---: | :---: | :--- | :--- |
 | **F-11** | **任务级多进程协同录制与落盘**（`traefik_recording_sessions` / `traefik_traffic_records`） | `Server`<br>`Agent`<br>`Frontend` | **P0** | 面向「单次执行一个业务任务、同时录制链路上多个进程」的场景：<br>1. **录制批次**：选择同机或跨机的多个进程创建批次，按 A-01 引导用户在开始后重启或重连目标进程；批次有最长时长（默认 30 分钟）与最大帧数（默认 10 万帧）上限，达到上限自动停止；<br>2. **采集与回传**：各 Agent 采集参与进程的 `INGRESS` / `EGRESS` 原始报文，信封头携带 `session_id`、`process_id`、`pid`、`direction`、源 / 目地址、采集时间戳；<br>3. **解析与关联**：主控用 `pkg/crosrpc` 解析，同一连接内按 `ullSNO` 配对 REQ / RSP（兼容 `ucReqType` Oneway 与 `RSP_SEG` 分片），按 F-03 解码 Payload，按 F-05 定位模块；<br>4. **落盘**：原始帧与解析结果按 `session_id` + `process_id` 落盘；单帧超过采集阈值（默认 4MB）时截断保存并标记为「不可重放」。 | 1. 两进程上下游录制批次触发 1 次业务请求：两进程的入站 / 出站帧都归档到同一 `session_id` 下各自的 `process_id`，REQ / RSP 配对正确；<br>2. 支持按批次、子系统、模块、进程、`ascServiceName`、`ascOperation`、`ullSNO`、`TraceID` 筛选，并使用 URL 同步分页；<br>3. 达到时长或帧数上限时批次自动停止，状态为 `COMPLETED_BY_LIMIT`；<br>4. 超阈值帧被标记为不可重放。 |
 | **F-12** | **重放编排与 Agent 本地执行**（`traefik_replay_tasks`） | `Server`<br>`Agent`<br>`Frontend` | **P0** | 在测试环境 (A-06)、下游已关闭或隔离的前提下：<br>1. **重放资产**：从录制批次中选定 1 个目标进程及其 1..N 条 `INGRESS` 请求，主控组装原始请求帧 + 该进程录制期间的 `EGRESS` 应答帧集合 + 监听端口 + 下游 `IP:Port`，下发给目标 Agent（不下发 `.pb`）；<br>2. **执行**：Agent 为下游规则挂载出站重定向，提示重启或重连目标进程 (A-01)，然后向监听端口建立连接并按录制顺序写入请求帧（若录制中存在该连接的 MNG 帧则原样发送，A-08）；<br>3. **回收**：Agent 回传目标进程的实际应答（单包 `RSP` 或多段 `RSP_SEG`）与 Mock 命中 / 未命中明细；<br>4. **结果状态**：`PASS`、`FAILED`（Diff 不一致）、`MOCK_MISS`（存在未命中的下游调用）、`TIMEOUT`（单请求等待应答超时，默认 30s，可配置）、`ERROR`（连接失败或 Agent 异常）；多种情况同时出现时按 `ERROR > TIMEOUT > MOCK_MISS > FAILED > PASS` 取最高者，并保留全部明细。 | 1. 关闭模拟下游后发起重放：Agent 完成请求注入，下游调用全部命中 Mock，结果为 `PASS`；<br>2. 目标端口不可达时结果为 `ERROR`；<br>3. 目标进程不应答时，在超时阈值后结果为 `TIMEOUT`；<br>4. 多请求重放时，每条请求都有独立的结果明细。 |
-| **F-13** | **Agent 零 `.pb` 二进制 Mock 匹配与 `ullSNO` 自愈**（`pkg/replay`） | `Agent` | **P0** | 1. **匹配键**：下游请求会话头中的 `(ascServiceName, ascOperation)` + `24 + usHeadLen` 之后 Payload 字节的哈希；由此天然忽略公共头 `ullSNO`、会话头时间戳与扩展头 Trace 等每次运行都会变化的字段；<br>2. **兜底匹配**：Payload 哈希未命中时，按同一接口的录制调用次序取下一条未使用的应答；<br>3. **未命中策略**：同一接口的录制应答已用完或不存在时，**不转发到真实下游、不返回应答**，记录 `MOCK_MISS` 明细（接口、Payload 摘要、时间），由目标进程自身的超时逻辑处理；<br>4. **自愈改写**：命中后在应答帧公共头偏移 `8..15` 覆写当前请求的大端 `ullSNO`；会话头中需要与请求对应的回显字段（如 `aucTraceBuff`、`ullClientSendTime`），偏移按 `usHeadLen` 判定的会话头版本确定后回填（字段清单以协议原文为准，阶段二固化）；`RSP_SEG` 分片逐片改写；<br>5. **Oneway**：`ucReqType` 为 Oneway 的请求只记录、不应答；<br>6. **MNG 帧** (A-08)：按 `ucMsgType` 取录制中的同类应答原样回放并覆写 `ullSNO`，没有则忽略。 | 1. 目标进程重放时生成全新的随机 `ullSNO`（如 `0x000000010009A2B3`）、新 TraceID 与新时间戳，Agent 仍命中 Mock，应答帧中的 `ullSNO` 与请求一致；<br>2. 同接口 Payload 含动态参数时按调用次序兜底命中；<br>3. 调用次数超过录制次数时产生 `MOCK_MISS` 明细，且没有任何流量流向真实下游；<br>4. 3 段 `RSP_SEG` 分片全部被正确改写。 |
+| **F-13** | **Agent 零 `.pb` 二进制 Mock 匹配与 `ullSNO` 自愈**（`pkg/replay`） | `Agent` | **P0** | 1. **匹配键**：下游请求会话头中的 `(ascServiceName, ascOperation)` + `24 + usHeadLen` 之后 Payload 字节的哈希；由此天然忽略公共头 `ullSNO`、会话头时间戳与扩展头 Trace 等每次运行都会变化的字段；<br>2. **兜底匹配**：Payload 哈希未命中时，按同一接口的录制调用次序取下一条未使用的应答；<br>3. **未命中策略**：同一接口的录制应答已用完或不存在时，**不转发到真实下游、不返回应答**，记录 `MOCK_MISS` 明细（接口、Payload 摘要、时间），由目标进程自身的超时逻辑处理；<br>4. **自愈改写**：依据《CROS RPC 协议规范》（[`01-cros-rpc-protocol-spec.md`](../07-references/01-cros-rpc-protocol-spec.md)），命中后执行二进制自愈重写：<br>   - **请求序列号**：在应答公共头偏移 `8..15` 覆写当前请求的大端 `ullSNO`；<br>   - **Trace 缓冲回显**：将应答头 `RPC_RSP_HEAD_S` 偏移 `8..23` 的 `aucTraceBuff[16]` 覆写为请求头 `RPC_REQ_HEAD_S` 偏移 `144..159` 的对应值；<br>   - **发送时间戳回显**：对 V3+ 版本的应答头，将偏移 `32..39` 的 `ullClientSendTime` 覆写为请求头偏移 `248..255` 的 `ullSendTimeStamp`；<br>   - **服务与接口回显**：校验并确保应答头偏移 `56..119` 的 `ascServiceName` 与偏移 `120..183` 的 `ascOperation` 与请求一致；<br>   - **多段应答支持**：`RSP_SEG` 分片逐片改写上述字段；<br>5. **Oneway**：`ucReqType` 为 Oneway 的请求只记录、不应答；<br>6. **MNG 帧** (A-08)：按 `ucMsgType` 取录制中的同类应答原样回放并覆写 `ullSNO`，没有则忽略。 | 1. 目标进程重放时生成全新的随机 `ullSNO`（如 `0x000000010009A2B3`）、新 TraceID 与新时间戳，Agent 仍命中 Mock，应答帧中的 `ullSNO`、`aucTraceBuff` 与 `ullClientSendTime` 与当前请求保持一致；<br>2. 同接口 Payload 含动态参数时按调用次序兜底命中；<br>3. 调用次数超过录制次数时产生 `MOCK_MISS` 明细，且没有任何流量流向真实下游；<br>4. 3 段 `RSP_SEG` 分片全部被正确改写。 |
 | **F-14** | **协议头级 + Protobuf 字段级双层回归 Diff** | `Server`<br>`Frontend` | **P0** | 把 Agent 回传的实际应答（`Actual`）与录制基线（`Expected`）比对：<br>1. **第一层（协议头）**：比对 `ucMsgType`、`uiStatusCode` / `ullStatusCode`、`usRspMsgNo`、`isPacked` 与 Payload 原始字节；<br>2. **第二层（Protobuf 字段）**：Payload 字节不同且有 `.pb` 映射时，解码为 JSON 树逐字段计算 `[]FieldDiff{FieldPath, Expected, Actual}`；没有 `.pb` 映射时只给出字节级 Diff；<br>3. **固定豁免**：会话头 / 扩展头中的服务端时间戳（`ullServerRecvTime`、`ullServerSendTime`、`ullServerEnqueueTime`）不参与比对；<br>4. **忽略规则**：可按接口 `(service, operation)` 配置忽略的字段路径，重放任务可临时追加；<br>5. **顺序语义**：`repeated` 字段按顺序比对，`map` 字段不考虑顺序。 | 1. 应答 `uiStatusCode` 变为非零，结果为 `FAILED` 并指出状态码字段；<br>2. `discount_cents` 由 `6500` 变为 `6600`，结果为 `FAILED` 并给出 `FieldPath` 与期望 / 实际值；<br>3. 只有服务端时间戳不同，结果为 `PASS`；<br>4. 被配置为忽略的字段不同，结果为 `PASS`；`map` 只是顺序不同，结果为 `PASS`。 |
 
 ---
@@ -252,12 +253,12 @@ erDiagram
 | 场景编号 | 场景名称 | 触发条件与输入 | 预期行为与断言 |
 | :--- | :--- | :--- | :--- |
 | **SC-01** | **免密探针、未认证拦截与 RBAC 越权** | 1. `GET /api/health`<br>2. 无 JWT 访问受保护接口<br>3. 普通用户新增架构元素、上传 `.pb`、开始录制 | 1. `200 OK` 且 `service: "Code-Traefik"`<br>2. `401`<br>3. 全部 `403` |
-| **SC-02** | **架构建模约束与静态拓扑推导** | 管理员创建子系统、三级嵌套功能组、模块，绑定进程，声明 `PROVIDE` / `DEPEND`；尝试把功能组移到其子孙下；尝试让第二个模块供给已被供给的接口；上传 `.pb` | 成环移动返回 `400`；重复供给返回 `409`；`.pb` 映射正确；静态拓扑包含正常边、外部占位边与「进程内」边；审计记录完整 |
+| **SC-02** | **架构建模约束与静态拓扑推导** | 管理员创建子系统、三级嵌套功能组、模块，绑定进程，声明 `PROVIDE` / `DEPEND`；尝试把功能组移到其子孙下；尝试让第二个模块供给已被供给的接口；上传 `.pb` | 成环移动返回 `400`；重复供给返回 `409`；`.pb` 映射正确（自动按 `{package}_{serviceName}` 生成 `ascServiceName` 并绑定模块接口）；静态拓扑包含正常边、外部占位边与「进程内」边；审计记录完整 |
 | **SC-03** | **Agent 纳管、信道与白名单** | 启动 `code-traefik-agent`（监听 `127.0.0.1`），主控登记并下发监控元信息、建立 WebSocket；模拟非白名单 IP 访问；停止 Agent | 握手成功并定位目标 PID；非白名单返回 `403`；Agent 停止后 3 个心跳周期内变为 `OFFLINE` |
 | **SC-04** | **CROS RPC 分帧与解码** | 向 `pkg/crosrpc` 输入：带前序脏字节的流、1 字节碎片流、多包粘连流、V01 / V05 会话头、含 Trace 扩展头的报文、`usHeadLen > uiLength` 的畸形包 | 正确切出完整帧并提取 `ullSNO`、`ascServiceName`、`ascOperation`、`TraceID`；主控正确解码 Payload；畸形帧被拒绝且无 panic |
 | **SC-05** | **单 Agent 多进程协同录制** | 同一 Agent 下监控 `Process_A`（含 `Module_A`）与 `Process_B`（含 `Module_B`）；先建立一条存量长连接再下发监控；重启两进程后执行 `外部 → Process_A → Process_B` 业务请求 | 下发后上报存量连接诊断；重启后 A 的入站 / 出站、B 的入站都被采集且不死锁；同一 `session_id` 下按 `process_id` 正确归档，REQ / RSP 配对正确 |
 | **SC-06** | **架构一致性验证** | 使用 SC-05 的录制结果，静态模型中 `Module_A` 未声明对 `Module_B` 接口的依赖，另有一个已声明但未触发的依赖与一条同进程内依赖 | `A → B` 标为 `Violation`；未触发依赖标为 `Uncovered`；同进程内依赖标为 `Not Observable` |
-| **SC-07** | **零 `.pb` 重放与 `ullSNO` 自愈** | 关闭下游，对 SC-05 中 `Process_A` 的入站请求发起重放；目标进程生成全新随机 `ullSNO` 与时间戳 | Agent 注入请求，下游调用按 `(service, operation)` + Payload 哈希命中 Mock，应答 `ullSNO` 被正确覆写，结果为 `PASS` |
+| **SC-07** | **零 `.pb` 重放与 `ullSNO` 自愈** | 关闭下游，对 SC-05 中 `Process_A` 的入站请求发起重放；目标进程生成全新随机 `ullSNO` 与时间戳 | Agent 注入请求，下游调用按 `(service, operation)` + Payload 哈希命中 Mock，应答 `ullSNO`、`aucTraceBuff` 与 `ullClientSendTime` 被正确覆写，结果为 `PASS` |
 | **SC-08** | **业务突变与 Mock 未命中检出** | ① 修改目标进程使 `uiStatusCode` 非零或 `discount_cents` 变化；② 修改目标进程使其多调用一次下游接口 | ① 结果为 `FAILED`，定位到状态码或字段路径，服务端时间戳差异被忽略；② 结果为 `MOCK_MISS`，明细中包含多出的那次调用，且没有流量流向真实下游 |
 
 ---
