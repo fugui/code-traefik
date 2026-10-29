@@ -31,12 +31,14 @@ export const ReplayReportDrawer: React.FC<ReplayReportDrawerProps> = ({
   const [extraIgnorePaths, setExtraIgnorePaths] = useState('');
   const [rediffing, setRediffing] = useState(false);
 
+  const taskId = task?.id;
+
   useEffect(() => {
-    if (!open || !task) return;
+    if (!open || !taskId) return;
     void (async () => {
       setLoading(true);
       try {
-        const res = await replayApi.listReplayItems(task.id, { page_size: 100 });
+        const res = await replayApi.listReplayItems(taskId, { page_size: 100 });
         setItems(res.items);
         if (res.items.length > 0) {
           setSelectedItemId(res.items[0].id);
@@ -47,20 +49,20 @@ export const ReplayReportDrawer: React.FC<ReplayReportDrawerProps> = ({
         setLoading(false);
       }
     })();
-  }, [open, task, toast]);
+  }, [open, taskId, toast]);
 
   // 加载单条重放明细详情
   useEffect(() => {
-    if (!task || !selectedItemId) return;
+    if (!taskId || !selectedItemId) return;
     void (async () => {
       try {
-        const detail = await replayApi.getReplayItemDetail(task.id, selectedItemId);
+        const detail = await replayApi.getReplayItemDetail(taskId, selectedItemId);
         setItemDetail(detail);
       } catch (err) {
         toast.error(err instanceof Error ? err.message : '加载重放断言详情失败');
       }
     })();
-  }, [task, selectedItemId, toast]);
+  }, [taskId, selectedItemId, toast]);
 
   const handleRediff = async () => {
     if (!task) return;

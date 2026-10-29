@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Pagination, usePaginationState } from '@code/common';
 import { useToast } from '../../utils/toast';
@@ -94,13 +94,15 @@ export const TrafficMonitorWorkbenchPage: React.FC = () => {
     })();
   }, []);
 
+  const currentSessionId = currentSession?.id;
+
   // 加载流量记录列表
   const loadRecords = useCallback(async () => {
-    if (!currentSession) return;
+    if (!currentSessionId) return;
     setLoading(true);
     try {
       const res = await trafficApi.listTrafficRecords({
-        session_id: currentSession.id,
+        session_id: currentSessionId,
         direction: filters.direction,
         exchange_type: filters.exchange_type,
         service_name: filters.service_name,
@@ -119,21 +121,37 @@ export const TrafficMonitorWorkbenchPage: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [currentSession, filters.direction, filters.exchange_type, filters.service_name, filters.operation, filters.sno, filters.trace_id, filters.keyword, filters.is_replayable, page, pageSize, toast]);
+  }, [
+    currentSessionId,
+    filters.direction,
+    filters.exchange_type,
+    filters.service_name,
+    filters.operation,
+    filters.sno,
+    filters.trace_id,
+    filters.keyword,
+    filters.is_replayable,
+    page,
+    pageSize,
+    toast,
+  ]);
 
   useEffect(() => {
     void loadRecords();
   }, [loadRecords]);
 
+  const loadRecordsRef = useRef(loadRecords);
+  loadRecordsRef.current = loadRecords;
+
   // SSE 实时流订阅
   useEffect(() => {
-    if (!currentSession || isSsePaused) return;
+    if (!currentSessionId || isSsePaused) return;
 
     const unsubscribe = subscribeServerEvents({
-      sessionId: currentSession.id,
+      sessionId: currentSessionId,
       onMessage: (evt) => {
         if (evt.event === 'traffic.persisted' || evt.event === 'session.lifecycle') {
-          void loadRecords();
+          void loadRecordsRef.current();
         }
       },
     });
@@ -141,7 +159,7 @@ export const TrafficMonitorWorkbenchPage: React.FC = () => {
     return () => {
       unsubscribe();
     };
-  }, [currentSession, isSsePaused, loadRecords]);
+  }, [currentSessionId, isSsePaused]);
 
   // 打开单条报文解剖抽屉
   const handleOpenAnatomy = async (record: TrafficRecordSummary) => {

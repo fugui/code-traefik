@@ -101,15 +101,19 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
     try {
       const res = await archApi.listSubsystems({ page_size: 100 });
       setSubsystems(res.items);
-      if (res.items.length > 0 && !selectedSubsystemId) {
-        const firstId = res.items[0].id;
-        setSelectedSubsystemId(firstId);
-        updateParams({ subsystem_id: firstId });
+      if (res.items.length > 0) {
+        setSelectedSubsystemId((prev) => {
+          if (!prev) {
+            updateParams({ subsystem_id: res.items[0].id });
+            return res.items[0].id;
+          }
+          return prev;
+        });
       }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '加载子系统失败');
     }
-  }, [selectedSubsystemId, updateParams, toast]);
+  }, [updateParams, toast]);
 
   useEffect(() => {
     void loadSubsystems();
@@ -201,14 +205,14 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
       try {
         const res = await trafficApi.listRecordingSessions({ page_size: 50 });
         setSessions(res.items);
-        if (res.items.length > 0 && !selectedSessionId) {
-          setSelectedSessionId(res.items[0].id);
+        if (res.items.length > 0) {
+          setSelectedSessionId((prev) => prev || res.items[0].id);
         }
       } catch (err) {
         toast.error(err instanceof Error ? err.message : '加载录制批次失败');
       }
     })();
-  }, [activeTab, selectedSessionId, toast]);
+  }, [activeTab, toast]);
 
   const loadConsistency = useCallback(async () => {
     if (!selectedSessionId) return;

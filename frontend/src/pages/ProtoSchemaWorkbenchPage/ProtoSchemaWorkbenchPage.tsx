@@ -42,13 +42,13 @@ export const ProtoSchemaWorkbenchPage: React.FC = () => {
     try {
       const res = await schemaApi.listProtoSchemas({ page_size: 100 });
       setSchemas(res.items);
-      if (res.items.length > 0 && !selectedSchemaId) {
-        setSelectedSchemaId(res.items[0].id);
+      if (res.items.length > 0) {
+        setSelectedSchemaId((prev) => prev || res.items[0].id);
       }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '加载描述集列表失败');
     }
-  }, [selectedSchemaId, toast]);
+  }, [toast]);
 
   useEffect(() => {
     void loadSchemas();

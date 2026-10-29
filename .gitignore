@@ -1,7 +1,9 @@
 # 构建产物与可执行二进制
 code-traefik-server
+code-traefik-agent
 code-template-server
 *-server
+*-agent
 bin/
 dist/
 frontend/dist/

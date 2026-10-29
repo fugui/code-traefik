@@ -55,15 +55,15 @@ export const AgentManagementPage: React.FC = () => {
       });
       setAgents(res.items);
       setTotalAgents(res.total);
-      if (res.items.length > 0 && !selectedAgent) {
-        setSelectedAgent(res.items[0]);
+      if (res.items.length > 0) {
+        setSelectedAgent((prev) => prev || res.items[0]);
       }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '加载 Agent 列表失败');
     } finally {
       setLoading(false);
     }
-  }, [scopeParam, page, pageSize, selectedAgent, toast]);
+  }, [scopeParam, page, pageSize, toast]);
 
   useEffect(() => {
     void loadAgents();

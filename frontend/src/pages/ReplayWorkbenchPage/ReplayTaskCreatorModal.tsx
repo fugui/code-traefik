@@ -33,13 +33,13 @@ export const ReplayTaskCreatorModal: React.FC<ReplayTaskCreatorModalProps> = ({
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    if (sessions.length > 0 && !selectedSessionId) {
-      setSelectedSessionId(sessions[0].id);
+    if (sessions.length > 0) {
+      setSelectedSessionId((prev) => prev || sessions[0].id);
     }
-    if (processes.length > 0 && !selectedProcessId) {
-      setSelectedProcessId(processes[0].id);
+    if (processes.length > 0) {
+      setSelectedProcessId((prev) => prev || processes[0].id);
     }
-  }, [sessions, processes, selectedSessionId, selectedProcessId]);
+  }, [sessions, processes]);
 
   // 当录制批次变更时，加载其 INGRESS 且可重放的流量记录
   useEffect(() => {
