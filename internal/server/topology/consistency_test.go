@@ -37,8 +37,8 @@ func TestResolveSourceModuleThreeTierPriority(t *testing.T) {
 		t.Fatalf("创建功能组失败: %v", err)
 	}
 
-	modA := models.Module{GroupID: grp.ID, Code: "MOD_ORDER_A", Name: "订单模块A", CreatedBy: 1}
-	modB := models.Module{GroupID: grp.ID, Code: "MOD_ORDER_B", Name: "订单模块B", CreatedBy: 1}
+	modA := models.Module{SubsystemID: sub.ID, GroupID: grp.ID, Code: "MOD_ORDER_A", Name: "订单模块A", CreatedBy: 1}
+	modB := models.Module{SubsystemID: sub.ID, GroupID: grp.ID, Code: "MOD_ORDER_B", Name: "订单模块B", CreatedBy: 1}
 	if err := db.Create(&modA).Error; err != nil {
 		t.Fatalf("创建模块A失败: %v", err)
 	}
@@ -176,11 +176,11 @@ func TestSC06_ArchitectureConsistencyVerification(t *testing.T) {
 	grp := models.FunctionalGroup{SubsystemID: sub.ID, Code: "GRP_BIZ", Name: "业务功能组", Level: 1, CreatedBy: 1}
 	db.Create(&grp)
 
-	mod1 := models.Module{GroupID: grp.ID, Code: "MOD_1", Name: "模块1", CreatedBy: 1}
-	mod2 := models.Module{GroupID: grp.ID, Code: "MOD_2", Name: "模块2", CreatedBy: 1}
-	mod3 := models.Module{GroupID: grp.ID, Code: "MOD_3", Name: "模块3", CreatedBy: 1}
-	mod4 := models.Module{GroupID: grp.ID, Code: "MOD_4", Name: "模块4", CreatedBy: 1}
-	modUnmon := models.Module{GroupID: grp.ID, Code: "MOD_UNMON", Name: "未监控模块", CreatedBy: 1}
+	mod1 := models.Module{SubsystemID: sub.ID, GroupID: grp.ID, Code: "MOD_1", Name: "模块1", CreatedBy: 1}
+	mod2 := models.Module{SubsystemID: sub.ID, GroupID: grp.ID, Code: "MOD_2", Name: "模块2", CreatedBy: 1}
+	mod3 := models.Module{SubsystemID: sub.ID, GroupID: grp.ID, Code: "MOD_3", Name: "模块3", CreatedBy: 1}
+	mod4 := models.Module{SubsystemID: sub.ID, GroupID: grp.ID, Code: "MOD_4", Name: "模块4", CreatedBy: 1}
+	modUnmon := models.Module{SubsystemID: sub.ID, GroupID: grp.ID, Code: "MOD_UNMON", Name: "未监控模块", CreatedBy: 1}
 	db.Create(&mod1)
 	db.Create(&mod2)
 	db.Create(&mod3)
