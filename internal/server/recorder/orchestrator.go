@@ -16,8 +16,10 @@ import (
 	commonAudit "code-common/backend/audit"
 	"code-traefik/config"
 	"code-traefik/internal/server/hub"
+	"code-traefik/internal/server/topology"
 	"code-traefik/models"
 	"code-traefik/pkg/agentproto"
+	"github.com/gorilla/websocket"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
@@ -55,11 +57,12 @@ type SessionListQuery struct {
 
 // Orchestrator 多进程协同录制中枢编排器
 type Orchestrator struct {
-	db         *gorm.DB
-	assembler  *ExchangeAssembler
-	httpClient *http.Client
-	timers     sync.Map // sessionID (uint64) -> *time.Timer
-	mu         sync.Mutex
+	db            *gorm.DB
+	assembler     *ExchangeAssembler
+	httpClient    *http.Client
+	timers        sync.Map // sessionID (uint64) -> *time.Timer
+	streamCancels sync.Map // sessionID (uint64) -> context.CancelFunc
+	mu            sync.Mutex
 }
 
 // NewOrchestrator 构造 Orchestrator
@@ -188,10 +191,12 @@ func (o *Orchestrator) StartSession(
 		var specs []agentproto.ProcessMonitorSpec
 		for _, p := range procs {
 			if p.AgentID == agtID {
+				downstreams, _ := topology.CompileProcessDownstreams(o.db, p.ID, req.TargetProcessIDs, nil)
 				specs = append(specs, agentproto.ProcessMonitorSpec{
-					ProcessID:  p.ID,
-					ListenPort: uint16(p.ListenPort),
-					CmdPattern: p.CmdPattern,
+					ProcessID:   p.ID,
+					ListenPort:  uint16(p.ListenPort),
+					CmdPattern:  p.CmdPattern,
+					Downstreams: downstreams,
 				})
 			}
 		}
@@ -220,6 +225,13 @@ func (o *Orchestrator) StartSession(
 		"process_diagnostics": session.ProcessDiagnostics,
 	}).Error; err != nil {
 		return nil, fmt.Errorf("更新录制会话状态失败: %w", err)
+	}
+
+	// 5.5 建立与各 Agent 的二进制 WebSocket 采集流
+	streamCtx, streamCancel := context.WithCancel(context.Background())
+	o.streamCancels.Store(session.ID, streamCancel)
+	for _, agt := range agentMap {
+		go o.startAgentStream(streamCtx, session.ID, agt)
 	}
 
 	// 6. 注册汇聚器帧数上限与时长自动停录定时器
@@ -273,9 +285,14 @@ func (o *Orchestrator) StopSession(
 		return nil, ErrSessionAlreadyEnded
 	}
 
-	// 取消定时器
+	// 取消定时器与采集流
 	if tVal, ok := o.timers.LoadAndDelete(sessionID); ok {
 		tVal.(*time.Timer).Stop()
+	}
+	if cancelVal, ok := o.streamCancels.LoadAndDelete(sessionID); ok {
+		if cancelFn, ok := cancelVal.(context.CancelFunc); ok {
+			cancelFn()
+		}
 	}
 
 	// 1. 解析参与 Agent 列表
@@ -593,5 +610,109 @@ func (o *Orchestrator) callAgentStop(ctx context.Context, agt *models.Agent) {
 	resp, err := o.httpClient.Do(httpReq)
 	if err == nil {
 		_ = resp.Body.Close()
+	}
+}
+
+func (o *Orchestrator) startAgentStream(ctx context.Context, sessionID uint64, agt *models.Agent) {
+	endpoint := agt.Endpoint
+	wsURL := strings.TrimRight(endpoint, "/") + "/agent/v1/stream"
+	if strings.HasPrefix(wsURL, "http://") {
+		wsURL = "ws://" + strings.TrimPrefix(wsURL, "http://")
+	} else if strings.HasPrefix(wsURL, "https://") {
+		wsURL = "wss://" + strings.TrimPrefix(wsURL, "https://")
+	}
+
+	header := make(http.Header)
+	if agt.ClaimCode != "" {
+		header.Set(agentproto.HeaderClaimCode, agt.ClaimCode)
+	}
+
+	dialer := websocket.Dialer{
+		HandshakeTimeout: 5 * time.Second,
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		conn, _, err := dialer.DialContext(ctx, wsURL, header)
+		if err != nil {
+			log.Printf("[Orchestrator] 连接 Agent [%s] stream 失败: %v, 将在 1 秒后重试", agt.Name, err)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(1 * time.Second):
+				continue
+			}
+		}
+
+		_ = o.readAgentStream(ctx, sessionID, conn)
+		_ = conn.Close()
+		if ctx.Err() != nil {
+			return
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
+func (o *Orchestrator) readAgentStream(ctx context.Context, sessionID uint64, conn *websocket.Conn) error {
+	pingCtx, pingCancel := context.WithCancel(ctx)
+	defer pingCancel()
+
+	// 定时向 Agent 发送 ping 帧保持活跃
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-pingCtx.Done():
+				return
+			case <-ticker.C:
+				if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+					return
+				}
+			}
+		}
+	}()
+
+	go func() {
+		<-ctx.Done()
+		_ = conn.Close()
+	}()
+
+	for {
+		msgType, data, err := conn.ReadMessage()
+		if err != nil {
+			return err
+		}
+		if msgType != websocket.BinaryMessage {
+			continue
+		}
+
+		header, payload, err := agentproto.UnmarshalEnvelope(data)
+		if err != nil {
+			log.Printf("[Orchestrator] 解析 Agent 信封帧失败: %v", err)
+			continue
+		}
+
+		if header.SessionOrTaskID != 0 && header.SessionOrTaskID != sessionID {
+			continue
+		}
+
+		switch header.EventType {
+		case agentproto.EventTrafficFrame:
+			if o.assembler != nil {
+				o.assembler.Feed(header, payload)
+			}
+		case agentproto.EventConnClosed:
+			if o.assembler != nil {
+				o.assembler.FeedConnClosed(header)
+			}
+		case agentproto.EventSessionDrained:
+			log.Printf("[Orchestrator] Agent 会话排空信号: session=%d", sessionID)
+		}
 	}
 }

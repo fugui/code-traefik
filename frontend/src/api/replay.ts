@@ -28,16 +28,23 @@ export async function getReplayTask(id: string) {
 
 export async function createReplayTask(data: {
   name: string;
-  session_id: string;
-  source_process_id: string;
-  target_process_id: string;
-  selected_record_ids: string[];
+  session_id: string | number;
+  source_process_id: string | number;
+  target_process_id: string | number;
+  selected_record_ids: (string | number)[];
   extra_ignore_paths?: string[];
   timeout_ms?: number;
 }) {
+  const payload = {
+    ...data,
+    session_id: Number(data.session_id),
+    source_process_id: Number(data.source_process_id || data.target_process_id),
+    target_process_id: Number(data.target_process_id),
+    selected_record_ids: (data.selected_record_ids ?? []).map((id) => Number(id)),
+  };
   return apiRequest<ReplayTask>('/replay-tasks', {
     method: 'POST',
-    body: JSON.stringify(data),
+    body: JSON.stringify(payload),
   });
 }
 

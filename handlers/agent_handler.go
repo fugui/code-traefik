@@ -95,6 +95,27 @@ func ListAgents(c *gin.Context) {
 		}
 	}
 
+	if len(items) > 0 {
+		agentIDs := make([]uint64, len(items))
+		for i, ag := range items {
+			agentIDs[i] = ag.ID
+		}
+		type procCount struct {
+			AgentID uint64
+			Count   int
+		}
+		var counts []procCount
+		if err := models.DB.Model(&models.Process{}).Select("agent_id, count(*) as count").Where("agent_id IN ?", agentIDs).Group("agent_id").Scan(&counts).Error; err == nil {
+			countMap := make(map[uint64]int)
+			for _, c := range counts {
+				countMap[c.AgentID] = c.Count
+			}
+			for i := range items {
+				items[i].ProcessesCount = countMap[items[i].ID]
+			}
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"items":     items,
 		"total":     total,
@@ -133,7 +154,8 @@ func GetAgent(c *gin.Context) {
 	}
 
 	procs := make([]models.Process, 0)
-	_ = models.DB.Where("agent_id = ?", agent.ID).Order("listen_port ASC").Find(&procs).Error
+	_ = models.DB.Preload("ProcessModules.Module").Where("agent_id = ?", agent.ID).Order("listen_port ASC").Find(&procs).Error
+	agent.ProcessesCount = len(procs)
 
 	c.JSON(http.StatusOK, gin.H{
 		"agent":     agent,

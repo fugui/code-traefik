@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"strconv"
@@ -469,6 +470,8 @@ func (m *Manager) attachLocked() error {
 	})
 	if err == nil {
 		links = append(links, cgroupLink)
+	} else {
+		log.Printf("[eBPF] AttachCgroup connect4 警告: %v", err)
 	}
 
 	// 挂载 sock_ops 钩子
@@ -479,52 +482,73 @@ func (m *Manager) attachLocked() error {
 	})
 	if err == nil {
 		links = append(links, sockopsLink)
+	} else {
+		log.Printf("[eBPF] AttachCgroup sock_ops 警告: %v", err)
 	}
 
 	// 挂载 syscall tracepoints
 	tpReadEnter, err := link.Tracepoint("syscalls", "sys_enter_read", objs.TraceSysEnterRead, nil)
 	if err == nil {
 		links = append(links, tpReadEnter)
+	} else {
+		log.Printf("[eBPF] Tracepoint sys_enter_read 警告: %v", err)
 	}
 	tpReadExit, err := link.Tracepoint("syscalls", "sys_exit_read", objs.TraceSysExitRead, nil)
 	if err == nil {
 		links = append(links, tpReadExit)
+	} else {
+		log.Printf("[eBPF] Tracepoint sys_exit_read 警告: %v", err)
 	}
 
 	tpWriteEnter, err := link.Tracepoint("syscalls", "sys_enter_write", objs.TraceSysEnterWrite, nil)
 	if err == nil {
 		links = append(links, tpWriteEnter)
+	} else {
+		log.Printf("[eBPF] Tracepoint sys_enter_write 警告: %v", err)
 	}
 	tpWriteExit, err := link.Tracepoint("syscalls", "sys_exit_write", objs.TraceSysExitWrite, nil)
 	if err == nil {
 		links = append(links, tpWriteExit)
+	} else {
+		log.Printf("[eBPF] Tracepoint sys_exit_write 警告: %v", err)
 	}
 
 	tpRecvEnter, err := link.Tracepoint("syscalls", "sys_enter_recvfrom", objs.TraceSysEnterRecvfrom, nil)
 	if err == nil {
 		links = append(links, tpRecvEnter)
+	} else {
+		log.Printf("[eBPF] Tracepoint sys_enter_recvfrom 警告: %v", err)
 	}
 	tpRecvExit, err := link.Tracepoint("syscalls", "sys_exit_recvfrom", objs.TraceSysExitRecvfrom, nil)
 	if err == nil {
 		links = append(links, tpRecvExit)
+	} else {
+		log.Printf("[eBPF] Tracepoint sys_exit_recvfrom 警告: %v", err)
 	}
 
 	tpSendEnter, err := link.Tracepoint("syscalls", "sys_enter_sendto", objs.TraceSysEnterSendto, nil)
 	if err == nil {
 		links = append(links, tpSendEnter)
+	} else {
+		log.Printf("[eBPF] Tracepoint sys_enter_sendto 警告: %v", err)
 	}
 	tpSendExit, err := link.Tracepoint("syscalls", "sys_exit_sendto", objs.TraceSysExitSendto, nil)
 	if err == nil {
 		links = append(links, tpSendExit)
+	} else {
+		log.Printf("[eBPF] Tracepoint sys_exit_sendto 警告: %v", err)
 	}
 
 	// 挂载 sched_process_exec
 	tpSchedExec, err := link.Tracepoint("sched", "sched_process_exec", objs.CrosSchedExec, nil)
 	if err == nil {
 		links = append(links, tpSchedExec)
+	} else {
+		log.Printf("[eBPF] Tracepoint sched_process_exec 警告: %v", err)
 	}
 
 	m.links = links
+	log.Printf("[eBPF] 探针挂载完成，共挂载 %d 个内核链接", len(links))
 
 	// 启动 RingBuf Reader
 	rb, err := ringbuf.NewReader(objs.IngRingbuf)

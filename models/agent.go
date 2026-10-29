@@ -33,11 +33,12 @@ type Agent struct {
 	LeaseAcquiredAt *time.Time `json:"lease_acquired_at,omitempty"`
 	LeaseExpiresAt  *time.Time `gorm:"index:idx_traefik_agents_lease_exp" json:"lease_expires_at,omitempty"`
 
-	Description string    `gorm:"type:text" json:"description"`
-	CreatedBy   uint      `gorm:"not null;default:0" json:"created_by"`
-	UpdatedBy   uint      `gorm:"not null;default:0" json:"updated_by"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	Description    string    `gorm:"type:text" json:"description"`
+	ProcessesCount int       `gorm:"-" json:"processes_count"`
+	CreatedBy      uint      `gorm:"not null;default:0" json:"created_by"`
+	UpdatedBy      uint      `gorm:"not null;default:0" json:"updated_by"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 func (Agent) TableName() string { return config.TablePrefix + "agents" }

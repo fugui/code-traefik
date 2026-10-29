@@ -7,6 +7,7 @@ export interface ProtoSchema {
   is_active: boolean;
   description?: string;
   operations_count?: number;
+  operation_count?: number;
   created_at?: string;
   updated_at?: string;
 }

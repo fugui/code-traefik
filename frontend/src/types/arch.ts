@@ -77,11 +77,12 @@ export interface Module {
 export interface StaticTopologyNode {
   id: string;
   name: string;
-  code: string;
-  kind: 'MODULE' | 'PROCESS' | 'SUBSYSTEM';
+  code?: string;
+  node_type?: string;
+  kind?: string;
   subsystem_id?: string;
   subsystem_name?: string;
-  process_id?: string;
+  process_id?: string | number;
   process_name?: string;
   listen_port?: number;
   is_external?: boolean;
@@ -89,11 +90,14 @@ export interface StaticTopologyNode {
 
 export interface StaticTopologyEdge {
   id: string;
-  source: string;
-  target: string;
+  source?: string;
+  target?: string;
+  source_node_id?: string;
+  target_node_id?: string;
   service_name: string;
   operation: string;
-  edge_kind: 'CROSS_PROCESS' | 'INTRA_PROCESS' | 'EXTERNAL_UNREGISTERED';
+  edge_kind?: 'CROSS_PROCESS' | 'INTRA_PROCESS' | 'EXTERNAL_UNREGISTERED';
+  kind?: 'CROSS_PROCESS' | 'INTRA_PROCESS' | 'EXTERNAL_UNREGISTERED';
 }
 
 export interface StaticTopologyDTO {

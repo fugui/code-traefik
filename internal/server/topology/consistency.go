@@ -26,15 +26,20 @@ const (
 // ConsistencyEdgeResult 单条边一致性验证结果
 type ConsistencyEdgeResult struct {
 	Status             VerificationStatus `json:"status"`
+	Category           VerificationStatus `json:"category"`
 	SrcModuleID        *uint64            `json:"src_module_id,omitempty"`
+	SourceModuleName   string             `json:"source_module_name,omitempty"`
 	SrcProcessID       *uint64            `json:"src_process_id,omitempty"`
 	CandidateModuleIDs []uint64           `json:"candidate_module_ids,omitempty"`
 	DstModuleID        *uint64            `json:"dst_module_id,omitempty"` // nil 表示未登记外部接口
+	TargetModuleName   string             `json:"target_module_name,omitempty"`
 	ServiceName        string             `json:"service_name"`
 	Operation          string             `json:"operation"`
 	ObservedCallCount  int64              `json:"observed_call_count"`
+	CallCount          int64              `json:"call_count"`
 	AttributionMode    string             `json:"attribution_mode,omitempty"`
 	SampleTrafficRecID *uint64            `json:"sample_traffic_record_id,omitempty"`
+	Detail             string             `json:"detail,omitempty"`
 }
 
 // ConsistencyReportDTO 一致性验证报告响应 DTO
@@ -47,6 +52,7 @@ type ConsistencyReportDTO struct {
 	NotMonitoredCount  int                     `json:"not_monitored_count"`
 	NotObservableCount int                     `json:"not_observable_count"`
 	UnattributedCount  int                     `json:"unattributed_count"`
+	Stats              map[string]int          `json:"stats"`
 	Edges              []ConsistencyEdgeResult `json:"edges"`
 }
 
@@ -89,7 +95,9 @@ func VerifySessionTopology(ctx context.Context, db *gorm.DB, sessionID uint64, r
 	if err := db.WithContext(ctx).Find(&allModules).Error; err != nil {
 		return nil, err
 	}
+	moduleNameMap := make(map[uint64]string, len(allModules))
 	for _, m := range allModules {
+		moduleNameMap[m.ID] = m.Name
 		if _, ok := moduleProcessMap[m.ID]; !ok && m.ProcessID != nil && *m.ProcessID > 0 {
 			moduleProcessMap[m.ID] = *m.ProcessID
 		}
@@ -383,7 +391,38 @@ func VerifySessionTopology(ctx context.Context, db *gorm.DB, sessionID uint64, r
 		edges = append(edges, edge)
 	}
 
-	// 8. 汇总各状态计数
+	// 8. 丰富边信息并汇总各状态计数
+	for i := range edges {
+		edges[i].Category = edges[i].Status
+		edges[i].CallCount = edges[i].ObservedCallCount
+		if edges[i].SrcModuleID != nil {
+			if name, ok := moduleNameMap[*edges[i].SrcModuleID]; ok {
+				edges[i].SourceModuleName = name
+			}
+		}
+		if edges[i].DstModuleID != nil {
+			if name, ok := moduleNameMap[*edges[i].DstModuleID]; ok {
+				edges[i].TargetModuleName = name
+			}
+		}
+		if edges[i].Detail == "" {
+			switch edges[i].Status {
+			case StatusVerified:
+				edges[i].Detail = "实测跨模块调用与静态 PROVIDE/DEPEND 声明契约完全吻合"
+			case StatusViolation:
+				edges[i].Detail = "实测抓取到调用关系，但静态拓扑架构中未显式声明 DEPEND 依赖"
+			case StatusUncovered:
+				edges[i].Detail = "静态拓扑已声明依赖契约，但本次录制窗口内未观测到实际调用"
+			case StatusNotMonitored:
+				edges[i].Detail = "目标供给方进程未纳入本次会话录制监控范围"
+			case StatusNotObservable:
+				edges[i].Detail = "同进程内部调用或缺乏必要探针插桩"
+			case StatusUnattributed:
+				edges[i].Detail = "无法将源地址推导归属至具体单一业务模块"
+			}
+		}
+	}
+
 	report := &ConsistencyReportDTO{
 		SessionID:          sessionID,
 		StaticModelVersion: time.Now(),
@@ -405,6 +444,15 @@ func VerifySessionTopology(ctx context.Context, db *gorm.DB, sessionID uint64, r
 		case StatusUnattributed:
 			report.UnattributedCount++
 		}
+	}
+
+	report.Stats = map[string]int{
+		string(StatusVerified):      report.VerifiedCount,
+		string(StatusViolation):     report.ViolationCount,
+		string(StatusUncovered):     report.UncoveredCount,
+		string(StatusNotMonitored):  report.NotMonitoredCount,
+		string(StatusNotObservable): report.NotObservableCount,
+		string(StatusUnattributed):  report.UnattributedCount,
 	}
 
 	// 9. 更新 session 表的 TopologyVerifySummary 缓存

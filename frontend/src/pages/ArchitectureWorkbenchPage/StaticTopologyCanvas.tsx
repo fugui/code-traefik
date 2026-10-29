@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import type { StaticTopologyDTO, StaticTopologyNode, StaticTopologyEdge } from '../../types';
+import type { StaticTopologyDTO, StaticTopologyNode } from '../../types';
 
 export interface StaticTopologyCanvasProps {
   topology: StaticTopologyDTO | null;
@@ -41,7 +41,7 @@ export const StaticTopologyCanvas: React.FC<StaticTopologyCanvasProps> = ({
     return map;
   }, [topoNodes]);
 
-  const getEdgeStroke = (kind: StaticTopologyEdge['edge_kind']) => {
+  const getEdgeStroke = (kind?: string) => {
     switch (kind) {
       case 'CROSS_PROCESS':
         return 'var(--color-primary)';
@@ -104,8 +104,11 @@ export const StaticTopologyCanvas: React.FC<StaticTopologyCanvasProps> = ({
 
               {/* 边连线 */}
               {edges.map((edge) => {
-                const srcPos = nodePositions.get(edge.source);
-                const dstPos = nodePositions.get(edge.target);
+                const srcId = edge.source_node_id || edge.source || '';
+                const dstId = edge.target_node_id || edge.target || '';
+                const edgeKind = edge.kind || edge.edge_kind || 'CROSS_PROCESS';
+                const srcPos = nodePositions.get(srcId);
+                const dstPos = nodePositions.get(dstId);
                 if (!srcPos || !dstPos) return null;
                 return (
                   <g key={edge.id} className="code-topology-edge-group">
@@ -114,9 +117,9 @@ export const StaticTopologyCanvas: React.FC<StaticTopologyCanvasProps> = ({
                       y1={srcPos.y}
                       x2={dstPos.x}
                       y2={dstPos.y}
-                      stroke={getEdgeStroke(edge.edge_kind)}
+                      stroke={getEdgeStroke(edgeKind)}
                       strokeWidth="2"
-                      strokeDasharray={edge.edge_kind === 'EXTERNAL_UNREGISTERED' ? '4 3' : undefined}
+                      strokeDasharray={edgeKind === 'EXTERNAL_UNREGISTERED' ? '4 3' : undefined}
                       markerEnd="url(#topo-arrow)"
                     />
                     <text
@@ -137,6 +140,7 @@ export const StaticTopologyCanvas: React.FC<StaticTopologyCanvasProps> = ({
                 const pos = nodePositions.get(node.id);
                 if (!pos) return null;
                 const isSelected = selectedNode?.id === node.id;
+                const label = (node.code || node.name || '').slice(0, 5);
                 return (
                   <g
                     key={node.id}
@@ -156,7 +160,7 @@ export const StaticTopologyCanvas: React.FC<StaticTopologyCanvasProps> = ({
                       fill="var(--color-text-primary)"
                       className="code-node-text"
                     >
-                      {node.code.slice(0, 5)}
+                      {label}
                     </text>
                     <text
                       y="38"
@@ -189,11 +193,11 @@ export const StaticTopologyCanvas: React.FC<StaticTopologyCanvasProps> = ({
             <div className="code-meta-grid">
               <div className="code-meta-item">
                 <span className="code-meta-label">编码:</span>
-                <span className="code-meta-val code-font-mono">{selectedNode.code}</span>
+                <span className="code-meta-val code-font-mono">{selectedNode.code || '-'}</span>
               </div>
               <div className="code-meta-item">
                 <span className="code-meta-label">类型:</span>
-                <span className="code-badge code-badge--info">{selectedNode.kind}</span>
+                <span className="code-badge code-badge--info">{selectedNode.node_type || selectedNode.kind || '-'}</span>
               </div>
               {selectedNode.process_name && (
                 <div className="code-meta-item">

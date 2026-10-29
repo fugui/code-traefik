@@ -57,7 +57,7 @@ func ListProtoSchemas(c *gin.Context) {
 	activeOnlyStr := c.Query("active_only")
 	search := strings.TrimSpace(c.Query("search"))
 
-	query := models.DB.Model(&models.ProtoSchema{}).Select("id, name, version, version_tag, file_name, file_size, is_active, activated_at, description, created_by, created_at, updated_at")
+	query := models.DB.Model(&models.ProtoSchema{}).Omit("descriptor_bytes")
 	if name != "" {
 		query = query.Where("name = ?", name)
 	}

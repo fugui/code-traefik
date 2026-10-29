@@ -42,6 +42,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
 
   // 拓扑与一致性数据
   const [topology, setTopology] = useState<StaticTopologyDTO | null>(null);
+  const [topologyView, setTopologyView] = useState<'LOGICAL' | 'PHYSICAL'>('PHYSICAL');
   const [loadingTopo, setLoadingTopo] = useState(false);
   const [sessions, setSessions] = useState<RecordingSession[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string>(urlSessionId);
@@ -197,9 +198,8 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
   );
 
   useEffect(() => {
-    if (activeTab === 'logical') void loadTopology('LOGICAL');
-    if (activeTab === 'physical') void loadTopology('PHYSICAL');
-  }, [activeTab, loadTopology]);
+    if (activeTab === 'physical') void loadTopology(topologyView);
+  }, [activeTab, topologyView, loadTopology]);
 
   // 一致性报告加载
   useEffect(() => {
@@ -516,8 +516,11 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
           <StaticTopologyCanvas
             topology={topology}
             loading={loadingTopo}
-            view="PHYSICAL"
-            onViewChange={() => {}}
+            view={topologyView}
+            onViewChange={(v) => {
+              setTopologyView(v);
+              void loadTopology(v);
+            }}
           />
         )}
 

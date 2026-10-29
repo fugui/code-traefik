@@ -142,19 +142,29 @@ export interface RecordingSession {
 }
 
 export interface ConsistencyEdge {
-  source_module_id: string;
-  source_module_name: string;
-  target_module_id: string;
-  target_module_name: string;
+  source_module_id?: string;
+  source_module_name?: string;
+  src_module_name?: string;
+  target_module_id?: string;
+  target_module_name?: string;
+  dst_module_name?: string;
   service_name: string;
   operation: string;
   category: 'VERIFIED' | 'VIOLATION' | 'UNCOVERED' | 'NOT_MONITORED' | 'NOT_OBSERVABLE' | 'UNATTRIBUTED';
+  status?: 'VERIFIED' | 'VIOLATION' | 'UNCOVERED' | 'NOT_MONITORED' | 'NOT_OBSERVABLE' | 'UNATTRIBUTED';
   call_count: number;
+  observed_call_count?: number;
   detail?: string;
 }
 
 export interface ConsistencyReportDTO {
   session_id: string;
-  stats: Record<'VERIFIED' | 'VIOLATION' | 'UNCOVERED' | 'NOT_MONITORED' | 'NOT_OBSERVABLE' | 'UNATTRIBUTED', number>;
+  stats?: Record<'VERIFIED' | 'VIOLATION' | 'UNCOVERED' | 'NOT_MONITORED' | 'NOT_OBSERVABLE' | 'UNATTRIBUTED', number>;
   edges: ConsistencyEdge[];
+  verified_count?: number;
+  violation_count?: number;
+  uncovered_count?: number;
+  not_monitored_count?: number;
+  not_observable_count?: number;
+  unattributed_count?: number;
 }

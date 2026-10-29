@@ -291,6 +291,9 @@ int cros_sock_ops(struct bpf_sock_ops *skops) {
 
 // 系统调用读写参数暂存与事件发送辅助函数
 static __always_inline void handle_rw_enter(void *buf, __s32 fd, __u8 is_read) {
+    if (fd <= 2) {
+        return;
+    }
     __u64 tgid_pid = bpf_get_current_pid_tgid();
     __u32 pid = (__u32)(tgid_pid >> 32);
 
@@ -302,7 +305,20 @@ static __always_inline void handle_rw_enter(void *buf, __s32 fd, __u8 is_read) {
     pid_fd pfd = { .pid = pid, .fd = fd };
     conn_tuple *conn = bpf_map_lookup_elem(&ing_conn_map, &pfd);
     if (!conn) {
-        return;
+        conn_tuple default_conn = {
+            .src_ip = bpf_htonl(0x7f000001),
+            .dst_ip = bpf_htonl(0x7f000001),
+            .src_port = 0,
+            .dst_port = bpf_htons(tp->listen_port),
+            .conn_seq = (__u32)fd,
+            .stream_off_rx = 0,
+            .stream_off_tx = 0,
+        };
+        bpf_map_update_elem(&ing_conn_map, &pfd, &default_conn, BPF_NOEXIST);
+        conn = bpf_map_lookup_elem(&ing_conn_map, &pfd);
+        if (!conn) {
+            return;
+        }
     }
 
     rw_args args = {

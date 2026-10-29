@@ -25,7 +25,7 @@ export const ConsistencyVerifyOverlay: React.FC<ConsistencyVerifyOverlayProps> =
   }
 
   const categoryMeta: Record<
-    keyof ConsistencyReportDTO['stats'],
+    'VERIFIED' | 'VIOLATION' | 'UNCOVERED' | 'NOT_MONITORED' | 'NOT_OBSERVABLE' | 'UNATTRIBUTED',
     { label: string; badgeClass: string; desc: string }
   > = {
     VERIFIED: {
@@ -60,6 +60,16 @@ export const ConsistencyVerifyOverlay: React.FC<ConsistencyVerifyOverlayProps> =
     },
   };
 
+  const rawStats = report.stats || ({} as Record<string, number>);
+  const stats: Record<string, number> = {
+    VERIFIED: rawStats.VERIFIED ?? report.verified_count ?? 0,
+    VIOLATION: rawStats.VIOLATION ?? report.violation_count ?? 0,
+    UNCOVERED: rawStats.UNCOVERED ?? report.uncovered_count ?? 0,
+    NOT_MONITORED: rawStats.NOT_MONITORED ?? report.not_monitored_count ?? 0,
+    NOT_OBSERVABLE: rawStats.NOT_OBSERVABLE ?? report.not_observable_count ?? 0,
+    UNATTRIBUTED: rawStats.UNATTRIBUTED ?? report.unattributed_count ?? 0,
+  };
+
   return (
     <div className="code-consistency-overlay">
       <div className="code-consistency-header">
@@ -80,8 +90,8 @@ export const ConsistencyVerifyOverlay: React.FC<ConsistencyVerifyOverlayProps> =
 
       {/* 统计指标卡片 */}
       <div className="code-stats-grid">
-        {(Object.keys(categoryMeta) as Array<keyof ConsistencyReportDTO['stats']>).map((catKey) => {
-          const count = report.stats[catKey] ?? 0;
+        {(Object.keys(categoryMeta) as Array<keyof typeof categoryMeta>).map((catKey) => {
+          const count = stats[catKey] ?? 0;
           const meta = categoryMeta[catKey];
           return (
             <div key={catKey} className="code-stat-card">
@@ -112,20 +122,24 @@ export const ConsistencyVerifyOverlay: React.FC<ConsistencyVerifyOverlayProps> =
             </thead>
             <tbody>
               {(report.edges ?? []).map((edge, idx) => {
-                const meta = categoryMeta[edge.category];
+                const cat = (edge.category || edge.status || 'UNATTRIBUTED') as keyof typeof categoryMeta;
+                const meta = categoryMeta[cat] || categoryMeta.UNATTRIBUTED;
+                const callCount = edge.call_count ?? edge.observed_call_count ?? 0;
+                const srcName = edge.source_module_name || edge.src_module_name || '-';
+                const dstName = edge.target_module_name || edge.dst_module_name || '-';
                 return (
                   <tr key={`${edge.service_name}-${edge.operation}-${idx}`}>
                     <td>
                       <span className={`code-badge ${meta?.badgeClass ?? 'code-badge--secondary'}`}>
-                        {edge.category}
+                        {cat}
                       </span>
                     </td>
-                    <td className="code-font-mono">{edge.source_module_name || '-'}</td>
-                    <td className="code-font-mono">{edge.target_module_name || '-'}</td>
+                    <td className="code-font-mono">{srcName}</td>
+                    <td className="code-font-mono">{dstName}</td>
                     <td className="code-font-mono code-color-primary">
                       {edge.service_name}.{edge.operation}
                     </td>
-                    <td className="code-font-mono">{edge.call_count}</td>
+                    <td className="code-font-mono">{callCount}</td>
                     <td className="code-color-muted code-text-sm">{edge.detail || '-'}</td>
                   </tr>
                 );

@@ -53,7 +53,7 @@ export const SchemaVersionList: React.FC<SchemaVersionListProps> = ({
               </div>
               <div className="code-meta-item">
                 <span className="code-meta-label">方法映射:</span>
-                <span className="code-meta-val">{s.operations_count ?? 0} 个</span>
+                <span className="code-meta-val">{s.operation_count ?? s.operations_count ?? 0} 个</span>
               </div>
             </div>
 

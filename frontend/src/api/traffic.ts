@@ -33,15 +33,19 @@ export async function getRecordingSession(id: string) {
 export async function startRecordingSession(data: {
   name: string;
   scope: 'SHARED' | 'PRIVATE';
-  target_process_ids: string[];
+  target_process_ids: (string | number)[];
   max_duration_sec?: number;
   max_frames?: number;
   max_frame_bytes?: number;
   description?: string;
 }) {
+  const payload = {
+    ...data,
+    target_process_ids: (data.target_process_ids ?? []).map((id) => Number(id)),
+  };
   return apiRequest<RecordingSession>('/recording-sessions', {
     method: 'POST',
-    body: JSON.stringify(data),
+    body: JSON.stringify(payload),
   });
 }
 
