@@ -32,7 +32,10 @@ code-traefik/
 └── frontend/            # React 18 微前端工程（暴露 ./App 与 ./menu）
 ```
 
-* **本模块专有架构红线**：*(随阶段二 `docs/02-design/` 演进在此补充领域防腐约束)*
+* **本模块专有架构红线（阶段二已冻结，详见 [`docs/02-design/`](docs/02-design/)）**：
+  1. **主从物理防腐**：`cmd/agent` 及 `pkg/{crosrpc,agentproto,ebpf,replay}` 严禁引入 `gorm`、数据库连接或 `dynamicpb`/`protoregistry`；主控 `cmd/server` 以非特权运行，严禁直接挂载 eBPF 或跨网发重放包。
+  2. **协议与契约唯一性**：仅处理 IPv4 TCP 明文 DOPHI `CROS RPC` 报文；`ascServiceName` 强制采用 `{package}-{serviceName}`（点分 package + 中划线连接），`PROVIDE` 接口全局唯一。
+  3. **重放零外泄与探针卫生**：重放 `MOCK_MISS` 严禁转发至真实下游；主控失联超宽限期（5 分钟）或收到退出信号时，Agent 必须自动卸载全部 eBPF 探针与监听端口。
 
 ---
 

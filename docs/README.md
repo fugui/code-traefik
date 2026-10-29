@@ -27,7 +27,8 @@ docs/
 │   ├── 01-roadmap.md                      # 【工程路线图】Milestone 1~4 依赖拓扑图与 TDD 质量门禁
 │   └── 02-m1-domain-model-and-api.md      # 【M1 作战卡】核心领域模型、API 与物理隔离单元测试
 ├── 05-adr/          # 架构决策记录 (ADR)：重大技术选型与权衡记录 (Architecture Decision Records)
-│   └── 01-microfrontend-and-table-prefix-isolation.md # ADR-01：微前端集成、共享库表前缀隔离与 TDD 测试策略
+│   ├── 01-microfrontend-and-table-prefix-isolation.md # ADR-01：微前端集成、共享库表前缀隔离与 TDD 测试策略
+│   └── 02-ebpf-hook-and-dual-subsystem-adr.md         # ADR-02：eBPF 入站旁路钩子、Cookie 原目的还原与无 Schema 数据面解耦
 ├── 06-ops/          # 交付与验证：双模联调、物理隔离数据库测试与生产环境单二进制部署手册
 │   └── 01-verification-and-deployment-guide.md # 联调验证、自动化回归测试与生产部署操作指南
 └── 07-references/   # 外部参考与上位契约基准：协议包规范、字节字典与领域标准文档
