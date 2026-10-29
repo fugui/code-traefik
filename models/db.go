@@ -3,6 +3,7 @@ package models
 import (
 	"fmt"
 	"log"
+	"time"
 
 	commonAuth "code-common/backend/auth"
 	"code-common/backend/gormdb"
@@ -15,7 +16,6 @@ import (
 var DB *gorm.DB
 
 // InitDB 连接 PostgreSQL 数据库并执行表结构迁移与种子数据初始化
-// TODO(security): 生产环境请为本服务分配遵循最小权限原则的独立数据库账号，并开启 SSL/mTLS 传输加密
 func InitDB() error {
 	db, err := gormdb.Connect(config.AppConfig.Database, gormdb.Options{
 		ServiceName: config.ServiceName,
@@ -30,87 +30,168 @@ func InitDB() error {
 func SetupWithDB(db *gorm.DB) error {
 	DB = db
 
+	// 1. 自动迁移标准实体表
 	if err := DB.AutoMigrate(
 		&Department{},
 		&User{},
 		&SysAuditLog{},
-		&TemplateItem{},
-		&TemplateSetting{},
+		&TraefikSetting{},
+		&Subsystem{},
+		&FunctionalGroup{},
+		&Module{},
+		&ModuleInterface{},
+		&Agent{},
+		&Process{},
+		&ProcessModule{},
+		&ProtoSchema{},
+		&ProtoOperation{},
+		&RecordingSession{},
+		&ReplayTask{},
+		&ReplayItem{},
 	); err != nil {
 		return fmt.Errorf("迁移数据表结构失败: %w", err)
 	}
 
-	// 确保独立运行模式下至少存在一个默认管理员账号
+	// 2. 初始化 traefik_traffic_records 物理分区母表与近期按日分区
+	pm := &PartitionManager{}
+	if err := pm.EnsureParentTable(DB); err != nil {
+		return fmt.Errorf("初始化流量分区母表失败: %w", err)
+	}
+	now := time.Now()
+	if _, err := pm.EnsurePartitionsRange(DB, now.AddDate(0, 0, -1), now.AddDate(0, 0, 7)); err != nil {
+		return fmt.Errorf("预建日常流量分区子表失败: %w", err)
+	}
+
+	// 3. 显式创建关键业务部分唯一索引
+	partialIndexes := []string{
+		`CREATE UNIQUE INDEX IF NOT EXISTS uk_traefik_provide_service_op ON traefik_module_interfaces (service_name, operation) WHERE relation_type = 'PROVIDE';`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uk_traefik_proto_active_name ON traefik_proto_schemas (name) WHERE is_active = true;`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uk_traefik_active_proto_op ON traefik_proto_operations (service_name, operation) WHERE is_active = true;`,
+	}
+	for _, idxSQL := range partialIndexes {
+		if err := DB.Exec(idxSQL).Error; err != nil {
+			return fmt.Errorf("创建部分唯一索引失败: %w", err)
+		}
+	}
+
+	// 4. 显式创建外键约束（由于工作区基础库默认配置 DisableForeignKeyConstraintWhenMigrating，此处补充权威外键以保障数据防腐）
+	fkSQL := `
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_traefik_fg_subsystem') THEN
+        ALTER TABLE traefik_functional_groups
+        ADD CONSTRAINT fk_traefik_fg_subsystem
+        FOREIGN KEY (subsystem_id) REFERENCES traefik_subsystems(id)
+        ON UPDATE CASCADE ON DELETE RESTRICT;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_traefik_fg_parent') THEN
+        ALTER TABLE traefik_functional_groups
+        ADD CONSTRAINT fk_traefik_fg_parent
+        FOREIGN KEY (parent_id) REFERENCES traefik_functional_groups(id)
+        ON UPDATE CASCADE ON DELETE RESTRICT;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_traefik_modules_subsystem') THEN
+        ALTER TABLE traefik_modules
+        ADD CONSTRAINT fk_traefik_modules_subsystem
+        FOREIGN KEY (subsystem_id) REFERENCES traefik_subsystems(id)
+        ON UPDATE CASCADE ON DELETE RESTRICT;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_traefik_modules_group') THEN
+        ALTER TABLE traefik_modules
+        ADD CONSTRAINT fk_traefik_modules_group
+        FOREIGN KEY (group_id) REFERENCES traefik_functional_groups(id)
+        ON UPDATE CASCADE ON DELETE RESTRICT;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_traefik_mod_iface_module') THEN
+        ALTER TABLE traefik_module_interfaces
+        ADD CONSTRAINT fk_traefik_mod_iface_module
+        FOREIGN KEY (module_id) REFERENCES traefik_modules(id)
+        ON UPDATE CASCADE ON DELETE RESTRICT;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_traefik_proc_agent') THEN
+        ALTER TABLE traefik_processes
+        ADD CONSTRAINT fk_traefik_proc_agent
+        FOREIGN KEY (agent_id) REFERENCES traefik_agents(id)
+        ON UPDATE CASCADE ON DELETE RESTRICT;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_traefik_proc_mod_proc') THEN
+        ALTER TABLE traefik_process_modules
+        ADD CONSTRAINT fk_traefik_proc_mod_proc
+        FOREIGN KEY (process_id) REFERENCES traefik_processes(id)
+        ON UPDATE CASCADE ON DELETE CASCADE;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_traefik_proc_mod_module') THEN
+        ALTER TABLE traefik_process_modules
+        ADD CONSTRAINT fk_traefik_proc_mod_module
+        FOREIGN KEY (module_id) REFERENCES traefik_modules(id)
+        ON UPDATE CASCADE ON DELETE RESTRICT;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_traefik_proto_op_schema') THEN
+        ALTER TABLE traefik_proto_operations
+        ADD CONSTRAINT fk_traefik_proto_op_schema
+        FOREIGN KEY (schema_id) REFERENCES traefik_proto_schemas(id)
+        ON UPDATE CASCADE ON DELETE CASCADE;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_traefik_replay_task_session') THEN
+        ALTER TABLE traefik_replay_tasks
+        ADD CONSTRAINT fk_traefik_replay_task_session
+        FOREIGN KEY (session_id) REFERENCES traefik_recording_sessions(id)
+        ON UPDATE CASCADE ON DELETE RESTRICT;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_traefik_replay_task_item') THEN
+        ALTER TABLE traefik_replay_items
+        ADD CONSTRAINT fk_traefik_replay_task_item
+        FOREIGN KEY (task_id) REFERENCES traefik_replay_tasks(id)
+        ON UPDATE CASCADE ON DELETE CASCADE;
+    END IF;
+END $$;
+`
+	if err := DB.Exec(fkSQL).Error; err != nil {
+		return fmt.Errorf("创建外键完整性约束失败: %w", err)
+	}
+
+	// 5. 确保独立运行模式下至少存在一个默认管理员账号
 	if err := commonAuth.EnsureSeedAdmin(DB, config.AdminRole); err != nil {
 		log.Printf("[%s] 提示: 初始化默认管理员账号未完成: %v", config.ServiceName, err)
 	}
 
-	if err := seedDefaultData(DB); err != nil {
-		log.Printf("[%s] 提示: 初始化示例种子数据未完成: %v", config.ServiceName, err)
+	// 6. 初始化治理参数种子数据
+	if err := seedDefaultSettings(DB); err != nil {
+		log.Printf("[%s] 提示: 初始化模块配置参数种子未完成: %v", config.ServiceName, err)
 	}
 
 	return nil
 }
 
-func seedDefaultData(db *gorm.DB) error {
-	var itemCount int64
-	if err := db.Model(&TemplateItem{}).Count(&itemCount).Error; err != nil {
-		return err
-	}
-	if itemCount == 0 {
-		samples := []TemplateItem{
-			{
-				Code:        "TPL-001",
-				Name:        "接入统一 JWT 鉴权与 RBAC 角色守卫",
-				Category:    "security",
-				Status:      ItemStatusActive,
-				Priority:    ItemPriorityHigh,
-				Description: "复用 code-common/backend/auth 中间件，实现与 CodeBench 宿主的无感单点认证及模块管理员权限控制。",
-			},
-			{
-				Code:        "TPL-002",
-				Name:        "配置 Vite Module Federation 微前端暴露契约",
-				Category:    "frontend",
-				Status:      ItemStatusActive,
-				Priority:    ItemPriorityHigh,
-				Description: "通过 remoteEntry.js 动态导出 ./App 与 ./menu，无需修改宿主源码即可挂载二级侧边栏与业务路由。",
-			},
-			{
-				Code:        "TPL-003",
-				Name:        "适配亮色与暗黑双模 Design Tokens 主题",
-				Category:    "ui",
-				Status:      ItemStatusDraft,
-				Priority:    ItemPriorityMedium,
-				Description: "全面采用 theme.css 中的 --color-* 语义变量与 Flat BEM 类名，杜绝硬编码颜色导致的亮色黑块问题。",
-			},
-		}
-		if err := db.Create(&samples).Error; err != nil {
-			return err
-		}
-	}
-
+func seedDefaultSettings(db *gorm.DB) error {
 	var settingCount int64
-	if err := db.Model(&TemplateSetting{}).Count(&settingCount).Error; err != nil {
+	if err := db.Model(&TraefikSetting{}).Count(&settingCount).Error; err != nil {
 		return err
 	}
 	if settingCount == 0 {
-		defaultSettings := []TemplateSetting{
+		defaultSettings := []TraefikSetting{
 			{
-				SettingKey:  "enable_notification",
-				SettingVal:  "true",
-				Description: "是否在关键业务条目变更时触发平台通知",
+				SettingKey:  "traffic_retention_days",
+				SettingVal:  "30",
+				Description: "流量往返记录物理分区保留天数（超出自动执行 DROP TABLE 销毁）",
 				UpdatedBy:   "system",
 			},
 			{
-				SettingKey:  "max_items_per_user",
-				SettingVal:  "200",
-				Description: "单个用户可创建的活跃业务条目配额上限",
+				SettingKey:  "default_max_frames",
+				SettingVal:  "100000",
+				Description: "录制任务默认单批次最大捕获帧数上限",
 				UpdatedBy:   "system",
 			},
 			{
-				SettingKey:  "default_category",
-				SettingVal:  "general",
-				Description: "新建业务条目的默认分类标识",
+				SettingKey:  "default_max_duration_sec",
+				SettingVal:  "1800",
+				Description: "录制任务默认单批次最大录制时长（秒）",
+				UpdatedBy:   "system",
+			},
+			{
+				SettingKey:  "default_max_frame_bytes",
+				SettingVal:  "4194304",
+				Description: "单帧报文截断排空阈值（字节，默认 4MB）",
 				UpdatedBy:   "system",
 			},
 		}
@@ -118,6 +199,5 @@ func seedDefaultData(db *gorm.DB) error {
 			return err
 		}
 	}
-
 	return nil
 }

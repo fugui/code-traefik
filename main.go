@@ -64,13 +64,6 @@ func RegisterAPIRoutes(r *gin.Engine) {
 		protected.PATCH("/password", handlers.UpdatePassword)
 		protected.GET("/users", handlers.SearchUsers)
 
-		// 示例业务资源 CRUD 路由
-		protected.GET("/items/stats", handlers.GetItemStats)
-		protected.GET("/items", handlers.ListItems)
-		protected.POST("/items", handlers.CreateItem)
-		protected.PUT("/items/:id", handlers.UpdateItem)
-		protected.DELETE("/items/:id", handlers.DeleteItem)
-
 		// 3. 模块管理员专属路由 (RequireAdmin - 仅 super_admin 或 <module_key>_admin 可访问)
 		admin := protected.Group("/admin")
 		admin.Use(commonAuth.RequireAdmin(config.AdminRole))

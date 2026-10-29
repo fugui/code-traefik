@@ -4,6 +4,7 @@
 - **文档版本**：v1.0.0
 - **更新日期**：2026-10-29
 - **归属阶段**：阶段三/四：M1 TDD 任务拆解与验收标准 (`04-tasks`)
+- **状态**：已交付 (Completed)
 - **覆盖特性与场景**：`F-01`(模型层)、`F-02`(模型层)、`F-03`(模型层)、`F-06`(模型层)、`F-07`(信封协议)、`F-10`(分帧与头解析)、`F-11`(分区表)、`SC-04`(分帧基础)
 - **设计参考基线**：[`01-system-architecture.md` §4.3](../02-design/01-system-architecture.md)、[`02-data-plane-and-cros-rpc-engine.md` §1](../02-design/02-data-plane-and-cros-rpc-engine.md)、[`05-database-schema.md` §1~§6](../02-design/05-database-schema.md)、[`01-cros-rpc-protocol-spec.md`](../07-references/01-cros-rpc-protocol-spec.md)
 

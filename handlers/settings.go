@@ -21,7 +21,7 @@ var validSettingKeyPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{1,63}$`)
 
 // GetModuleSettings 读取模块级参数列表 GET /api/admin/settings（仅模块管理员/超级管理员可访问）
 func GetModuleSettings(c *gin.Context) {
-	var settings []models.TemplateSetting
+	var settings []models.TraefikSetting
 	if err := models.DB.Order("setting_key ASC").Find(&settings).Error; err != nil {
 		log.Printf("[%s] 读取模块配置失败: %v", config.ServiceName, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "读取模块配置失败"})
@@ -59,7 +59,7 @@ func UpdateModuleSettings(c *gin.Context) {
 		return
 	}
 
-	var beforeList []models.TemplateSetting
+	var beforeList []models.TraefikSetting
 	if err := models.DB.Order("setting_key ASC").Find(&beforeList).Error; err != nil {
 		log.Printf("[%s] 读取变更前配置失败: %v", config.ServiceName, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "更新配置失败"})
@@ -78,10 +78,10 @@ func UpdateModuleSettings(c *gin.Context) {
 			return
 		}
 
-		var setting models.TemplateSetting
+		var setting models.TraefikSetting
 		err := models.DB.Where("setting_key = ?", key).First(&setting).Error
 		if err != nil {
-			setting = models.TemplateSetting{
+			setting = models.TraefikSetting{
 				SettingKey:  key,
 				SettingVal:  val,
 				Description: strings.TrimSpace(entry.Description),
@@ -106,7 +106,7 @@ func UpdateModuleSettings(c *gin.Context) {
 		}
 	}
 
-	var afterList []models.TemplateSetting
+	var afterList []models.TraefikSetting
 	if err := models.DB.Order("setting_key ASC").Find(&afterList).Error; err != nil {
 		log.Printf("[%s] 读取变更后配置失败: %v", config.ServiceName, err)
 	}
