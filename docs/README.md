@@ -15,8 +15,12 @@ docs/
 │   └── 04-tdd-implementation-prompt.md    # 阶段四：TDD 红-绿-重构编码实施与全链路交付验证提示词
 ├── 01-features/     # 特性与需求边界：特性清单矩阵 (Feature Matrix)、P0~P2 优先级与 Non-Goals
 │   └── 01-feature-matrix.md               # 阶段一：需求范围、核心特性矩阵与验收场景定义
-├── 02-design/       # 系统技术架构 (SDD)：微前端双模拓扑、traefik_* 数据表模型与核心业务流程
-│   └── 01-system-architecture.md          # 【总览篇】系统总体架构、数据模型与前端组件分层设计
+├── 02-design/       # 系统技术架构 (SDD)：双子系统边界、数据面引擎、业务拓扑与数据模型
+│   ├── 01-system-architecture.md               # 【总览篇】系统总体架构、双模拓扑、主从信道与全链路时序
+│   ├── 02-data-plane-and-cros-rpc-engine.md    # 【数据面篇】CROS RPC 协议栈、Agent eBPF 采集与自愈重放引擎
+│   ├── 03-architecture-elements-and-topology.md # 【业务篇】架构元素建模 (SSOT)、模块接口契约与拓扑验证
+│   ├── 04-control-plane-and-web-console.md     # 【管理面篇】Server 控制面、微前端控制台、Protobuf 编解码与回归 Diff
+│   └── 05-database-schema.md                   # 【数据模型篇】11 张 traefik_* 物理表 GORM 字典与索引设计
 ├── 03-api/          # 接口与数据契约：RESTful API 签名、请求/响应 Schema、RBAC 权限与审计规范
 │   └── 01-http-api-contract.md            # 【API 契约】HTTP 接口字典、角色守卫 (traefik_admin) 与状态码规范
 ├── 04-tasks/        # TDD 实施规划与验收：Milestone 拆解、任务作战卡与自动化验收测试标准 (AC)
