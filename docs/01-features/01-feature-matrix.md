@@ -17,7 +17,7 @@
 | v2.3.0 | 2026-10-28 | 支持单 Agent 多进程并发监控与任务级协同录制 |
 | v2.4.0 | 2026-10-28 | 明确架构元素 SSOT、三级模型、模块级接口契约与多模块进程映射 |
 | v2.5.0 | 2026-10-28 | 依据阶段一出口检视修订：新增「关键业务假设」；补充入站旁路采集与长连接前置条件；新增 Agent 实例纳管；PROVIDE 全局唯一与来源模块判定规则；重放结果状态与 Mock 未命中策略；`.pb` 版本管理；信道收敛为 HTTP + WebSocket；重排 P0/P1/P2；补充性能、存储保留与 eBPF 测试策略 NFR；补充术语表 |
-| v2.5.1 | 2026-10-29 | 挂载项目内置协议规范 (docs/07-references/01-cros-rpc-protocol-spec.md)；明确服务名映射为 package 前缀全名 ({package}_{serviceName})；依据协议原文固化 F-13 应答头回填字段清单 (ullSNO/aucTraceBuff/ullClientSendTime) 与精准偏移 |
+| v2.5.1 | 2026-10-29 | 挂载项目内置协议规范 (docs/07-references/01-cros-rpc-protocol-spec.md)；明确服务名映射为 package 前缀全名 ({package}-{serviceName}，package 保持原有点分结构，以中划线连接)；依据协议原文固化 F-13 应答头回填字段清单 (ullSNO/aucTraceBuff/ullClientSendTime) 与精准偏移 |
 
 ---
 
@@ -62,7 +62,7 @@
 | **A-04** | 同一进程内的功能模块之间走**进程内函数调用**，不经过网络 | F-02、F-05 |
 | **A-05** | 同一 `(ascServiceName, ascOperation)` **只由 1 个功能模块供给**（全局唯一） | F-02、F-03、F-05 |
 | **A-06** | 重放**只在测试环境**执行；目标进程对 DB / MQ 等非 CROS RPC 依赖的副作用首期不处理（DB 中主要是很少变化的元数据） | F-12、Non-Goal 8 |
-| **A-07** | 服务名匹配 Protobuf 的 package 前缀全名：`ascServiceName` 格式为 `{package}_{serviceName}`（中间以下划线连接；若 package 含 `.` 则替换为 `_`）；`ascOperation` 与 Method 名称**字符串直接相等** | F-03、F-10 |
+| **A-07** | 服务名匹配 Protobuf 的 package 前缀全名：`ascServiceName` 格式为 `{package}-{serviceName}`（package 原样保留其点分结构，与 Service 之间以中划线 `-` 连接）；`ascOperation` 与 Method 名称**字符串直接相等** | F-03、F-10 |
 | **A-08** | 首期聚焦 REQ / RSP 业务调用；MNG 管理消息（`ucMsgType=5/6/7`）只做解析展示与原样回放，不做握手语义仿真 | F-12、F-13、Non-Goal 9 |
 
 ### 2.2 主从运行架构与网络交互拓扑
@@ -158,7 +158,7 @@ erDiagram
     }
     TRAEFIK_PROTO_OPERATIONS {
         bigint schema_id FK
-        string service_name "格式为 {package}_{serviceName} (下划线连接)"
+        string service_name "格式为 {package}-{serviceName} (中划线连接)"
         string operation "与 Method 名字符串直接相等"
         string req_message
         string rsp_message
@@ -167,7 +167,7 @@ erDiagram
 
 关键约束：
 1. **三级逻辑架构**：子系统是顶层边界；功能组归属子系统，支持多级自嵌套（`parent_id` + `path` + `level`）；功能模块是最小契约单元，可挂在**任意层级**的功能组下。
-2. **接口契约在功能模块层面**：`PROVIDE` 为模块对外实现的 CROS RPC 接口，`DEPEND` 为模块需要调用的下游接口，均以 `(ascServiceName, ascOperation)` 字符串表示。**`PROVIDE` 的 `(service_name, operation)` 全局唯一 (A-05)**；其中 `ascServiceName` 为 `{package}_{serviceName}`（下划线连接全名），`ascOperation` 为方法名。
+2. **接口契约在功能模块层面**：`PROVIDE` 为模块对外实现的 CROS RPC 接口，`DEPEND` 为模块需要调用的下游接口，均以 `(ascServiceName, ascOperation)` 字符串表示。**`PROVIDE` 的 `(service_name, operation)` 全局唯一 (A-05)**；其中 `ascServiceName` 为 `{package}-{serviceName}`（package 原样保留其点分结构，与 Service 之间以中划线连接全名），`ascOperation` 为方法名。
 3. **物理部署**：1 个进程承载 N 个模块，每个模块只属于 1 个进程 (A-03)；进程只有 1 个监听端口 (A-02)，同一 Agent 下端口互斥；PID 不落库为权威数据，由 Agent 按端口或 `cmd_pattern` 实时反查。
 4. **`.pb` 与接口解耦**：模块接口不直接外键引用 `.pb`，解码时按 `(service_name, operation)` 查找当前生效的映射；每条流量记录保存解码所用的 schema 版本。
 
@@ -188,7 +188,7 @@ erDiagram
 | :--- | :--- | :---: | :---: | :--- | :--- |
 | **F-01** | **三级架构元素建模**（`traefik_subsystems` / `traefik_functional_groups` / `traefik_modules`） | `Server`<br>`Frontend` | **P0** | 1. 子系统：编码（全局唯一）、名称、负责人、描述；<br>2. 功能组：归属子系统，支持多级自嵌套，维护 `parent_id`、`level`、`path`、排序；编码在同一子系统内唯一；最大深度 8 级；<br>3. 功能模块：编码全局唯一，挂在任意层级的功能组下，冗余记录所属子系统；<br>4. 移动功能组时级联更新子孙节点的 `path` / `level`。 | 1. 三类元素 CRUD 单测全部通过；<br>2. 把功能组移到自身或其子孙下返回 `400`；超过最大深度返回 `400`；<br>3. 移动功能组后，所有子孙的 `path` / `level` 正确；<br>4. 删除非空功能组、或删除已声明接口的模块返回 `409`；<br>5. 编码重复返回 `409`。 |
 | **F-02** | **进程部署映射与模块接口契约**（`traefik_processes` / `traefik_module_interfaces`） | `Server`<br>`Frontend` | **P0** | 1. 进程：归属 1 个 Agent，维护名称、唯一监听端口 (A-02)、`/proc` 命令行匹配规则；每个模块绑定 0..1 个进程 (A-03)；<br>2. 模块接口：`PROVIDE` / `DEPEND` 两类，以 `(ascServiceName, ascOperation)` 字符串声明；<br>3. 约束：同一模块内 `(relation_type, service, operation)` 唯一；**`PROVIDE` 的 `(service, operation)` 全局唯一** (A-05)；<br>4. 静态依赖推导：模块 A 的 `DEPEND` 匹配到模块 B 的 `PROVIDE` 时生成边 `A → B`；匹配不到任何 `PROVIDE` 的 `DEPEND` 归入「外部 / 未登记系统」占位节点。 | 1. 同一 Agent 下监听端口重复返回 `409`；<br>2. 第二个模块声明已被供给的 `PROVIDE` 接口返回 `409`；<br>3. 静态依赖推导单测：正常边、外部占位边、同进程内两模块之间的边（标记为「进程内」）均正确；<br>4. 删除正在录制或重放中的进程返回 `409`。 |
-| **F-03** | **Protobuf 描述集注册与接口映射**（`traefik_proto_schemas` / `traefik_proto_operations`） | `Server`<br>`Frontend` | **P0** | 1. 上传 `.pb`（`FileDescriptorSet`），校验体积 `<= 4MB` 与 `protodesc` 合法性；同名描述集每次上传生成新版本，可切换生效版本；<br>2. 从 `ServiceDescriptor` / `MethodDescriptor` 自动生成 `(ascServiceName, ascOperation) → (Req, Rsp Message)` 映射：服务名匹配 package 前缀全名，**`ascServiceName` 格式为 `{package}_{serviceName}`**（中间以下划线连接；若 package 含 `.` 则替换为 `_`），**`ascOperation` 与 Method 名称直接对应** (A-07)；<br>3. 生效映射中 `(service, operation)` 全局唯一，冲突时拒绝激活；<br>4. 流量记录保存解码所用的 schema 版本，切换版本不改写历史解码结果（可手动重新解码）。 | 1. 合法 `.pb` 上传后，映射接口返回正确的 `(service, operation)` 清单（服务名包含 package 前缀下划线连接全名）；<br>2. 损坏文件或超过 4MB 返回 `400`；<br>3. 激活与其他生效描述集存在 `(service, operation)` 冲突的版本返回 `409`；<br>4. 切换版本后，历史记录的 schema 版本字段保持不变。 |
+| **F-03** | **Protobuf 描述集注册与接口映射**（`traefik_proto_schemas` / `traefik_proto_operations`） | `Server`<br>`Frontend` | **P0** | 1. 上传 `.pb`（`FileDescriptorSet`），校验体积 `<= 4MB` 与 `protodesc` 合法性；同名描述集每次上传生成新版本，可切换生效版本；<br>2. 从 `ServiceDescriptor` / `MethodDescriptor` 自动生成 `(ascServiceName, ascOperation) → (Req, Rsp Message)` 映射：服务名匹配 package 前缀全名，**`ascServiceName` 格式为 `{package}-{serviceName}`**（package 原样保留其点分结构，与 Service 之间以中划线 `-` 连接），**`ascOperation` 与 Method 名称直接对应** (A-07)；<br>3. 生效映射中 `(service, operation)` 全局唯一，冲突时拒绝激活；<br>4. 流量记录保存解码所用的 schema 版本，切换版本不改写历史解码结果（可手动重新解码）。 | 1. 合法 `.pb` 上传后，映射接口返回正确的 `(service, operation)` 清单（服务名包含 package 原样点分前缀并以中划线 `-` 连接全名）；<br>2. 损坏文件或超过 4MB 返回 `400`；<br>3. 激活与其他生效描述集存在 `(service, operation)` 冲突的版本返回 `409`；<br>4. 切换版本后，历史记录的 schema 版本字段保持不变。 |
 | **F-04** | **静态架构拓扑视图** | `Server`<br>`Frontend` | **P0** | 1. 逻辑视角：按「子系统 → 功能组树 → 功能模块」展开，绘制 F-02 推导的模块依赖边（含外部占位节点）；<br>2. 物理视角：「Agent（主机）→ 进程 → 承载的模块」部署归属图。 | 1. 拓扑 API 对给定建模数据返回期望的节点与边集合；<br>2. 画布只使用 `--color-*` 语义 Token，适配亮 / 暗主题。 |
 | **F-05** | **实测调用拓扑还原与架构一致性验证** | `Server`<br>`Frontend` | **P0** | 基于一次录制批次 (F-11) 的报文：<br>1. **目的模块定位**：按 `(ascServiceName, ascOperation)` 查唯一的 `PROVIDE` 模块；查不到时归为「未登记接口」；<br>2. **来源模块判定**（进程承载多个模块时）依次采用：① 出站请求的 `FatherSpanID` 关联到同进程某条入站请求所在的模块；② 该进程内**只有一个**模块声明了对应 `DEPEND`；③ 以上都不满足时，标记为「进程级归属」并给出候选模块集合；<br>3. **比对结果分类**：`Verified`（实测且已声明）、`Violation`（实测但未声明，架构漂移告警）、`Uncovered`（已声明但本次未触发）、`Not Observable`（同进程内两模块之间的依赖，A-04 决定网络上不可见，不计入 Uncovered）、`Unattributed`（来源只能归到进程级）。 | 1. 输入预置的上中下游三进程录制数据集（含 1 条未声明调用、1 条同进程内依赖、1 条无 Trace 且多模块声明同一 `DEPEND` 的调用），验证 API 分别标出 `Violation`、`Not Observable`、`Unattributed`，其余边为 `Verified` / `Uncovered`；<br>2. 每类结果都有独立的单测用例。 |
 
@@ -209,7 +209,7 @@ erDiagram
 | 编号 | 特性名称 | 涉及组件 | 优先级 | 功能描述与技术规范 | TDD 验收指标 |
 | :--- | :--- | :---: | :---: | :--- | :--- |
 | **F-09** | **Agent 嵌入式 `cilium/ebpf` 采集引擎**（`pkg/ebpf`） | `Agent` | **P0** | 基于 `github.com/cilium/ebpf` 在 Agent 内挂载单套探针，服务本机多个目标进程：<br>1. **多 PID 过滤**：BPF Hash Map 保存目标 PID 集合、监听端口与下游规则，`O(1)` 查找，支持运行期热增删；未命中的进程与连接原样放行；<br>2. **入站被动旁路复制**：对「目标 PID + 监听端口」上的连接复制收发字节到用户态（ring buffer），不代理、不改变入站链路；<br>3. **出站透明重定向**：`cgroup/connect4` 把目标 PID 访问已登记下游 `IP:Port` 的新建连接重定向到 Agent 本地代理，并保留原始目的地址；<br>4. **自环豁免**：Agent 自身 PID 写入 Map，内核态识别后直接放行并累计 `stat_bypassed_self`，保证同机被监控进程互调（`PID_A → PID_B`）不死锁，并同时录到 A 的出站与 B 的入站；<br>5. **特权要求与自洁**：必须具备 `CAP_BPF` + `CAP_NET_ADMIN`，否则拒绝开始录制并上报原因；全部监控停止或 Agent 退出（含 `SIGTERM`）时卸载全部钩子。 | 1. 同机运行 `PID_A`、`PID_B`（`A → B` 调用）与无关进程 `PID_C`：A 的出站、B 的入站都被录到，不死锁，`PID_C` 无任何重定向；<br>2. `stat_bypassed_self` 正确累加；<br>3. 无特权环境下开始录制返回明确错误；<br>4. 监控停止后 `Attached == false`，Agent 收到 `SIGTERM` 后无残留钩子。 |
-| **F-10** | **CROS RPC 分帧与头解析库（`pkg/crosrpc`）及主控 Protobuf 解码** | `Server`<br>`Agent` | **P0** | 1. **共享分帧与头解析库**（Agent 与主控共用，零 `.pb` 依赖）：<br>   - 公共头：识别 8B `unMagicInfo`（7B `"CSE.TCP"` + 1B `ucProtocol`），遇到前序脏字节时逐字节扫描重新同步；大端解析 `ullSNO`、`uiLength`、`usHeadLen`、`ucMsgType`、`isPacked`；校验 `usHeadLen >= 会话头最小长度`、`usHeadLen <= uiLength <= RPC_PAYLOAD_MAX_LEN (32MB - 4KB) + usHeadLen`、`ucMsgType ∈ [2, RPC_MSG_TYPE_MNG_BUTT)`；正确处理粘包与半包；<br>   - 会话头与扩展头：按 `#pragma pack(4)` 与 `usHeadLen` 长度判定版本（前 / 后向兼容），解析 `RPC_REQ_HEAD_S`（V00~V05：`ascServiceName[64]`、`ascOperation[64]`、`ucReqType` 等）、`RPC_RSP_HEAD_S`（V00~V04：`uiStatusCode` / `ullStatusCode`、收发时间戳、`usRspMsgNo`）、`RPC_MNG_HEAD_S`，以及 `0..N` 段扩展头（`TraceID` / `SpanID` / `FatherSpanID`、入队时间戳）；<br>2. **主控 Protobuf 解码**（只在主控引入 `dynamicpb`）：依据会话头中的 `ascServiceName`（格式为 `{package}_{serviceName}`）与 `ascOperation` 匹配 F-03 生效映射，对 `24 + usHeadLen` 之后的 Payload 做 JSON 解码与重编码；无映射或不可解码时保留完整头解析并以 Raw Hex 展示，不中断链路。 | 1. 单测覆盖：前序脏字节重新同步、逐字节碎片流、多包粘连流、V01 与 V05/V04 会话头、扩展头解析；<br>2. 非法 `ucMsgType`、超限 `uiLength`、`usHeadLen > uiLength`、`usHeadLen` 小于最小长度的报文全部被拒绝，无 panic、无超量分配（fuzz 测试运行 ≥ 60s 无崩溃）；<br>3. `cmd/agent` 的依赖图中不包含 `dynamicpb` / `protoregistry`；<br>4. 无 `.pb` 映射的报文解码结果为 Raw Hex，头字段完整。 |
+| **F-10** | **CROS RPC 分帧与头解析库（`pkg/crosrpc`）及主控 Protobuf 解码** | `Server`<br>`Agent` | **P0** | 1. **共享分帧与头解析库**（Agent 与主控共用，零 `.pb` 依赖）：<br>   - 公共头：识别 8B `unMagicInfo`（7B `"CSE.TCP"` + 1B `ucProtocol`），遇到前序脏字节时逐字节扫描重新同步；大端解析 `ullSNO`、`uiLength`、`usHeadLen`、`ucMsgType`、`isPacked`；校验 `usHeadLen >= 会话头最小长度`、`usHeadLen <= uiLength <= RPC_PAYLOAD_MAX_LEN (32MB - 4KB) + usHeadLen`、`ucMsgType ∈ [2, RPC_MSG_TYPE_MNG_BUTT)`；正确处理粘包与半包；<br>   - 会话头与扩展头：按 `#pragma pack(4)` 与 `usHeadLen` 长度判定版本（前 / 后向兼容），解析 `RPC_REQ_HEAD_S`（V00~V05：`ascServiceName[64]`、`ascOperation[64]`、`ucReqType` 等）、`RPC_RSP_HEAD_S`（V00~V04：`uiStatusCode` / `ullStatusCode`、收发时间戳、`usRspMsgNo`）、`RPC_MNG_HEAD_S`，以及 `0..N` 段扩展头（`TraceID` / `SpanID` / `FatherSpanID`、入队时间戳）；<br>2. **主控 Protobuf 解码**（只在主控引入 `dynamicpb`）：依据会话头中的 `ascServiceName`（格式为 `{package}-{serviceName}`）与 `ascOperation` 匹配 F-03 生效映射，对 `24 + usHeadLen` 之后的 Payload 做 JSON 解码与重编码；无映射或不可解码时保留完整头解析并以 Raw Hex 展示，不中断链路。 | 1. 单测覆盖：前序脏字节重新同步、逐字节碎片流、多包粘连流、V01 与 V05/V04 会话头、扩展头解析；<br>2. 非法 `ucMsgType`、超限 `uiLength`、`usHeadLen > uiLength`、`usHeadLen` 小于最小长度的报文全部被拒绝，无 panic、无超量分配（fuzz 测试运行 ≥ 60s 无崩溃）；<br>3. `cmd/agent` 的依赖图中不包含 `dynamicpb` / `protoregistry`；<br>4. 无 `.pb` 映射的报文解码结果为 Raw Hex，头字段完整。 |
 
 ---
 
@@ -253,7 +253,7 @@ erDiagram
 | 场景编号 | 场景名称 | 触发条件与输入 | 预期行为与断言 |
 | :--- | :--- | :--- | :--- |
 | **SC-01** | **免密探针、未认证拦截与 RBAC 越权** | 1. `GET /api/health`<br>2. 无 JWT 访问受保护接口<br>3. 普通用户新增架构元素、上传 `.pb`、开始录制 | 1. `200 OK` 且 `service: "Code-Traefik"`<br>2. `401`<br>3. 全部 `403` |
-| **SC-02** | **架构建模约束与静态拓扑推导** | 管理员创建子系统、三级嵌套功能组、模块，绑定进程，声明 `PROVIDE` / `DEPEND`；尝试把功能组移到其子孙下；尝试让第二个模块供给已被供给的接口；上传 `.pb` | 成环移动返回 `400`；重复供给返回 `409`；`.pb` 映射正确（自动按 `{package}_{serviceName}` 生成 `ascServiceName` 并绑定模块接口）；静态拓扑包含正常边、外部占位边与「进程内」边；审计记录完整 |
+| **SC-02** | **架构建模约束与静态拓扑推导** | 管理员创建子系统、三级嵌套功能组、模块，绑定进程，声明 `PROVIDE` / `DEPEND`；尝试把功能组移到其子孙下；尝试让第二个模块供给已被供给的接口；上传 `.pb` | 成环移动返回 `400`；重复供给返回 `409`；`.pb` 映射正确（自动按 `{package}-{serviceName}` 生成 `ascServiceName` 并绑定模块接口）；静态拓扑包含正常边、外部占位边与「进程内」边；审计记录完整 |
 | **SC-03** | **Agent 纳管、信道与白名单** | 启动 `code-traefik-agent`（监听 `127.0.0.1`），主控登记并下发监控元信息、建立 WebSocket；模拟非白名单 IP 访问；停止 Agent | 握手成功并定位目标 PID；非白名单返回 `403`；Agent 停止后 3 个心跳周期内变为 `OFFLINE` |
 | **SC-04** | **CROS RPC 分帧与解码** | 向 `pkg/crosrpc` 输入：带前序脏字节的流、1 字节碎片流、多包粘连流、V01 / V05 会话头、含 Trace 扩展头的报文、`usHeadLen > uiLength` 的畸形包 | 正确切出完整帧并提取 `ullSNO`、`ascServiceName`、`ascOperation`、`TraceID`；主控正确解码 Payload；畸形帧被拒绝且无 panic |
 | **SC-05** | **单 Agent 多进程协同录制** | 同一 Agent 下监控 `Process_A`（含 `Module_A`）与 `Process_B`（含 `Module_B`）；先建立一条存量长连接再下发监控；重启两进程后执行 `外部 → Process_A → Process_B` 业务请求 | 下发后上报存量连接诊断；重启后 A 的入站 / 出站、B 的入站都被采集且不死锁；同一 `session_id` 下按 `process_id` 正确归档，REQ / RSP 配对正确 |
