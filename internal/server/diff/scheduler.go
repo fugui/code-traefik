@@ -619,7 +619,7 @@ func (s *ReplayScheduler) ListTasks(ctx context.Context, query ReplayTaskListQue
 		pageSize = 25
 	}
 
-	var items []models.ReplayTask
+	items := make([]models.ReplayTask, 0)
 	if err := db.Order("id DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&items).Error; err != nil {
 		return nil, 0, err
 	}
@@ -653,7 +653,7 @@ func (s *ReplayScheduler) ListItems(ctx context.Context, taskID uint64, query Re
 		pageSize = 25
 	}
 
-	var items []models.ReplayItem
+	items := make([]models.ReplayItem, 0)
 	if err := db.Order("seq_no ASC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&items).Error; err != nil {
 		return nil, 0, err
 	}

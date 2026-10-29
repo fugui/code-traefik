@@ -75,7 +75,7 @@ func ListProtoSchemas(c *gin.Context) {
 		return
 	}
 
-	var items []models.ProtoSchema
+	items := make([]models.ProtoSchema, 0)
 	offset := (page - 1) * pageSize
 	if err := query.Order("name ASC, version DESC").Offset(offset).Limit(pageSize).Find(&items).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询描述集失败"})
@@ -266,7 +266,7 @@ func ListProtoOperations(c *gin.Context) {
 		return
 	}
 
-	var items []models.ProtoOperation
+	items := make([]models.ProtoOperation, 0)
 	offset := (page - 1) * pageSize
 	if err := query.Order("service_name ASC, operation ASC").Offset(offset).Limit(pageSize).Find(&items).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询方法映射失败"})

@@ -79,7 +79,7 @@ func ListAgents(c *gin.Context) {
 		return
 	}
 
-	var items []models.Agent
+	items := make([]models.Agent, 0)
 	offset := (page - 1) * pageSize
 	if err := query.Order("id ASC").Offset(offset).Limit(pageSize).Find(&items).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询 Agent 失败"})
@@ -132,7 +132,7 @@ func GetAgent(c *gin.Context) {
 		agent.LeaseHolder.Email = ""
 	}
 
-	var procs []models.Process
+	procs := make([]models.Process, 0)
 	_ = models.DB.Where("agent_id = ?", agent.ID).Order("listen_port ASC").Find(&procs).Error
 
 	c.JSON(http.StatusOK, gin.H{

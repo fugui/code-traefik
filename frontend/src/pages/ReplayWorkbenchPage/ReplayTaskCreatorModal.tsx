@@ -53,9 +53,10 @@ export const ReplayTaskCreatorModal: React.FC<ReplayTaskCreatorModalProps> = ({
           is_replayable: true,
           page_size: 50,
         });
-        setIngressRecords(res.items);
+        const items = res.items ?? [];
+        setIngressRecords(items);
         // 默认勾选前 5 条
-        setSelectedRecordIds(res.items.slice(0, 5).map((r) => r.id));
+        setSelectedRecordIds(items.slice(0, 5).map((r) => r.id));
       } catch (err) {
         toast.error(err instanceof Error ? err.message : '加载批次可重放记录失败');
       } finally {
@@ -74,10 +75,10 @@ export const ReplayTaskCreatorModal: React.FC<ReplayTaskCreatorModalProps> = ({
   };
 
   const handleSelectAll = () => {
-    if (selectedRecordIds.length === ingressRecords.length) {
+    if (selectedRecordIds.length === (ingressRecords ?? []).length) {
       setSelectedRecordIds([]);
     } else {
-      setSelectedRecordIds(ingressRecords.map((r) => r.id));
+      setSelectedRecordIds((ingressRecords ?? []).map((r) => r.id));
     }
   };
 
@@ -165,7 +166,7 @@ export const ReplayTaskCreatorModal: React.FC<ReplayTaskCreatorModalProps> = ({
               value={selectedSessionId}
               onChange={(e) => setSelectedSessionId(e.target.value)}
             >
-              {sessions.map((s) => (
+              {(sessions ?? []).map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.name} ({s.session_no}) [{s.scope}]
                 </option>
@@ -180,7 +181,7 @@ export const ReplayTaskCreatorModal: React.FC<ReplayTaskCreatorModalProps> = ({
               value={selectedProcessId}
               onChange={(e) => setSelectedProcessId(e.target.value)}
             >
-              {processes.map((p) => (
+              {(processes ?? []).map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.name} (Port: {p.listen_port})
                 </option>
@@ -218,7 +219,7 @@ export const ReplayTaskCreatorModal: React.FC<ReplayTaskCreatorModalProps> = ({
                   </tr>
                 </thead>
                 <tbody>
-                  {ingressRecords.map((r) => {
+                  {(ingressRecords ?? []).map((r) => {
                     const checked = selectedRecordIds.includes(r.id);
                     return (
                       <tr key={r.id}>

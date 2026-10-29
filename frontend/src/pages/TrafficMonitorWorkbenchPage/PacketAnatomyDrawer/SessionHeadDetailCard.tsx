@@ -76,7 +76,7 @@ export const SessionHeadDetailCard: React.FC<SessionHeadDetailCardProps> = ({ se
                 </tr>
               </thead>
               <tbody>
-                {sessionHead.fields.map((f, idx) => (
+                {(sessionHead?.fields ?? []).map((f, idx) => (
                   <tr key={`${f.name}-${idx}`}>
                     <td className="code-font-mono">{f.name}</td>
                     <td className="code-font-mono code-color-muted">{f.offsetRange}</td>

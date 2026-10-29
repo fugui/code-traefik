@@ -69,6 +69,9 @@ func ListReplayTasks(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询重放任务失败: " + err.Error()})
 		return
 	}
+	if items == nil {
+		items = make([]models.ReplayTask, 0)
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"items":     items,
@@ -269,6 +272,9 @@ func ListReplayItems(c *gin.Context) {
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
+	}
+	if items == nil {
+		items = make([]models.ReplayItem, 0)
 	}
 
 	c.JSON(http.StatusOK, gin.H{

@@ -62,7 +62,7 @@ export const ProcessModuleBinderModal: React.FC<ProcessModuleBinderModalProps> =
     void (async () => {
       try {
         const res = await archApi.listModules({ page_size: 100 });
-        setAllModules(res.items);
+        setAllModules(res.items ?? []);
       } catch (err) {
         toast.error(err instanceof Error ? err.message : '加载架构模块失败');
       }
@@ -74,8 +74,9 @@ export const ProcessModuleBinderModal: React.FC<ProcessModuleBinderModalProps> =
     setLoadingDiscovered(true);
     try {
       const res = await agentApi.discoverAgentProcesses(agent.id);
-      setDiscovered(res.items);
-      toast.success(`成功探测到 ${res.items.length} 个监听进程`);
+      const items = res.items ?? [];
+      setDiscovered(items);
+      toast.success(`成功探测到 ${items.length} 个监听进程`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '探测进程失败');
     } finally {
@@ -171,7 +172,7 @@ export const ProcessModuleBinderModal: React.FC<ProcessModuleBinderModalProps> =
                 </tr>
               </thead>
               <tbody>
-                {discovered.map((dp, idx) => (
+                {(discovered ?? []).map((dp, idx) => (
                   <tr key={`${dp.pid}-${dp.listen_port}-${idx}`}>
                     <td className="code-font-mono">{dp.pid}</td>
                     <td className="code-font-mono code-color-primary">{dp.listen_port}</td>
@@ -233,8 +234,8 @@ export const ProcessModuleBinderModal: React.FC<ProcessModuleBinderModalProps> =
               承载挂载的公共架构模块 (ModuleIDs - 决定重放同构匹配度):
             </label>
             <div className="code-module-checkbox-group">
-              {allModules.map((m) => {
-                const checked = form.module_ids.includes(m.id);
+              {(allModules ?? []).map((m) => {
+                const checked = (form.module_ids ?? []).includes(m.id);
                 return (
                   <label
                     key={m.id}

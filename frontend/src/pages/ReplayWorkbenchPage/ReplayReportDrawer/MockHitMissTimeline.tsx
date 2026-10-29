@@ -36,7 +36,7 @@ export const MockHitMissTimeline: React.FC<MockHitMissTimelineProps> = ({
                 </tr>
               </thead>
               <tbody>
-                {events.map((evt, idx) => (
+                {(events ?? []).map((evt, idx) => (
                   <tr key={`${evt.sno}-${idx}`}>
                     <td className="code-font-mono">{evt.sno}</td>
                     <td className="code-font-mono code-color-primary">{evt.service_name}</td>

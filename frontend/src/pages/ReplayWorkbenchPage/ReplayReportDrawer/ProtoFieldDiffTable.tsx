@@ -30,7 +30,7 @@ export const ProtoFieldDiffTable: React.FC<ProtoFieldDiffTableProps> = ({ fieldD
                 </tr>
               </thead>
               <tbody>
-                {diffs.map((d, idx) => (
+                {(diffs ?? []).map((d, idx) => (
                   <tr key={`${d.field_path}-${idx}`}>
                     <td className="code-font-mono code-color-primary">{d.field_path}</td>
                     <td>

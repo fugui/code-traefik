@@ -65,7 +65,7 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
         </div>
 
         <div className="code-module-selector-tabs">
-          {modules.map((m) => (
+          {(modules ?? []).map((m) => (
             <button
               key={m.id}
               type="button"
@@ -76,7 +76,7 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
               <span className="code-module-chip__name">{m.name}</span>
             </button>
           ))}
-          {modules.length === 0 && (
+          {(modules ?? []).length === 0 && (
             <div className="code-empty-pane code-p-sm">当前功能组下暂无功能模块</div>
           )}
         </div>
@@ -159,7 +159,7 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
                   </tr>
                 </thead>
                 <tbody>
-                  {interfaces.map((iface) => (
+                  {(interfaces ?? []).map((iface) => (
                     <tr key={iface.id}>
                       <td>
                         <span className={`code-badge ${iface.relation_type === 'PROVIDE' ? 'code-badge--success' : 'code-badge--info'}`}>

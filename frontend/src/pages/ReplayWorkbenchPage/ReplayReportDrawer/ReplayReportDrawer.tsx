@@ -145,7 +145,7 @@ export const ReplayReportDrawer: React.FC<ReplayReportDrawerProps> = ({
 
           {/* 请求条目横向切换标签 */}
           <div className="code-replay-item-tabs code-mt-sm">
-            {items.map((it) => (
+            {(items ?? []).map((it) => (
               <button
                 key={it.id}
                 type="button"

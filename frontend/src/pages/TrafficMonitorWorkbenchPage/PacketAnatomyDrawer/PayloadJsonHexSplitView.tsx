@@ -110,7 +110,7 @@ export const PayloadJsonHexSplitView: React.FC<PayloadJsonHexSplitViewProps> = (
                 <span className="code-hex-col--ascii">Decoded ASCII</span>
               </div>
               <div className="code-hex-body">
-                {payload.rawFrameHexLines.map((line, idx) => (
+                {(payload?.rawFrameHexLines ?? []).map((line, idx) => (
                   <div key={`${line.offsetHex}-${idx}`} className={`code-hex-row ${getRegionClass(line.region)}`}>
                     <span className="code-hex-col--offset code-font-mono">{line.offsetHex}</span>
                     <span className="code-hex-col--bytes code-font-mono">{line.hexCols}</span>

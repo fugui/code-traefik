@@ -45,8 +45,8 @@ export const ReplayWorkbenchPage: React.FC = () => {
         page,
         page_size: pageSize,
       });
-      setTasks(res.items);
-      setTotalTasks(res.total);
+      setTasks(res.items ?? []);
+      setTotalTasks(res.total ?? 0);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '加载重放任务列表失败');
     } finally {

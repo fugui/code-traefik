@@ -30,7 +30,7 @@ export const TrafficRecordTable: React.FC<TrafficRecordTableProps> = ({
           </tr>
         </thead>
         <tbody>
-          {records.map((r) => {
+          {(records ?? []).map((r) => {
             const isSelected = selectedRecordId === r.id;
             return (
               <tr

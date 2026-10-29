@@ -100,12 +100,13 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
   const loadSubsystems = useCallback(async () => {
     try {
       const res = await archApi.listSubsystems({ page_size: 100 });
-      setSubsystems(res.items);
-      if (res.items.length > 0) {
+      const items = res.items ?? [];
+      setSubsystems(items);
+      if (items.length > 0) {
         setSelectedSubsystemId((prev) => {
           if (!prev) {
-            updateParams({ subsystem_id: res.items[0].id });
-            return res.items[0].id;
+            updateParams({ subsystem_id: items[0].id });
+            return items[0].id;
           }
           return prev;
         });
@@ -125,9 +126,10 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
     void (async () => {
       try {
         const res = await archApi.getFunctionalGroupTree(selectedSubsystemId);
-        setGroupTree(res.tree);
-        if (res.tree.length > 0) {
-          setSelectedGroupId(res.tree[0].id);
+        const safeTree = res.tree ?? [];
+        setGroupTree(safeTree);
+        if (safeTree.length > 0) {
+          setSelectedGroupId(safeTree[0].id);
         } else {
           setSelectedGroupId('');
           setModules([]);
@@ -145,9 +147,10 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
     void (async () => {
       try {
         const res = await archApi.listModules({ group_id: selectedGroupId, page_size: 100 });
-        setModules(res.items);
-        if (res.items.length > 0) {
-          setSelectedModuleId(res.items[0].id);
+        const items = res.items ?? [];
+        setModules(items);
+        if (items.length > 0) {
+          setSelectedModuleId(items[0].id);
         } else {
           setSelectedModuleId('');
           setSelectedModule(null);
@@ -166,7 +169,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
       try {
         const res = await archApi.getModule(selectedModuleId);
         setSelectedModule(res.module);
-        setInterfaces(res.interfaces);
+        setInterfaces(res.interfaces ?? []);
       } catch (err) {
         toast.error(err instanceof Error ? err.message : '加载模块契约失败');
       }
@@ -204,9 +207,10 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
     void (async () => {
       try {
         const res = await trafficApi.listRecordingSessions({ page_size: 50 });
-        setSessions(res.items);
-        if (res.items.length > 0) {
-          setSelectedSessionId((prev) => prev || res.items[0].id);
+        const items = res.items ?? [];
+        setSessions(items);
+        if (items.length > 0) {
+          setSelectedSessionId((prev) => prev || items[0].id);
         }
       } catch (err) {
         toast.error(err instanceof Error ? err.message : '加载录制批次失败');
@@ -278,7 +282,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
       }
       setGroupModalOpen(false);
       const res = await archApi.getFunctionalGroupTree(selectedSubsystemId);
-      setGroupTree(res.tree);
+      setGroupTree(res.tree ?? []);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '操作功能组失败');
     }
@@ -293,7 +297,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
       toast.success('功能组层级调整成功');
       setMoveModalOpen(false);
       const res = await archApi.getFunctionalGroupTree(selectedSubsystemId);
-      setGroupTree(res.tree);
+      setGroupTree(res.tree ?? []);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '移动功能组失败');
     }
@@ -304,7 +308,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
       await archApi.deleteFunctionalGroup(id);
       toast.success('功能组已删除');
       const res = await archApi.getFunctionalGroupTree(selectedSubsystemId);
-      setGroupTree(res.tree);
+      setGroupTree(res.tree ?? []);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '删除功能组失败');
     }
@@ -529,7 +533,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
                   updateParams({ session_id: e.target.value });
                 }}
               >
-                {sessions.map((sess) => (
+                {sessions?.map((sess) => (
                   <option key={sess.id} value={sess.id}>
                     {sess.name} ({sess.session_no} - {sess.status})
                   </option>
@@ -692,7 +696,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
               onChange={(e) => setNewParentId(e.target.value)}
             >
               <option value="">移为一级根功能组 (None)</option>
-              {groupTree.map((g) => (
+              {(groupTree ?? []).map((g) => (
                 <option key={g.id} value={g.id} disabled={g.id === movingGroup?.id}>
                   {g.name} ({g.code}) - Level {g.level}
                 </option>

@@ -110,7 +110,7 @@ func ListSubsystems(c *gin.Context) {
 		return
 	}
 
-	var items []models.Subsystem
+	items := make([]models.Subsystem, 0)
 	offset := (page - 1) * pageSize
 	if err := query.Order("id ASC").Offset(offset).Limit(pageSize).Find(&items).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询子系统列表失败"})
@@ -252,6 +252,9 @@ func GetFunctionalGroupTree(c *gin.Context) {
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
+	}
+	if tree == nil {
+		tree = make([]*topology.FunctionalGroupTreeNode, 0)
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -442,7 +445,7 @@ func ListModules(c *gin.Context) {
 		return
 	}
 
-	var items []models.Module
+	items := make([]models.Module, 0)
 	offset := (page - 1) * pageSize
 	if err := query.Order("id ASC").Offset(offset).Limit(pageSize).Find(&items).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询模块列表失败"})
@@ -480,7 +483,7 @@ func GetModule(c *gin.Context) {
 		mod.Owner.Email = ""
 	}
 
-	var ifaces []models.ModuleInterface
+	ifaces := make([]models.ModuleInterface, 0)
 	_ = models.DB.Where("module_id = ?", mod.ID).Order("relation_type ASC, id ASC").Find(&ifaces).Error
 
 	c.JSON(http.StatusOK, gin.H{
@@ -625,7 +628,7 @@ func ListModuleInterfaces(c *gin.Context) {
 		query = query.Where("relation_type = ?", relType)
 	}
 
-	var items []models.ModuleInterface
+	items := make([]models.ModuleInterface, 0)
 	if err := query.Order("id ASC").Find(&items).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询接口契约失败"})
 		return
@@ -763,6 +766,15 @@ func GetStaticTopology(c *gin.Context) {
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
+	}
+
+	if res != nil {
+		if res.Nodes == nil {
+			res.Nodes = make([]topology.StaticTopologyNode, 0)
+		}
+		if res.Edges == nil {
+			res.Edges = make([]topology.StaticTopologyEdge, 0)
+		}
 	}
 
 	c.JSON(http.StatusOK, res)

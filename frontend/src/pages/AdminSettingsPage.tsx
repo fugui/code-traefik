@@ -108,7 +108,7 @@ export const AdminSettingsPage: React.FC = () => {
           <EmptyState compact title="暂无可配置参数" />
         ) : (
           <div className="code-tpl-setting-list">
-            {settings.map((item) => (
+            {(settings ?? []).map((item) => (
               <div key={item.setting_key} className="code-tpl-setting-row">
                 <div className="code-tpl-setting-meta">
                   <div>

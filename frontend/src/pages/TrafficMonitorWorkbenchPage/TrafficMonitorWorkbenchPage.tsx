@@ -64,9 +64,10 @@ export const TrafficMonitorWorkbenchPage: React.FC = () => {
   const loadSessions = useCallback(async () => {
     try {
       const res = await trafficApi.listRecordingSessions({ page_size: 50 });
-      setSessions(res.items);
-      if (res.items.length > 0) {
-        const found = res.items.find((s) => s.id === urlSessionId) || res.items[0];
+      const items = res.items ?? [];
+      setSessions(items);
+      if (items.length > 0) {
+        const found = items.find((s) => s.id === urlSessionId) || items[0];
         setCurrentSession(found);
       }
     } catch (err) {
@@ -86,8 +87,8 @@ export const TrafficMonitorWorkbenchPage: React.FC = () => {
           agentApi.listProcesses({ page_size: 100 }),
           agentApi.listAgents({ page_size: 100 }),
         ]);
-        setAllProcesses(procRes.items);
-        setAllAgents(agentRes.items);
+        setAllProcesses(procRes.items ?? []);
+        setAllAgents(agentRes.items ?? []);
       } catch {
         // 静默
       }
@@ -114,8 +115,8 @@ export const TrafficMonitorWorkbenchPage: React.FC = () => {
         page,
         page_size: pageSize,
       });
-      setRecords(res.items);
-      setTotalRecords(res.total);
+      setRecords(res.items ?? []);
+      setTotalRecords(res.total ?? 0);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '加载流量记录失败');
     } finally {

@@ -71,6 +71,9 @@ func ListRecordingSessions(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询录制批次列表失败: " + err.Error()})
 		return
 	}
+	if items == nil {
+		items = make([]models.RecordingSession, 0)
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"items":     items,
@@ -460,6 +463,10 @@ func GetConsistencyReport(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "生成架构一致性报告失败: " + err.Error()})
 		return
+	}
+
+	if report != nil && report.Edges == nil {
+		report.Edges = make([]topology.ConsistencyEdgeResult, 0)
 	}
 
 	c.JSON(http.StatusOK, report)

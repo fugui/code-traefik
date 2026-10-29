@@ -20,7 +20,7 @@ export const SchemaVersionList: React.FC<SchemaVersionListProps> = ({
 }) => {
   return (
     <div className="code-schema-version-list">
-      {schemas.map((s) => {
+      {(schemas ?? []).map((s) => {
         const isSelected = selectedSchemaId === s.id;
         return (
           <div

@@ -20,7 +20,7 @@ export const CommHeadBitmapCard: React.FC<CommHeadBitmapCardProps> = ({ commHead
       <div className="code-anatomy-card__body">
         {/* 24 字节偏移色块可视化 */}
         <div className="code-bitmap-bar">
-          {commHead.segments.map((seg) => (
+          {(commHead?.segments ?? []).map((seg) => (
             <div
               key={`${seg.offsetStart}-${seg.fieldName}`}
               className="code-bitmap-segment"

@@ -111,7 +111,7 @@ export const SubsystemGroupTreePanel: React.FC<SubsystemGroupTreePanelProps> = (
 
         {hasChildren && isExpanded && (
           <div className="code-tree-children">
-            {node.children?.map((child) => renderTreeNode(child))}
+            {(node.children ?? []).map((child) => renderTreeNode(child))}
           </div>
         )}
       </div>
@@ -139,7 +139,7 @@ export const SubsystemGroupTreePanel: React.FC<SubsystemGroupTreePanelProps> = (
           value={selectedSubsystemId}
           onChange={(e) => onSelectSubsystem(e.target.value)}
         >
-          {subsystems.map((sub) => (
+          {(subsystems ?? []).map((sub) => (
             <option key={sub.id} value={sub.id}>
               {sub.name} ({sub.code})
             </option>
@@ -184,8 +184,8 @@ export const SubsystemGroupTreePanel: React.FC<SubsystemGroupTreePanelProps> = (
           )}
         </div>
         <div className="code-tree-list">
-          {groupTree.length > 0 ? (
-            groupTree.map((node) => renderTreeNode(node))
+          {(groupTree ?? []).length > 0 ? (
+            (groupTree ?? []).map((node) => renderTreeNode(node))
           ) : (
             <div className="code-empty-pane code-p-sm">暂无功能组</div>
           )}

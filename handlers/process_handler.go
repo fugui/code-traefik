@@ -67,7 +67,7 @@ func ListProcesses(c *gin.Context) {
 		return
 	}
 
-	var items []models.Process
+	items := make([]models.Process, 0)
 	offset := (page - 1) * pageSize
 	if err := query.Order("traefik_processes.id ASC").Offset(offset).Limit(pageSize).Find(&items).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询进程映射失败"})

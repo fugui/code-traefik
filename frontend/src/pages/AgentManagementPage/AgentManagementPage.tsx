@@ -53,10 +53,11 @@ export const AgentManagementPage: React.FC = () => {
         page,
         page_size: pageSize,
       });
-      setAgents(res.items);
-      setTotalAgents(res.total);
-      if (res.items.length > 0) {
-        setSelectedAgent((prev) => prev || res.items[0]);
+      const items = res.items ?? [];
+      setAgents(items);
+      setTotalAgents(res.total ?? 0);
+      if (items.length > 0) {
+        setSelectedAgent((prev) => prev || items[0]);
       }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '加载 Agent 列表失败');
@@ -77,7 +78,7 @@ export const AgentManagementPage: React.FC = () => {
       try {
         const res = await agentApi.getAgent(selectedAgentId);
         setSelectedAgent(res.agent);
-        setProcesses(res.processes);
+        setProcesses(res.processes ?? []);
       } catch (err) {
         toast.error(err instanceof Error ? err.message : '加载 Agent 进程失败');
       }
@@ -152,7 +153,7 @@ export const AgentManagementPage: React.FC = () => {
       toast.success('进程映射已删除');
       if (selectedAgent) {
         const res = await agentApi.getAgent(selectedAgent.id);
-        setProcesses(res.processes);
+        setProcesses(res.processes ?? []);
       }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '删除进程失败');
@@ -210,7 +211,7 @@ export const AgentManagementPage: React.FC = () => {
             <div className="code-empty-pane code-p-xl">当前作用域下暂无已登记的 Agent</div>
           ) : (
             <div className="code-agent-cards-grid">
-              {agents.map((ag) => {
+              {(agents ?? []).map((ag) => {
                 const isSelected = selectedAgent?.id === ag.id;
                 return (
                   <div
@@ -326,7 +327,7 @@ export const AgentManagementPage: React.FC = () => {
                     </tr>
                   </thead>
                   <tbody>
-                    {processes.map((proc) => (
+                    {(processes ?? []).map((proc) => (
                       <tr key={proc.id}>
                         <td className="code-font-mono code-color-primary">{proc.name}</td>
                         <td className="code-font-mono">{proc.listen_port}</td>
@@ -459,7 +460,7 @@ export const AgentManagementPage: React.FC = () => {
           onSuccess={() => {
             void (async () => {
               const res = await agentApi.getAgent(selectedAgent.id);
-              setProcesses(res.processes);
+              setProcesses(res.processes ?? []);
             })();
           }}
         />

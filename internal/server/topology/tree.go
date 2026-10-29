@@ -559,7 +559,7 @@ func GetFunctionalGroupTree(db *gorm.DB, subsystemID uint64) ([]*FunctionalGroup
 	}
 
 	nodeMap := make(map[uint64]*FunctionalGroupTreeNode, len(groups))
-	var roots []*FunctionalGroupTreeNode
+	roots := make([]*FunctionalGroupTreeNode, 0)
 
 	for _, g := range groups {
 		node := &FunctionalGroupTreeNode{

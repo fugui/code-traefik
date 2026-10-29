@@ -41,9 +41,10 @@ export const ProtoSchemaWorkbenchPage: React.FC = () => {
   const loadSchemas = useCallback(async () => {
     try {
       const res = await schemaApi.listProtoSchemas({ page_size: 100 });
-      setSchemas(res.items);
-      if (res.items.length > 0) {
-        setSelectedSchemaId((prev) => prev || res.items[0].id);
+      const items = res.items ?? [];
+      setSchemas(items);
+      if (items.length > 0) {
+        setSelectedSchemaId((prev) => prev || items[0].id);
       }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '加载描述集列表失败');
@@ -64,8 +65,8 @@ export const ProtoSchemaWorkbenchPage: React.FC = () => {
         page,
         page_size: pageSize,
       });
-      setOperations(res.items);
-      setTotalOperations(res.total);
+      setOperations(res.items ?? []);
+      setTotalOperations(res.total ?? 0);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '加载方法映射失败');
     } finally {
@@ -262,7 +263,7 @@ export const ProtoSchemaWorkbenchPage: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {conflicts.map((c, idx) => (
+                  {(conflicts ?? []).map((c, idx) => (
                     <tr key={idx}>
                       <td className="code-font-mono">{c.service_name}</td>
                       <td className="code-font-mono">{c.operation}</td>

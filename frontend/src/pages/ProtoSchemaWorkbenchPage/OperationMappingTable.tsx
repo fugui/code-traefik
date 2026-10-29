@@ -25,7 +25,7 @@ export const OperationMappingTable: React.FC<OperationMappingTableProps> = ({
           </tr>
         </thead>
         <tbody>
-          {operations.map((op) => (
+          {(operations ?? []).map((op) => (
             <tr key={op.id}>
               <td className="code-font-mono code-color-primary">{op.service_name}</td>
               <td className="code-font-mono">{op.operation}</td>

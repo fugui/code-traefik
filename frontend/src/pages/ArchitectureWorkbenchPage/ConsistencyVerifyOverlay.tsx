@@ -97,7 +97,7 @@ export const ConsistencyVerifyOverlay: React.FC<ConsistencyVerifyOverlayProps> =
 
       {/* 边明细列表 */}
       <div className="code-consistency-edges code-mt-md">
-        <h4 className="code-section-subhead">一致性比对边清单 ({report.edges.length} 条)</h4>
+        <h4 className="code-section-subhead">一致性比对边清单 ({(report.edges ?? []).length} 条)</h4>
         <div className="code-table-wrapper">
           <table className="code-table">
             <thead>
@@ -111,7 +111,7 @@ export const ConsistencyVerifyOverlay: React.FC<ConsistencyVerifyOverlayProps> =
               </tr>
             </thead>
             <tbody>
-              {report.edges.map((edge, idx) => {
+              {(report.edges ?? []).map((edge, idx) => {
                 const meta = categoryMeta[edge.category];
                 return (
                   <tr key={`${edge.service_name}-${edge.operation}-${idx}`}>
@@ -130,7 +130,7 @@ export const ConsistencyVerifyOverlay: React.FC<ConsistencyVerifyOverlayProps> =
                   </tr>
                 );
               })}
-              {report.edges.length === 0 && (
+              {(report.edges ?? []).length === 0 && (
                 <tr>
                   <td colSpan={6} className="code-table-empty">
                     当前批次暂未分析出任何跨模块边记录

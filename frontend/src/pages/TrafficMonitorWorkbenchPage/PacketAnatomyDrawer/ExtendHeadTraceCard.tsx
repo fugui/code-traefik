@@ -74,7 +74,7 @@ export const ExtendHeadTraceCard: React.FC<ExtendHeadTraceCardProps> = ({ extend
         )}
 
         {/* 扩展头原始段列表 */}
-        {extendHead.items.length > 0 && (
+        {(extendHead?.items?.length ?? 0) > 0 && (
           <div className="code-table-wrapper code-mt-sm">
             <table className="code-table code-table--compact">
               <thead>
@@ -86,7 +86,7 @@ export const ExtendHeadTraceCard: React.FC<ExtendHeadTraceCardProps> = ({ extend
                 </tr>
               </thead>
               <tbody>
-                {extendHead.items.map((item, idx) => (
+                {(extendHead?.items ?? []).map((item, idx) => (
                   <tr key={`${item.ucType}-${idx}`}>
                     <td className="code-font-mono">{item.ucType}</td>
                     <td>{item.typeName}</td>

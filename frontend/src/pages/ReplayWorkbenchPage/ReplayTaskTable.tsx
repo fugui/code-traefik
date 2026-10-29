@@ -45,7 +45,7 @@ export const ReplayTaskTable: React.FC<ReplayTaskTableProps> = ({
           </tr>
         </thead>
         <tbody>
-          {tasks.map((t) => {
+          {(tasks ?? []).map((t) => {
             const isRunning = t.lifecycle_state === 'ARMED' || t.lifecycle_state === 'INJECTING';
             return (
               <tr key={t.id}>

@@ -122,12 +122,12 @@ export const RecordingSessionBar: React.FC<RecordingSessionBarProps> = ({
             value={currentSession?.id || ''}
             onChange={(e) => onSelectSession(e.target.value)}
           >
-            {sessions.map((s) => (
+            {(sessions ?? []).map((s) => (
               <option key={s.id} value={s.id}>
                 {s.name} ({s.session_no} - {s.status}) [{s.scope}]
               </option>
             ))}
-            {sessions.length === 0 && <option value="">暂无录制批次</option>}
+            {(sessions ?? []).length === 0 && <option value="">暂无录制批次</option>}
           </select>
 
           {currentSession && (
@@ -196,7 +196,7 @@ export const RecordingSessionBar: React.FC<RecordingSessionBarProps> = ({
               以下业务进程在挂载监控探针前已存在活跃的长连接（已建立的 TCP 链接未在握手阶段捕获 SYN/ACK）：
             </span>
             <ul className="code-diag-list">
-              {reconnectDiagnostics.map((d) => (
+              {(reconnectDiagnostics ?? []).map((d) => (
                 <li key={d.process_id}>
                   进程 <code>{d.process_name || d.process_id}</code> (Port {d.listen_port}): 存量长连接数 {d.established_conns_count} 条。
                   {d.reconnect_guide || '建议触发业务客户端短暂重连以完整捕获 CROS RPC 会话头。'}
@@ -288,7 +288,7 @@ export const RecordingSessionBar: React.FC<RecordingSessionBarProps> = ({
           <div className="code-form-item">
             <label className="code-form-label">勾选要协同监控的业务进程 (自动原子锁定所属 Agent):</label>
             <div className="code-process-selector-list">
-              {allProcesses.map((proc) => {
+              {(allProcesses ?? []).map((proc) => {
                 const parentAgent = allAgents.find((a) => a.id === proc.agent_id);
                 const isLeased = Boolean(parentAgent?.lease_type);
                 const checked = startForm.target_process_ids.includes(proc.id);

@@ -545,7 +545,7 @@ func (o *Orchestrator) ListSessions(
 		pageSize = 25
 	}
 
-	var items []models.RecordingSession
+	items := make([]models.RecordingSession, 0)
 	if err := db.Order("id DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&items).Error; err != nil {
 		return nil, 0, err
 	}

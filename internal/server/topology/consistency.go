@@ -204,7 +204,7 @@ func VerifySessionTopology(ctx context.Context, db *gorm.DB, sessionID uint64, r
 	}
 
 	// 6. 对纳管模块的静态依赖逐边进行评估
-	var edges []ConsistencyEdgeResult
+	edges := make([]ConsistencyEdgeResult, 0)
 	matchedDeclaredCalls := make(map[string]bool) // "srcModID:svc:op" -> true
 
 	for _, dep := range dependIfaces {

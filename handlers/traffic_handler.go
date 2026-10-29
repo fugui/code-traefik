@@ -132,7 +132,7 @@ func ListTrafficRecords(c *gin.Context) {
 		pageSize = 25
 	}
 
-	var items []models.TrafficRecord
+	items := make([]models.TrafficRecord, 0)
 	if err := tx.Order("seq_no ASC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&items).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询流量列表失败: " + err.Error()})
 		return
