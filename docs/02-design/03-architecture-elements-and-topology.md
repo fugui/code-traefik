@@ -1,10 +1,10 @@
 # 业务流量监控与重放 (`code-traefik`) 架构元素建模与拓扑一致性验证设计
 
 - **文档编号**：`03-architecture-elements-and-topology.md`
-- **文档版本**：v1.1.0
+- **文档版本**：v1.2.0
 - **更新日期**：2026-10-29
 - **归属阶段**：阶段二：系统架构与数据模型设计 (`02-design`)
-- **状态**：已定稿 (Frozen)
+- **状态**：定稿待审 (Ready for Review)
 - **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.6.0)、[`01-system-architecture.md`](./01-system-architecture.md)
 
 ---
@@ -32,21 +32,26 @@ Subsystem [ID=1, Code="TRADE_SYS"]
 
 ### 1.2 功能组移动防成环校验与级联更新算法 (`MoveFunctionalGroup`)
 
-当管理员将功能组 `G` 移动至同子系统内的新父节点 `NewParent`（`NewParent == nil` 表示提升为一级根功能组）时，在单个数据库可串行化/行锁事务内执行以下五步校验与重算：
+当管理员将功能组 `G` 移动至同子系统内的新父节点 `NewParent`（`NewParent == nil` 表示提升为一级根功能组）时，为防止并发移动导致树形破损或幽灵环路，必须在事务首行获取子系统级排他咨询锁 `SELECT pg_advisory_xact_lock(subsystem_id)`，并在单个事务内执行校验与单条批量 SQL 原子重算：
 
 ```go
 package topology
 
 const MaxGroupTreeDepth = 8
 
-// MoveFunctionalGroup 在单事务内校验防成环与最大深度约束，并原子级联更新子树 path 与 level
+// MoveFunctionalGroup 在单事务内串行化防成环与最大深度约束，并单条 SQL 原子级联更新子树 path 与 level
 func MoveFunctionalGroup(tx *gorm.DB, groupID uint64, newParentID *uint64) error {
 	var group models.FunctionalGroup
-	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&group, groupID).Error; err != nil {
+	if err := tx.First(&group, groupID).Error; err != nil {
 		return ErrGroupNotFound // 404
 	}
 
-	// 1. 禁止移动到自身
+	// 1. 获取子系统粒度事务咨询锁，彻底消除同子系统并发移动成环与脏读
+	if err := tx.Exec("SELECT pg_advisory_xact_lock(?)", group.SubsystemID).Error; err != nil {
+		return err
+	}
+
+	// 2. 禁止移动到自身
 	if newParentID != nil && *newParentID == group.ID {
 		return ErrCycleMoveToSelf // 400 Bad Request
 	}
@@ -55,14 +60,14 @@ func MoveFunctionalGroup(tx *gorm.DB, groupID uint64, newParentID *uint64) error
 	newParentPath := "/"
 	if newParentID != nil {
 		var parent models.FunctionalGroup
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&parent, *newParentID).Error; err != nil {
+		if err := tx.First(&parent, *newParentID).Error; err != nil {
 			return ErrParentGroupNotFound // 404
 		}
-		// 2. 跨子系统移动拦截（功能组归属固定子系统）
+		// 3. 跨子系统移动拦截（功能组归属固定子系统）
 		if parent.SubsystemID != group.SubsystemID {
 			return ErrCrossSubsystemMove // 400 Bad Request
 		}
-		// 3. 递归防成环检测：若目标父节点的物化路径以当前节点路径为前缀，说明目标父节点是当前节点的子孙！
+		// 4. 递归防成环检测：若目标父节点的物化路径以当前节点路径为前缀，说明目标父节点是当前节点的子孙！
 		if strings.HasPrefix(parent.Path, group.Path) {
 			return ErrCycleMoveToDescendant // 400 Bad Request
 		}
@@ -70,7 +75,7 @@ func MoveFunctionalGroup(tx *gorm.DB, groupID uint64, newParentID *uint64) error
 		newParentPath = parent.Path
 	}
 
-	// 4. 子树最大相对深度计算与 8 级上限门禁校验
+	// 5. 子树最大相对深度计算与 8 级上限门禁校验
 	var maxDescendantLevel int
 	if err := tx.Model(&models.FunctionalGroup{}).
 		Where("subsystem_id = ? AND path LIKE ?", group.SubsystemID, group.Path+"%").
@@ -83,28 +88,24 @@ func MoveFunctionalGroup(tx *gorm.DB, groupID uint64, newParentID *uint64) error
 		return ErrExceedMaxTreeDepth // 400 Bad Request (超过最大 8 级深度)
 	}
 
-	// 5. 计算新路径前缀与层级偏移，批量更新整棵子树
+	// 6. 原子更新当前节点父指针与整棵子树的物化路径与层级
 	oldPrefix := group.Path
 	newPrefix := fmt.Sprintf("%s%d/", newParentPath, group.ID)
 	levelDelta := newLevel - group.Level
 
-	var descendants []models.FunctionalGroup
-	if err := tx.Where("subsystem_id = ? AND path LIKE ?", group.SubsystemID, oldPrefix+"%").
-		Find(&descendants).Error; err != nil {
+	if err := tx.Model(&models.FunctionalGroup{}).Where("id = ?", group.ID).
+		Update("parent_id", newParentID).Error; err != nil {
 		return err
 	}
-	for i := range descendants {
-		node := &descendants[i]
-		if node.ID == group.ID {
-			node.ParentID = newParentID
-		}
-		node.Path = newPrefix + strings.TrimPrefix(node.Path, oldPrefix)
-		node.Level = node.Level + levelDelta
-		if err := tx.Save(node).Error; err != nil {
-			return err
-		}
-	}
-	return nil
+
+	// 利用数据库原生字符串替换与层级加算，单条 SQL 批量完成子树重算，杜绝逐行 Save 脏数据
+	return tx.Exec(`
+		UPDATE traefik_functional_groups 
+		SET path = ? || SUBSTRING(path FROM ?),
+		    level = level + ?
+		WHERE subsystem_id = ? AND path LIKE ?`,
+		newPrefix, len(oldPrefix)+1, levelDelta, group.SubsystemID, oldPrefix+"%",
+	).Error
 }
 ```
 
@@ -181,15 +182,17 @@ flowchart TB
 
 ### 3.2 进程级监控下游 `IP:Port` 自动推导算法 (`CompileProcessDownstreams`)
 
-当主控向 Agent 下发某目标进程 `P` 的录制或重放规格 `ProcessMonitorSpec` 时，自动聚合 `P` 承载的所有模块所需的下游网络端点：
+当主控向 Agent 下发某目标进程 `P` 的录制或重放规格 `ProcessMonitorSpec` 时，为确保**不仅能拦截声明内的合规调用，还能物理捕获私自发起的未声明越权调用（检出 `VIOLATION`）**，主控自动聚合以下四层下游网络端点集合：
 
-1. 读取 `P` 承载的公共模块集合 $M(P) = P.\text{ModuleIDs}$；
-2. 收集 $M(P)$ 声明的全部 `DEPEND` 接口集合 $D(P)$；
-3. 对每条 $(svc, op) \in D(P)$，在全局 `PROVIDE` 索引中查找供给模块 $m_{\text{prov}}$，并解析其目标进程 $P_{\text{prov}}$（若 `P` 位于 `PRIVATE` Agent 上且同机已有另一私有进程承载 $m_{\text{prov}}$，优先取该同机私有进程；否则回退取全局公共基线进程 $m_{\text{prov}}.\text{ProcessID}$）：
-   - 若 $P_{\text{prov}}$ 存在且 $P_{\text{prov}}.\text{ID} \neq P.\text{ID}$（排除同进程内互调 A-04）：
-     - 加入端点 `(EffectiveIP(P_prov), P_prov.ListenPort)`（其中 `EffectiveIP` 优先取 `P_prov.AdvertiseIP`，为空则取所属 `Agent.HostIP()`）；
-     - 若 $P_{\text{prov}}.\text{AgentID} == P.\text{AgentID}$（同机跨进程调用），同时注入回环别名 `("127.0.0.1", P_prov.ListenPort)`，确保无论业务代码连宿主机网卡 IP 还是 `127.0.0.1` 均被 `cgroup/connect4` 精确捕获；
-4. 合并进程显式登记的外部下游地址列表 `P.ExtraDownstreams`（用于承接「外部 / 未登记系统」CROS RPC 服务）；若为跨进程离线重放，额外并入源录制批次中 `SourceProcess` 观测到的全部 `EGRESS` 原始目的地址 `dst_addr`，按 `IP:Port` 去重排序后输出。
+1. **已声明下游推导端点**：
+   - 读取 `P` 承载的公共模块集合 $M(P)$ 及全部 `DEPEND` 接口集合 $D(P)$；
+   - 对每条 $(svc, op) \in D(P)$，在全局 `PROVIDE` 索引中查出供给进程 $P_{\text{prov}}$；若 $P_{\text{prov}}.\text{ID} \neq P.\text{ID}$，加入 `(EffectiveIP(P_prov), P_prov.ListenPort)`；
+2. **同机回环别名端点**：
+   - 对同机运行的供给进程（`P_prov.AgentID == P.AgentID`），自动并入回环别名 `("127.0.0.1", P_prov.ListenPort)`；
+3. **本批次协同监控监听端点全集 (`BatchListenEndpoints`)**：
+   - **核心物理保障（解决未声明调用拦截盲区）**：将本次录制批次所纳管的**所有目标进程的监听端点**（剔除 `P` 自身端口）全部并入 `Downstreams`；即使模块 $A$ 源码未声明对模块 $B$ 的依赖，一旦 $A$ 发起跨进程调用 $B$，出站网络同样被 `cgroup/connect4` 透明重定向至 Agent 代理并完成采集，使 `VIOLATION` 在物理上 100% 具备可观测性！
+4. **外部显式补充端点与离线重放历史端点**：
+   - 合并进程登记的 `P.ExtraDownstreams`；若为离线重放，并入源录制批次观测到的全部 `EGRESS` 目的端点；最终按 `IP:Port` 去重输出。
 
 ### 3.3 跨 Agent 同构进程重放兼容性校验算法 (`ValidateReplayProcessCompatibility`)
 
@@ -270,15 +273,19 @@ func ValidateReplayProcessCompatibility(
 
 基于一次多进程协同录制批次（`session_id`）采集到的全部业务请求报文（`ucMsgType == 2 (REQ)`），引擎自动穿透还原实际模块级调用图，并与当前静态架构契约执行逐边比对。
 
+为消除慢轨并发连接分片处理时“父入站请求尚未落盘而出站调用已到达”的时序竞态，**来源模块判定在录制批次停止后，由后台离线批量对账引擎 (`OfflineBatchAttribution`) 统一归集全链路报文并执行结算**，保证父子 SpanID 因果关系的 100% 精确闭环。
+
 ### 5.1 目的模块穿透定位 (`ResolveDestinationModule`)
 
 依据全局唯一供给假设（A-05），无论报文来自 `INGRESS` 还是 `EGRESS`，直接以请求头 `(ascServiceName, ascOperation)` 查表 `ProvideMap[serviceName + ":" + operation]`：
 - **命中**：唯一定位到目标功能模块 `DstModule`（同时确定所属功能组与子系统）；
 - **未命中**：归属至虚拟异常节点 `VIRTUAL_UNREGISTERED_INTERFACE`（「未登记接口」）。
 
-### 5.2 来源模块三级判定算法 (`ResolveSourceModule`)
+### 5.2 来源模块判定与去重权威原则 (`ResolveSourceModule`)
 
-对于目标进程 $P$ 发出的出站请求报文 `egressReq`（已知 $P$ 承载的模块集合为 $M(P)$）：
+在跨进程调用统计中，**严格以发起方目标进程的 `EGRESS` 出站记录为唯一权威统计源，接收方的 `INGRESS` 仅用于构建父 Span 索引与外部调用方统计，彻底消除同一次往返双重计数**：
+
+对于目标进程 $P$ 发出的出站请求报文 `egressReq`（已知 $P$ 承载的模块集合为 $M(P)$，且依据该批次固化的 `SessionProcessSnapshot` 动态解析）：
 
 ```mermaid
 flowchart TD
@@ -294,19 +301,22 @@ flowchart TD
 ```
 
 > [!NOTE]
-> **单模块进程前置收敛说明**：当进程 $P$ 仅承载 1 个模块（$|M(P)| = 1$）时，即便该调用未携带 DOTR Trace 扩展头且未声明 `DEPEND`（即发生了违规调用），其调用发起方在物理上也必然是唯一的 $M(P)[0]$。前置收敛保证了单模块进程的越权调用始终被精准判定为 `VIOLATION` 而非降级为 `UNATTRIBUTED`。对于仅在 `INGRESS` 侧观测到、而上游客户端不在本次纳管进程集合内的外部入站流量，来源标记为 `EXTERNAL_CALLER`（不计入内部模块越权，仅用于定位 `DstModule` 及构建 `IngressSpanMap` 供下游出站步骤 ① 关联）。
+> **单模块进程前置收敛与同机反查**：
+> 1. 当进程 $P$ 仅承载 1 个模块（$|M(P)| = 1$）时，即便未携带 Trace 且未声明 `DEPEND`，调用方在物理上也必然是唯一的 $M(P)[0]$。前置收敛保证单模块进程的违规外联被 100% 裁决为 **`VIOLATION`**；
+> 2. 同机跨进程互调时，Agent 依据 Socket inode 反查确认发起方 PID 属于纳管进程，从而将对端 INGRESS 关联至发起方进程，避免误判为外部未知调用。
 
-### 5.3 架构一致性五分类比对规则与算法
+### 5.3 架构一致性六分类比对规则与算法
 
-将「静态契约边集合 $E_{\text{static}}$」与「实测跨进程调用观测集合 $E_{\text{observed}}$」按 `(Src, Dst, ServiceName, Operation)` 键对齐，输出以下互斥且完备的五类结果：
+比对算法只针对**“源模块所在进程在本批次被纳管监控”**的静态依赖边进行评估，输出互斥完备的六类比对结果（彻底消除因未监控模块产生的虚假未覆盖噪音）：
 
 | 结果分类枚举 | 中文标签 | 严格判定条件 | 架构治理含义与 UI 视觉语义 |
 | :--- | :--- | :--- | :--- |
-| **`VERIFIED`** | 已验证合规 | 静态存在跨进程声明 `SrcModule --DEPEND--> (svc, op)`，且实测精确归属到 `SrcModule` 的调用次数 $\ge 1$ | 架构设计与实测运行完全一致（`--color-success` 绿色实线） |
-| **`VIOLATION`** | 架构漂移越权 | 实测精确归属到 `SrcModule`，但 `SrcModule` **未声明** `DEPEND(svc, op)`（含调用已登记模块或调用未登记接口） | **高优架构漂移告警**：存在代码私自调用下游未登记契约（`--color-danger` 红色高亮告警边） |
-| **`UNCOVERED`** | 本次未触发 | 静态声明为跨进程依赖（非同进程），且本次录制批次中既无精确命中记录，也无候选包含该模块的进程级调用 | 接口声明存在但当前测试任务未覆盖该分支（`--color-text-muted` 灰色虚线） |
-| **`NOT_OBSERVABLE`** | 进程内不可观测 | 静态声明 `SrcModule` 与 `DstModule` 绑定在同一非空 `ProcessID`（A-04 进程内直接函数调用） | 物理上不经内核网络栈，**不计入 `UNCOVERED` 分母**（`--color-info` 蓝色点划线徽章） |
-| **`UNATTRIBUTED`** | 进程级待定归属 | 多模块进程发出的实测调用因缺少父 Trace 且多模块重复声明（或均未声明）同一 `DEPEND`，只能归属到 `Process_P` | 展示 `Process_P -> DstModule` 及候选模块列表 `CandidateModules`，提示补充 Trace 或收敛重复契约（`--color-warning` 琥珀色边） |
+| **`VERIFIED`** | 已验证合规 | 静态声明跨进程依赖 `SrcModule --DEPEND--> (svc, op)`，且实测归属到 `SrcModule` 的跨进程调用 $\ge 1$ | 架构设计与实测运行完全一致（`--color-success` 绿色实线） |
+| **`VIOLATION`** | 架构漂移越权 | 实测精确定位到 `SrcModule`，但 `SrcModule` **未声明**该 `DEPEND(svc, op)`（含调用未登记接口或已登记其他模块） | **高优架构漂移告警**：源码存在未备案的私自跨进程调用（`--color-danger` 红色告警实线） |
+| **`UNCOVERED`** | 本次未触发 | 静态声明为跨进程依赖，源模块与目标供给模块所在进程**均在本次协同监控集合中**，但本次任务未捕获该调用 | 依赖已就绪但当前业务测试用例未覆盖该调用路径（`--color-text-muted` 灰色虚线） |
+| **`NOT_MONITORED`** | 目标未纳管 | 静态声明为跨进程依赖，源模块所在进程已被监控，但**目标供给模块所在物理进程未加入本次监控批次** | 物理上不可观测，**不计入 `UNCOVERED` 覆盖率分母**（`--color-text-tertiary` 浅灰点划线） |
+| **`NOT_OBSERVABLE`** | 进程内不可观测 | 静态声明为同进程内两模块调用（依据该批次快照 `SrcModule` 与 `DstModule` 绑定在同一 `ProcessID`） | 物理上走函数调用不经过内核网络栈，**不计入 `UNCOVERED` 分母**（`--color-info` 蓝色徽章） |
+| **`UNATTRIBUTED`** | 进程级待定归属 | 多模块进程发出的调用缺少父 Trace 且存在重复声明，只能定位于 `Process_P -> DstModule` | 提示在源码中补充 DOTR Trace 扩展头或在架构中心收敛重复契约（`--color-warning` 琥珀色边） |
 
 #### 一致性验证响应 DTO 结构 (`ConsistencyReportDTO`)
 
@@ -319,6 +329,7 @@ const (
 	StatusVerified      VerificationStatus = "VERIFIED"
 	StatusViolation     VerificationStatus = "VIOLATION"
 	StatusUncovered     VerificationStatus = "UNCOVERED"
+	StatusNotMonitored  VerificationStatus = "NOT_MONITORED"
 	StatusNotObservable VerificationStatus = "NOT_OBSERVABLE"
 	StatusUnattributed  VerificationStatus = "UNATTRIBUTED"
 )
@@ -338,9 +349,11 @@ type ConsistencyEdgeResult struct {
 
 type ConsistencyReportDTO struct {
 	SessionID          uint64                  `json:"session_id"`
+	StaticModelVersion time.Time               `json:"static_model_version"` // 静态架构版本快照时刻，模型变更时缓存自动失效
 	VerifiedCount      int                     `json:"verified_count"`
 	ViolationCount     int                     `json:"violation_count"`
 	UncoveredCount     int                     `json:"uncovered_count"`
+	NotMonitoredCount  int                     `json:"not_monitored_count"`
 	NotObservableCount int                     `json:"not_observable_count"`
 	UnattributedCount  int                     `json:"unattributed_count"`
 	Edges              []ConsistencyEdgeResult `json:"edges"`

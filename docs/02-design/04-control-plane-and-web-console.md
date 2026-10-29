@@ -1,10 +1,10 @@
 # 业务流量监控与重放 (`code-traefik`) 管理面服务、微前端控制台与回归断言设计
 
 - **文档编号**：`04-control-plane-and-web-console.md`
-- **文档版本**：v1.1.0
+- **文档版本**：v1.2.0
 - **更新日期**：2026-10-29
 - **归属阶段**：阶段二：系统架构与数据模型设计 (`02-design`)
-- **状态**：已定稿 (Frozen)
+- **状态**：定稿待审 (Ready for Review)
 - **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.6.0)、[`01-system-architecture.md`](./01-system-architecture.md)、[`02-data-plane-and-cros-rpc-engine.md`](./02-data-plane-and-cros-rpc-engine.md)、[`03-architecture-elements-and-topology.md`](./03-architecture-elements-and-topology.md)
 
 ---
@@ -99,19 +99,27 @@ flowchart LR
    - **单行往返聚合规则（Exchange-per-Row，目标吞吐 `>= 2000 帧/s`）**：
      - **`ONEWAY` 单向请求**（`ucMsgType == 2 && ucReqType == 3`）：无需等待应答，直接组装 `raw_req_packet = frame`、`raw_rsp_packet = nil`、`payload_json = {"req": reqObj, "rsp": null}`；
      - **标准 `UNARY` 与多段流式 `STREAM_RSP`**：收到 `REQ` 时暂存至 Worker 本地 `pendingMap[(process_id, direction, conn_key, sno)]`；后续收到 `ucMsgType == 4 (RSP_SEG)` 时按序追加分片字节至 `rspBuf` 并递增 `rsp_seg_count`；收到终结帧 `ucMsgType == 3 (RSP)` 时弹出配对项，无损拼接 `raw_rsp_packet`（可通过 `crosrpc.SplitFrames` 零歧义逐片还原），组装 `payload_json = {"req": reqObj, "rsp": rspObjOrSegArray}`，并精确计算微秒级往返耗时 `latency_us = (rspCapturedAtNs - reqCapturedAtNs) / 1000`；
-     - **未配对超时与孤立帧兜底**：在滑动窗口（默认 `2s`）内未等到应答或批次停止刷盘的挂起请求，以 `exchange_type = 'REQ_ONLY'` 落盘（`raw_rsp_packet = nil`）；连接中途切入捕获到的无头孤立应答以 `exchange_type = 'RSP_ORPHAN'` 落盘（`raw_req_packet = nil`）；连接管理帧以 `exchange_type = 'MNG'` 归档，确保**采集字节 100% 无损落库**；
-   - **微批写入**：每凑满 `200` 条往返记录或每 `200ms` 触发一次 GORM `CreateInBatches`。
+     - **自适应配对超时与孤立帧兜底**：
+       - 滑动配对超时时间基于报文会话头动态计算：取 `max(ReqHead.uiTimeOutSecondLimit, 30s)`；
+       - 若收到 Agent 投递的 `EVENT_CONN_CLOSED` 连接关闭事件，立即刷空该连接的所有挂起请求，置为 `exchange_type = 'REQ_ONLY'` 落盘；
+       - 连接中途切入捕获到的无头孤立应答以 `exchange_type = 'RSP_ORPHAN'` 落盘（`raw_req_packet = nil`）；连接管理帧以 `exchange_type = 'MNG'` 归档；
+       - 每个 Worker 设立最大 `10000` 条挂起请求预算，防止慢连接恶意泄漏内存；
+   - **微批写入**：每凑满 `200` 条往返记录或每 `200ms` 触发一次 GORM `CreateInBatches` 分区表写入。
 
-### 1.3 跨 Agent 同构重放调度器与状态折叠规则 (`diff.ReplayScheduler`)
+### 1.3 跨 Agent 同构重放调度器与多请求明细持久化 (`diff.ReplayScheduler`)
 
 1. **权限、同构兼容性与排他租约三重前置门禁**：
    - 校验选定的 `INGRESS` 往返记录均属于同一 `session_id` 与同一源进程 `source_process_id`，且 `is_replayable == true`（`raw_req_packet` 非空且未被 4MB 截断）；
-   - 调用 `topology.ValidateReplayProcessCompatibility` 校验发起人对录制素材（`SHARED` 或本人 `PRIVATE`）及目标进程 `target_process_id` 所属 Agent 的权限，并验证 `target_process_id` 完整承载选定请求命中的全部公共架构模块（支持将公共回归流量投递至开发者个人 `PRIVATE` Agent 上的同构本地进程）；
+   - 调用 `topology.ValidateReplayProcessCompatibility` 校验发起人对录制素材（`SHARED` 或本人 `PRIVATE`，管理员可全团队重用）及目标进程 `target_process_id` 所属 Agent 的权限，并验证 `target_process_id` 完整承载选定请求命中的全部公共架构模块（支持将公共回归流量投递至开发者个人 `PRIVATE` Agent 上的同构本地进程，或当前空闲的 `SHARED` Agent 进程）；
    - 对目标进程所属 Agent 获取 `REPLAY` 排他租约（若该 Agent 正在被录制或重放占用则立即返回 `409 Conflict`）。
-2. **单次扫描无损重放包组装**：
-   - 无需跨行二次自连接查询，直接从 `traefik_traffic_records` 提取选定入站记录的 `raw_req_packet` 作为 `IngressRequests`（保留对应的基线 `raw_rsp_packet` 与 `payload_json.rsp` 留驻主控内存供回归比对），并提取同批次源进程下所有 `EGRESS` 记录的 `append(raw_req_packet, raw_rsp_packet...)` 作为 `EgressMocks`（连同 `MNG` 帧）下发目标 Agent；任务结束或取消时自动释放 Agent 排他租约。
+2. **重放生命周期状态机与流式切片下发**：
+   - **状态机流转**：`PENDING`（初始创建） -> `ARMED`（向 Agent 下发重定向规格与 Mock 预加载完成，此时提示 A-01 引导重启或重连） -> `INJECTING`（连接建立，按序注入请求切片） -> `COMPLETED / CANCELLED / FAILED`；
+   - **单次扫描流式组装**：直接从 `traefik_traffic_records` 提取选定记录的 `raw_req_packet` 作为注入帧，并关联对应的局部 ScopedMock 集合及全局兜底 Mock 集合（严格过滤截断帧与 REQ_ONLY 帧），采用二进制分片流下发 Agent；
+   - **双轨可靠回收与独立明细持久化**：
+     - 重放执行进度与结果通过 WebSocket `EVENT_REPLAY_ITEM_DONE` 实时推送，同时支持通过 `GET /agent/v1/replays/:taskId/result` 幂等拉取；
+     - 每条请求重放回收的实际原始应答帧（`actual_rsp_packet` bytea）及双层比对结果独立持久化至 **`traefik_replay_items`** 表，支持前端标准服务端分页查询与历史多次比对！
 3. **多请求状态聚合优先级定律**：
-   单条请求及整包重放任务的最终 `result_status` 严格遵循以下全序优先级取最高异常级别（同时完整保留每条请求的独立明细）：
+   单条请求及整包重放任务的最终 `result_status` 严格遵循以下全序优先级取最高异常级别：
 
    $$\text{ERROR} \succ \text{TIMEOUT} \succ \text{MOCK\_MISS} \succ \text{FAILED} \succ \text{PASS}$$
 
@@ -161,7 +169,9 @@ flowchart LR
 
 1. **无 `.pb` 映射降级**：直接计算并返回 `ByteDiffSummary`（期望长度、实际长度、首个差异字节偏移量 `FirstDiffOffset` 及前后 32B Hex 切片），判定为 `FAILED`。
 2. **有 `.pb` 映射递归语义比对 (`DiffProtoMessages`)**：
+   - **严格快照 Schema 版本锁定**：解码 `Actual` 原始载荷时，必须严格使用录制基线记录所归档的 `(schema_id, schema_version)`，杜绝因管理员激活新 IDL 版本导致回归基线漂移；
    - 将 `Expected` 与 `Actual` 分别反序列化为 `dynamicpb.Message`；
+   - **未知字段防漏判机制**：通过 `protoreflect.Message.GetUnknown()` 提取双方原始载荷中未在当前 `.pb` 中声明的额外 Tag 字段；若 `Actual` 存在非空未知字节而 `Expected` 没有，记录 `FieldPath = "<unknown_fields>"`，判定为 **`FAILED`**（提示新代码引入了未备案的扩展字段，防止漏判）；
    - 合并生效忽略规则集合：`IgnoreMatcher = CompilePaths(Interface.DiffIgnorePaths ∪ Task.ExtraIgnorePaths)`（支持点分路径如 `header.server_time` 与数组通配路径如 `orders[*].trace_token`）；
    - 递归遍历 `Expected` 与 `Actual` 中所有被设置（`Has(fd)`）的 `protoreflect.FieldDescriptor`：
      - 若当前 `fieldPath` 命中 `IgnoreMatcher`，直接跳过；
@@ -354,10 +364,10 @@ export interface PacketAnatomyDrawerDTO {
 | 健康检查 (`/api/health`) 与认证配置 (`/api/auth/*`) | 允许 | 允许 | 允许 |
 | 查看公共三级架构元素、模块契约、静态拓扑与 `.pb` 映射列表 | `401` | **允许** | **允许** |
 | 新增 / 修改 / 移动 / 删除公共架构元素、`.pb` 描述集管理 | `401` | `403` | **允许** |
-| 查看公共 `SHARED` Agent 及实时租约状态；创建并全权管理**本人 `PRIVATE` Agent** 与名下进程（挂载公共模块） | `401` | **允许**（访问他人 `PRIVATE` Agent 返 `403`） | **允许**（另负责创建/管理全局 `SHARED` Agent 及强制释放异常租约） |
+| 查看公共 `SHARED` Agent 及实时租约状态；创建并全权管理**本人 `PRIVATE` Agent** 与名下进程（挂载公共模块） | `401` | **允许**（访问他人 `PRIVATE` Agent 返 `403`） | **允许**（全团队 `SHARED` 与各用户 `PRIVATE` Agent 均可见；负责创建/管理 `SHARED` 及强制释放异常租约） |
 | 租用空闲的 `SHARED` Agent 或本人的 `PRIVATE` Agent **启动/停止录制** | `401` | **允许**（若目标 Agent 已被占用返 `409 Conflict`） | **允许**（同样遵守动态排他租约 `409` 互斥） |
-| 查看 `SHARED` 录制素材及**本人的 `PRIVATE` 录制素材**；将本人 `PRIVATE` 素材发布为 `SHARED` 或删除本人 `PRIVATE` 素材 | `401` | **允许**（访问或删除他人 `PRIVATE` 素材返 `403`；删除公共 `SHARED` 素材返 `403`） | **允许**（可管理并删除无重放引用的 `SHARED` 素材） |
-| **跨 Agent 同构离线重放**：选用有权限的 `SHARED` 或本人 `PRIVATE` 素材，投递至空闲 `SHARED` 或本人 `PRIVATE` Agent 的同模块进程 | `401` | **允许**（模块不匹配返 `400`，Agent 被占用返 `409`） | **允许** |
+| 查看 `SHARED` 录制素材及**本人的 `PRIVATE` 录制素材**；将本人 `PRIVATE` 素材发布为 `SHARED` 或删除本人 `PRIVATE` 素材 | `401` | **允许**（访问或删除他人 `PRIVATE` 素材返 `403`；删除公共 `SHARED` 素材返 `403`） | **允许**（全团队 `SHARED` 与所有用户的 `PRIVATE` 录制素材均可见与审计；可治理并删除无引用的素材） |
+| **跨 Agent 同构离线重放**：选用有权限的 `SHARED` 或本人 `PRIVATE` 素材，投递至空闲 `SHARED` 或本人 `PRIVATE` Agent 的同模块进程 | `401` | **允许**（支持投递至本人私有或空闲共享环境，模块不匹配返 `400`，Agent 被占用返 `409`） | **允许**（具备跨公私域同构调度与故障恢复特权） |
 | 修改模块全局治理参数 (`/api/admin/settings`) | `401` | `403` | **允许** |
 
 ### 5.2 `commonAudit` 字段级 Diff 与操作事件审计埋点字典

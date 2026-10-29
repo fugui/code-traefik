@@ -73,7 +73,7 @@ CROS RPC 是 DOPHI 平台提供的远程过程调用框架，支持多种通信�
 
 ```
 偏移  长度  字段        说明
-0     7    aucMagic    固定字符串 "CSE.TCP"（ASCII 0x43 53 45 2E 54 50 43），继承自 gRPC 互通要求
+0     7    aucMagic    固定字符串 "CSE.TCP"（ASCII 0x43 53 45 2E 54 43 50），继承自 gRPC 互通要求
 7     1    ucProtocol  底层通信协议标识，取值见 RPC_TRANSPORT_TYPE_E（第 5 节）
 ```
 
@@ -260,7 +260,7 @@ CROS RPC 是 DOPHI 平台提供的远程过程调用框架，支持多种通信�
 
 ```
 偏移  内容
-0     43 53 45 2E 54 50 43 01          "CSE.TCP" + 0x01(TCP)
+0     43 53 45 2E 54 43 50 01          "CSE.TCP" + 0x01(TCP)
 8     <ullSNO, 8B, 大端>
 16    <uiLength, 4B, 大端> = sizeof(Req头) + 扩展头总长 + payloadLen
 20    <usHeadLen, 2B, 大端> = sizeof(Req头) + 扩展头总长

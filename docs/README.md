@@ -20,7 +20,7 @@ docs/
 │   ├── 02-data-plane-and-cros-rpc-engine.md    # 【数据面篇】CROS RPC 协议栈、Agent eBPF 采集与自愈重放引擎
 │   ├── 03-architecture-elements-and-topology.md # 【业务篇】架构元素建模 (SSOT)、模块接口契约与拓扑验证
 │   ├── 04-control-plane-and-web-console.md     # 【管理面篇】Server 控制面、微前端控制台、Protobuf 编解码与回归 Diff
-│   └── 05-database-schema.md                   # 【数据模型篇】11 张 traefik_* 物理表 GORM 字典与索引设计
+│   └── 05-database-schema.md                   # 【数据模型篇】13 张 traefik_* 物理表 GORM 字典、分区表与索引设计
 ├── 03-api/          # 接口与数据契约：RESTful API 签名、请求/响应 Schema、RBAC 权限与审计规范
 │   └── 01-http-api-contract.md            # 【API 契约】HTTP 接口字典、角色守卫 (traefik_admin) 与状态码规范
 ├── 04-tasks/        # TDD 实施规划与验收：Milestone 拆解、任务作战卡与自动化验收测试标准 (AC)
@@ -28,7 +28,9 @@ docs/
 │   └── 02-m1-domain-model-and-api.md      # 【M1 作战卡】核心领域模型、API 与物理隔离单元测试
 ├── 05-adr/          # 架构决策记录 (ADR)：重大技术选型与权衡记录 (Architecture Decision Records)
 │   ├── 01-microfrontend-and-table-prefix-isolation.md # ADR-01：微前端集成、共享库表前缀隔离与 TDD 测试策略
-│   └── 02-ebpf-hook-and-dual-subsystem-adr.md         # ADR-02：eBPF 入站旁路钩子、Cookie 原目的还原与无 Schema 数据面解耦
+│   ├── 02-ebpf-hook-and-dual-subsystem-adr.md         # ADR-02：eBPF 入站旁路钩子、Cookie 原目的还原与无 Schema 数据面解耦
+│   ├── 03-control-plane-state-recovery-and-lease-reconciliation.md # ADR-03：控制面状态自愈恢复、Agent 双向租约对账与孤儿探针防御
+│   └── 04-traffic-storage-partitioning-and-relational-normalization.md # ADR-04：海量流量物理分区归档与核心关系规范化解耦
 ├── 06-ops/          # 交付与验证：双模联调、物理隔离数据库测试与生产环境单二进制部署手册
 │   └── 01-verification-and-deployment-guide.md # 联调验证、自动化回归测试与生产部署操作指南
 └── 07-references/   # 外部参考与上位契约基准：协议包规范、字节字典与领域标准文档
