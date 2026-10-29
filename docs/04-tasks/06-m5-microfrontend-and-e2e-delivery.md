@@ -54,3 +54,16 @@ make build && make clean
 # AC-M5-05: 端口与进程卫生检查（确保 :8091 与 :5181 零残留占用）
 ! ss -lptn 'sport = :8091 or sport = :5181' | grep -q LISTEN
 ```
+
+---
+
+## 4. 验收执行结果与交付结论 (Verification Results & Sign-off)
+
+- **执行日期**：2026-10-29
+- **验收结果**：
+  1. **AC-M5-01** (前端静态安全扫描)：`PASS`，零 `any`、零 `dangerouslySetInnerHTML`/`innerHTML`、零原生 `alert()`/`confirm()`。
+  2. **AC-M5-02** (前端 lint & 类型检查)：`PASS`，`tsc --noEmit` 与 `eslint` 100% 零错误零警告。
+  3. **AC-M5-03** (`make test` 全量包测试与 SC-01~SC-08 E2E 隔离库测试)：`PASS`，全部 14 个 Go 包及 SC-01~SC-08 全链路端到端场景断言 100% 绿灯。
+  4. **AC-M5-04** (双二进制打包与产物清理)：`PASS`，`code-traefik-server`（内嵌 `frontend/dist`）与 `code-traefik-agent` 成功编译构建并通过 `make clean` 清理。
+  5. **AC-M5-05** (端口卫生检查)：`PASS`，`:8091` 与 `:5181` 物理端口零泄漏占用。
+- **阶段结论**：M5 作战卡准出质量门禁全部通过，工程已具备全链路交付能力。

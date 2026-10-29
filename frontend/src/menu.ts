@@ -9,24 +9,38 @@ export const traefikMenuConfig: ModuleMenuConfig = {
   moduleName: MODULE_TITLE,
   groups: [
     {
-      title: '核心业务',
+      title: '流量与架构',
       items: [
         {
-          path: '/dashboard',
-          label: '概览看板',
-          icon: 'M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6',
+          path: '/architecture',
+          label: '架构中心与拓扑',
+          icon: 'M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10',
         },
         {
-          path: '/items',
-          label: '示例条目管理',
-          icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4',
+          path: '/traffic',
+          label: '协同录制与流量解剖',
+          icon: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z',
+        },
+        {
+          path: '/replay',
+          label: '跨Agent重放与回归',
+          icon: 'M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15',
+        },
+        {
+          path: '/schemas',
+          label: 'Proto描述集工作台',
+          icon: 'M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4',
         },
       ],
     },
     {
-      title: '模块治理',
-      adminOnly: true, // 仅具备 <module_key>_admin 或 super_admin 角色的用户可见
+      title: '资源与治理',
       items: [
+        {
+          path: '/agents',
+          label: 'Agent纳管与租约',
+          icon: 'M5 12h14M12 5l7 7-7 7',
+        },
         {
           path: '/admin/settings',
           label: '模块参数配置',
@@ -41,7 +55,6 @@ export const traefikMenuConfig: ModuleMenuConfig = {
 export const menuGroups: MenuGroup[] = traefikMenuConfig.groups;
 export const menuItems: SubMenuItem[] = traefikMenuConfig.groups.flatMap((group) => group.items);
 
-// 可选高阶能力：动态菜单变更订阅机制（当业务需要根据后端配置动态刷新宿主侧边栏时调用 notifyMenuUpdated）
 type MenuChangeListener = (config: ModuleMenuConfig) => void;
 const listeners = new Set<MenuChangeListener>();
 let currentConfig: ModuleMenuConfig = traefikMenuConfig;

@@ -1,6 +1,16 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { BrowserRouter, Link, Navigate, Route, Routes, useLocation } from 'react-router-dom';
-import { LayoutDashboard, ListChecks, LogOut, Moon, Settings, Sun } from 'lucide-react';
+import {
+  Network,
+  Activity,
+  RotateCcw,
+  FileCode,
+  Server,
+  Settings,
+  LogOut,
+  Moon,
+  Sun,
+} from 'lucide-react';
 import {
   AUTH_TOKEN_KEY,
   ConfirmProvider,
@@ -19,9 +29,12 @@ import {
   MODULE_TITLE,
 } from './constants';
 import { ModuleUserProvider, useModuleUser } from './context/ModuleUserContext';
+import ArchitectureWorkbenchPage from './pages/ArchitectureWorkbenchPage';
+import TrafficMonitorWorkbenchPage from './pages/TrafficMonitorWorkbenchPage';
+import ReplayWorkbenchPage from './pages/ReplayWorkbenchPage';
+import ProtoSchemaWorkbenchPage from './pages/ProtoSchemaWorkbenchPage';
+import AgentManagementPage from './pages/AgentManagementPage';
 import AdminSettingsPage from './pages/AdminSettingsPage';
-import DashboardPage from './pages/DashboardPage';
-import ItemListPage from './pages/ItemListPage';
 import type { CurrentUserProfile } from './types';
 import './index.css';
 
@@ -37,16 +50,22 @@ export interface AppProps {
  * 嵌入模式路由视图：无独立侧边栏与顶栏，同时兼容相对子路径与带模块前缀的完整路径
  */
 const EmbeddedRoutes: React.FC = () => {
-  const defaultTarget = `${MODULE_BASE_PATH}/dashboard`;
+  const defaultTarget = `${MODULE_BASE_PATH}/architecture`;
   return (
     <Routes>
       <Route path="/" element={<Navigate to={defaultTarget} replace />} />
       <Route path={MODULE_BASE_PATH} element={<Navigate to={defaultTarget} replace />} />
       <Route path={`${MODULE_BASE_PATH}/`} element={<Navigate to={defaultTarget} replace />} />
-      <Route path="/dashboard" element={<DashboardPage />} />
-      <Route path={`${MODULE_BASE_PATH}/dashboard`} element={<DashboardPage />} />
-      <Route path="/items" element={<ItemListPage />} />
-      <Route path={`${MODULE_BASE_PATH}/items`} element={<ItemListPage />} />
+      <Route path="/architecture" element={<ArchitectureWorkbenchPage />} />
+      <Route path={`${MODULE_BASE_PATH}/architecture`} element={<ArchitectureWorkbenchPage />} />
+      <Route path="/traffic" element={<TrafficMonitorWorkbenchPage />} />
+      <Route path={`${MODULE_BASE_PATH}/traffic`} element={<TrafficMonitorWorkbenchPage />} />
+      <Route path="/replay" element={<ReplayWorkbenchPage />} />
+      <Route path={`${MODULE_BASE_PATH}/replay`} element={<ReplayWorkbenchPage />} />
+      <Route path="/schemas" element={<ProtoSchemaWorkbenchPage />} />
+      <Route path={`${MODULE_BASE_PATH}/schemas`} element={<ProtoSchemaWorkbenchPage />} />
+      <Route path="/agents" element={<AgentManagementPage />} />
+      <Route path={`${MODULE_BASE_PATH}/agents`} element={<AgentManagementPage />} />
       <Route path="/admin/settings" element={<AdminSettingsPage />} />
       <Route path={`${MODULE_BASE_PATH}/admin/settings`} element={<AdminSettingsPage />} />
       <Route path="*" element={<Navigate to={defaultTarget} replace />} />
@@ -55,7 +74,7 @@ const EmbeddedRoutes: React.FC = () => {
 };
 
 /**
- * 独立调试模式布局外壳：自带简易导航、主题明暗切换器与本地登录守卫，方便脱离宿主独立开发
+ * 独立调试模式布局外壳：自带简易导航、主题明暗切换器与本地登录守卫
  */
 const StandaloneShell: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
   const location = useLocation();
@@ -80,9 +99,13 @@ const StandaloneShell: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
   }
 
   const pathname = location.pathname;
-  const isDashboard = pathname === '/' || pathname.startsWith('/dashboard');
-  const isItems = pathname.startsWith('/items');
+  const isArch = pathname === '/' || pathname.startsWith('/architecture');
+  const isTraffic = pathname.startsWith('/traffic');
+  const isReplay = pathname.startsWith('/replay');
+  const isSchemas = pathname.startsWith('/schemas');
+  const isAgents = pathname.startsWith('/agents');
   const isSettings = pathname.startsWith('/admin/settings');
+  const isAdmin = Boolean(user.is_module_admin || user.is_super_admin);
 
   return (
     <div className="code-tpl-standalone-shell">
@@ -97,156 +120,183 @@ const StandaloneShell: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
 
         <nav className="code-tpl-nav">
           <div className="code-tpl-nav-group">
-            <div className="code-tpl-nav-group-title">核心业务</div>
+            <div className="code-tpl-nav-group-title">流量与架构</div>
             <Link
-              to="/dashboard"
-              className={`code-tpl-nav-link ${isDashboard ? 'code-tpl-nav-link--active' : ''}`}
+              to="/architecture"
+              className={`code-tpl-nav-link ${isArch ? 'code-tpl-nav-link--active' : ''}`}
             >
-              <LayoutDashboard size={17} />
-              <span>概览看板</span>
+              <Network size={16} />
+              <span>架构中心与拓扑</span>
             </Link>
             <Link
-              to="/items"
-              className={`code-tpl-nav-link ${isItems ? 'code-tpl-nav-link--active' : ''}`}
+              to="/traffic"
+              className={`code-tpl-nav-link ${isTraffic ? 'code-tpl-nav-link--active' : ''}`}
             >
-              <ListChecks size={17} />
-              <span>示例条目管理</span>
+              <Activity size={16} />
+              <span>协同录制与流量解剖</span>
+            </Link>
+            <Link
+              to="/replay"
+              className={`code-tpl-nav-link ${isReplay ? 'code-tpl-nav-link--active' : ''}`}
+            >
+              <RotateCcw size={16} />
+              <span>跨Agent重放与回归</span>
+            </Link>
+            <Link
+              to="/schemas"
+              className={`code-tpl-nav-link ${isSchemas ? 'code-tpl-nav-link--active' : ''}`}
+            >
+              <FileCode size={16} />
+              <span>Proto描述集工作台</span>
             </Link>
           </div>
 
-          {user.is_module_admin && (
-            <div className="code-tpl-nav-group">
-              <div className="code-tpl-nav-group-title">模块治理</div>
+          <div className="code-tpl-nav-group">
+            <div className="code-tpl-nav-group-title">资源与治理</div>
+            <Link
+              to="/agents"
+              className={`code-tpl-nav-link ${isAgents ? 'code-tpl-nav-link--active' : ''}`}
+            >
+              <Server size={16} />
+              <span>Agent纳管与租约</span>
+            </Link>
+            {isAdmin && (
               <Link
                 to="/admin/settings"
                 className={`code-tpl-nav-link ${isSettings ? 'code-tpl-nav-link--active' : ''}`}
               >
-                <Settings size={17} />
+                <Settings size={16} />
                 <span>模块参数配置</span>
               </Link>
-            </div>
-          )}
+            )}
+          </div>
         </nav>
-      </aside>
 
-      <div className="code-tpl-main-area">
-        <header className="code-tpl-topbar">
-          <h2 className="code-tpl-topbar-title">
-            {isSettings ? '模块参数配置' : isItems ? '示例条目管理' : '概览看板'}
-          </h2>
-          <div className="code-tpl-topbar-actions">
+        <div className="code-tpl-sidebar-footer">
+          <div className="code-tpl-user-summary">
+            <span className="code-tpl-user-name">{user.name || user.username}</span>
+            <span className="code-tpl-user-role">
+              {isAdmin ? '模块管理员' : '普通研发成员'}
+            </span>
+          </div>
+          <div className="code-tpl-footer-actions">
             <button
               type="button"
-              className="btn btn-secondary btn-small"
+              className="code-tpl-btn-icon"
               onClick={toggleTheme}
-              title="切换亮色 / 暗黑主题以检验双模视觉兼容性"
+              title={`切换至${theme === 'dark' ? '明亮' : '暗色'}主题`}
             >
-              {theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
-              <span>{theme === 'dark' ? '切换亮色' : '切换暗黑'}</span>
+              {theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
             </button>
+            <button
+              type="button"
+              className="code-tpl-btn-icon code-tpl-btn-icon--danger"
+              onClick={onLogout}
+              title="退出登录"
+            >
+              <LogOut size={15} />
+            </button>
+          </div>
+        </div>
+      </aside>
 
-            <span className="code-badge code-badge--primary">
-              {user.name || user.username}
+      <main className="code-tpl-standalone-main">
+        <header className="code-tpl-topbar">
+          <div className="code-tpl-topbar-breadcrumb">
+            <span className="code-tpl-breadcrumb-parent">{MODULE_TITLE}</span>
+            <span className="code-tpl-breadcrumb-sep">/</span>
+            <span className="code-tpl-breadcrumb-current">
+              {isArch && '架构中心与拓扑'}
+              {isTraffic && '协同录制与流量解剖'}
+              {isReplay && '跨Agent重放与回归'}
+              {isSchemas && 'Proto描述集工作台'}
+              {isAgents && 'Agent纳管与租约'}
+              {isSettings && '模块参数配置'}
             </span>
-
-            <button type="button" className="btn btn-outline btn-small" onClick={onLogout}>
-              <LogOut size={14} />
-              <span>退出</span>
-            </button>
           </div>
         </header>
 
-        <main className="flex-1">
+        <div className="code-tpl-content-scroll">
           <Routes>
-            <Route path="/" element={<Navigate to="/dashboard" replace />} />
-            <Route path="/dashboard" element={<DashboardPage />} />
-            <Route path="/items" element={<ItemListPage />} />
+            <Route path="/" element={<Navigate to="/architecture" replace />} />
+            <Route path="/architecture" element={<ArchitectureWorkbenchPage />} />
+            <Route path="/traffic" element={<TrafficMonitorWorkbenchPage />} />
+            <Route path="/replay" element={<ReplayWorkbenchPage />} />
+            <Route path="/schemas" element={<ProtoSchemaWorkbenchPage />} />
+            <Route path="/agents" element={<AgentManagementPage />} />
             <Route path="/admin/settings" element={<AdminSettingsPage />} />
-            <Route path="*" element={<Navigate to="/dashboard" replace />} />
+            <Route path="*" element={<Navigate to="/architecture" replace />} />
           </Routes>
-        </main>
-      </div>
+        </div>
+      </main>
     </div>
   );
 };
 
 export const App: React.FC<AppProps> = ({ isEmbedded = false }) => {
-  const effectiveEmbedded = isEmbedded || Boolean(window.__POWERED_BY_PORTAL__);
-  const [user, setUser] = useState<CurrentUserProfile | null>(null);
+  const [currentUser, setCurrentUser] = useState<CurrentUserProfile | null>(null);
   const [loadingUser, setLoadingUser] = useState<boolean>(true);
 
-  const loadUser = useCallback(async () => {
+  const fetchCurrentUser = useCallback(async () => {
     const token = localStorage.getItem(AUTH_TOKEN_KEY);
     if (!token) {
-      setUser(null);
+      setCurrentUser(null);
       setLoadingUser(false);
       return;
     }
+
     try {
+      setLoadingUser(true);
       const profile = await apiRequest<CurrentUserProfile>('/me');
-      setUser(profile);
+      setCurrentUser(profile);
     } catch {
-      setUser(null);
+      localStorage.removeItem(AUTH_TOKEN_KEY);
+      setCurrentUser(null);
     } finally {
       setLoadingUser(false);
     }
   }, []);
 
   useEffect(() => {
-    void loadUser();
-    const handleAuthChange = () => {
-      void loadUser();
-    };
-    window.addEventListener('auth-change', handleAuthChange);
-    return () => window.removeEventListener('auth-change', handleAuthChange);
-  }, [loadUser]);
+    void fetchCurrentUser();
+  }, [fetchCurrentUser]);
 
-  const handleStandaloneLogout = useCallback(() => {
+  const handleLogout = useCallback(() => {
     localStorage.removeItem(AUTH_TOKEN_KEY);
-    setUser(null);
-    window.location.href = window.location.pathname.startsWith(MODULE_BASE_PATH)
-      ? `${MODULE_BASE_PATH}/`
-      : '/';
+    setCurrentUser(null);
   }, []);
 
   const contextValue = useMemo(
     () => ({
-      user,
+      user: currentUser,
       loadingUser,
-      isEmbedded: effectiveEmbedded,
-      reloadUser: loadUser,
+      isEmbedded,
+      reloadUser: fetchCurrentUser,
     }),
-    [user, loadingUser, effectiveEmbedded, loadUser],
+    [currentUser, loadingUser, isEmbedded, fetchCurrentUser]
   );
 
-  // 独立运行模式下自适应识别 Vite base 路径（/<MODULE_KEY>/）或单二进制根路径（/）
-  const standaloneBasename = useMemo(() => {
-    if (typeof window === 'undefined') return '/';
-    const p = window.location.pathname;
-    if (p === MODULE_BASE_PATH || p.startsWith(`${MODULE_BASE_PATH}/`)) {
-      return MODULE_BASE_PATH;
-    }
-    return '/';
-  }, []);
+  const innerContent = isEmbedded ? (
+    <EmbeddedRoutes />
+  ) : (
+    <StandaloneShell onLogout={handleLogout} />
+  );
 
-  return (
-    <ErrorBoundary title={`${MODULE_TITLE} 运行异常`}>
-      {/* 子应用内部独立挂载 ConfirmProvider 与 ToastProvider，确保模块联邦非共享 Context 始终可用 */}
-      <ConfirmProvider>
+  const appBody = (
+    <ErrorBoundary>
+      <ModuleUserProvider value={contextValue}>
         <ToastProvider>
-          <ModuleUserProvider value={contextValue}>
-            {effectiveEmbedded ? (
-              <EmbeddedRoutes />
-            ) : (
-              <BrowserRouter basename={standaloneBasename}>
-                <StandaloneShell onLogout={handleStandaloneLogout} />
-              </BrowserRouter>
-            )}
-          </ModuleUserProvider>
+          <ConfirmProvider>{innerContent}</ConfirmProvider>
         </ToastProvider>
-      </ConfirmProvider>
+      </ModuleUserProvider>
     </ErrorBoundary>
   );
+
+  if (isEmbedded) {
+    return appBody;
+  }
+
+  return <BrowserRouter>{appBody}</BrowserRouter>;
 };
 
 export default App;

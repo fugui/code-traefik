@@ -43,7 +43,7 @@ backend: $(BINARY)
 
 $(BINARY): $(BACKEND_SRCS) $(DIST_DIR)
 	go mod tidy
-	go build -ldflags "$(LDFLAGS)" -o $(BINARY)
+	go build -ldflags "$(LDFLAGS)" -o $(BINARY) ./cmd/server
 
 # 编译数据面 Agent 单二进制
 agent: $(AGENT_BINARY)

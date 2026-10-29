@@ -10,6 +10,7 @@ import (
 
 	commonAuth "code-common/backend/auth"
 	commonModels "code-common/backend/models"
+	"code-traefik/internal/server/hub"
 	"code-traefik/internal/server/recorder"
 	"code-traefik/internal/server/topology"
 	"code-traefik/models"
@@ -150,7 +151,8 @@ func StartRecordingSession(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		if strings.Contains(err.Error(), "409") {
+		var leaseErr *hub.LeaseConflictError
+		if errors.As(err, &leaseErr) || strings.Contains(err.Error(), "already leased") || strings.Contains(err.Error(), "409") {
 			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 			return
 		}

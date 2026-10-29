@@ -1,59 +1,14 @@
-export type ItemStatus = 'active' | 'draft' | 'archived';
-export type ItemPriority = 'high' | 'medium' | 'low';
+export * from './types/arch';
+export * from './types/agent';
+export * from './types/schema';
+export * from './types/traffic';
+export * from './types/replay';
 
-export interface ItemOwnerSummary {
-  id: number;
-  name: string;
-  username?: string;
-  employee_id?: string;
-}
-
-export interface TemplateItem {
-  id: number;
-  code: string;
-  name: string;
-  category: string;
-  status: ItemStatus;
-  priority: ItemPriority;
-  description: string;
-  owner_id: number | null;
-  owner?: ItemOwnerSummary | null;
-  created_by: number;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface ItemUpsertPayload {
-  code: string;
-  name: string;
-  category: string;
-  status: ItemStatus;
-  priority: ItemPriority;
-  description: string;
-  owner_id: number | null;
-}
-
-export interface PaginatedItemsResponse {
-  items: TemplateItem[];
+export interface PaginatedResponse<T> {
+  items: T[];
   total: number;
   page: number;
-  pageSize: number;
-  totalPages: number;
-}
-
-export interface ItemStatsResponse {
-  total: number;
-  active: number;
-  draft: number;
-  archived: number;
-}
-
-export interface HealthStatusResponse {
-  status: string;
-  service: string;
-  module_key: string;
-  version: string;
-  timestamp: string;
+  page_size: number;
 }
 
 export interface CurrentUserProfile {

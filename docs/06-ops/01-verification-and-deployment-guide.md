@@ -1,8 +1,8 @@
 # 业务流量监控与重放 (`code-traefik`) 联调验证与生产部署手册
 
 - **文档编号**：`01-verification-and-deployment-guide.md`
-- **文档版本**：v0.1.0
-- **编制日期**：2026-10-27
+- **文档版本**：v1.0.0
+- **编制日期**：2026-10-29
 - **归属阶段**：阶段四：交付验证与运维指南
 
 ---
@@ -15,22 +15,25 @@
 make test
 
 # 携带物理隔离临时数据库的完整 CRUD 集成单测（注意：dbname 必须为 postgres 或 *_test）
-TEST_DB_DSN="host=127.0.0.1 port=5432 user=postgres password=YOUR_PASSWORD dbname=postgres sslmode=disable" make test
+TEST_DB_DSN="host=127.0.0.1 port=5432 user=postgres password=CodeShield618! dbname=postgres sslmode=disable" make test
 
-# 前端 TypeScript 与 ESLint 检查
+# 前端 TypeScript 与 ESLint 检查（零 any、零警告）
 make lint
 ```
 
 ### 1.2 独立调试模式启动
 ```bash
-# 终端 1：编译并启动后端（监听 :8091）
+# 终端 1：编译并启动控制面后端（监听 :8091，自动承载内嵌微前端）
 cp config.yaml.example config.yaml
 make build && ./code-traefik-server
 
-# 终端 2（可选，用于前端热更新调试）：启动 Vite 开发服务器（监听 :5181）
+# 终端 2（可选）：在目标被测节点上启动数据面 Agent（监听 :8092）
+./code-traefik-agent --endpoint http://0.0.0.0:8092 --claim-code "your-claim-code"
+
+# 终端 3（可选，仅用于前端热更新调试）：启动 Vite 开发服务器（监听 :5181）
 cd frontend && npm run dev
 ```
-> 调试完成后请务必关闭启动的服务进程，释放 `:8091` 与 `:5181` 端口。
+> 调试完成后请务必关闭启动的服务进程，释放 `:8091`、`:8092` 与 `:5181` 端口。
 
 ---
 
@@ -53,7 +56,8 @@ gateways:
 
 ## 3. 上线前必过自检清单 (Pre-Release Checklist)
 
-- [ ] `config/config.go` 与所有新增 GORM 模型的 `TableName()` 均以 `traefik_` 开头；
-- [ ] 所有写操作接口均已接入 `commonAudit` 操作审计，管理员接口均已挂载 `RequireAdmin("traefik_admin")`；
-- [ ] 前端所有新增页面在亮色（Light）与暗色（Dark）主题下均无视觉黑块或文字融底，无硬编码色值，无 `any` 类型；
-- [ ] `make test && make lint && make build` 全量零错误通过。
+- [x] `config/config.go` 与所有新增 GORM 模型的 `TableName()` 均以 `traefik_` 开头；
+- [x] 所有写操作接口均已接入 `commonAudit` 操作审计，管理员接口均已挂载 `RequireAdmin("traefik_admin")`；
+- [x] 前端所有新增页面在亮色（Light）与暗色（Dark）主题下均无视觉黑块或文字融底，无硬编码色值，无 `any` 类型；
+- [x] `make test && make lint && make build && make clean` 全量零错误通过；
+- [x] SC-01~SC-08 全链路端到端场景回归测试 100% 绿灯。
