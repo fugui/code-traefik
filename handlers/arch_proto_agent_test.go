@@ -17,6 +17,7 @@ import (
 	"code-common/backend/testdb"
 	"code-traefik/config"
 	"code-traefik/handlers"
+	"code-traefik/internal/server/decoder"
 	"code-traefik/internal/server/hub"
 	"code-traefik/models"
 	"code-traefik/pkg/agentproto"
@@ -41,26 +42,11 @@ func setupRouterAndDB(t *testing.T) (*gin.Engine, *gorm.DB) {
 
 	// 使用隔离数据库
 	db := testdb.SetupIsolatedDB(t, "traefik_api_test")
-	models.DB = db
-
-	// 自动迁移 traefik 全量数据模型与 code-common sys_audit_logs 模型
-	if err := db.AutoMigrate(
-		&models.Subsystem{},
-		&models.FunctionalGroup{},
-		&models.Module{},
-		&models.ModuleInterface{},
-		&models.Agent{},
-		&models.Process{},
-		&models.ProcessModule{},
-		&models.ProtoSchema{},
-		&models.ProtoOperation{},
-		&models.RecordingSession{},
-		&models.TrafficRecord{},
-		&models.ReplayTask{},
-		&models.ReplayItem{},
-		&commonModels.SysAuditLog{},
-	); err != nil {
-		t.Fatalf("自动迁移失败: %v", err)
+	if err := models.SetupWithDB(db); err != nil {
+		t.Fatalf("SetupWithDB 失败: %v", err)
+	}
+	if err := db.AutoMigrate(&commonModels.SysAuditLog{}); err != nil {
+		t.Fatalf("迁移审计表失败: %v", err)
 	}
 
 	// 初始化测试审计引擎
@@ -84,6 +70,15 @@ func setupRouterAndDB(t *testing.T) (*gin.Engine, *gorm.DB) {
 	// 实例化 Hub 管理器并注入全局
 	mgr := hub.NewManager(db, &config.AppConfig)
 	handlers.ResetGlobalHubManager(mgr)
+
+	decReg, _ := decoder.NewRegistry(db)
+	handlers.ResetGlobalDecoderRegistry(decReg)
+	assembler, _, _ := handlers.InitRecorderAndDiff(db, decReg)
+	t.Cleanup(func() {
+		if assembler != nil {
+			assembler.Close()
+		}
+	})
 
 	r := gin.New()
 	r.Use(gin.Recovery())
@@ -223,6 +218,33 @@ func RegisterRoutesForTest(r *gin.Engine) {
 		protected.PUT("/processes/:id", handlers.UpdateProcess)
 		protected.DELETE("/processes/:id", handlers.DeleteProcess)
 		protected.GET("/processes/:id/downstreams", handlers.GetProcessDownstreams)
+
+		// 8. 协同录制与架构拓扑域 (F-05, F-11, F-16)
+		protected.GET("/recording-sessions", handlers.ListRecordingSessions)
+		protected.GET("/recording-sessions/:id", handlers.GetRecordingSession)
+		protected.POST("/recording-sessions", handlers.StartRecordingSession)
+		protected.POST("/recording-sessions/:id/stop", handlers.StopRecordingSession)
+		protected.DELETE("/recording-sessions/:id/processes/:processId", handlers.RemoveProcessFromSession)
+		protected.PATCH("/recording-sessions/:id/publish", handlers.PublishRecordingSession)
+		protected.DELETE("/recording-sessions/:id", handlers.DeleteRecordingSession)
+		protected.GET("/recording-sessions/:id/consistency-report", handlers.GetConsistencyReport)
+
+		// 9. 流量检索与解剖域 (F-03, F-11)
+		protected.GET("/traffic-records", handlers.ListTrafficRecords)
+		protected.GET("/traffic-records/:id/anatomy", handlers.GetTrafficRecordAnatomy)
+		protected.POST("/traffic-records/:id/redecode", handlers.RedecodeTrafficRecord)
+
+		// 10. 跨 Agent 同构离线重放与双层回归 Diff 域 (F-12, F-14)
+		protected.GET("/replay-tasks", handlers.ListReplayTasks)
+		protected.GET("/replay-tasks/:id", handlers.GetReplayTask)
+		protected.POST("/replay-tasks", handlers.CreateReplayTask)
+		protected.POST("/replay-tasks/:id/cancel", handlers.CancelReplayTask)
+		protected.GET("/replay-tasks/:id/items", handlers.ListReplayItems)
+		protected.GET("/replay-tasks/:id/items/:itemId", handlers.GetReplayItemDetail)
+		protected.POST("/replay-tasks/:id/rediff", handlers.RediffReplayTask)
+
+		// 11. SSE 实时事件流 (GET /api/events)
+		protected.GET("/events", handlers.HandleEventsSSE)
 	}
 }
 

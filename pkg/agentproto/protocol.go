@@ -123,6 +123,14 @@ type ExecuteReplayReq struct {
 	MngMocks        [][]byte           `json:"mng_mocks"`
 }
 
+// ReplayItemDetail 单请求执行结果明细（序列化放入 Details JSON 串中）
+type ReplayItemDetail struct {
+	RecordID     uint64 `json:"record_id"`
+	Status       string `json:"status,omitempty"` // PASS | FAILED | MOCK_MISS | TIMEOUT | ERROR
+	ActualRspHex string `json:"actual_rsp_hex,omitempty"`
+	ErrorMessage string `json:"error_message,omitempty"`
+}
+
 // ReplayTaskResultResp 重放任务汇总结果
 type ReplayTaskResultResp struct {
 	TaskID         uint64 `json:"task_id"`

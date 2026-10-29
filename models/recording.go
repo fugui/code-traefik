@@ -79,7 +79,7 @@ type TrafficRecord struct {
 	RawReqPacket          []byte         `gorm:"column:raw_req_packet;type:bytea" json:"-"`
 	RawRspPacket          []byte         `gorm:"column:raw_rsp_packet;type:bytea" json:"-"`
 	IsTruncated           bool           `gorm:"column:is_truncated;not null;default:false" json:"is_truncated"`
-	IsReplayable          bool           `gorm:"column:is_replayable;not null;default:true;index:idx_traefik_tr_replayable" json:"is_replayable"`
+	IsReplayable          bool           `gorm:"column:is_replayable;not null;index:idx_traefik_tr_replayable" json:"is_replayable"`
 }
 
 func (TrafficRecord) TableName() string { return config.TablePrefix + "traffic_records" }

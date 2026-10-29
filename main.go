@@ -140,6 +140,33 @@ func RegisterAPIRoutes(r *gin.Engine) {
 		protected.PUT("/processes/:id", handlers.UpdateProcess)
 		protected.DELETE("/processes/:id", handlers.DeleteProcess)
 		protected.GET("/processes/:id/downstreams", handlers.GetProcessDownstreams)
+
+		// 8. 协同录制与架构拓扑域 (F-05, F-11, F-16)
+		protected.GET("/recording-sessions", handlers.ListRecordingSessions)
+		protected.GET("/recording-sessions/:id", handlers.GetRecordingSession)
+		protected.POST("/recording-sessions", handlers.StartRecordingSession)
+		protected.POST("/recording-sessions/:id/stop", handlers.StopRecordingSession)
+		protected.DELETE("/recording-sessions/:id/processes/:processId", handlers.RemoveProcessFromSession)
+		protected.PATCH("/recording-sessions/:id/publish", handlers.PublishRecordingSession)
+		protected.DELETE("/recording-sessions/:id", handlers.DeleteRecordingSession)
+		protected.GET("/recording-sessions/:id/consistency-report", handlers.GetConsistencyReport)
+
+		// 9. 流量检索与解剖域 (F-03, F-11)
+		protected.GET("/traffic-records", handlers.ListTrafficRecords)
+		protected.GET("/traffic-records/:id/anatomy", handlers.GetTrafficRecordAnatomy)
+		protected.POST("/traffic-records/:id/redecode", handlers.RedecodeTrafficRecord)
+
+		// 10. 跨 Agent 同构离线重放与双层回归 Diff 域 (F-12, F-14)
+		protected.GET("/replay-tasks", handlers.ListReplayTasks)
+		protected.GET("/replay-tasks/:id", handlers.GetReplayTask)
+		protected.POST("/replay-tasks", handlers.CreateReplayTask)
+		protected.POST("/replay-tasks/:id/cancel", handlers.CancelReplayTask)
+		protected.GET("/replay-tasks/:id/items", handlers.ListReplayItems)
+		protected.GET("/replay-tasks/:id/items/:itemId", handlers.GetReplayItemDetail)
+		protected.POST("/replay-tasks/:id/rediff", handlers.RediffReplayTask)
+
+		// 11. SSE 实时事件流 (GET /api/events)
+		protected.GET("/events", handlers.HandleEventsSSE)
 	}
 }
 
@@ -175,6 +202,9 @@ func main() {
 	hubMgr := hub.NewManager(models.DB, &config.AppConfig)
 	handlers.ResetGlobalHubManager(hubMgr)
 
+	// 5. 初始化协同录制双轨管道与双层 Diff 重放调度引擎
+	assembler, _, _ := handlers.InitRecorderAndDiff(models.DB, decoderReg)
+
 	// 5. 执行主控启动恢复流水线与后台心跳探活 (ADR-03)
 	rootCtx, rootCancel := context.WithCancel(context.Background())
 	defer rootCancel()
@@ -204,6 +234,9 @@ func main() {
 		},
 		OnShutdown: func(ctx context.Context) {
 			rootCancel()
+			if assembler != nil {
+				assembler.Close()
+			}
 			if closeErr := commonAudit.Close(ctx); closeErr != nil {
 				log.Printf("[%s] 关闭审计引擎出现异常: %v", config.ServiceName, closeErr)
 			}

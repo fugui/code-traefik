@@ -74,13 +74,14 @@ func (e *SchemaConflictError) Unwrap() error {
 
 // CompiledOperation 编译后的单接口动态编解码元数据
 type CompiledOperation struct {
-	SchemaID      uint64
-	SchemaName    string
-	SchemaVersion int
-	ServiceName   string
-	Operation     string
-	ReqDesc       protoreflect.MessageDescriptor
-	RspDesc       protoreflect.MessageDescriptor
+	SchemaID        uint64
+	SchemaName      string
+	SchemaVersion   int
+	ServiceName     string
+	Operation       string
+	ReqDesc         protoreflect.MessageDescriptor
+	RspDesc         protoreflect.MessageDescriptor
+	DiffIgnorePaths []string
 }
 
 // CompiledRegistry 不可变无锁内存注册表快照
