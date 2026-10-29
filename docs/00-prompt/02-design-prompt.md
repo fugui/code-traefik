@@ -1,7 +1,7 @@
 # code-traefik: 阶段二系统架构与数据模型设计 (SDD) 提示词指令
 
 ## 角色定位与工程原则
-你是一名资深 Go 全栈系统架构师与底层网络协议专家。阶段一特性清单与需求边界（[`docs/01-features/01-feature-matrix.md`](../01-features/01-feature-matrix.md) v2.5.1）与协议规范（[`docs/07-references/01-cros-rpc-protocol-spec.md`](../07-references/01-cros-rpc-protocol-spec.md)）已冻结定稿。
+你是一名资深 Go 全栈系统架构师与底层网络协议专家。阶段一特性清单与需求边界（[`docs/01-features/01-feature-matrix.md`](../01-features/01-feature-matrix.md) v2.6.0）与协议规范（[`docs/07-references/01-cros-rpc-protocol-spec.md`](../07-references/01-cros-rpc-protocol-spec.md)）已冻结定稿。
 
 开发过程**严禁跳过设计堆砌业务代码**，现在正式执行：
 **「阶段二：系统架构与数据模型设计 (02-design)」**。
@@ -33,14 +33,15 @@
 ### 3.1 `01-system-architecture.md`：系统总体架构与主从协同
 1. **双模微前端运行拓扑**：CodeBench 门户嵌入（网关路由剥离、JWT 拦截透传）与独立开发调试双模运行拓扑；
 2. **主从双子系统物理架构**：`cmd/server`（无特权控制中心）与 `cmd/agent`（业务宿主机轻量守护进程，1 Agent : N 进程，零数据库、零 `.pb`）的部署边界与职责切分；
-3. **主从管控通信信道协议**：
+3. **多人并发模型与动态排他租约**：公共级（`SHARED`）与个人级（`PRIVATE`，普通用户自建自用）Agent 共享模型，以及同一 Agent 同一时间仅限 1 名用户操作的动态排他租约（`Agent Mutex Lease`）；
+4. **主从管控通信信道协议**：
    - HTTP REST：探活、进程探查、多进程监控元信息下发、重放任务调度接口定义；
-   - WebSocket 二进制流：带进程标签信封头（`session_id`、`process_id`、`pid`、`direction`）的原始帧回传协议；
+   - WebSocket 二进制流：带进程标签信封头（`session_id`、`process_id`、`pid`、`direction`、`capture_time`）的原始帧回传协议；
    - 健壮性保障：Agent 有界背压缓冲（默认 64MB）、丢帧计数上报、断线重连与主控失联宽限期（5分钟）探针自洁退出流程；
-4. **三大端到端全链路 Mermaid 时序图**：
-   - 多进程协同录制全链路时序（主控下发 -> 业务重连 -> Agent 采集推送 -> 主控解码与穿透定位）；
-   - 隔离自愈重放全链路时序（重放资产编排 -> Agent 注入 -> 内核拦截 -> 本地 Mock 覆写 -> 收集结果 -> 主控双层 Diff 断言）；
-   - Agent 纳管、心跳探活与探针生命周期时序。
+5. **三大端到端全链路 Mermaid 时序图**：
+   - 多进程协同录制全链路时序（排他租约获取 -> 主控下发 -> 业务重连 -> Agent 采集推送 -> 主控双轨分发、解码与穿透定位）；
+   - 隔离自愈重放全链路时序（公私录制素材校验与跨 Agent 同构进程匹配 -> Agent 注入 -> 内核拦截 -> 本地 Mock 覆写 -> 收集结果 -> 主控双层 Diff 断言与租约释放）；
+   - Agent 纳管、心跳探活、租约回收与探针生命周期时序。
 
 ### 3.2 `02-data-plane-and-cros-rpc-engine.md`：CROS RPC 协议栈与 Agent 引擎
 1. **共享协议栈 `pkg/crosrpc`**：
@@ -70,7 +71,7 @@
    - 结果分类算法：`Verified`（合规）、`Violation`（越权/未声明调用，架构漂移告警）、`Uncovered`（未触发）、`Not Observable`（进程内互调）、`Unattributed`（来源只能归到进程级）。
 
 ### 3.4 `04-control-plane-and-web-console.md`：Server 控制面、微前端控制台与回归断言
-1. **Server 核心服务与调度**：多进程协同录制批次编排器、Agent 连接池管理、重放任务调度器；
+1. **Server 核心服务、双轨分发管道与调度**：WebSocket 流双轨分发（实时前端 SSE 推送 + 异步连接分片 Worker 配对解码落盘管道）、多进程协同录制批次编排器、跨 Agent 同构进程重放任务调度器；
 2. **IDL 描述集引擎与动态编解码**：
    - `.pb` 描述集文件注册、合法性校验、多版本管理与切换；
    - 基于 `dynamicpb` 按 `{package}-{serviceName}` 映射执行 Payload JSON 动态反序列化与序列化；
@@ -90,7 +91,7 @@
    - 接口契约：`traefik_module_interfaces`；
    - 实体部署：`traefik_agents`、`traefik_processes`；
    - IDL 描述：`traefik_proto_schemas`、`traefik_proto_operations`；
-   - 录制与流量：`traefik_recording_sessions`、`traefik_traffic_records`；
+   - 录制与流量：`traefik_recording_sessions`（支持公私素材作用域）、`traefik_traffic_records`（同时持久化无损 `raw_req_packet` / `raw_rsp_packet` `bytea` 与结构化 `payload_json` `jsonb`）；
    - 回放断言：`traefik_replay_tasks`；
 3. **字段与索引规范**：提供包含完整 GORM Tag、字段注释、主键、联合唯一索引（如 `UK(agent_id, listen_port)`、`UK(service_name, operation)` 等）、外键或逻辑外键关联的 Go 结构体代码及安全级联保护逻辑。
 

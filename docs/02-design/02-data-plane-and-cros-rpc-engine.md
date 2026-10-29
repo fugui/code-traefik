@@ -1,11 +1,11 @@
 # 业务流量监控与重放 (`code-traefik`) 数据面引擎与 CROS RPC 协议栈设计
 
 - **文档编号**：`02-data-plane-and-cros-rpc-engine.md`
-- **文档版本**：v1.0.0
+- **文档版本**：v1.1.0
 - **更新日期**：2026-10-29
 - **归属阶段**：阶段二：系统架构与数据模型设计 (`02-design`)
 - **状态**：已定稿 (Frozen)
-- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.5.1)、[`01-cros-rpc-protocol-spec.md`](../07-references/01-cros-rpc-protocol-spec.md) (v1.0.0)、[`01-system-architecture.md`](./01-system-architecture.md)
+- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.6.0)、[`01-cros-rpc-protocol-spec.md`](../07-references/01-cros-rpc-protocol-spec.md) (v1.0.0)、[`01-system-architecture.md`](./01-system-architecture.md)
 
 ---
 
@@ -157,6 +157,10 @@ type ParsedPacket struct {
 	PayloadLen    int            `json:"payload_len"`    // 实际保留帧中的 Payload 字节长度
 	IsTruncated   bool           `json:"is_truncated"`
 }
+
+// SplitFrames 按 CROS RPC 24B 公共头 ("CSE.TCP" + 24 + uiLength) 无损切分连续拼接的多段帧切片
+// 供 Server 双模归档列 raw_rsp_packet（含多段 RSP_SEG + RSP）及 Agent 二进制重放包 EgressMocks 零拷贝还原单帧序列
+func SplitFrames(concatenated []byte) ([][]byte, error)
 ```
 
 ---
@@ -255,14 +259,18 @@ flowchart LR
 2. **原始目的地址还原 (`sock_ops`)**：挂载 `BPF_CGROUP_SOCK_OPS`，在 `BPF_SOCK_OPS_ACTIVE_ESTABLISHED_CB` 回调中通过 `bpf_get_socket_cookie(skops)` 取出 `orig_dst`，以 `{skops->local_ip4, skops->local_port}` 为键写入 `nat_tuple_map`。Agent 本地代理 `Accept()` 后用 `RemoteAddr` `O(1)` 查表即可精确获知 `{process_id, pid, orig_ip, orig_port}`。
 3. **录制态双向透传**：Agent 建立到 `orig_ip:orig_port` 的真实上游连接，使用双协程 `io.CopyBuffer` 全双工转发，同时将上行（`EGRESS REQ`）与下行（`EGRESS RSP`）字节旁路喂入各自的 `crosrpc.StreamFramer` 切帧回传。
 
-### 2.4 多进程动态 PID 定位、存量连接诊断与探针卫生
+### 2.4 单租约互斥守卫、多进程动态 PID 定位与探针卫生
 
-1. **纯 Go `/proc` 进程定位与 2s 热巡检 (`ProcWatcher`)**：
+1. **Agent 侧单租约并发互斥守卫 (`SingleTenantGuard`)**：
+   - 与主控数据库侧的 `AcquireAgentLeases` 形成主从双重防御：`cmd/agent` 在内存互斥锁下维护唯一活跃租约 `activeLease{Type: NONE | RECORDING | REPLAY, RefID: uint64}`（通过 `GET /agent/v1/handshake` 实时回报主控对账）。
+   - 当收到 `PUT /agent/v1/monitors/sync`（`SessionID`）或 `POST /agent/v1/replays/execute`（`TaskID`）时：仅当 `activeLease` 为空，或与当前活跃 `(Type, RefID)` 完全一致（同一录制批次内幂等重试或动态增减监控进程）时允许执行；若已被其他会话或任务占用，立即返回 **`409 Conflict`**，绝不覆写内核 `target_pids_map` 与 `downstream_rules_map`。
+   - **内存边界硬保障**：因单台 Agent 同一时刻至多承载 1 个活跃会话，Agent 进程内的有界会话字节缓冲（默认 `64MB`）在物理上至多只存在 **1 份实例**，彻底消除多会话并发堆积导致的 OOM 风险。
+2. **纯 Go `/proc` 进程定位与 2s 热巡检 (`ProcWatcher`)**：
    - 定位优先级：① 解析 `/proc/net/tcp` 查找本地 `st == 0A (TCP_LISTEN)` 且端口等于 `ListenPort` 的 Socket `inode`，再反查 `/proc/<pid>/fd/*` 定位精确 `PID`；② 若端口尚未就绪或需二次确认，读取 `/proc/<pid>/cmdline`（将 `\0` 替换为空格）与 `CmdPattern` 匹配。
    - 活跃录制期间每 `2s` 复核一次：若检测到某 `ProcessID` 的 `PID` 由 `oldPID` 变为 `newPID`（业务进程重启），立即在 `target_pids_map` 中插入 `newPID`、移除 `oldPID`，扫描预热 `ing_conn_map`，并通过 WebSocket 上报 `PROCESS_RESTARTED` 事件，确保重启后流量无缝续录。
-2. **存量长连接诊断 (A-01)**：
+3. **存量长连接诊断 (A-01)**：
    - 首次定位到 `PID` 时，扫描该进程的 FD Socket 表与 `/proc/<pid>/net/tcp`，统计 `st == 01 (TCP_ESTABLISHED)` 且远端 `rem_address` 命中 `Downstreams` 列表的存量连接数 `EstablishedConns`。若 `> 0`，置 `NeedReconnect = true` 返回给主控并在前端显著告警。
-3. **特权预检与自洁保证**：
+4. **特权预检与自洁保证**：
    - 调用 `unix.Capget` 校验当前进程 Effective 能力集同时包含 `CAP_BPF` 与 `CAP_NET_ADMIN`（老内核兼容 `CAP_SYS_ADMIN`）；缺失时拒绝挂载并返回 `CAP_DENIED`。
    - 单元测试通过 `//go:build ebpf` 隔离内核挂载用例；普通无特权 CI 运行全量分帧、规则计算、`/proc` 模拟目录解析与 Mock 自愈单测。
 
@@ -270,19 +278,19 @@ flowchart LR
 
 ## 3. 零 `.pb` 纯二进制 Mock 匹配与自愈引擎 (`pkg/replay`)
 
-在离线重放模式下，下游真实 CROS RPC 服务已关闭或网络隔离（A-06）。Agent 在本地独立完成**入站请求注入**与**出站下游二进制 Mock 自愈应答**，全流程无需知道 Payload 内部任何业务字段含义。
+在离线重放模式下，下游真实 CROS RPC 服务已关闭或网络隔离（A-06）。Agent 在本地独立完成**入站请求注入**与**出站下游二进制 Mock 自愈应答**，全流程无需知道 Payload 内部任何业务字段含义，天然支持将公共（`SHARED`）或个人（`PRIVATE`）录制素材投递到任意承载相同公共架构模块的目标进程（含开发者本人 `PRIVATE` Agent 上的本地测试进程）执行重放。
 
 ### 3.1 重放执行拓扑与请求注入器 (`ReplayExecutor`)
 
-1. **挂载隔离规则**：将目标进程 `ProcessSpec` 的所有 `Downstreams` 在 `downstream_rules_map` 中指向 Agent 本地 `MockServer` 监听端口（`is_replay = 1`）。
+1. **挂载跨环境兼容隔离规则**：主控在编译 `ExecuteReplayReq.ProcessSpec.Downstreams` 时，自动取「目标进程自身推导/登记的下游端点集合」与「源录制批次中观测到的全部 `EGRESS` 原始 `dst_addr`（`IP:Port`）集合」的**并集**。Agent 将这些端点在 `downstream_rules_map` 中统一指向本地 `MockServer` 监听端口（`is_replay = 1`），确保跨 Agent 同构重放时无论本地测试进程连接原录制下游地址还是本地配置的下游地址，均被 100% 透明拦截至 `MockServer`。
 2. **连接注入与 MNG 回放**：
    - `Injector` 向 `127.0.0.1:<ListenPort>` 发起 TCP 连接（其 `pid == agent_pid`，不受重定向影响）。
    - 若重放资产包中存在该连接前置的 `MNG` 请求帧（A-08），按原顺序写入并等待/跳过对端握手响应。
-   - 按选定顺序逐条发送 `IngressRequests` 原始字节流；每发送一条同步/异步请求（`ucReqType != 3`），在连接上的 `StreamFramer` 中等待相同 `ullSNO` 的应答帧（若收到 `ucMsgType == 4 (RSP_SEG)` 则持续收集各分片直至收到终结帧或达到录制分片数，单请求最长等待 `TimeoutMs` 默认 `30s`）。
+   - 按选定顺序逐条发送 `IngressRequests`（源自 `traefik_traffic_records.raw_req_packet`）原始字节流；每发送一条同步/异步请求（`ucReqType != 3`），在连接上的 `StreamFramer` 中等待相同 `ullSNO` 的应答帧（若收到 `ucMsgType == 4 (RSP_SEG)` 则持续收集各分片直至收到终结帧或达到录制分片数，单请求最长等待 `TimeoutMs` 默认 `30s`）。
 
 ### 3.2 双级无 Schema 二进制 Mock 匹配算法 (`BinaryMockMatcher`)
 
-预加载阶段，Agent 使用 `pkg/crosrpc` 解析重放包中每对录制的 `EGRESS (REQ_i -> []RSP_i)`（支持 1 条 `REQ` 对应 1 条 `RSP` 或多段 `RSP_SEG`），提取：
+预加载阶段，主控将每条出站往返记录拼装为连续字节流 `append(raw_req_packet, raw_rsp_packet...)` 放入 `EgressMocks: [][]byte`。Agent 调用 `crosrpc.SplitFrames(pairBytes)` 无损还原出 `reqRaw = frames[0]` 与应答帧组 `rspFrames = frames[1:]`（支持单包 `RSP` 或多段连续 `RSP_SEG + RSP`），并提取：
 - 接口键：`MethodKey = ReqHead.ServiceName + ":" + ReqHead.Operation`（例如 `"dophi.order.v1-TradeService:QueryStock"`）；
 - 纯净载荷摘要：`PayloadSHA256 = sha256(reqRaw[24 + reqComm.HeadLen : 24 + reqComm.Length])`。
 

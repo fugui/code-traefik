@@ -1,11 +1,11 @@
 # 业务流量监控与重放 (`code-traefik`) 架构元素建模与拓扑一致性验证设计
 
 - **文档编号**：`03-architecture-elements-and-topology.md`
-- **文档版本**：v1.0.0
+- **文档版本**：v1.1.0
 - **更新日期**：2026-10-29
 - **归属阶段**：阶段二：系统架构与数据模型设计 (`02-design`)
 - **状态**：已定稿 (Frozen)
-- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.5.1)、[`01-system-architecture.md`](./01-system-architecture.md)
+- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.6.0)、[`01-system-architecture.md`](./01-system-architecture.md)
 
 ---
 
@@ -142,45 +142,115 @@ $$\text{ascServiceName} = \text{package} + \text{"-"} + \text{serviceName}, \qua
 
 ---
 
-## 3. 物理部署映射与监控下游规则自动编译
+## 3. 公私域物理部署映射、下游自动编译与跨 Agent 同构重放校验
 
-### 3.1 `Agent -> Process -> Module` 映射不变量
+### 3.1 公共架构 SSOT 与公私域 `Agent -> Process -> Module` 映射不变量
+
+系统所有逻辑架构元素（`Subsystem`、`FunctionalGroup`、`Module`、`ModuleInterface`）均为全团队共享的**公共唯一真实源（SSOT）**；而物理运行载体 `Agent` 与 `Process` 则支持**公共基线域 (`SHARED`)** 与**个人开发域 (`PRIVATE`)** 双域挂载同一套公共功能模块：
 
 ```mermaid
 flowchart TB
-    subgraph Host1["业务宿主机 1: Agent_1 (192.168.56.21:9091)"]
-        Proc1["Process_A (listen_port=9001, cmd_pattern='trade-core')"]
+    subgraph PublicSSOT["全局公共架构元素 SSOT (traefik_admin 维护)"]
         Mod1["Module_Order (PROVIDE: dophi.order-OrderSvc:Create)"]
         Mod2["Module_Risk (PROVIDE: dophi.risk-RiskSvc:Check)"]
-        Proc1 --> Mod1
-        Proc1 --> Mod2
-    end
-
-    subgraph Host2["业务宿主机 2: Agent_2 (192.168.56.22:9091)"]
-        Proc2["Process_B (listen_port=9002, cmd_pattern='stock-srv')"]
         Mod3["Module_Stock (PROVIDE: dophi.stock-StockSvc:Deduct)"]
-        Proc2 --> Mod3
     end
 
-    Mod1 -. "进程内函数互调 (A-04, 不经网络)" .-> Mod2
-    Mod1 == "跨进程 CROS RPC 调用 (DEPEND -> PROVIDE)" ==> Mod3
+    subgraph SharedEnv["公共基线环境: SHARED Agent_1 & Agent_2"]
+        Proc1["Process_A (listen_port=9001, module_ids=[Order, Risk])"]
+        Proc2["Process_B (listen_port=9002, module_ids=[Stock])"]
+    end
+
+    subgraph PrivateEnv["开发者个人环境: PRIVATE Agent_Dev (owner_id=Alice)"]
+        PrivProc["LocalProc_A' (listen_port=19001, module_ids=[Order, Risk])"]
+    end
+
+    Proc1 -- "双向同步 Module.ProcessID 基线" --> Mod1
+    Proc1 -- "双向同步 Module.ProcessID 基线" --> Mod2
+    Proc2 -- "双向同步 Module.ProcessID 基线" --> Mod3
+    PrivProc -. "仅写入 Process.ModuleIDs (复用公共模块，不污染全局基线)" .-> Mod1
+    PrivProc -. "仅写入 Process.ModuleIDs (复用公共模块，不污染全局基线)" .-> Mod2
 ```
 
 1. **端口互斥 (A-02)**：每个进程仅监听 1 个 CROS RPC 端口，同一 `agent_id` 下 `listen_port` 唯一（冲突返回 `409`）。
-2. **单实例模块承载 (A-03)**：1 个进程可承载 $N \ge 1$ 个功能模块（`traefik_modules.process_id`），每个功能模块只绑定 `0..1` 个进程，不支持多副本部署。
+2. **公私双域单实例模块承载 (A-03)**：
+   - 1 个进程可承载 $N \ge 1$ 个公共功能模块（统一记录在 `traefik_processes.module_ids` JSONB 数组中）；
+   - **公共基线环境 (`SHARED` Agent)**：`traefik_modules.process_id` 权威指向该模块在公共环境绑定的唯一 `SHARED` 进程（全局至多 `0..1` 个公共进程，不支持多副本部署），供全局静态物理拓扑视图（`BuildStaticTopology`）直接读取；
+   - **个人私有环境 (`PRIVATE` Agent)**：普通用户在本人 `PRIVATE` Agent 下登记本地测试进程并勾选复用的公共 `Module` 时，仅写入该私有进程的 `traefik_processes.module_ids`，**绝不覆写全局 `traefik_modules.process_id`**（避免个人本地调试污染团队公共拓扑）；同时在同一台 `PRIVATE` Agent 内部同样强制校验同一 `Module` 至多绑定 1 个私有进程（重复绑定返回 `409 Conflict`）。
 3. **动态 PID 非权威原则**：操作系统 `PID` 随业务重启而变化，不写入数据库作为静态配置，由 Agent 依据 `(listen_port, cmd_pattern)` 实时扫描 `/proc` 获取并维护在内存运行态中。
 
 ### 3.2 进程级监控下游 `IP:Port` 自动推导算法 (`CompileProcessDownstreams`)
 
 当主控向 Agent 下发某目标进程 `P` 的录制或重放规格 `ProcessMonitorSpec` 时，自动聚合 `P` 承载的所有模块所需的下游网络端点：
 
-1. 查询 `P` 承载的模块集合 $M(P) = \{ m \mid m.\text{ProcessID} = P.\text{ID} \}$；
+1. 读取 `P` 承载的公共模块集合 $M(P) = P.\text{ModuleIDs}$；
 2. 收集 $M(P)$ 声明的全部 `DEPEND` 接口集合 $D(P)$；
-3. 对每条 $(svc, op) \in D(P)$，在全局 `PROVIDE` 索引中查找供给模块 $m_{\text{prov}}$ 及其绑定的进程 $P_{\text{prov}}$：
+3. 对每条 $(svc, op) \in D(P)$，在全局 `PROVIDE` 索引中查找供给模块 $m_{\text{prov}}$，并解析其目标进程 $P_{\text{prov}}$（若 `P` 位于 `PRIVATE` Agent 上且同机已有另一私有进程承载 $m_{\text{prov}}$，优先取该同机私有进程；否则回退取全局公共基线进程 $m_{\text{prov}}.\text{ProcessID}$）：
    - 若 $P_{\text{prov}}$ 存在且 $P_{\text{prov}}.\text{ID} \neq P.\text{ID}$（排除同进程内互调 A-04）：
      - 加入端点 `(EffectiveIP(P_prov), P_prov.ListenPort)`（其中 `EffectiveIP` 优先取 `P_prov.AdvertiseIP`，为空则取所属 `Agent.HostIP()`）；
      - 若 $P_{\text{prov}}.\text{AgentID} == P.\text{AgentID}$（同机跨进程调用），同时注入回环别名 `("127.0.0.1", P_prov.ListenPort)`，确保无论业务代码连宿主机网卡 IP 还是 `127.0.0.1` 均被 `cgroup/connect4` 精确捕获；
-4. 合并进程显式登记的外部下游地址列表 `P.ExtraDownstreams`（用于承接「外部 / 未登记系统」CROS RPC 服务），按 `IP:Port` 去重排序后输出。
+4. 合并进程显式登记的外部下游地址列表 `P.ExtraDownstreams`（用于承接「外部 / 未登记系统」CROS RPC 服务）；若为跨进程离线重放，额外并入源录制批次中 `SourceProcess` 观测到的全部 `EGRESS` 原始目的地址 `dst_addr`，按 `IP:Port` 去重排序后输出。
+
+### 3.3 跨 Agent 同构进程重放兼容性校验算法 (`ValidateReplayProcessCompatibility`)
+
+为落实「任何有访问权限的公共（`SHARED`）或个人（`PRIVATE`）录制素材，均可在承载相同公共架构元素的目标进程上执行重放」，重放调度器在锁定 Agent 排他租约前执行如下校验：
+
+```go
+package topology
+
+// ValidateReplayProcessCompatibility 校验录制源进程选定报文能否安全重放到目标进程 targetProc
+func ValidateReplayProcessCompatibility(
+	callerID uint,
+	isAdmin bool,
+	session *models.RecordingSession,
+	selectedRecords []models.TrafficRecord,
+	sourceProc *models.Process,
+	targetProc *models.Process,
+	targetAgent *models.Agent,
+	provideMap map[string]uint64, // key: "serviceName:operation" -> DstModuleID
+) error {
+	// 1. 录制素材与目标 Agent 的公私域归属防越权校验 (Anti-IDOR)
+	if session.Scope == models.ScopePrivate && session.OwnerID != callerID && !isAdmin {
+		return ErrForbiddenPrivateSession // 403 Forbidden
+	}
+	if targetAgent.Scope == models.ScopePrivate && (targetAgent.OwnerID == nil || *targetAgent.OwnerID != callerID) && !isAdmin {
+		return ErrForbiddenPrivateAgent // 403 Forbidden
+	}
+
+	// 2. 原地同进程重放天然兼容
+	if sourceProc.ID == targetProc.ID {
+		return nil
+	}
+
+	// 3. 跨进程/跨 Agent 重放：校验目标进程必须完整承载选定请求命中的全部公共架构模块
+	targetModSet := toUint64Set(targetProc.ModuleIDs)
+	requiredMods := make(map[uint64]struct{})
+	hasUnregisteredIface := false
+
+	for _, rec := range selectedRecords {
+		key := rec.ServiceName + ":" + rec.Operation
+		if dstModID, ok := provideMap[key]; ok {
+			requiredMods[dstModID] = struct{}{}
+		} else {
+			hasUnregisteredIface = true
+		}
+	}
+
+	// 若包含未登记接口，退化要求源进程声明的模块集合非空且被目标进程完全覆盖
+	if hasUnregisteredIface || len(requiredMods) == 0 {
+		sourceMods := toUint64Set(sourceProc.ModuleIDs)
+		if len(sourceMods) == 0 || !isSubset(sourceMods, targetModSet) {
+			return ErrIncompatibleReplayTargetModule // 400 Bad Request
+		}
+		return nil
+	}
+
+	if !isSubset(requiredMods, targetModSet) {
+		return ErrIncompatibleReplayTargetModule // 400 Bad Request (附带缺失的公共模块编码明细)
+	}
+	return nil
+}
+```
 
 ---
 

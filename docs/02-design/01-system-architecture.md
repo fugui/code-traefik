@@ -1,11 +1,11 @@
 # 业务流量监控与重放 (`code-traefik`) 系统总体架构与主从协同设计
 
 - **文档编号**：`01-system-architecture.md`
-- **文档版本**：v1.0.0
+- **文档版本**：v1.1.0
 - **更新日期**：2026-10-29
 - **归属阶段**：阶段二：系统架构与数据模型设计 (`02-design`)
 - **状态**：已定稿 (Frozen)
-- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.5.1)、[`01-cros-rpc-protocol-spec.md`](../07-references/01-cros-rpc-protocol-spec.md) (v1.0.0)
+- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.6.0)、[`01-cros-rpc-protocol-spec.md`](../07-references/01-cros-rpc-protocol-spec.md) (v1.0.0)
 
 ---
 
@@ -106,11 +106,46 @@ code-traefik/
 
 ---
 
-## 3. 主从管控通信信道协议规范 (Control & Data Channel Protocol)
+## 3. 多人并发模型：公私域资源共享与 Agent 动态排他租约 (Concurrency & Lease Model)
+
+在团队多人并发研发测试场景下，系统采用 **「公共逻辑架构统一共享 + 物理 Agent 与录制素材公私二元划分 + Agent 动态排他租约 (Mutex Lease)」** 三层协同机制。
+
+### 3.1 公私域资源归属与跨环境复用矩阵
+
+| 资源类别 | 公共级 (`SHARED`) | 个人级 (`PRIVATE`) | 跨环境关联与安全边界 |
+| :--- | :--- | :--- | :--- |
+| **三级架构元素与 `.pb`** | **全局唯一公共 SSOT**（`traefik_admin` 维护，全体只读） | *不设私有架构元素* | 个人私有 Agent 上的测试进程直接挂载并复用公共功能模块（`Module`）与接口契约 |
+| **数据面实例 (`Agent`)** | `traefik_admin` 登记管理；全团队可见，空闲时任意认证用户可申请排他租约 | **普通用户可自建、编辑、删除本人的私有 Agent**；**仅 `owner_id` 本人可见与租用** | 他人尝试查看、修改或租用某用户的 `PRIVATE` Agent 均拦截返回 `403 Forbidden` |
+| **录制流量素材 (`RecordingSession`)** | 全团队可见并可作为重放输入资产（支持将合格个人素材发布为 `SHARED`） | 仅录制发起人 `owner_id` 本人可见、管理与用于重放 | 只要用户对某录制素材有访问权，即可将其投递到任何有权限且**承载相同公共架构模块**的进程（含本人 `PRIVATE` Agent 进程）上执行隔离重放 |
+
+### 3.2 Agent 动态排他租约状态机 (`Agent Mutex Lease`)
+
+由于录制与重放均需动态改写宿主机内核 eBPF `downstream_rules_map` 并可能引导目标进程重连（A-01），**同一台 Agent 在同一时刻严格限制只能由 1 名用户执行 1 项活跃操作（1 个录制批次 或 1 个重放任务）**。单次多进程协同录制允许同一名用户同时锁定该批次涉及的 1..M 台 Agent 及其上的多个进程。
+
+```mermaid
+stateDiagram-v2
+    [*] --> LeaseIdle: Agent 在线空闲 (lease_type = '')
+    LeaseIdle --> LeasedRecording: AcquireAgentLeases 成功 (写入 RECORDING + holder_id + expires_at)
+    LeaseIdle --> LeasedReplaying: AcquireAgentLeases 成功 (写入 REPLAY + holder_id + expires_at)
+    LeasedRecording --> LeasedRecording: 其他用户或新任务请求租用 -> 立即拒绝 409 Conflict (返回持锁人与到期时间)
+    LeasedReplaying --> LeasedReplaying: 其他用户或新任务请求租用 -> 立即拒绝 409 Conflict (返回持锁人与到期时间)
+    LeasedRecording --> LeaseIdle: 手动停止 / 达时长或帧数上限 / Agent 离线 / TTL 到期 / 管理员强制释放
+    LeasedReplaying --> LeaseIdle: 重放完成 / 超时 / 取消 / Agent 离线 / TTL 到期 / 管理员强制释放
+```
+
+* **多 Agent 升序原子加锁算法 (`AcquireAgentLeases`)**：
+  1. 提取本次录制/重放涉及的全部 `agent_id` 去重并**严格按主键升序排序**（彻底消除并发交叉申请 `Agent_1, Agent_2` 与 `Agent_2, Agent_1` 导致的 PostgreSQL 行锁死锁）；
+  2. 在数据库事务内执行 `SELECT * FROM traefik_agents WHERE id IN (?) ORDER BY id ASC FOR UPDATE`；
+  3. 逐台校验：① 若 `scope == 'PRIVATE' && owner_id != currentUser.ID`，返回 `403`；② 若 `status != 'ONLINE'` 或无 eBPF 权限，返回 `400/503`；③ 若存在未过期的活跃租约（`lease_type != '' && now < lease_expires_at`），回滚事务并返回 **`409 Conflict`**（响应体附带 `lease_holder_name`、`lease_type`、`lease_acquired_at`）；④ 若旧租约已超硬性安全期 `lease_expires_at`（默认任务最大时长 + `2 分钟` 缓冲），执行惰性自愈清理后授予新租约。
+* **Agent 进程侧双重防御 (`SingleTenantGuard`)**：`cmd/agent` 在内存中同步维护唯一 `activeLease{Type, RefID}`，拒绝任何非当前活跃 `SessionID/TaskID` 的并发下发指令（返回 `409`），从而在物理上保证每台 Agent 任意时刻最多只存在 **1 个 64MB 有界会话缓冲**。
+
+---
+
+## 4. 主从管控通信信道协议规范 (Control & Data Channel Protocol)
 
 主控与 Agent 之间采用 **「HTTP REST 控制下行 + WebSocket 二进制流事件上行」** 双通道协同协议（协议常量定义于 `pkg/agentproto`，首期主协议版本 `ProtocolVersion = "1.0"`）。
 
-### 3.1 连接安全控制（源 IP 白名单与鉴权扩展位）
+### 4.1 连接安全控制（源 IP 白名单与鉴权扩展位）
 
 1. **监听与源 IP 白名单中间件 (`IPAllowlistMiddleware`)**：
    - Agent 启动参数支持 `--listen 0.0.0.0:9091`（测试环境强制绑定 `127.0.0.1:<port>`）与 `--allow-ips 127.0.0.1,192.168.56.18`（支持单 IP 与 CIDR 网段解析为 `[]netip.Prefix`）。
@@ -118,13 +153,13 @@ code-traefik/
 2. **协议主版本校验**：握手响应携带 `protocol_version: "1.0"`；主控在比对主版本号（Major Version，即 `"1"`）不一致时，标记该 Agent 为版本不兼容状态并拒绝下发录制或重放指令。
 3. **安全演进预留**：在 `IPAllowlistMiddleware` 之后预留 `AgentTokenAuthMiddleware` 钩子位（标记 `// TODO(security): F-17 P1 阶段启用 X-Traefik-Agent-Token 常量时间比对与 mTLS 双向认证`）。
 
-### 3.2 HTTP REST 控制下行接口契约 (`Server -> Agent`)
+### 4.2 HTTP REST 控制下行接口契约 (`Server -> Agent`)
 
 | 方法 | Agent 路由路径 | 调用时机与职责 | 核心请求 / 响应载荷 (`pkg/agentproto`) |
 | :---: | :--- | :--- | :--- |
-| `GET` | `/agent/v1/handshake` | 纳管校验与每 10s 周期心跳探活 | 返回 `HandshakeResp{AgentVersion, ProtocolVersion, KernelVersion, HasEbpfCap, CapDetail, ActiveSessions, UptimeSec}` |
-| `GET` | `/agent/v1/processes/discover` | 管理员在页面探查候选业务进程 | 返回宿主机当前持有 IPv4 TCP `LISTEN` 端口的进程清单 `[]DiscoveredProcess{PID, ListenPort, Cmdline, ExeName}` |
-| `PUT` | `/agent/v1/monitors/sync` | 启动协同录制或动态增补进程监控 | 请求 `SyncMonitorReq{SessionID, MaxFrameBytes, MaxBufferBytes, Processes: []ProcessMonitorSpec}`；返回各进程 PID 定位状态与存量连接诊断 `[]ProcessDiagStatus` |
+| `GET` | `/agent/v1/handshake` | 纳管校验与每 10s 周期心跳探活 | 返回 `HandshakeResp{AgentVersion, ProtocolVersion, KernelVersion, HasEbpfCap, CapDetail, ActiveLeaseType, ActiveRefID, UptimeSec}` |
+| `GET` | `/agent/v1/processes/discover` | 用户/管理员探查候选业务进程 | 返回宿主机当前持有 IPv4 TCP `LISTEN` 端口的进程清单 `[]DiscoveredProcess{PID, ListenPort, Cmdline, ExeName}` |
+| `PUT` | `/agent/v1/monitors/sync` | 持排他租约启动协同录制或增补进程 | 请求 `SyncMonitorReq{SessionID, MaxFrameBytes, MaxBufferBytes, Processes: []ProcessMonitorSpec}`；若与当前 Agent 内存活跃租约冲突返回 `409` |
 | `DELETE` | `/agent/v1/monitors/:sessionId/processes/:processId` | 单独移除某进程的监控（不影响同机其他进程） | 从 BPF Map 热移除该进程的 PID 与下游规则；若已无任何活跃监控则自动卸载探针 |
 | `POST` | `/agent/v1/monitors/:sessionId/stop` | 录制批次正常结束或触发上限停止 | 刷空该会话缓冲剩余帧，返回累计统计 `StopMonitorResp{CapturedFrames, DroppedFrames, BypassedSelfCount}` |
 | `POST` | `/agent/v1/replays/execute` | 下发单进程离线隔离重放任务 | 请求 `ExecuteReplayReq{TaskID, ProcessSpec, TimeoutMs, IngressRequests: [][]byte, EgressMocks: [][]byte, MngMocks: [][]byte}`（纯二进制帧切片，无 `.pb`） |
@@ -160,7 +195,7 @@ type ProcessDiagStatus struct {
 }
 ```
 
-### 3.3 WebSocket 二进制流上行信封协议 (`Agent -> Server`)
+### 4.3 WebSocket 二进制流上行信封协议 (`Agent -> Server`)
 
 主控在活跃录制或重放期间长连 Agent 的 `ws://<agent_endpoint>/agent/v1/stream`。为避免高频采集下 JSON + Base64 编码带来的 CPU 与带宽膨胀，WebSocket 统一使用 `BinaryMessage` 帧传输 **56 字节定长网络大端信封头 (`EnvelopeHeader`) + 变长载荷**。
 
@@ -197,14 +232,15 @@ type ProcessDiagStatus struct {
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 ```
 
-* **`EventType` 枚举定义**：
+* **`EventType` 枚举与租约校验守卫**：
+  * 主控 `AgentHub` 收到任意 WebSocket 二进制帧后，首先核对信封偏移 `4..11` 的 `SessionOrTaskID` 是否与该 Agent 当前持有的排他租约 `lease_ref_id` 一致；过期或悬空会话的滞留残帧直接丢弃，杜绝跨批次串包污染。
   * `0x01 (EVENT_TRAFFIC_FRAME)`：采集到的单条完整（或超限截断）CROS RPC 原始帧，`Payload` 直接为 `RPC_COMM_HEAD_S` 起始的原始字节流；`Direction` 取值 `1 = INGRESS`、`2 = EGRESS`；`Flags` 位掩码 `bit0 = IS_TRUNCATED`（单帧超 `MaxFrameBytes` 截断不可重放）。
   * `0x02 (EVENT_PROCESS_LIFECYCLE)`：目标进程生命周期事件（如 `PROCESS_RESTARTED` 新旧 PID 切换、`PROCESS_EXITED`），`Payload` 为轻量 JSON 元数据。
   * `0x03 (EVENT_SESSION_STATS)`：每 2s 周期上报会话采集计数、当前缓冲水位与累计背压丢帧数 `dropped_frames`。
   * `0x04 (EVENT_REPLAY_ITEM_DONE)`：重放单条请求完成事件，携带实际捕获的 `RSP` / `RSP_SEG` 原始字节流或超时/连接错误状态。
   * `0x05 (EVENT_REPLAY_COMPLETED)`：重放任务汇总完成事件，携带完整 `MockHit` / `MockMiss` 明细列表。
 
-### 3.4 背压缓冲、断线重连与失联宽限期探针自洁
+### 4.4 背压缓冲、断线重连与失联宽限期探针自洁
 
 ```mermaid
 stateDiagram-v2
@@ -228,50 +264,51 @@ stateDiagram-v2
 
 ---
 
-## 4. 三大核心业务全链路时序图 (End-to-End Sequence Diagrams)
+## 5. 三大核心业务全链路时序图 (End-to-End Sequence Diagrams)
 
-### 4.1 场景一：Agent 纳管、能力握手、心跳探活与失联自洁时序
+### 5.1 场景一：公私域 Agent 纳管、能力握手、心跳探活与失联自洁时序
 
 ```mermaid
 sequenceDiagram
     autonumber
-    actor Admin as 模块管理员 (traefik_admin)
+    actor User as 用户 (普通用户自建 PRIVATE / 管理员建 SHARED)
     participant Server as code-traefik-server (AgentHub)
     participant DB as PostgreSQL (traefik_agents)
     participant Agent as code-traefik-agent
     participant Kernel as Linux Kernel (BPF Subsystem)
 
-    Admin->>Server: POST /api/agents (登记名称与 IP:Port)
+    User->>Server: POST /api/agents (指定 scope=PRIVATE/SHARED 与 IP:Port)
+    Server->>Server: 校验 RBAC (普通用户仅允许创建 scope=PRIVATE 且绑定 owner_id=本人)
     Server->>Agent: GET /agent/v1/handshake
     Agent->>Kernel: Capget 校验 CAP_BPF + CAP_NET_ADMIN & 读取 uname
     Kernel-->>Agent: 返回权限位图与内核版本
     Agent-->>Server: 200 OK (ProtocolVersion="1.0", HasEbpfCap=true)
     Server->>Server: 校验协议主版本 == "1"
-    Server->>DB: INSERT traefik_agents (status='ONLINE', last_heartbeat_at=NOW())
-    Server-->>Admin: 201 Created (写入 commonAudit 审计日志)
+    Server->>DB: INSERT traefik_agents (status='ONLINE', lease_type='', last_heartbeat_at=NOW())
+    Server-->>User: 201 Created (写入 commonAudit 审计日志)
 
-    loop 每 10s 周期探活
+    loop 每 10s 周期探活与租约健康对账
         Server->>Agent: GET /agent/v1/handshake
         alt 探活正常
             Agent-->>Server: 200 OK (刷新 lastControlContactAt)
             Server->>DB: UPDATE last_heartbeat_at = NOW(), status = 'ONLINE'
         else 连续 3 次探活超时/拒绝 (30s)
-            Server->>DB: UPDATE status = 'OFFLINE'
+            Server->>DB: UPDATE status = 'OFFLINE', 清空悬空排他租约并终止关联活跃任务
         end
     end
 
     Note over Server,Agent: 异常分支：主控与 Agent 网络完全中断超过 5 分钟宽限期
     Agent->>Agent: GracePeriodWatchdog 触发 (>= 5m 无心跳且无 WS 连接)
-    Agent->>Kernel: 关闭代理监听 + link.Close() 卸载全部 eBPF 探针 + 清空 BPF Maps
+    Agent->>Kernel: 关闭代理监听 + link.Close() 卸载全部 eBPF 探针 + 清空 BPF Maps + 重置本地租约
     Note right of Agent: 确保宿主机业务进程网络恢复纯直连零残留
 ```
 
-### 4.2 场景二：多进程协同录制与报文穿透定位全链路时序
+### 5.2 场景二：排他租约协同录制、双轨分发与双模落盘全链路时序
 
 ```mermaid
 sequenceDiagram
     autonumber
-    actor Admin as 模块管理员
+    actor User as 认证用户 (租用本人 PRIVATE 或空闲 SHARED Agent)
     participant UI as 微前端流量监控台
     participant Server as code-traefik-server
     participant Agent as code-traefik-agent
@@ -279,21 +316,22 @@ sequenceDiagram
     participant ProcA as 目标进程 A (Module_A)
     participant ProcB as 目标进程 B (Module_B)
 
-    Admin->>UI: 选择 Process_A 与 Process_B 创建协同录制批次
-    UI->>Server: POST /api/recording-sessions (启动录制)
+    User->>UI: 选择 Process_A 与 Process_B 并指定素材作用域 (SHARED/PRIVATE) 启动录制
+    UI->>Server: POST /api/recording-sessions
+    Server->>Server: 按 agent_id 升序 SELECT FOR UPDATE 原子锁定排他租约 (若已被占用立即返 409)
     Server->>Agent: WS Connect /agent/v1/stream (建立二进制事件流)
     Server->>Agent: PUT /agent/v1/monitors/sync ([Spec_A, Spec_B])
-    Agent->>Agent: 扫描 /proc 定位 PID_A、PID_B 并检测存量 TCP_ESTABLISHED 连接
-    Agent->>Kernel: 首次挂载探针 + 写入 agent_pid(自环豁免)、target_pids_map、downstream_rules_map
+    Agent->>Agent: 锁定本地单租约 -> 扫描 /proc 定位 PID_A、PID_B 并诊断存量连接
+    Agent->>Kernel: 挂载探针 + 写入 agent_pid(自环豁免)、target_pids_map、downstream_rules_map
     Agent-->>Server: 返回定位成功 & NeedReconnect=true (若存在存量连接)
     Server-->>UI: 提示 A-01 引导信息「请重启目标进程或触发长连接重连」
 
-    Admin->>ProcA: 触发重连或重启进程 (Agent 2s 巡检自动热更新 PID 并上报 PROCESS_RESTARTED)
+    User->>ProcA: 触发重连或重启进程 (Agent 2s 巡检自动热更新 PID 并上报 PROCESS_RESTARTED)
     Note over ProcA,ProcB: 外部上游发起真实业务请求 -> ProcA -> ProcB
 
     ProcA->>ProcA: 监听端口收到上游请求 (INGRESS REQ)
     Kernel-->>Agent: 入站旁路复制收字节至 RingBuf (零代理零延迟)
-    Agent-->>Server: WS Binary [Dir=INGRESS, Proc=A, Raw REQ Frame]
+    Agent-->>Server: WS Binary 信封帧 [SessionID, Proc=A, Dir=INGRESS, CaptureTime, Raw REQ]
 
     ProcA->>Kernel: connect(IP_B:Port_B) 发起下游调用
     Kernel->>Agent: cgroup/connect4 透明重定向至 Agent 本地代理 (记录 socket_cookie 原始目的地址)
@@ -301,66 +339,63 @@ sequenceDiagram
     Kernel->>ProcB: 命中 agent_pid 自环豁免 (stat_bypassed_self++)，直连 ProcB 监听端口
     ProcA->>Agent: 发送下游请求字节流 (EGRESS REQ)
     Agent->>ProcB: 原样透传字节流
-    Agent-->>Server: WS Binary [Dir=EGRESS, Proc=A, Raw REQ Frame]
-    Kernel-->>Agent: ProcB 监听端口入站旁路复制 (INGRESS REQ)
-    Agent-->>Server: WS Binary [Dir=INGRESS, Proc=B, Raw REQ Frame]
+    Agent-->>Server: WS Binary 信封帧 [Proc=A, Dir=EGRESS, Raw REQ] & [Proc=B, Dir=INGRESS, Raw REQ]
 
-    ProcB-->>Agent: 返回下游应答 (INGRESS RSP 旁路复制 + EGRESS RSP 代理透传)
-    Agent-->>ProcA: 透传应答字节流
-    ProcA-->>ProcA: 返回上游最终应答 (INGRESS RSP 旁路复制)
-    Agent-->>Server: 批量推送各自 RSP 原始帧
+    ProcB-->>Agent: 返回下游应答 -> 透传回 ProcA -> ProcA 返回上游最终应答
+    Agent-->>Server: 推送各自 RSP 原始二进制信封帧
 
-    Server->>Server: pkg/crosrpc 分帧解析 -> 同连接按 ullSNO 配对 REQ/RSP
-    Server->>Server: 匹配生效 .pb 执行 dynamicpb JSON 解码 -> 按 F-05 穿透定位源/目模块
-    Server->>UI: SSE /api/events 实时推送流量摘要 & 批量写入 traefik_traffic_records
+    Server->>Server: 双轨分发 Track A (快轨)：按批次可见性鉴权后经 SSE 实时推送前端预览
+    Server->>Server: 双轨分发 Track B (慢轨)：连接分片 Worker 按 ullSNO 配对 + dynamicpb 解码 + 模块穿透
+    Server->>Server: 双模批量落盘 traefik_traffic_records (raw_req_packet + raw_rsp_packet + payload_json)
+    User->>Server: POST /api/recording-sessions/:id/stop (或触发上限自动停止)
+    Server->>Agent: POST /monitors/:sessionId/stop -> 释放数据库与 Agent 排他租约
 ```
 
-### 4.3 场景三：离线隔离自愈重放与双层回归 Diff 全链路时序
+### 5.3 场景三：跨 Agent 同构进程隔离重放与双层 Diff 全链路时序
 
 ```mermaid
 sequenceDiagram
     autonumber
-    actor Dev as 开发/测试工程师 (普通认证用户)
+    actor Dev as 开发/测试工程师
     participant UI as 微前端重放编排台
     participant Server as code-traefik-server (Replay & Diff)
-    participant Agent as code-traefik-agent (pkg/replay)
+    participant PrivAgent as 目标 Agent (如开发者 PRIVATE Agent)
     participant Kernel as eBPF (cgroup/connect4)
-    participant ProcA as 测试环境目标进程 A (待回归版本)
+    participant LocalProcA as 本地测试进程 A' (同样承载 Module_A)
 
-    Note over ProcA: 测试环境前置条件 (A-06)：下游真实服务已关闭或物理隔离
-    Dev->>UI: 选定录制批次中 Process_A 的 INGRESS 请求并配置附加忽略字段
-    UI->>Server: POST /api/replay-tasks (发起重放)
-    Server->>Server: 从 DB 提取原始 INGRESS REQ 帧 + Process_A 录制期全部 EGRESS RSP/MNG 帧
-    Server->>Agent: POST /agent/v1/replays/execute (纯二进制重放包，零 .pb)
-    Agent->>Kernel: 为 Process_A 下游 IP:Port 挂载 cgroup/connect4 重定向至本地 Mock 端口
-    Note over Dev,ProcA: 引导重启或重连 Process_A 使出站连接接入 Agent Mock 监听器
+    Note over LocalProcA: 测试环境前置条件 (A-06)：真实下游已关闭或隔离
+    Dev->>UI: 选定有权限的录制素材 (如公共 SHARED 批次)，指定投递至本人 PRIVATE Agent 的 LocalProcA
+    UI->>Server: POST /api/replay-tasks (携带 source_process_id 与 target_process_id)
+    Server->>Server: 校验素材可见性 + 校验 LocalProcA 承载相同的公共架构模块 Module_A + 锁定 PrivAgent 排他租约
+    Server->>Server: 单次顺序扫描提取无损 raw_req_packet (INGRESS) 与 raw_rsp_packet (EGRESS Mock)
+    Server->>PrivAgent: POST /agent/v1/replays/execute (纯二进制重放包，零 .pb)
+    PrivAgent->>Kernel: 为下游 IP:Port 集合挂载 cgroup/connect4 重定向至本地 Mock 端口
+    Note over Dev,LocalProcA: 引导重启或重连 LocalProcA 使出站连接接入 PrivAgent Mock 监听器
 
-    loop 按录制顺序逐条注入选定请求
-        Agent->>ProcA: 建立 TCP 连接至 ListenPort，(若有 MNG 帧先原样发送)，写入原始 INGRESS REQ
-        ProcA->>ProcA: 执行新版业务逻辑，生成全新随机 ullSNO'、新 TraceBuff' 与新 SendTimeStamp'
-        ProcA->>Agent: 经重定向连接发送下游 EGRESS REQ'
-        Agent->>Agent: pkg/crosrpc 解析 24+usHeadLen 前头部，提取 (ascServiceName, ascOperation) + Payload SHA256
+    loop 按录制顺序逐条注入选定 raw_req_packet
+        PrivAgent->>LocalProcA: 建立 TCP 连接至 ListenPort，(若有 MNG 帧先原样发送)，写入原始请求帧
+        LocalProcA->>LocalProcA: 执行待测新代码，生成全新随机 ullSNO'、新 TraceBuff' 与新 SendTimeStamp'
+        LocalProcA->>PrivAgent: 经重定向连接发送下游 EGRESS REQ'
+        PrivAgent->>PrivAgent: pkg/crosrpc 解析头部，提取 (ascServiceName, ascOperation) + Payload SHA256
         alt 命中精确 Payload 哈希 或 同接口调用次序兜底队列
-            Agent->>Agent: 原地自愈覆写应答帧(含多段 RSP_SEG)：[8..15]=ullSNO'、RSP[8..23]=TraceBuff'、RSP[32..39]=SendTimeStamp'
-            Agent-->>ProcA: 返回自愈后的二进制 Mock 应答帧
+            PrivAgent->>PrivAgent: 切分 raw_rsp_packet(含多段 RSP_SEG)并原地覆写 ullSNO' / TraceBuff' / SendTimeStamp'
+            PrivAgent-->>LocalProcA: 返回自愈后的二进制 Mock 应答帧
         else 录制应答已耗尽或接口未录制 (MOCK_MISS)
-            Agent->>Agent: 严禁转发至真实下游！记录 MOCK_MISS 明细并保持连接静默等待目标超时
+            PrivAgent->>PrivAgent: 严禁转发至真实下游！记录 MOCK_MISS 明细并保持静默等待目标超时
         end
-        ProcA-->>Agent: 返回目标进程实际应答 Actual RSP / RSP_SEG (或等待 TimeoutMs 超时)
-        Agent-->>Server: WS Binary 上报 EVENT_REPLAY_ITEM_DONE (含 Actual 原始帧)
+        LocalProcA-->>PrivAgent: 返回实际应答 Actual RSP / RSP_SEG (或等待 TimeoutMs 超时)
+        PrivAgent-->>Server: WS Binary 上报 EVENT_REPLAY_ITEM_DONE (含 Actual 原始帧)
     end
 
-    Agent->>Kernel: 清理本次重放下游重定向规则
-    Agent-->>Server: WS Binary 上报 EVENT_REPLAY_COMPLETED (含全部 MockHit / MockMiss 明细)
-    Server->>Server: 第一层协议头比对 (ucMsgType / StatusCode / Payload 字节，豁免服务端时间戳)
-    Server->>Server: 第二层 dynamicpb 语义比对 (过滤忽略字段，repeated 保序、map 无序计算 FieldDiff)
-    Server->>Server: 按 ERROR > TIMEOUT > MOCK_MISS > FAILED > PASS 聚合状态并落盘
+    PrivAgent->>Kernel: 清理本次重放下游重定向规则并释放本地租约
+    PrivAgent-->>Server: WS Binary 上报 EVENT_REPLAY_COMPLETED (含全部 MockHit / MockMiss 明细)
+    Server->>Server: 双层回归 Diff (比对基线 raw_rsp_packet 与 payload_json.rsp) -> 聚合状态落盘 -> 释放 DB 排他租约
     Server-->>UI: 返回完整双层 Diff 回归报告
 ```
 
 ---
 
-## 5. 系统级安全架构与验证计划基线 (Security Guardrails & Verification Plan)
+## 6. 系统级安全架构与验证计划基线 (Security Guardrails & Verification Plan)
 
 依据工作区安全编码红线，阶段二架构冻结以下强制安全防护契约，并纳入阶段四自动化验收计划：
 
@@ -368,6 +403,7 @@ sequenceDiagram
    - 控制面所有非公开 `/api/*` 接口（含 `/api/events` SSE 流）强制经 `commonAuth.AuthMiddleware` 校验 `HS256` JWT（显式拒绝 `none` 算法、强制校验 `exp` 过期时间）；`JWT_SECRET` 通过环境变量或密钥管理系统注入，严禁源码硬编码回退字面量（生产集群接入 KMS 标记见 `config/config.go` `TODO(security)`）。
    - 严禁在 URL Query 参数中传递 JWT 或任何凭据；前端登出时清空内存认证上下文并触发页面级重载跳转。
    - 独立密码登录（调试模式）复用平台 `bcrypt` 加盐哈希存储，预留 MFA 与泄露密码库检测扩展位（`// TODO(security): 企业生产门户统一走 OAuth2/OIDC + MFA 强认证`）。
+   - **公私域防横向越权（Anti-IDOR）**：所有涉及 `PRIVATE` Agent、名下进程及 `PRIVATE` 录制素材的查询、修改、SSE 订阅与重放接口，均必须在数据访问层就近校验 `owner_id == currentUser.ID`，严禁仅靠前端隐藏入口。
 2. **输入校验、文件上传与命令执行零信任**：
    - `.pb` 描述集上传强制校验 `<= 4MB` 体积上限、校验 `FileDescriptorSet` 魔术结构与 `protodesc.NewFiles` 完整性；二进制内容直接存入 PostgreSQL `bytea` 字段，不落地宿主机可执行文件系统（病毒扫描外部网关集成留存 `// TODO(security): 接入企业制品防病毒扫描服务`）。
    - Agent 进程探查与连接诊断 100% 通过 Go 标准库只读解析 `/proc/<pid>/*` 虚拟文件，**全仓严禁调用 `os/exec` 拼接执行外部 Shell 命令**。

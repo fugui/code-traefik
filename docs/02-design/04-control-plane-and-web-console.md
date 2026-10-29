@@ -1,11 +1,11 @@
 # 业务流量监控与重放 (`code-traefik`) 管理面服务、微前端控制台与回归断言设计
 
 - **文档编号**：`04-control-plane-and-web-console.md`
-- **文档版本**：v1.0.0
+- **文档版本**：v1.1.0
 - **更新日期**：2026-10-29
 - **归属阶段**：阶段二：系统架构与数据模型设计 (`02-design`)
 - **状态**：已定稿 (Frozen)
-- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.5.1)、[`01-system-architecture.md`](./01-system-architecture.md)、[`02-data-plane-and-cros-rpc-engine.md`](./02-data-plane-and-cros-rpc-engine.md)、[`03-architecture-elements-and-topology.md`](./03-architecture-elements-and-topology.md)
+- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.6.0)、[`01-system-architecture.md`](./01-system-architecture.md)、[`02-data-plane-and-cros-rpc-engine.md`](./02-data-plane-and-cros-rpc-engine.md)、[`03-architecture-elements-and-topology.md`](./03-architecture-elements-and-topology.md)
 
 ---
 
@@ -45,33 +45,72 @@ flowchart TB
     DiffSvc --> DecoderSvc
 ```
 
-### 1.1 Agent 连接池与事件广播中心 (`hub.Manager`)
+### 1.1 多 Agent 信封路由与双轨分发管道 (`hub.Manager` & `recorder.Orchestrator`)
 
-1. **周期心跳与离线熔断**：后台单协程按 `10s` 间隔并发探活所有已登记 Agent（`GET /agent/v1/handshake`，单次超时 `3s`）。成功则刷新 `status = 'ONLINE'`、`last_heartbeat_at` 及内核能力快照；连续 **3 个周期（30s）** 探活失败则将数据库状态切换为 `OFFLINE` 并向前端广播状态变更事件。
-2. **WebSocket 流管理**：仅当某 Agent 存在活跃录制批次或重放任务时按需维持长连接 `/agent/v1/stream`，空闲时释放连接；异常断线时执行 `500ms -> 5s` 指数退避自动重连。
-3. **SSE 实时推送总线 (`/api/events`)**：为每个已认证前端订阅者分配容量为 `128` 的非阻塞缓冲 Channel；满载时执行跳跃合并（仅丢弃瞬时实时预览通知，不影响后端完整落盘），确保从 Agent 采集到前端界面呈现端到端延迟 `<= 1s`。
+当多台公私域 Agent（`SHARED` 或个人 `PRIVATE`）同时处于不同用户的活跃会话时，Server 基于 56B `EnvelopeHeader` 执行租约核验与**「快轨 SSE 实时推送 + 慢轨异步配对双模落盘」**双轨无阻塞分流：
 
-### 1.2 多进程协同录制编排与高吞吐落盘流水线 (`recorder.Orchestrator`)
+```mermaid
+flowchart LR
+    subgraph Agents["多台数据面 Agent (公私隔离 / 单机单租约)"]
+        Ag1["SHARED Agent_1 (WS 二进制流)"]
+        Ag2["PRIVATE Agent_2 (WS 二进制流)"]
+    end
 
-1. **跨机多进程批次编排**：
-   - 将选定的 `target_process_ids` 按所属 `agent_id` 分组，校验所有涉及 Agent 均处于 `ONLINE`、协议主版本匹配且 `has_ebpf_cap == true`；
-   - 并发调用各 Agent `PUT /agent/v1/monitors/sync` 下发 `[]ProcessMonitorSpec`，汇总存量长连接诊断结果写入 `traefik_recording_sessions.process_diagnostics`。
+    subgraph Hub["hub.Manager (接收与双轨路由层)"]
+        LeaseChk["信封头解析 + 活跃租约核验 (SessionID == Agent.LeaseRefID)"]
+        FastHead["pkg/crosrpc 极速提取公共头与会话头"]
+        SSEBus["Track A 快轨: SSE 广播总线 (按 session_id 与公私权限过滤)"]
+    end
+
+    subgraph SlowTrack["Track B 慢轨: 连接哈希分片异步落盘池 (N = NumCPU)"]
+        Shard["一致性分片 fnv64a(session_id, process_id, dir, conn_key)"]
+        PairWin["ExchangeAssembler (2s 滑动配对窗口: ullSNO 聚合 REQ + RSP_SEG/RSP)"]
+        Decode["decoder.Registry 动态反序列化 + topology.Engine 模块穿透"]
+        BatchDB["微批聚合器 (200 行 或 200ms CreateInBatches)"]
+    end
+
+    PG[("PostgreSQL traefik_traffic_records (raw_req_packet + raw_rsp_packet + payload_json)")]
+    Browser["前端监控台 (/api/events SSE)"]
+
+    Ag1 --> LeaseChk
+    Ag2 --> LeaseChk
+    LeaseChk --> FastHead
+    FastHead -- "非阻塞扇出 (满载跳跃预览)" --> SSEBus --> Browser
+    FastHead -- "有界队列投递" --> Shard --> PairWin --> Decode --> BatchDB --> PG
+    BatchDB -. "补推 traffic.persisted 绑定正式 record_id" .-> SSEBus
+```
+
+1. **周期心跳、离线熔断与悬空租约自愈**：
+   - 后台协程按 `10s` 间隔并发探活所有已登记 Agent（`GET /agent/v1/handshake`，超时 `3s`），刷新 `status = 'ONLINE'`、`last_heartbeat_at` 并核对 `ActiveLeaseType / ActiveRefID`；
+   - 连续 **3 个周期（30s）** 探活失败则将数据库状态切换为 `OFFLINE`，**自动释放该 Agent 上残留的排他租约**并将关联录制批次或重放任务置为异常终止，防止团队共享 Agent 发生死锁挂死。
+2. **Track A 快轨（前端 SSE 实时预览推送）**：
+   - 为每个已认证订阅者分配容量为 `128` 的缓冲 Channel；推送前严格校验订阅者对目标 `session_id` 的访问权（`PRIVATE` 批次仅推送给 `owner_id` 本人及 `traefik_admin`）；
+   - Channel 瞬时满载时仅跳过实时预览通知，绝不反向阻塞 WebSocket 读取协程与 Track B 落盘管道，确保端到端呈现延迟 `<= 1s`。
+
+### 1.2 排他租约录制编排与无损+结构化双模落盘流水线 (`recorder.Orchestrator`)
+
+1. **多进程排他租约获取与协同下发**：
+   - 校验发起人对所选 `target_process_ids` 所属 Agent 的访问权（普通用户可组合本人 `PRIVATE` Agent 与当前空闲的 `SHARED` Agent），按 `agent_id` 升序调用 `AcquireAgentLeases` 原子加锁（冲突立即返回 `409 Conflict` 及持锁人信息）；
+   - 并发调用各 Agent `PUT /agent/v1/monitors/sync` 下发 `[]ProcessMonitorSpec`，汇总存量长连接诊断结果写入 `traefik_recording_sessions.process_diagnostics`；录制正常结束、触发上限或启动失败时，在统一收尾函数中原子释放全部 Agent 租约。
 2. **双阈值自动停录守卫**：
-   - 内存原子维护当前批次 `capturedFrames` 与启动定时器 `time.AfterFunc(MaxDuration)`（默认 `30 分钟` / `100,000 帧`）；任一阈值触发时自动向全部参与 Agent 发送 `/stop`，批次最终状态落盘为 **`COMPLETED_BY_LIMIT`**。
-3. **解析、配对与批量写入流水线（目标吞吐 `>= 2000 帧/s`）**：
-   - **Worker Pool 解码**：有界队列分发至 `N = runtime.NumCPU()` 个解析协程，调用 `pkg/crosrpc` 解析完整头部，调用 `decoder.Registry` 动态反序列化 Payload，调用 `topology.Engine` 判定目的与来源模块。
-   - **连接内 `ullSNO` 配对器 (`SessionPairTracker`)**：
-     - 以 `(process_id, direction, conn_key, sno)` 为关联键维护待配对请求表；
-     - 若 `REQ` 的 `ucReqType == 3 (Oneway)`，直接落盘不入表；
-     - 收到 `RSP (ucMsgType=3)` 或 `RSP_SEG (ucMsgType=4)` 时，关联同键 `REQ.ID` 填入 `paired_req_id`，并根据采集时间戳差值计算微秒级往返耗时 `latency_us`。
-   - **微批聚合落盘**：每凑满 `200` 条记录或每 `200ms` 触发一次 GORM `CreateInBatches`，避免逐帧单条 `INSERT` 打满数据库连接池。
+   - 内存原子维护当前批次 `capturedFrames` 与启动定时器 `time.AfterFunc(MaxDuration)`（默认 `30 分钟` / `100,000 帧`）；任一阈值触发时自动向全部参与 Agent 发送 `/stop`、刷空配对窗口并释放租约，状态落盘为 **`COMPLETED_BY_LIMIT`**。
+3. **Track B 慢轨：连接内 `ullSNO` 往返配对与双模归档 (`ExchangeAssembler`)**：
+   - **无锁分片亲和**：按 `(session_id, process_id, direction, conn_key)` 哈希路由至固定 Worker，保证同一 TCP 连接上的 `REQ`、`RSP_SEG` 与 `RSP` 100% 由同一协程串行处理；
+   - **单行往返聚合规则（Exchange-per-Row，目标吞吐 `>= 2000 帧/s`）**：
+     - **`ONEWAY` 单向请求**（`ucMsgType == 2 && ucReqType == 3`）：无需等待应答，直接组装 `raw_req_packet = frame`、`raw_rsp_packet = nil`、`payload_json = {"req": reqObj, "rsp": null}`；
+     - **标准 `UNARY` 与多段流式 `STREAM_RSP`**：收到 `REQ` 时暂存至 Worker 本地 `pendingMap[(process_id, direction, conn_key, sno)]`；后续收到 `ucMsgType == 4 (RSP_SEG)` 时按序追加分片字节至 `rspBuf` 并递增 `rsp_seg_count`；收到终结帧 `ucMsgType == 3 (RSP)` 时弹出配对项，无损拼接 `raw_rsp_packet`（可通过 `crosrpc.SplitFrames` 零歧义逐片还原），组装 `payload_json = {"req": reqObj, "rsp": rspObjOrSegArray}`，并精确计算微秒级往返耗时 `latency_us = (rspCapturedAtNs - reqCapturedAtNs) / 1000`；
+     - **未配对超时与孤立帧兜底**：在滑动窗口（默认 `2s`）内未等到应答或批次停止刷盘的挂起请求，以 `exchange_type = 'REQ_ONLY'` 落盘（`raw_rsp_packet = nil`）；连接中途切入捕获到的无头孤立应答以 `exchange_type = 'RSP_ORPHAN'` 落盘（`raw_req_packet = nil`）；连接管理帧以 `exchange_type = 'MNG'` 归档，确保**采集字节 100% 无损落库**；
+   - **微批写入**：每凑满 `200` 条往返记录或每 `200ms` 触发一次 GORM `CreateInBatches`。
 
-### 1.3 重放调度器与状态优先级折叠规则 (`diff.ReplayScheduler`)
+### 1.3 跨 Agent 同构重放调度器与状态折叠规则 (`diff.ReplayScheduler`)
 
-1. **重放资产组装**：
-   - 校验选定的 `INGRESS REQ` 记录均属于同一 `session_id` 与 `target_process_id`，且 `is_replayable == true`（未被 4MB 阈值截断）；
-   - 自动检索同批次、同进程录制期间采集到的全部 `EGRESS RSP / RSP_SEG` 原始帧及连接级 `MNG` 帧，打包为 `ExecuteReplayReq` 下发目标 Agent。
-2. **多请求状态聚合优先级定律**：
+1. **权限、同构兼容性与排他租约三重前置门禁**：
+   - 校验选定的 `INGRESS` 往返记录均属于同一 `session_id` 与同一源进程 `source_process_id`，且 `is_replayable == true`（`raw_req_packet` 非空且未被 4MB 截断）；
+   - 调用 `topology.ValidateReplayProcessCompatibility` 校验发起人对录制素材（`SHARED` 或本人 `PRIVATE`）及目标进程 `target_process_id` 所属 Agent 的权限，并验证 `target_process_id` 完整承载选定请求命中的全部公共架构模块（支持将公共回归流量投递至开发者个人 `PRIVATE` Agent 上的同构本地进程）；
+   - 对目标进程所属 Agent 获取 `REPLAY` 排他租约（若该 Agent 正在被录制或重放占用则立即返回 `409 Conflict`）。
+2. **单次扫描无损重放包组装**：
+   - 无需跨行二次自连接查询，直接从 `traefik_traffic_records` 提取选定入站记录的 `raw_req_packet` 作为 `IngressRequests`（保留对应的基线 `raw_rsp_packet` 与 `payload_json.rsp` 留驻主控内存供回归比对），并提取同批次源进程下所有 `EGRESS` 记录的 `append(raw_req_packet, raw_rsp_packet...)` 作为 `EgressMocks`（连同 `MNG` 帧）下发目标 Agent；任务结束或取消时自动释放 Agent 排他租约。
+3. **多请求状态聚合优先级定律**：
    单条请求及整包重放任务的最终 `result_status` 严格遵循以下全序优先级取最高异常级别（同时完整保留每条请求的独立明细）：
 
    $$\text{ERROR} \succ \text{TIMEOUT} \succ \text{MOCK\_MISS} \succ \text{FAILED} \succ \text{PASS}$$
@@ -154,39 +193,43 @@ type FieldDiff struct {
 | 菜单分组 | 子路由路径 (`MODULE_BASE_PATH = '/traefik'`) | 页面组件 | 可见角色 | URL Search Params 状态同步项 |
 | :--- | :--- | :--- | :---: | :--- |
 | **流量与架构** | `/architecture` | `ArchitectureWorkbenchPage` | 全体登录用户 | `tab` (`logical` \| `physical` \| `verify`), `subsystem_id`, `session_id` |
-| **流量与架构** | `/traffic` | `TrafficMonitorWorkbenchPage` | 全体登录用户 | `session_id`, `subsystem_id`, `module_id`, `process_id`, `service_name`, `operation`, `sno`, `trace_id`, `page`, `page_size` |
-| **流量与架构** | `/replay` | `ReplayWorkbenchPage` | 全体登录用户 | `session_id`, `process_id`, `status`, `page`, `page_size` |
+| **流量与架构** | `/traffic` | `TrafficMonitorWorkbenchPage` | 全体登录用户 | `scope` (`SHARED` \| `PRIVATE`), `session_id`, `subsystem_id`, `module_id`, `process_id`, `service_name`, `operation`, `sno`, `trace_id`, `keyword`, `page`, `page_size` |
+| **流量与架构** | `/replay` | `ReplayWorkbenchPage` | 全体登录用户 | `session_id`, `target_process_id`, `status`, `page`, `page_size` |
 | **流量与架构** | `/schemas` | `ProtoSchemaWorkbenchPage` | 全体登录用户 | `name`, `active_only`, `search`, `page`, `page_size` |
-| **模块治理** | `/admin/agents` | `AgentManagementPage` | `traefik_admin` | `status`, `search`, `page`, `page_size` |
-| **模块治理** | `/admin/settings` | `AdminSettingsPage` | `traefik_admin` | - |
+| **资源与治理** | `/agents` | `AgentManagementPage` | 全体登录用户 | `scope` (`SHARED` \| `PRIVATE`), `lease_state`, `status`, `search`, `page`, `page_size` |
+| **资源与治理** | `/admin/settings` | `AdminSettingsPage` | `traefik_admin` | - |
 
 > **通用分页硬约束**：所有分页列表统一复用 `@code/common` 的 `Pagination` 与 `usePaginationState`（同步至 `useSearchParams`），每页条数选项固定为 **`15 / 25 / 50 / 100`（默认 `25`）**，控件布局严格为 `[首页] [上一页] [5页连续数字滑动窗口] [下一页] [末页] [条/页下拉框]`。
 
-### 4.2 四大核心工作台 React 组件分层树
+### 4.2 核心工作台 React 组件分层树
 
 ```text
 src/pages/
 ├── ArchitectureWorkbenchPage/             # 1. 架构中心与拓扑工作台
 │   ├── SubsystemGroupTreePanel.tsx        # 左侧：子系统切换 + 8级功能组树（支持拖拽/弹窗移动与防成环提示）
-│   ├── ModuleContractDetailPane.tsx       # 中部：功能模块详情、进程部署绑定器、PROVIDE/DEPEND 接口契约表
-│   ├── StaticTopologyCanvas.tsx           # 画布：逻辑架构视图 / 物理进程归属视图切换（纯 --color-* Token 渲染）
-│   └── ConsistencyVerifyOverlay.tsx       # 验证层：关联录制批次叠加 Verified/Violation/Uncovered/NotObservable/Unattributed
-├── ProtoSchemaWorkbenchPage/              # 2. 接口文档与 IDL 描述集工作台
+│   ├── ModuleContractDetailPane.tsx       # 中部：功能模块详情、公共基线进程绑定器、PROVIDE/DEPEND 接口契约表
+│   ├── StaticTopologyCanvas.tsx           # 画布：逻辑架构视图 / 公共物理进程归属视图切换（纯 --color-* Token 渲染）
+│   └── ConsistencyVerifyOverlay.tsx       # 验证层：关联公共或本人私有录制批次叠加五类一致性验证结果
+├── AgentManagementPage/                   # 2. 公私域 Agent 纳管与排他租约看板
+│   ├── AgentScopeTabs.tsx                 # 切换「团队公共 Agent (SHARED)」与「我的私有 Agent (PRIVATE)」
+│   ├── AgentLeaseStatusBadge.tsx          # 实时展示空闲 / 录制占用(持锁人+剩余TTL) / 重放占用，管理员支持强制解锁
+│   └── ProcessModuleBinderModal.tsx       # 进程探查与挂载复用全局公共架构模块 (ModuleIDs) 配置弹窗
+├── ProtoSchemaWorkbenchPage/              # 3. 接口文档与 IDL 描述集工作台
 │   ├── SchemaUploadModal.tsx              # .pb 上传弹窗（<=4MB 预检、版本备注）
 │   ├── SchemaVersionList.tsx              # 同名描述集多版本时间线与一键生效切换（409 冲突明细展示）
 │   ├── OperationMappingTable.tsx          # {package}-{serviceName} 映射检索表 + 接口默认忽略路径编辑器
 │   └── OperationDocDrawer.tsx             # 入参/出参 Message 字段树与模块关联抽屉（兼顾 P0 映射详情与 P1 F-18 演进槽位）
-├── TrafficMonitorWorkbenchPage/           # 3. 协同录制与流量解剖工作台
-│   ├── RecordingSessionBar.tsx            # 批次控制栏：多进程选择器、A-01 存量长连接重连引导横幅、帧数/时长进度条
-│   ├── LiveTrafficFilterForm.tsx          # 多维 URL 同步筛选器 + SSE 实时流暂停/继续开关
-│   ├── TrafficRecordTable.tsx             # 报文主表（方向徽章、REQ/RSP 配对耗时、穿透源/目模块标签）
-│   └── PacketAnatomyDrawer/               # 右侧四段式 CROS RPC 深度解剖抽屉（复用 @code/common Drawer）
+├── TrafficMonitorWorkbenchPage/           # 4. 协同录制与流量解剖工作台
+│   ├── RecordingSessionBar.tsx            # 批次控制栏：公私域进程选择器(含租约冲突置灰提示)、素材作用域(SHARED/PRIVATE)、A-01 重连横幅
+│   ├── LiveTrafficFilterForm.tsx          # 多维 URL 同步筛选器(含 payload_json GIN 关键字检索) + SSE 实时流暂停/继续开关
+│   ├── TrafficRecordTable.tsx             # 往返归档主表（方向徽章、ExchangeType、往返耗时、穿透源/目模块标签）
+│   └── PacketAnatomyDrawer/               # 右侧四段式 CROS RPC 深度解剖抽屉（支持单条往返内「请求帧 REQ <-> 应答帧 RSP」无缝切换）
 │       ├── CommHeadBitmapCard.tsx         # ① 24B 公共头字节偏移位图可视化卡片
 │       ├── SessionHeadDetailCard.tsx      # ② 会话头版本识别、字段表与客户端/服务端耗时拆解条
 │       ├── ExtendHeadTraceCard.tsx        # ③ DOTR TraceID/SpanID/FatherSpanID 链路跳转与入队等待耗时
-│       └── PayloadJsonHexSplitView.tsx    # ④ 左栏 Protobuf JSON 树 <-> 右栏 16B 对齐 Raw Hex + ASCII 对照视图
-└── ReplayWorkbenchPage/                   # 4. 离线重放与双层回归断言工作台
-    ├── ReplayTaskCreatorModal.tsx         # 选定录制批次、目标进程、勾选 INGRESS 请求与临时追加忽略路径
+│       └── PayloadJsonHexSplitView.tsx    # ④ 左栏 payload_json.{req|rsp} 树 <-> 右栏 raw_{req|rsp}_packet 16B 对齐 Hex 对照
+└── ReplayWorkbenchPage/                   # 5. 跨 Agent 同构离线重放与双层回归断言工作台
+    ├── ReplayTaskCreatorModal.tsx         # 选定有权限的录制素材 -> 自动过滤承载相同公共模块的目标进程(含本人 PRIVATE Agent) -> 勾选请求
     ├── ReplayTaskTable.tsx                # 重放任务列表（PASS/FAILED/MOCK_MISS/TIMEOUT/ERROR 状态标签）
     └── ReplayReportDrawer/                # 重放回归报告详情抽屉
         ├── HeaderAssertionCard.tsx        # 第一层协议头断言结果卡片（状态码、消息类型、豁免时间戳说明）
@@ -196,7 +239,7 @@ src/pages/
 
 ### 4.3 四段报文解剖抽屉前后端 TypeScript DTO 契约 (`PacketAnatomyDTO`)
 
-所有 `uint64` 字段（如 `sno`, `trace_id`, `span_id`, `status_code`, 时间戳）在 JSON 契约中统一采用 **`string`**（十进制或 `0x` 十六进制格式），严禁使用 `any`：
+由于单行 `TrafficRecord` 同时归档无损 `raw_req_packet`、`raw_rsp_packet` 与结构化 `payload_json: {req, rsp}`，解剖抽屉一次加载即可在请求侧（`reqSide`）与应答侧（`rspSide`）之间零延迟切换。所有 `uint64` 字段在 JSON 契约中统一采用 **`string`**，严禁使用 `any`：
 
 ```typescript
 // frontend/src/types/traffic.ts
@@ -267,8 +310,8 @@ export interface PayloadAnatomyDTO {
   schemaName?: string;
   schemaVersion?: number;
   messageFullName?: string;
-  decodedJson?: Record<string, unknown>;
-  rawFrameHexLines: Array<{  // 后端或前端按每行 16B 切片对齐生成的对照行
+  decodedJson?: Record<string, unknown> | Array<Record<string, unknown>>; // 支持单包对象或多段 RSP_SEG 数组
+  rawFrameHexLines: Array<{  // 基于 raw_req_packet / raw_rsp_packet 按每行 16B 切片对齐生成的对照行
     offsetHex: string;       // "00000018"
     hexCols: string;         // "00 05 01 00 00 00 00 01  64 6f 70 68 69 2e 6f 72"
     asciiCols: string;       // "........dophi.or"
@@ -276,18 +319,25 @@ export interface PayloadAnatomyDTO {
   }>;
 }
 
-export interface PacketAnatomyDrawerDTO {
-  recordId: string;
-  sessionId: string;
-  direction: 'INGRESS' | 'EGRESS';
-  pairedRecordId?: string;
-  roundTripLatencyUs?: number;
-  srcModuleName?: string;
-  dstModuleName?: string;
+/** 单侧报文四段完整解剖结构（用于 reqSide 或 rspSide） */
+export interface FrameSideAnatomyDTO {
   commHead: CommHeadAnatomyDTO;
   sessionHead: SessionHeadAnatomyDTO;
   extendHead: ExtendHeadAnatomyDTO;
   payload: PayloadAnatomyDTO;
+  segmentCount: number;      // REQ 恒为 1；STREAM_RSP 为实际拼接的 RSP_SEG + RSP 总段数
+}
+
+export interface PacketAnatomyDrawerDTO {
+  recordId: string;
+  sessionId: string;
+  direction: 'INGRESS' | 'EGRESS';
+  exchangeType: 'UNARY' | 'STREAM_RSP' | 'ONEWAY' | 'REQ_ONLY' | 'RSP_ORPHAN' | 'MNG';
+  roundTripLatencyUs?: number;
+  srcModuleName?: string;
+  dstModuleName?: string;
+  reqSide?: FrameSideAnatomyDTO; // RSP_ORPHAN 时为空
+  rspSide?: FrameSideAnatomyDTO; // ONEWAY 或 REQ_ONLY 时为空
 }
 ```
 
@@ -295,21 +345,19 @@ export interface PacketAnatomyDrawerDTO {
 
 ## 5. RBAC 权限矩阵与操作审计接入规范 (RBAC & Audit Governance)
 
-### 5.1 角色权限守卫矩阵
+### 5.1 角色权限守卫与公私域防越权矩阵
 
-基于 `code-common/backend/auth` 的 `AuthMiddleware`（登录态校验）与 `RequireAdmin("traefik_admin")`（模块管理员或 `super_admin` 放行），严格划分以下权限边界：
+基于 `code-common/backend/auth` 的 `AuthMiddleware`（登录态校验）、`RequireAdmin("traefik_admin")` 以及资源层 `owner_id` 归属核验，严格划分以下权限边界：
 
 | 业务资源与操作动作 | 免密访客 | 普通认证用户 (JWT) | 模块管理员 (`traefik_admin` / `super_admin`) |
 | :--- | :---: | :---: | :---: |
 | 健康检查 (`/api/health`) 与认证配置 (`/api/auth/*`) | 允许 | 允许 | 允许 |
-| 查看三级架构元素、模块契约、静态拓扑与一致性报告 | `401` | **允许** | **允许** |
-| 新增 / 修改 / 移动 / 删除子系统、功能组、模块、接口契约 | `401` | `403` | **允许** |
-| 查看 Agent 列表、进程部署映射、`.pb` 版本与接口映射列表 | `401` | **允许** | **允许** |
-| Agent 纳管增删改、进程探查与进程映射增删改 | `401` | `403` | **允许** |
-| 上传 `.pb` 描述集、切换生效版本、修改接口默认忽略字段 | `401` | `403` | **允许** |
-| **启动 / 停止多进程协同录制**、删除录制批次与流量数据 | `401` | `403` | **允许** |
-| 查看录制批次、流量解剖详情抽屉、触发单条重解码预览 | `401` | **允许** | **允许** |
-| **基于已有录制资产发起离线重放**（测试环境 A-06）及查看 Diff 报告 | `401` | **允许** | **允许** |
+| 查看公共三级架构元素、模块契约、静态拓扑与 `.pb` 映射列表 | `401` | **允许** | **允许** |
+| 新增 / 修改 / 移动 / 删除公共架构元素、`.pb` 描述集管理 | `401` | `403` | **允许** |
+| 查看公共 `SHARED` Agent 及实时租约状态；创建并全权管理**本人 `PRIVATE` Agent** 与名下进程（挂载公共模块） | `401` | **允许**（访问他人 `PRIVATE` Agent 返 `403`） | **允许**（另负责创建/管理全局 `SHARED` Agent 及强制释放异常租约） |
+| 租用空闲的 `SHARED` Agent 或本人的 `PRIVATE` Agent **启动/停止录制** | `401` | **允许**（若目标 Agent 已被占用返 `409 Conflict`） | **允许**（同样遵守动态排他租约 `409` 互斥） |
+| 查看 `SHARED` 录制素材及**本人的 `PRIVATE` 录制素材**；将本人 `PRIVATE` 素材发布为 `SHARED` 或删除本人 `PRIVATE` 素材 | `401` | **允许**（访问或删除他人 `PRIVATE` 素材返 `403`；删除公共 `SHARED` 素材返 `403`） | **允许**（可管理并删除无重放引用的 `SHARED` 素材） |
+| **跨 Agent 同构离线重放**：选用有权限的 `SHARED` 或本人 `PRIVATE` 素材，投递至空闲 `SHARED` 或本人 `PRIVATE` Agent 的同模块进程 | `401` | **允许**（模块不匹配返 `400`，Agent 被占用返 `409`） | **允许** |
 | 修改模块全局治理参数 (`/api/admin/settings`) | `401` | `403` | **允许** |
 
 ### 5.2 `commonAudit` 字段级 Diff 与操作事件审计埋点字典
@@ -319,8 +367,8 @@ export interface PacketAnatomyDrawerDTO {
 | 审计子模块 (`module`) | 动作标识 (`action`) | 风险等级 | `before` / `after` 快照策略与必含上下文 |
 | :--- | :--- | :---: | :--- |
 | `traefik_arch` | `create` / `update` / `move` / `delete` | `P1` (删除) / `P2` | 传入变更前后的 `Subsystem` / `FunctionalGroup` / `Module` / `ModuleInterface` 结构体快照 |
-| `traefik_agent` | `create` / `update` / `delete` | `P1` | 传入 `Agent` / `Process` 快照（含 `endpoint`、`listen_port`、`cmd_pattern` 变更 Diff） |
+| `traefik_agent` | `create` / `update` / `delete` / `force_unlock_lease` | `P1` | 传入 `Agent`（含 `scope`、`owner_id`、`endpoint`）或 `Process`（含 `listen_port`、`module_ids`）快照；管理员强制解锁记录原持锁人及原因 |
 | `traefik_schema` | `upload` / `activate` / `delete` | `P1` | 记录描述集 `name`、`version`、`file_sha256` 及 `is_active` 切换前后版本对比（剔除大体积 `descriptor_bytes` 二进制字段避免膨胀审计表） |
-| `traefik_record` | `start_session` / `stop_session` / `delete_session` | `P1` | 操作事件审计：记录操作人、`session_no`、参与 `agent_id` 与 `process_id` 列表、停止原因 |
-| `traefik_replay` | `execute_replay` / `cancel_replay` | `P2` | 操作事件审计：记录操作人（含普通认证用户）、`task_no`、来源 `session_id`、目标 `process_id` 与 `extra_ignore_paths` |
+| `traefik_record` | `start_session` / `stop_session` / `publish_session` / `delete_session` | `P1` | 操作事件审计：记录操作人、`session_no`、`scope`（`SHARED`/`PRIVATE`）、加锁的 `agent_id` 与 `process_id` 列表、停止原因 |
+| `traefik_replay` | `execute_replay` / `cancel_replay` | `P2` | 操作事件审计：记录操作人、`task_no`、来源 `(session_id, source_process_id)`、目标 `(agent_id, target_process_id)` 与 `extra_ignore_paths` |
 | `traefik_system` | `retention_cleanup` | `P2` | 后台定时任务直接调用 `commonAudit.Push` 记录清理过期批次数量与释放流量行数 |
