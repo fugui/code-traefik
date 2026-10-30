@@ -228,17 +228,19 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
       {/* 顶部面包屑路径 */}
       <div className="code-module-breadcrumb">
         <span className="code-module-breadcrumb__item">架构根节点</span>
-        {currentSubsystem && (
+        {(currentSubsystem || selectedModule?.subsystem) && (
           <>
             <ChevronRight size={13} className="code-module-breadcrumb__sep" />
-            <span className="code-module-breadcrumb__item">{currentSubsystem.name}</span>
+            <span className="code-module-breadcrumb__item">
+              {currentSubsystem?.name || selectedModule?.subsystem?.name}
+            </span>
           </>
         )}
-        {currentGroup && (
+        {(currentGroup || selectedModule?.group) && (
           <>
             <ChevronRight size={13} className="code-module-breadcrumb__sep" />
             <span className="code-module-breadcrumb__item code-module-breadcrumb__item--current">
-              {currentGroup.name}
+              {currentGroup?.name || selectedModule?.group?.name}
             </span>
           </>
         )}

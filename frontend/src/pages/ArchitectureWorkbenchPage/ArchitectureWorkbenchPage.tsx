@@ -341,7 +341,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
         setServices(res.services ?? []);
         setDependencies(res.dependencies ?? []);
         if (res.module?.group_id) {
-          setSelectedGroupId(res.module.group_id);
+          setSelectedGroupId((prev) => (prev === res.module.group_id ? prev : res.module.group_id));
         }
         return res;
       } catch (err) {
@@ -350,6 +350,22 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
       }
     },
     [toast]
+  );
+
+  // 原子化选择功能模块叶子节点（避免中间状态置空引发视图抖动与闪烁）
+  const handleSelectModuleLeaf = useCallback(
+    (subsystemId: string, groupId: string, moduleId: string) => {
+      setSelectedSubsystemId(subsystemId);
+      setSelectedGroupId(groupId);
+      setSelectedModuleId(moduleId);
+      updateParams({
+        subsystem_id: subsystemId,
+        group_id: groupId,
+        module_id: moduleId,
+        view_mode: 'LOGICAL',
+      });
+    },
+    [updateParams]
   );
 
   // 当模块切换时，加载模块详情与服务契约
@@ -895,6 +911,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
                 setSelectedModuleId(modId);
                 updateParams({ module_id: modId, view_mode: 'LOGICAL' });
               }}
+              onSelectModuleLeaf={handleSelectModuleLeaf}
               onCreateModule={(groupId) => {
                 setEditingMod(null);
                 setModuleForm({ code: '', name: '', description: '', process_id: '', group_id: groupId });

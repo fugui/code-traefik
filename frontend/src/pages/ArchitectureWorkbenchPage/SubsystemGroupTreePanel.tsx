@@ -37,6 +37,7 @@ export interface SubsystemGroupTreePanelProps {
   modules?: Module[];
   selectedModuleId?: string;
   onSelectModule?: (moduleId: string) => void;
+  onSelectModuleLeaf?: (subsystemId: string, groupId: string, moduleId: string) => void;
   onCreateModule?: (groupId: string) => void;
   onEditModule?: (mod: Module) => void;
   onDeleteModule?: (moduleId: string) => void;
@@ -139,6 +140,7 @@ export const SubsystemGroupTreePanel: React.FC<SubsystemGroupTreePanelProps> = (
   modules = [],
   selectedModuleId = '',
   onSelectModule,
+  onSelectModuleLeaf,
   onCreateModule,
   onEditModule,
   onDeleteModule,
@@ -543,9 +545,13 @@ export const SubsystemGroupTreePanel: React.FC<SubsystemGroupTreePanelProps> = (
                   style={{ paddingLeft: `${(depth + 1) * 16 + 8}px` }}
                   onClick={(e) => {
                     e.stopPropagation();
-                    onSelectSubsystem(subsystemId);
-                    onSelectGroup(node.id);
-                    if (onSelectModule) onSelectModule(mod.id);
+                    if (onSelectModuleLeaf) {
+                      onSelectModuleLeaf(subsystemId, node.id, mod.id);
+                    } else {
+                      onSelectSubsystem(subsystemId);
+                      onSelectGroup(node.id);
+                      if (onSelectModule) onSelectModule(mod.id);
+                    }
                   }}
                 >
                   <div className="code-tree-node__left">
