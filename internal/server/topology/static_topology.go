@@ -85,6 +85,7 @@ type ModuleInterfaceInput struct {
 // ProcessInput 进程部署与模块承载映射新增/修改入参
 type ProcessInput struct {
 	AgentID          uint64
+	GroupName        string
 	Name             string
 	ListenPort       int
 	AdvertiseIP      string
@@ -284,11 +285,17 @@ func CreateProcess(db *gorm.DB, in ProcessInput) (*models.Process, error) {
 	if in.ListenPort < 1 || in.ListenPort > 65535 {
 		return nil, ErrInvalidListenPort
 	}
-	if strings.TrimSpace(in.Name) == "" || strings.TrimSpace(in.CmdPattern) == "" {
+	name := strings.TrimSpace(in.Name)
+	if name == "" {
 		return nil, ErrInvalidProcessName
 	}
-	if len(in.ModuleIDs) == 0 {
-		return nil, ErrEmptyProcessModules
+	cmdPattern := strings.TrimSpace(in.CmdPattern)
+	if cmdPattern == "" {
+		cmdPattern = "./bin/" + name
+	}
+	groupName := strings.TrimSpace(in.GroupName)
+	if groupName == "" {
+		groupName = "默认进程组"
 	}
 	for _, ep := range in.ExtraDownstreams {
 		if err := validateIPv4Endpoint(ep); err != nil {
@@ -297,11 +304,29 @@ func CreateProcess(db *gorm.DB, in ProcessInput) (*models.Process, error) {
 	}
 
 	var agent models.Agent
-	if err := db.First(&agent, in.AgentID).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrAgentNotFound
+	if in.AgentID == 0 {
+		if err := db.Where("scope = ?", "SHARED").First(&agent).Error; err != nil {
+			if err := db.First(&agent).Error; err != nil {
+				agent = models.Agent{
+					Name:        "default-host-agent",
+					Endpoint:    "127.0.0.1:8090",
+					Scope:       "SHARED",
+					Status:      "ONLINE",
+					Description: "系统预置默认宿主 Agent",
+				}
+				if err := db.Create(&agent).Error; err != nil {
+					return nil, err
+				}
+			}
 		}
-		return nil, err
+		in.AgentID = agent.ID
+	} else {
+		if err := db.First(&agent, in.AgentID).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil, ErrAgentNotFound
+			}
+			return nil, err
+		}
 	}
 
 	if agent.LeaseType != "" {
@@ -316,49 +341,51 @@ func CreateProcess(db *gorm.DB, in ProcessInput) (*models.Process, error) {
 	if portCount > 0 {
 		return nil, ErrDuplicateProcessPort
 	}
-	if err := db.Model(&models.Process{}).Where("agent_id = ? AND name = ?", in.AgentID, strings.TrimSpace(in.Name)).Count(&nameCount).Error; err != nil {
+	if err := db.Model(&models.Process{}).Where("agent_id = ? AND name = ?", in.AgentID, name).Count(&nameCount).Error; err != nil {
 		return nil, err
 	}
 	if nameCount > 0 {
 		return nil, ErrDuplicateProcessName
 	}
 
-	// 校验所有 Module 存在
-	var modCount int64
-	if err := db.Model(&models.Module{}).Where("id IN ?", in.ModuleIDs).Count(&modCount).Error; err != nil {
-		return nil, err
-	}
-	if modCount != int64(len(in.ModuleIDs)) {
-		return nil, ErrModuleNotFound
-	}
+	if len(in.ModuleIDs) > 0 {
+		// 校验所有 Module 存在
+		var modCount int64
+		if err := db.Model(&models.Module{}).Where("id IN ?", in.ModuleIDs).Count(&modCount).Error; err != nil {
+			return nil, err
+		}
+		if modCount != int64(len(in.ModuleIDs)) {
+			return nil, ErrModuleNotFound
+		}
 
-	// 校验单域单进程挂载约束 (A-03)
-	if agent.Scope == models.ScopeShared {
-		// SHARED Agent 域：检查全部 SHARED 进程中是否已绑定该模块
-		var conflictCount int64
-		err := db.Model(&models.ProcessModule{}).
-			Joins("JOIN traefik_processes ON traefik_processes.id = traefik_process_modules.process_id").
-			Joins("JOIN traefik_agents ON traefik_agents.id = traefik_processes.agent_id").
-			Where("traefik_agents.scope = ? AND traefik_process_modules.module_id IN ?", models.ScopeShared, in.ModuleIDs).
-			Count(&conflictCount).Error
-		if err != nil {
-			return nil, err
-		}
-		if conflictCount > 0 {
-			return nil, ErrDuplicateModuleBinding
-		}
-	} else {
-		// PRIVATE Agent 域：检查当前 Agent 下是否已绑定该模块
-		var conflictCount int64
-		err := db.Model(&models.ProcessModule{}).
-			Joins("JOIN traefik_processes ON traefik_processes.id = traefik_process_modules.process_id").
-			Where("traefik_processes.agent_id = ? AND traefik_process_modules.module_id IN ?", in.AgentID, in.ModuleIDs).
-			Count(&conflictCount).Error
-		if err != nil {
-			return nil, err
-		}
-		if conflictCount > 0 {
-			return nil, ErrDuplicateModuleBinding
+		// 校验单域单进程挂载约束 (A-03)
+		if agent.Scope == models.ScopeShared {
+			// SHARED Agent 域：检查全部 SHARED 进程中是否已绑定该模块
+			var conflictCount int64
+			err := db.Model(&models.ProcessModule{}).
+				Joins("JOIN traefik_processes ON traefik_processes.id = traefik_process_modules.process_id").
+				Joins("JOIN traefik_agents ON traefik_agents.id = traefik_processes.agent_id").
+				Where("traefik_agents.scope = ? AND traefik_process_modules.module_id IN ?", models.ScopeShared, in.ModuleIDs).
+				Count(&conflictCount).Error
+			if err != nil {
+				return nil, err
+			}
+			if conflictCount > 0 {
+				return nil, ErrDuplicateModuleBinding
+			}
+		} else {
+			// PRIVATE Agent 域：检查当前 Agent 下是否已绑定该模块
+			var conflictCount int64
+			err := db.Model(&models.ProcessModule{}).
+				Joins("JOIN traefik_processes ON traefik_processes.id = traefik_process_modules.process_id").
+				Where("traefik_processes.agent_id = ? AND traefik_process_modules.module_id IN ?", in.AgentID, in.ModuleIDs).
+				Count(&conflictCount).Error
+			if err != nil {
+				return nil, err
+			}
+			if conflictCount > 0 {
+				return nil, ErrDuplicateModuleBinding
+			}
 		}
 	}
 
@@ -369,10 +396,11 @@ func CreateProcess(db *gorm.DB, in ProcessInput) (*models.Process, error) {
 
 	proc := &models.Process{
 		AgentID:          in.AgentID,
-		Name:             strings.TrimSpace(in.Name),
+		GroupName:        groupName,
+		Name:             name,
 		ListenPort:       in.ListenPort,
 		AdvertiseIP:      strings.TrimSpace(in.AdvertiseIP),
-		CmdPattern:       strings.TrimSpace(in.CmdPattern),
+		CmdPattern:       cmdPattern,
 		ExtraDownstreams: datatypes.JSON(extraJSON),
 		Description:      in.Description,
 		CreatedBy:        in.OperatorID,
@@ -417,11 +445,13 @@ func UpdateProcess(db *gorm.DB, procID uint64, in ProcessInput) (*models.Process
 	if in.ListenPort < 1 || in.ListenPort > 65535 {
 		return nil, nil, ErrInvalidListenPort
 	}
-	if strings.TrimSpace(in.Name) == "" || strings.TrimSpace(in.CmdPattern) == "" {
+	name := strings.TrimSpace(in.Name)
+	if name == "" {
 		return nil, nil, ErrInvalidProcessName
 	}
-	if len(in.ModuleIDs) == 0 {
-		return nil, nil, ErrEmptyProcessModules
+	cmdPattern := strings.TrimSpace(in.CmdPattern)
+	if cmdPattern == "" {
+		cmdPattern = "./bin/" + name
 	}
 	for _, ep := range in.ExtraDownstreams {
 		if err := validateIPv4Endpoint(ep); err != nil {
@@ -497,16 +527,20 @@ func UpdateProcess(db *gorm.DB, procID uint64, in ProcessInput) (*models.Process
 	}
 
 	after := before
+	if in.GroupName != "" {
+		after.GroupName = strings.TrimSpace(in.GroupName)
+	}
 	after.Name = strings.TrimSpace(in.Name)
 	after.ListenPort = in.ListenPort
 	after.AdvertiseIP = strings.TrimSpace(in.AdvertiseIP)
-	after.CmdPattern = strings.TrimSpace(in.CmdPattern)
+	after.CmdPattern = cmdPattern
 	after.ExtraDownstreams = datatypes.JSON(extraJSON)
 	after.Description = in.Description
 	after.UpdatedBy = in.OperatorID
 
 	err := db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Model(&models.Process{}).Where("id = ?", procID).Updates(map[string]interface{}{
+			"group_name":        after.GroupName,
 			"name":              after.Name,
 			"listen_port":       after.ListenPort,
 			"advertise_ip":      after.AdvertiseIP,

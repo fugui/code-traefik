@@ -1125,6 +1125,40 @@ body {
   background: transparent;
 }
 
+/* 视角双模切换器 (方案 2: 逻辑架构树 vs 物理进程树) */
+.code-tree-view-tabs {
+  display: flex;
+  background: var(--color-bg-muted);
+  border-radius: var(--radius-md);
+  padding: 2px;
+  gap: 2px;
+}
+
+.code-tree-view-tab {
+  flex: 1;
+  border: none;
+  background: transparent;
+  font-size: 0.8rem;
+  font-weight: 500;
+  padding: 0.4rem 0.5rem;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  color: var(--color-text-secondary);
+  transition: all 0.15s ease;
+  text-align: center;
+}
+
+.code-tree-view-tab:hover {
+  color: var(--color-text-primary);
+}
+
+.code-tree-view-tab--active {
+  background: var(--color-bg-surface);
+  color: var(--color-primary);
+  font-weight: 600;
+  box-shadow: var(--shadow-sm);
+}
+
 .code-tree-panel__header {
   display: flex;
   align-items: center;
@@ -1337,6 +1371,53 @@ body {
   display: flex;
   flex-direction: column;
   gap: 0.1rem;
+}
+
+/* 物理进程树节点变体 */
+.code-tree-node--proc-group {
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.code-tree-node--process {
+  color: var(--color-text-primary);
+}
+
+.code-tree-node--module-leaf {
+  color: var(--color-text-secondary);
+  font-size: 0.8rem;
+}
+
+.code-tree-node--module-leaf:hover {
+  color: var(--color-text-primary);
+}
+
+/* 快捷新建进程嵌入卡片 */
+.code-quick-process-panel {
+  border: 1px dashed var(--color-border-primary);
+  border-radius: var(--radius-md);
+  padding: 0.75rem;
+  background: var(--color-bg-muted);
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin-top: 0.5rem;
+}
+
+.code-quick-process-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.code-quick-process-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 100px auto;
+  gap: 0.5rem;
+  align-items: center;
 }
 
 /* 右侧详情面包屑与容器 */

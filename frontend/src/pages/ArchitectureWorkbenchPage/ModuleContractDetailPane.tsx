@@ -17,6 +17,7 @@ export interface ModuleContractDetailPaneProps {
   onUpdateIgnorePaths: (ifaceId: string, paths: string[]) => void;
   currentSubsystem?: Subsystem | null;
   currentGroup?: FunctionalGroupTreeNode | null;
+  onViewProcess?: (processId: string) => void;
 }
 
 export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> = ({
@@ -34,6 +35,7 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
   onUpdateIgnorePaths,
   currentSubsystem,
   currentGroup,
+  onViewProcess,
 }) => {
   const [editingIfaceId, setEditingIfaceId] = useState<string | null>(null);
   const [ignorePathInput, setIgnorePathInput] = useState<string>('');
@@ -138,10 +140,52 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
             <div className="code-meta-grid">
               <div className="code-meta-item">
                 <span className="code-meta-label">公共基线进程:</span>
-                <span className="code-meta-val code-font-mono">
-                  {selectedModule.process
-                    ? `${selectedModule.process.name} (Port: ${selectedModule.process.listen_port})`
-                    : '未绑定公共基线进程'}
+                <span className="code-meta-val code-font-mono" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                  {selectedModule.process ? (
+                    <>
+                      <span
+                        style={{
+                          color: 'var(--color-primary)',
+                          fontWeight: 600,
+                          cursor: onViewProcess ? 'pointer' : 'default',
+                        }}
+                        onClick={() => {
+                          if (onViewProcess && selectedModule.process?.id) {
+                            onViewProcess(selectedModule.process.id);
+                          }
+                        }}
+                        title={onViewProcess ? '点击在物理架构树中定位此进程' : undefined}
+                      >
+                        {selectedModule.process.name} (Port: {selectedModule.process.listen_port})
+                      </span>
+                      {isAdmin && (
+                        <button
+                          type="button"
+                          className="code-btn code-btn--secondary code-btn--xs"
+                          onClick={() => onEditModule(selectedModule)}
+                          title="更换关联绑定的物理进程"
+                          style={{ padding: '0.1rem 0.4rem', fontSize: '0.725rem' }}
+                        >
+                          更换进程
+                        </button>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <span className="code-color-muted">未绑定公共基线进程</span>
+                      {isAdmin && (
+                        <button
+                          type="button"
+                          className="code-btn code-btn--primary code-btn--xs"
+                          onClick={() => onEditModule(selectedModule)}
+                          title="为模块绑定宿主业务进程"
+                          style={{ padding: '0.1rem 0.4rem', fontSize: '0.725rem' }}
+                        >
+                          立即绑定
+                        </button>
+                      )}
+                    </>
+                  )}
                 </span>
               </div>
               <div className="code-meta-item">

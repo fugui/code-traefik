@@ -93,11 +93,12 @@ export async function listProcesses(params?: {
 
 export async function createProcess(data: {
   agent_id: string;
+  group_name?: string;
   name: string;
   listen_port: number;
   advertise_ip?: string;
   cmd_pattern?: string;
-  module_ids: string[];
+  module_ids?: string[];
   extra_downstreams?: string[];
   description?: string;
 }) {
@@ -109,10 +110,11 @@ export async function createProcess(data: {
 
 export async function updateProcess(id: string, data: {
   name: string;
+  group_name?: string;
   listen_port: number;
   advertise_ip?: string;
   cmd_pattern?: string;
-  module_ids: string[];
+  module_ids?: string[];
   extra_downstreams?: string[];
   description?: string;
 }) {

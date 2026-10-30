@@ -33,11 +33,12 @@ export interface ProcessModuleBinding {
 export interface Process {
   id: string;
   agent_id: string;
+  group_name?: string;
   name: string;
   listen_port: number;
   advertise_ip?: string;
   cmd_pattern?: string;
-  module_ids: string[];
+  module_ids?: string[];
   extra_downstreams?: string[];
   description?: string;
   agent?: Agent;
