@@ -37,7 +37,7 @@ export interface SubsystemGroupTreePanelProps {
   modules?: Module[];
   selectedModuleId?: string;
   onSelectModule?: (moduleId: string) => void;
-  onSelectModuleLeaf?: (subsystemId: string, groupId: string, moduleId: string) => void;
+  onSelectModuleLeaf?: (subsystemId: string | number, groupId: string | number, moduleId: string | number) => void;
   onCreateModule?: (groupId: string) => void;
   onEditModule?: (mod: Module) => void;
   onDeleteModule?: (moduleId: string) => void;
@@ -192,10 +192,11 @@ export const SubsystemGroupTreePanel: React.FC<SubsystemGroupTreePanelProps> = (
   const modulesByGroupId = useMemo(() => {
     const map: Record<string, Module[]> = {};
     for (const mod of modules) {
-      if (!map[mod.group_id]) {
-        map[mod.group_id] = [];
+      const key = String(mod.group_id);
+      if (!map[key]) {
+        map[key] = [];
       }
-      map[mod.group_id].push(mod);
+      map[key].push(mod);
     }
     return map;
   }, [modules]);
@@ -205,7 +206,7 @@ export const SubsystemGroupTreePanel: React.FC<SubsystemGroupTreePanelProps> = (
     if (selectedSubsystemId) {
       setExpandedSubsystemIds((prev) => {
         const next = new Set(prev);
-        next.add(selectedSubsystemId);
+        next.add(String(selectedSubsystemId));
         return next;
       });
     }
@@ -215,7 +216,7 @@ export const SubsystemGroupTreePanel: React.FC<SubsystemGroupTreePanelProps> = (
     if (selectedGroupId) {
       setExpandedGroupIds((prev) => {
         const next = new Set(prev);
-        next.add(selectedGroupId);
+        next.add(String(selectedGroupId));
         return next;
       });
     }
@@ -224,11 +225,11 @@ export const SubsystemGroupTreePanel: React.FC<SubsystemGroupTreePanelProps> = (
   // 当选中某个模块时，自动展开其所在的功能组
   useEffect(() => {
     if (!selectedModuleId || !modules.length) return;
-    const targetMod = modules.find((m) => m.id === selectedModuleId);
+    const targetMod = modules.find((m) => String(m.id) === String(selectedModuleId));
     if (targetMod?.group_id) {
       setExpandedGroupIds((prev) => {
         const next = new Set(prev);
-        next.add(targetMod.group_id);
+        next.add(String(targetMod.group_id));
         return next;
       });
     }
@@ -253,26 +254,28 @@ export const SubsystemGroupTreePanel: React.FC<SubsystemGroupTreePanelProps> = (
 
   // 辅助函数：获取某子系统下的功能组树
   const getSubsystemGroupTree = useCallback(
-    (subsystemId: string): FunctionalGroupTreeNode[] => {
-      if (subsystemId === selectedSubsystemId && groupTree.length > 0) {
+    (subsystemId: string | number): FunctionalGroupTreeNode[] => {
+      const subIdStr = String(subsystemId);
+      if (subIdStr === String(selectedSubsystemId) && groupTree.length > 0) {
         return groupTree;
       }
-      return groupTreeMap[subsystemId] ?? (subsystemId === selectedSubsystemId ? groupTree : []);
+      return groupTreeMap[subIdStr] ?? (subIdStr === String(selectedSubsystemId) ? groupTree : []);
     },
     [selectedSubsystemId, groupTree, groupTreeMap]
   );
 
   // 切换子系统展开
-  const toggleSubsystemExpand = (id: string, e?: React.MouseEvent) => {
+  const toggleSubsystemExpand = (id: string | number, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
+    const strId = String(id);
     setExpandedSubsystemIds((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
+      if (next.has(strId)) {
+        next.delete(strId);
       } else {
-        next.add(id);
-        if (onLoadSubsystemTree && !groupTreeMap[id] && id !== selectedSubsystemId) {
-          void onLoadSubsystemTree(id);
+        next.add(strId);
+        if (onLoadSubsystemTree && !groupTreeMap[strId] && strId !== String(selectedSubsystemId)) {
+          void onLoadSubsystemTree(strId);
         }
       }
       return next;
@@ -280,12 +283,13 @@ export const SubsystemGroupTreePanel: React.FC<SubsystemGroupTreePanelProps> = (
   };
 
   // 切换功能组展开
-  const toggleGroupExpand = (id: string, e: React.MouseEvent) => {
+  const toggleGroupExpand = (id: string | number, e: React.MouseEvent) => {
     e.stopPropagation();
+    const strId = String(id);
     setExpandedGroupIds((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      if (next.has(strId)) next.delete(strId);
+      else next.add(strId);
       return next;
     });
   };
@@ -442,8 +446,8 @@ export const SubsystemGroupTreePanel: React.FC<SubsystemGroupTreePanelProps> = (
     const hasChildrenGroups = Boolean(node.children && node.children.length > 0);
     const hasChildrenModules = groupMods.length > 0;
     const hasAnyChildren = hasChildrenGroups || hasChildrenModules;
-    const isExpanded = expandedGroupIds.has(node.id) || Boolean(searchQuery.trim());
-    const isSelected = selectedGroupId === node.id && !selectedModuleId;
+    const isExpanded = expandedGroupIds.has(String(node.id)) || Boolean(searchQuery.trim());
+    const isSelected = String(selectedGroupId) === String(node.id) && !selectedModuleId;
 
     return (
       <div key={node.id} className="code-tree-node-wrapper">
@@ -537,7 +541,7 @@ export const SubsystemGroupTreePanel: React.FC<SubsystemGroupTreePanelProps> = (
 
             {/* 2. 属于当前功能组的功能模块 (FM 叶子节点) */}
             {filteredMods.map((mod) => {
-              const isModSelected = selectedModuleId === mod.id;
+              const isModSelected = String(selectedModuleId) === String(mod.id);
               return (
                 <div
                   key={mod.id}
@@ -601,8 +605,8 @@ export const SubsystemGroupTreePanel: React.FC<SubsystemGroupTreePanelProps> = (
     const rawTree = getSubsystemGroupTree(sub.id);
     const displayedTree = filterGroupNodes(rawTree, modulesByGroupId, searchQuery);
     const hasChildren = rawTree.length > 0;
-    const isExpanded = expandedSubsystemIds.has(sub.id) || Boolean(searchQuery.trim());
-    const isSelected = selectedSubsystemId === sub.id && !selectedGroupId && !selectedModuleId;
+    const isExpanded = expandedSubsystemIds.has(String(sub.id)) || Boolean(searchQuery.trim());
+    const isSelected = String(selectedSubsystemId) === String(sub.id) && !selectedGroupId && !selectedModuleId;
 
     return (
       <div key={sub.id} className="code-tree-node-wrapper">

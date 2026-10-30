@@ -27,10 +27,11 @@ import { ConsistencyVerifyOverlay } from './ConsistencyVerifyOverlay';
 
 function findGroupInTree(
   nodes: FunctionalGroupTreeNode[],
-  targetId: string
+  targetId: string | number
 ): FunctionalGroupTreeNode | null {
+  const targetStr = String(targetId);
   for (const node of nodes) {
-    if (node.id === targetId) return node;
+    if (String(node.id) === targetStr) return node;
     if (node.children && node.children.length > 0) {
       const found = findGroupInTree(node.children, targetId);
       if (found) return found;
@@ -172,11 +173,11 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
 
     setActiveTab(tab);
     setTreeViewMode(vm);
-    if (subId) setSelectedSubsystemId(subId);
-    if (grpId) setSelectedGroupId(grpId);
-    if (modId) setSelectedModuleId(modId);
-    if (procId) setSelectedProcessId(procId);
-    if (sessId) setSelectedSessionId(sessId);
+    if (subId) setSelectedSubsystemId((prev) => (String(prev) === String(subId) ? prev : String(subId)));
+    if (grpId) setSelectedGroupId((prev) => (String(prev) === String(grpId) ? prev : String(grpId)));
+    if (modId) setSelectedModuleId((prev) => (String(prev) === String(modId) ? prev : String(modId)));
+    if (procId) setSelectedProcessId((prev) => (String(prev) === String(procId) ? prev : String(procId)));
+    if (sessId) setSelectedSessionId((prev) => (String(prev) === String(sessId) ? prev : String(sessId)));
   }, [searchParams]);
 
   // 加载子系统列表
@@ -297,7 +298,10 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
         setGroupTree(safeTree);
         setGroupTreeMap((prev) => ({ ...prev, [selectedSubsystemId]: safeTree }));
         if (safeTree.length > 0) {
-          setSelectedGroupId((prev) => (findGroupInTree(safeTree, prev) ? prev : safeTree[0].id));
+          setSelectedGroupId((prev) => {
+            if (prev && findGroupInTree(safeTree, prev)) return String(prev);
+            return String(safeTree[0].id);
+          });
         } else {
           setSelectedGroupId('');
           setModules([]);
@@ -318,7 +322,12 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
         const items = res.items ?? [];
         setModules(items);
         if (items.length > 0) {
-          setSelectedModuleId((prev) => (items.some((m) => m.id === prev) ? prev : items[0].id));
+          setSelectedModuleId((prev) => {
+            if (prev && items.some((m) => String(m.id) === String(prev))) {
+              return String(prev);
+            }
+            return String(items[0].id);
+          });
         } else {
           setSelectedModuleId('');
           setSelectedModule(null);
@@ -341,7 +350,9 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
         setServices(res.services ?? []);
         setDependencies(res.dependencies ?? []);
         if (res.module?.group_id) {
-          setSelectedGroupId((prev) => (prev === res.module.group_id ? prev : res.module.group_id));
+          setSelectedGroupId((prev) =>
+            String(prev) === String(res.module.group_id) ? prev : String(res.module.group_id)
+          );
         }
         return res;
       } catch (err) {
@@ -354,14 +365,17 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
 
   // 原子化选择功能模块叶子节点（避免中间状态置空引发视图抖动与闪烁）
   const handleSelectModuleLeaf = useCallback(
-    (subsystemId: string, groupId: string, moduleId: string) => {
-      setSelectedSubsystemId(subsystemId);
-      setSelectedGroupId(groupId);
-      setSelectedModuleId(moduleId);
+    (subsystemId: string | number, groupId: string | number, moduleId: string | number) => {
+      const subId = String(subsystemId);
+      const grpId = String(groupId);
+      const modId = String(moduleId);
+      setSelectedSubsystemId(subId);
+      setSelectedGroupId(grpId);
+      setSelectedModuleId(modId);
       updateParams({
-        subsystem_id: subsystemId,
-        group_id: groupId,
-        module_id: moduleId,
+        subsystem_id: subId,
+        group_id: grpId,
+        module_id: modId,
         view_mode: 'LOGICAL',
       });
     },
