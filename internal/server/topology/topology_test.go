@@ -215,15 +215,13 @@ func TestDeleteNonEmptyArchElementsConflict(t *testing.T) {
 		t.Fatalf("CreateModule 失败: %v", err)
 	}
 
-	// 模块声明接口 + 挂载进程
-	iface, err := CreateModuleInterface(db, ModuleInterfaceInput{
-		ModuleID:     mod.ID,
-		RelationType: models.InterfaceRelationProvide,
-		ServiceName:  "dophi.del.v1-DelService",
-		Operation:    "CheckDelete",
+	// 模块声明供给服务 + 挂载进程
+	svc, err := CreateModuleService(db, ModuleServiceInput{
+		ModuleID:    mod.ID,
+		ServiceName: "dophi.del.v1-DelService",
 	})
 	if err != nil {
-		t.Fatalf("CreateModuleInterface 失败: %v", err)
+		t.Fatalf("CreateModuleService 失败: %v", err)
 	}
 
 	agent := models.Agent{
@@ -260,11 +258,11 @@ func TestDeleteNonEmptyArchElementsConflict(t *testing.T) {
 	}
 	// 4. 删除已声明接口且关联进程的模块 -> 409
 	if _, err := DeleteModule(db, mod.ID); !errors.Is(err, ErrModuleNotEmpty) {
-		t.Fatalf("删除含接口与进程关联的模块期望 ErrModuleNotEmpty，实际为: %v", err)
+		t.Fatalf("删除含服务与进程关联的模块期望 ErrModuleNotEmpty，实际为: %v", err)
 	}
-	// 仅删除接口但仍关联进程 -> 依然 409
-	if _, err := DeleteModuleInterface(db, iface.ID); err != nil {
-		t.Fatalf("DeleteModuleInterface 失败: %v", err)
+	// 仅删除服务但仍关联进程 -> 依然 409
+	if _, err := DeleteModuleService(db, svc.ID); err != nil {
+		t.Fatalf("DeleteModuleService 失败: %v", err)
 	}
 	if _, err := DeleteModule(db, mod.ID); !errors.Is(err, ErrModuleNotEmpty) {
 		t.Fatalf("删除仍被进程挂载的模块期望 ErrModuleNotEmpty，实际为: %v", err)
@@ -288,7 +286,7 @@ func TestDeleteNonEmptyArchElementsConflict(t *testing.T) {
 	}
 }
 
-func TestModuleInterfaceProvideGlobalUnique(t *testing.T) {
+func TestModuleServiceProvideGlobalUnique(t *testing.T) {
 	db := setupIsolatedTopologyDB(t)
 
 	sub, err := CreateSubsystem(db, SubsystemInput{Code: "ORDER_SYS", Name: "订单子系统"})
@@ -314,52 +312,43 @@ func TestModuleInterfaceProvideGlobalUnique(t *testing.T) {
 	}
 
 	// 校验非法服务名（缺少中划线连接 package 与 service）拦截为 400
-	if _, err := CreateModuleInterface(db, ModuleInterfaceInput{
-		ModuleID:     modA.ID,
-		RelationType: models.InterfaceRelationProvide,
-		ServiceName:  "dophi.order.v1.TradeService",
-		Operation:    "CreateOrder",
+	if _, err := CreateModuleService(db, ModuleServiceInput{
+		ModuleID:    modA.ID,
+		ServiceName: "dophi.order.v1.TradeService",
 	}); !errors.Is(err, ErrInvalidServiceNameFormat) {
 		t.Fatalf("缺少中划线的服务名期望返回 ErrInvalidServiceNameFormat，实际为: %v", err)
 	}
 
-	// 1. 模块 A 声明 PROVIDE (dophi.order.v1-TradeService, CreateOrder)
-	if _, err := CreateModuleInterface(db, ModuleInterfaceInput{
-		ModuleID:     modA.ID,
-		RelationType: models.InterfaceRelationProvide,
-		ServiceName:  "dophi.order.v1-TradeService",
-		Operation:    "CreateOrder",
-	}); err != nil {
+	// 1. 模块 A 声明 PROVIDE dophi.order.v1-TradeService
+	svcA, err := CreateModuleService(db, ModuleServiceInput{
+		ModuleID:    modA.ID,
+		ServiceName: "dophi.order.v1-TradeService",
+	})
+	if err != nil {
 		t.Fatalf("模块 A 声明 PROVIDE 失败: %v", err)
 	}
 
-	// 2. 模块 B 与模块 C 声明相同 DEPEND -> 均成功
-	if _, err := CreateModuleInterface(db, ModuleInterfaceInput{
-		ModuleID:     modB.ID,
-		RelationType: models.InterfaceRelationDepend,
-		ServiceName:  "dophi.order.v1-TradeService",
-		Operation:    "CreateOrder",
+	// 2. 模块 B 与模块 C 声明依赖模块 A 的服务 -> 均成功
+	if _, err := CreateModuleDependency(db, ModuleDependencyInput{
+		ConsumerModuleID: modB.ID,
+		ServiceID:        &svcA.ID,
 	}); err != nil {
-		t.Fatalf("模块 B 声明相同 DEPEND 失败: %v", err)
+		t.Fatalf("模块 B 声明依赖模块 A 失败: %v", err)
 	}
-	if _, err := CreateModuleInterface(db, ModuleInterfaceInput{
-		ModuleID:     modC.ID,
-		RelationType: models.InterfaceRelationDepend,
-		ServiceName:  "dophi.order.v1-TradeService",
-		Operation:    "CreateOrder",
+	if _, err := CreateModuleDependency(db, ModuleDependencyInput{
+		ConsumerModuleID: modC.ID,
+		ServiceID:        &svcA.ID,
 	}); err != nil {
-		t.Fatalf("模块 C 声明相同 DEPEND 失败: %v", err)
+		t.Fatalf("模块 C 声明依赖模块 A 失败: %v", err)
 	}
 
 	// 3. 模块 B 尝试声明相同 PROVIDE -> 409 Conflict 并指出已被模块 A 占用
-	_, err = CreateModuleInterface(db, ModuleInterfaceInput{
-		ModuleID:     modB.ID,
-		RelationType: models.InterfaceRelationProvide,
-		ServiceName:  "dophi.order.v1-TradeService",
-		Operation:    "CreateOrder",
+	_, err = CreateModuleService(db, ModuleServiceInput{
+		ModuleID:    modB.ID,
+		ServiceName: "dophi.order.v1-TradeService",
 	})
-	if !errors.Is(err, ErrDuplicateProvideInterface) {
-		t.Fatalf("重复 PROVIDE 期望返回 ErrDuplicateProvideInterface，实际为: %v", err)
+	if !errors.Is(err, ErrDuplicateModuleService) {
+		t.Fatalf("重复 PROVIDE 期望返回 ErrDuplicateModuleService，实际为: %v", err)
 	}
 	var conflictErr *ProvideConflictError
 	if !errors.As(err, &conflictErr) {
@@ -367,6 +356,89 @@ func TestModuleInterfaceProvideGlobalUnique(t *testing.T) {
 	}
 	if conflictErr.HolderModuleID != modA.ID || conflictErr.HolderModuleCode != "MOD_A" || !strings.Contains(conflictErr.Error(), "MOD_A") {
 		t.Fatalf("冲突详情未准确指出占用方模块 A: %+v", conflictErr)
+	}
+}
+
+func TestModuleDependenciesAndExternalSystem(t *testing.T) {
+	db := setupIsolatedTopologyDB(t)
+
+	sub, err := CreateSubsystem(db, SubsystemInput{Code: "EXT_SYS", Name: "外部测试子系统"})
+	if err != nil {
+		t.Fatalf("CreateSubsystem 失败: %v", err)
+	}
+	grp, err := CreateFunctionalGroup(db, FunctionalGroupInput{SubsystemID: sub.ID, Code: "EXT_GRP", Name: "功能组"})
+	if err != nil {
+		t.Fatalf("CreateFunctionalGroup 失败: %v", err)
+	}
+	mod1, err := CreateModule(db, ModuleInput{GroupID: grp.ID, Code: "MOD_1", Name: "模块1"})
+	if err != nil {
+		t.Fatalf("CreateModule 1 失败: %v", err)
+	}
+	mod2, err := CreateModule(db, ModuleInput{GroupID: grp.ID, Code: "MOD_2", Name: "模块2"})
+	if err != nil {
+		t.Fatalf("CreateModule 2 失败: %v", err)
+	}
+
+	svc1, err := CreateModuleService(db, ModuleServiceInput{
+		ModuleID:    mod1.ID,
+		ServiceName: "dophi.pay.v1-PayService",
+	})
+	if err != nil {
+		t.Fatalf("CreateModuleService 1 失败: %v", err)
+	}
+
+	// 1. 自依赖校验拦截 (模块不能依赖自身)
+	if _, err := CreateModuleDependency(db, ModuleDependencyInput{
+		ConsumerModuleID: mod1.ID,
+		ServiceID:        &svc1.ID,
+	}); !errors.Is(err, ErrSelfDependency) {
+		t.Fatalf("自循环依赖期望返回 ErrSelfDependency，实际为: %v", err)
+	}
+
+	// 2. 正常内部依赖
+	dep, err := CreateModuleDependency(db, ModuleDependencyInput{
+		ConsumerModuleID: mod2.ID,
+		ServiceID:        &svc1.ID,
+		Description:      "调用结算服务",
+	})
+	if err != nil {
+		t.Fatalf("内部依赖创建失败: %v", err)
+	}
+
+	// 3. 重复依赖拦截
+	if _, err := CreateModuleDependency(db, ModuleDependencyInput{
+		ConsumerModuleID: mod2.ID,
+		ServiceID:        &svc1.ID,
+	}); !errors.Is(err, ErrDuplicateDependency) {
+		t.Fatalf("重复依赖期望返回 ErrDuplicateDependency，实际为: %v", err)
+	}
+
+	// 4. 删除被依赖的 Service 应当被拦截 (ErrServiceHasDependencies)
+	if _, err := DeleteModuleService(db, svc1.ID); !errors.Is(err, ErrServiceHasDependencies) {
+		t.Fatalf("删除正被依赖的 Service 期望返回 ErrServiceHasDependencies，实际为: %v", err)
+	}
+
+	// 5. 解除依赖后再删除 Service -> 成功
+	if _, err := DeleteModuleDependency(db, dep.ID); err != nil {
+		t.Fatalf("DeleteModuleDependency 失败: %v", err)
+	}
+	if _, err := DeleteModuleService(db, svc1.ID); err != nil {
+		t.Fatalf("解除依赖后删除 Service 失败: %v", err)
+	}
+
+	// 6. 外部第三方系统依赖支持
+	extDep, err := CreateModuleDependency(db, ModuleDependencyInput{
+		ConsumerModuleID: mod1.ID,
+		IsExternal:       true,
+		ExternalSystem:   "WeChatPay",
+		ExternalService:  "UnifiedOrderService",
+		Description:      "微信统一下单",
+	})
+	if err != nil {
+		t.Fatalf("外部服务依赖创建失败: %v", err)
+	}
+	if !extDep.IsExternal || extDep.ExternalSystem != "WeChatPay" {
+		t.Fatalf("外部依赖入库属性不符: %+v", extDep)
 	}
 }
 
@@ -537,37 +609,35 @@ func TestBuildStaticTopologyLogicalAndPhysical(t *testing.T) {
 	}
 
 	// 接口契约：
-	// Mod_2 PROVIDE dophi.risk-RiskSvc:Check
-	// Mod_3 PROVIDE dophi.stock-StockSvc:Deduct
+	// Mod_2 PROVIDE dophi.risk-RiskSvc
+	// Mod_3 PROVIDE dophi.stock-StockSvc
 	// Mod_1 DEPEND Mod_2 (同进程 INTRA_PROCESS) 与 Mod_3 (跨进程 CROSS_PROCESS)
-	// Mod_3 DEPEND ext.bank-UnknownSvc:Op (无供给方 EXTERNAL_UNREGISTERED)
-	if _, err := CreateModuleInterface(db, ModuleInterfaceInput{
-		ModuleID: mod2.ID, RelationType: models.InterfaceRelationProvide,
-		ServiceName: "dophi.risk-RiskSvc", Operation: "Check",
-	}); err != nil {
+	// Mod_3 DEPEND 外部三方服务 (EXTERNAL_UNREGISTERED)
+	svc2, err := CreateModuleService(db, ModuleServiceInput{
+		ModuleID: mod2.ID, ServiceName: "dophi.risk-RiskSvc",
+	})
+	if err != nil {
 		t.Fatalf("Mod_2 PROVIDE 失败: %v", err)
 	}
-	if _, err := CreateModuleInterface(db, ModuleInterfaceInput{
-		ModuleID: mod3.ID, RelationType: models.InterfaceRelationProvide,
-		ServiceName: "dophi.stock-StockSvc", Operation: "Deduct",
-	}); err != nil {
+	svc3, err := CreateModuleService(db, ModuleServiceInput{
+		ModuleID: mod3.ID, ServiceName: "dophi.stock-StockSvc",
+	})
+	if err != nil {
 		t.Fatalf("Mod_3 PROVIDE 失败: %v", err)
 	}
-	if _, err := CreateModuleInterface(db, ModuleInterfaceInput{
-		ModuleID: mod1.ID, RelationType: models.InterfaceRelationDepend,
-		ServiceName: "dophi.risk-RiskSvc", Operation: "Check",
+	if _, err := CreateModuleDependency(db, ModuleDependencyInput{
+		ConsumerModuleID: mod1.ID, ServiceID: &svc2.ID,
 	}); err != nil {
 		t.Fatalf("Mod_1 DEPEND Mod_2 失败: %v", err)
 	}
-	if _, err := CreateModuleInterface(db, ModuleInterfaceInput{
-		ModuleID: mod1.ID, RelationType: models.InterfaceRelationDepend,
-		ServiceName: "dophi.stock-StockSvc", Operation: "Deduct",
+	if _, err := CreateModuleDependency(db, ModuleDependencyInput{
+		ConsumerModuleID: mod1.ID, ServiceID: &svc3.ID,
 	}); err != nil {
 		t.Fatalf("Mod_1 DEPEND Mod_3 失败: %v", err)
 	}
-	if _, err := CreateModuleInterface(db, ModuleInterfaceInput{
-		ModuleID: mod3.ID, RelationType: models.InterfaceRelationDepend,
-		ServiceName: "ext.bank-UnknownSvc", Operation: "Op",
+	if _, err := CreateModuleDependency(db, ModuleDependencyInput{
+		ConsumerModuleID: mod3.ID, IsExternal: true,
+		ExternalSystem: "BankGateway", ExternalService: "ext.bank-UnknownSvc",
 	}); err != nil {
 		t.Fatalf("Mod_3 DEPEND UnknownSvc 失败: %v", err)
 	}

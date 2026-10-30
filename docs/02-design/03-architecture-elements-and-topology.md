@@ -147,14 +147,14 @@ $$\text{ascServiceName} = \text{package} + \text{"-"} + \text{serviceName}, \qua
 
 ### 3.1 公共架构 SSOT 与公私域 `Agent -> Process -> Module` 映射不变量
 
-系统所有逻辑架构元素（`Subsystem`、`FunctionalGroup`、`Module`、`ModuleInterface`）均为全团队共享的**公共唯一真实源（SSOT）**；而物理运行载体 `Agent` 与 `Process` 则支持**公共基线域 (`SHARED`)** 与**个人开发域 (`PRIVATE`)** 双域挂载同一套公共功能模块：
+系统所有逻辑架构元素（`Subsystem`、`FunctionalGroup`、`Module`、`ModuleService`、`ModuleDependency`）均为全团队共享的**公共唯一真实源（SSOT）**；而物理运行载体 `Agent` 与 `Process` 则支持**公共基线域 (`SHARED`)** 与**个人开发域 (`PRIVATE`)** 双域挂载同一套公共功能模块：
 
 ```mermaid
 flowchart TB
     subgraph PublicSSOT["全局公共架构元素 SSOT (traefik_admin 维护)"]
-        Mod1["Module_Order (PROVIDE: dophi.order-OrderSvc:Create)"]
-        Mod2["Module_Risk (PROVIDE: dophi.risk-RiskSvc:Check)"]
-        Mod3["Module_Stock (PROVIDE: dophi.stock-StockSvc:Deduct)"]
+        Mod1["Module_Order (PROVIDE: dophi.order-OrderSvc)"]
+        Mod2["Module_Risk (PROVIDE: dophi.risk-RiskSvc)"]
+        Mod3["Module_Stock (PROVIDE: dophi.stock-StockSvc)"]
     end
 
     subgraph SharedEnv["公共基线环境: SHARED Agent_1 & Agent_2"]

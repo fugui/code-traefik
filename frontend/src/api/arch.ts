@@ -4,7 +4,9 @@ import type {
   FunctionalGroupTreeNode,
   FunctionalGroup,
   Module,
-  ModuleInterface,
+  ModuleService,
+  ModuleDependency,
+  AvailableServiceItem,
   StaticTopologyDTO,
   PaginatedResponse,
 } from '../types';
@@ -106,7 +108,7 @@ export async function listModules(params?: {
 }
 
 export async function getModule(id: string) {
-  return apiRequest<{ module: Module; interfaces: ModuleInterface[] }>(`/arch/modules/${id}`);
+  return apiRequest<{ module: Module; services: ModuleService[]; dependencies: ModuleDependency[] }>(`/arch/modules/${id}`);
 }
 
 export async function createModule(data: {
@@ -143,40 +145,74 @@ export async function deleteModule(id: string) {
   });
 }
 
-export async function listModuleInterfaces(moduleId: string, relationType?: 'PROVIDE' | 'DEPEND') {
-  const query = new URLSearchParams();
-  if (relationType) query.set('relation_type', relationType);
-  const qs = query.toString();
-  return apiRequest<{ items: ModuleInterface[] }>(`/arch/modules/${moduleId}/interfaces${qs ? `?${qs}` : ''}`);
+export async function bindModuleProcess(moduleId: string, processId: string | null) {
+  return apiRequest<Module>(`/arch/modules/${moduleId}/process-binding`, {
+    method: 'POST',
+    body: JSON.stringify({ process_id: processId }),
+  });
 }
 
-export async function createModuleInterface(moduleId: string, data: {
-  relation_type: 'PROVIDE' | 'DEPEND';
+// --- Module Services (PROVIDE) ---
+export async function listModuleServices(moduleId: string) {
+  return apiRequest<{ items: ModuleService[] }>(`/arch/modules/${moduleId}/services`);
+}
+
+export async function createModuleService(moduleId: string, data: {
   service_name: string;
-  operation: string;
   diff_ignore_paths?: string[];
   description?: string;
 }) {
-  return apiRequest<ModuleInterface>(`/arch/modules/${moduleId}/interfaces`, {
+  return apiRequest<ModuleService>(`/arch/modules/${moduleId}/services`, {
     method: 'POST',
     body: JSON.stringify(data),
   });
 }
 
-export async function updateModuleInterface(ifaceId: string, data: {
+export async function updateModuleService(serviceId: string, data: {
   diff_ignore_paths: string[];
   description?: string;
 }) {
-  return apiRequest<ModuleInterface>(`/arch/module-interfaces/${ifaceId}`, {
+  return apiRequest<ModuleService>(`/arch/module-services/${serviceId}`, {
     method: 'PUT',
     body: JSON.stringify(data),
   });
 }
 
-export async function deleteModuleInterface(ifaceId: string) {
-  return apiRequest<{ message: string }>(`/arch/module-interfaces/${ifaceId}`, {
+export async function deleteModuleService(serviceId: string) {
+  return apiRequest<{ message: string }>(`/arch/module-services/${serviceId}`, {
     method: 'DELETE',
   });
+}
+
+// --- Module Dependencies (DEPEND) ---
+export async function listModuleDependencies(moduleId: string) {
+  return apiRequest<{ items: ModuleDependency[] }>(`/arch/modules/${moduleId}/dependencies`);
+}
+
+export async function createModuleDependency(moduleId: string, data: {
+  is_external: boolean;
+  external_system?: string;
+  external_service?: string;
+  service_id?: string;
+  description?: string;
+}) {
+  return apiRequest<ModuleDependency>(`/arch/modules/${moduleId}/dependencies`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteModuleDependency(depId: string) {
+  return apiRequest<{ message: string }>(`/arch/module-dependencies/${depId}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function listAvailableServices(excludeModuleId?: string) {
+  const query = new URLSearchParams();
+  if (excludeModuleId) query.set('exclude_module_id', excludeModuleId);
+  const qs = query.toString();
+  return apiRequest<{ items: AvailableServiceItem[] }>(`/arch/services/available${qs ? `?${qs}` : ''}`);
 }
 
 export async function getStaticTopology(params?: { view?: 'LOGICAL' | 'PHYSICAL'; subsystem_id?: string }) {

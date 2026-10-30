@@ -790,11 +790,19 @@ func DeleteModule(db *gorm.DB, id uint64) (*models.Module, error) {
 		return nil, err
 	}
 
-	var ifaceCount int64
-	if err := db.Model(&models.ModuleInterface{}).Where("module_id = ?", id).Count(&ifaceCount).Error; err != nil {
+	var svcCount int64
+	if err := db.Model(&models.ModuleService{}).Where("module_id = ?", id).Count(&svcCount).Error; err != nil {
 		return nil, err
 	}
-	if ifaceCount > 0 {
+	if svcCount > 0 {
+		return nil, ErrModuleNotEmpty
+	}
+
+	var depCount int64
+	if err := db.Model(&models.ModuleDependency{}).Where("consumer_module_id = ? OR provider_module_id = ?", id, id).Count(&depCount).Error; err != nil {
+		return nil, err
+	}
+	if depCount > 0 {
 		return nil, ErrModuleNotEmpty
 	}
 

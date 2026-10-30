@@ -187,10 +187,15 @@ func RegisterRoutesForTest(r *gin.Engine) {
 		protected.PUT("/arch/modules/:id", requireAdmin, handlers.UpdateModule)
 		protected.DELETE("/arch/modules/:id", requireAdmin, handlers.DeleteModule)
 
-		protected.GET("/arch/modules/:id/interfaces", handlers.ListModuleInterfaces)
-		protected.POST("/arch/modules/:id/interfaces", requireAdmin, handlers.CreateModuleInterface)
-		protected.PUT("/arch/module-interfaces/:ifaceId", requireAdmin, handlers.UpdateModuleInterface)
-		protected.DELETE("/arch/module-interfaces/:ifaceId", requireAdmin, handlers.DeleteModuleInterface)
+		protected.POST("/arch/modules/:id/process-binding", requireAdmin, handlers.BindModuleProcess)
+		protected.GET("/arch/modules/:id/services", handlers.ListModuleServices)
+		protected.POST("/arch/modules/:id/services", requireAdmin, handlers.CreateModuleService)
+		protected.PUT("/arch/module-services/:serviceId", requireAdmin, handlers.UpdateModuleService)
+		protected.DELETE("/arch/module-services/:serviceId", requireAdmin, handlers.DeleteModuleService)
+		protected.GET("/arch/modules/:id/dependencies", handlers.ListModuleDependencies)
+		protected.POST("/arch/modules/:id/dependencies", requireAdmin, handlers.CreateModuleDependency)
+		protected.DELETE("/arch/module-dependencies/:depId", requireAdmin, handlers.DeleteModuleDependency)
+		protected.GET("/arch/services/available", handlers.ListAvailableServices)
 
 		protected.GET("/arch/topology/static", handlers.GetStaticTopology)
 
@@ -612,29 +617,57 @@ func TestSC02_ArchProtoAndTopologyFlows(t *testing.T) {
 	var mod2 models.Module
 	_ = json.Unmarshal(w.Body.Bytes(), &mod2)
 
-	// 4. 为 MOD_RISK 声明 PROVIDE 接口 dophi.risk.v1-RiskService:VerifyRisk
-	ifaceBody, _ := json.Marshal(map[string]interface{}{
-		"relation_type": "PROVIDE",
-		"service_name":  "dophi.risk.v1-RiskService",
-		"operation":     "VerifyRisk",
+	// 4. 为 MOD_RISK 声明对外供给服务 PROVIDE dophi.risk.v1-RiskService
+	svcBody, _ := json.Marshal(map[string]interface{}{
+		"service_name": "dophi.risk.v1-RiskService",
 	})
-	req = httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/arch/modules/%d/interfaces", mod2.ID), bytes.NewReader(ifaceBody))
+	req = httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/arch/modules/%d/services", mod2.ID), bytes.NewReader(svcBody))
 	req.Header.Set("Authorization", "Bearer "+adminToken)
 	req.Header.Set("Content-Type", "application/json")
 	w = httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusCreated {
-		t.Fatalf("声明 PROVIDE 接口失败: %d", w.Code)
+		t.Fatalf("声明 PROVIDE 服务契约失败: %d", w.Code)
 	}
+	var svcRisk models.ModuleService
+	_ = json.Unmarshal(w.Body.Bytes(), &svcRisk)
 
-	// 5. 尝试在 MOD_PAY 上声明相同的 PROVIDE 接口 -> 409 Conflict (A-05 供给全局唯一)
-	req = httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/arch/modules/%d/interfaces", mod1.ID), bytes.NewReader(ifaceBody))
+	// 5. 尝试在 MOD_PAY 上声明相同的 PROVIDE 服务 -> 409 Conflict (A-05 供给全局唯一)
+	req = httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/arch/modules/%d/services", mod1.ID), bytes.NewReader(svcBody))
 	req.Header.Set("Authorization", "Bearer "+adminToken)
 	req.Header.Set("Content-Type", "application/json")
 	w = httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusConflict {
 		t.Fatalf("期望声明冲突 PROVIDE 返回 409，实际: %d", w.Code)
+	}
+
+	// 5.1 为 MOD_PAY 声明依赖 MOD_RISK 的服务
+	depBody, _ := json.Marshal(map[string]interface{}{
+		"service_id": svcRisk.ID,
+	})
+	req = httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/arch/modules/%d/dependencies", mod1.ID), bytes.NewReader(depBody))
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("添加内部服务依赖失败: %d (body: %s)", w.Code, w.Body.String())
+	}
+
+	// 5.2 为 MOD_PAY 声明依赖外部第三方系统
+	extDepBody, _ := json.Marshal(map[string]interface{}{
+		"is_external":      true,
+		"external_system":  "BankGateway",
+		"external_service": "UnifiedPay",
+	})
+	req = httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/arch/modules/%d/dependencies", mod1.ID), bytes.NewReader(extDepBody))
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("添加外部服务依赖失败: %d (body: %s)", w.Code, w.Body.String())
 	}
 
 	// 6. 上传 Protobuf 描述集

@@ -135,12 +135,12 @@ func (s *ReplayScheduler) CreateAndExecuteTask(
 	}
 
 	// 5. 跨 Agent 同构进程模块兼容性校验 (F-12.1)
-	var provideIfaces []models.ModuleInterface
-	_ = s.db.WithContext(ctx).Where("relation_type = 'PROVIDE'").Find(&provideIfaces).Error
+	var provideServices []models.ModuleService
+	_ = s.db.WithContext(ctx).Find(&provideServices).Error
 	provideMap := make(map[string]uint64)
-	for _, iface := range provideIfaces {
-		k := strings.TrimSpace(iface.ServiceName) + ":" + strings.TrimSpace(iface.Operation)
-		provideMap[k] = iface.ModuleID
+	for _, svc := range provideServices {
+		k := strings.TrimSpace(svc.ServiceName)
+		provideMap[k] = svc.ModuleID
 	}
 
 	// 加载两进程绑定的全部 ModuleIDs

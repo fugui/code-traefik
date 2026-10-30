@@ -95,14 +95,19 @@
 | `PATCH` | `/api/arch/functional-groups/:id/move` | `AdminOnly` | Body: `{new_parent_id: uint64 \| null, sort_order?: int}`（执行 `MoveFunctionalGroup` 咨询锁级联更新） | `200`: `{"group":FunctionalGroup,"updated_descendants":int}`<br>`400`: 移至自身、移至子孙成环、跨子系统或子树总深 `> 8`；`403/404` | `traefik_arch:move` |
 | `DELETE` | `/api/arch/functional-groups/:id` | `AdminOnly` | Path: `id` | `200`: `{"message":"功能组已删除"}`<br>`403/404`；`409`: 存在子功能组或挂载模块禁止删除 | `traefik_arch:delete` |
 | `GET` | `/api/arch/modules` | `JWT` | Query: `subsystem_id?, group_id?, include_descendants?, process_id?, search?, page?, page_size?` | `200`: 标准分页 `items: []Module`（含 `group`, `subsystem`, 公共基线 `process` 及接口计数） | - |
-| `GET` | `/api/arch/modules/:id` | `JWT` | Path: `id` | `200`: `{module: Module, interfaces: []ModuleInterface}`<br>`404`: 模块不存在 | - |
+| `GET` | `/api/arch/modules/:id` | `JWT` | Path: `id` | `200`: `{module: Module, services: []ModuleService, dependencies: []ModuleDependency}`<br>`404`: 模块不存在（含完整装载进程 `process` 及其 `agent` 节点信息） | - |
 | `POST` | `/api/arch/modules` | `AdminOnly` | Body: `{group_id, code, name, owner_id?, process_id?, description?}`（冗余写入所属 `subsystem_id`） | `201`: `Module`<br>`400`: 格式非法或绑定私有进程为公共基线；`403/404`；`409`: `code` 全局重复 | `traefik_arch:create` |
 | `PUT` | `/api/arch/modules/:id` | `AdminOnly` | Body: `{group_id, code?, name, owner_id?, process_id?, description?}` | `200`: `Module`<br>`400/403/404`；`409`: `code` 冲突 | `traefik_arch:update` |
-| `DELETE` | `/api/arch/modules/:id` | `AdminOnly` | Path: `id` | `200`: `{"message":"功能模块已删除"}`<br>`403/404`；`409`: 已声明 `ModuleInterface` 或仍被 `traefik_process_modules` 关联 | `traefik_arch:delete` |
-| `GET` | `/api/arch/modules/:id/interfaces` | `JWT` | Path: `id`；Query: `relation_type?` (`PROVIDE` \| `DEPEND`) | `200`: `{"items": []ModuleInterface}`<br>`404`: 模块不存在 | - |
-| `POST` | `/api/arch/modules/:id/interfaces` | `AdminOnly` | Body: `{relation_type, service_name, operation, diff_ignore_paths?: string[], description?}` | `201`: `ModuleInterface`<br>`400`: `service_name` 不符合 `{package}-{serviceName}` 或超 63B；`403/404`；`409`: 同模块重复或 `PROVIDE` 已被其他模块声明 (A-05，返回冲突模块信息) | `traefik_arch:create` |
-| `PUT` | `/api/arch/module-interfaces/:ifaceId` | `AdminOnly` | Body: `{diff_ignore_paths: string[], description?}` | `200`: `ModuleInterface`<br>`400/403/404` | `traefik_arch:update` |
-| `DELETE` | `/api/arch/module-interfaces/:ifaceId` | `AdminOnly` | Path: `ifaceId` | `200`: `{"message":"接口契约已删除"}`<br>`403/404` | `traefik_arch:delete` |
+| `POST` | `/api/arch/modules/:id/process-binding` | `AdminOnly` | Body: `{process_id: uint64 \| null}` | `200`: `Module` (绑定或解绑公共基线进程，同步更新 `traefik_process_modules`)<br>`400/403/404` | `traefik_arch:update` |
+| `DELETE` | `/api/arch/modules/:id` | `AdminOnly` | Path: `id` | `200`: `{"message":"功能模块已删除"}`<br>`403/404`；`409`: 存在被其他 FM 依赖的服务或仍被进程挂载 | `traefik_arch:delete` |
+| `GET` | `/api/arch/modules/:id/services` | `JWT` | Path: `id` | `200`: `{"items": []ModuleService}`（含被依赖下游模块摘要统计）<br>`404`: 模块不存在 | - |
+| `POST` | `/api/arch/modules/:id/services` | `AdminOnly` | Body: `{service_name, diff_ignore_paths?: string[], description?}` | `201`: `ModuleService`<br>`400`: `service_name` 不合法；`403/404`；`409`: `service_name` 已被其他模块声明提供 (A-05) | `traefik_arch:create` |
+| `PUT` | `/api/arch/module-services/:serviceId` | `AdminOnly` | Body: `{diff_ignore_paths: string[], description?}` | `200`: `ModuleService`<br>`400/403/404` | `traefik_arch:update` |
+| `DELETE` | `/api/arch/module-services/:serviceId` | `AdminOnly` | Path: `serviceId` | `200`: `{"message":"供给服务契约已删除"}`<br>`403/404`；`409`: 仍有内部模块依赖此服务 | `traefik_arch:delete` |
+| `GET` | `/api/arch/modules/:id/dependencies` | `JWT` | Path: `id` | `200`: `{"items": []ModuleDependency}`（展开关联提供方 FM 及宿主进程信息）<br>`404`: 模块不存在 | - |
+| `POST` | `/api/arch/modules/:id/dependencies` | `AdminOnly` | Body: `{is_external: boolean, service_id?: uint64, external_system?: string, external_service?: string, description?: string}` | `201`: `ModuleDependency`<br>`400`: 自身循环依赖或必填项缺失；`403/404`；`409`: 重复依赖相同服务 | `traefik_arch:create` |
+| `DELETE` | `/api/arch/module-dependencies/:depId` | `AdminOnly` | Path: `depId` | `200`: `{"message":"服务依赖关系已解除"}`<br>`403/404` | `traefik_arch:delete` |
+| `GET` | `/api/arch/services/available` | `JWT` | - | `200`: `{"items": []}`（按子系统与 FM 分组列出全系统已声明的 PROVIDE Service，用于添加依赖弹窗下拉） | - |
 | `GET` | `/api/arch/topology/static` | `JWT` | Query: `view` (`LOGICAL` \| `PHYSICAL`，默认 `LOGICAL`), `subsystem_id?` | `200`: `{"view":string,"nodes":[],"edges":[]}`（含 `CROSS_PROCESS`、`INTRA_PROCESS`、`EXTERNAL_UNREGISTERED`，参见 [`03-architecture-elements-and-topology.md` §4](../02-design/03-architecture-elements-and-topology.md)）<br>`400`: `view` 参数非法 | - |
 
 ---

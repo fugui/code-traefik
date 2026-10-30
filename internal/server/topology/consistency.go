@@ -111,28 +111,28 @@ func VerifySessionTopology(ctx context.Context, db *gorm.DB, sessionID uint64, r
 		}
 	}
 
-	// 3. 加载全局唯一 PROVIDE 接口
-	var provideIfaces []models.ModuleInterface
-	if err := db.WithContext(ctx).Where("relation_type = ?", "PROVIDE").Find(&provideIfaces).Error; err != nil {
+	// 3. 加载全局唯一 PROVIDE 服务 (Service 级)
+	var provideServices []models.ModuleService
+	if err := db.WithContext(ctx).Find(&provideServices).Error; err != nil {
 		return nil, err
 	}
-	provideMap := make(map[string]uint64, len(provideIfaces))
-	for _, iface := range provideIfaces {
-		key := strings.TrimSpace(iface.ServiceName) + ":" + strings.TrimSpace(iface.Operation)
-		provideMap[key] = iface.ModuleID
+	provideMap := make(map[string]uint64, len(provideServices))
+	for _, svc := range provideServices {
+		key := strings.TrimSpace(svc.ServiceName)
+		provideMap[key] = svc.ModuleID
 	}
 
-	// 4. 加载本次纳管模块声明的所有 DEPEND 接口
-	var dependIfaces []models.ModuleInterface
+	// 4. 加载本次纳管模块声明的所有依赖
+	var declaredDependencies []models.ModuleDependency
 	var monitoredModIDList []uint64
 	for mid := range monitoredModuleIDs {
 		monitoredModIDList = append(monitoredModIDList, mid)
 	}
 
 	if len(monitoredModIDList) > 0 {
-		if err := db.WithContext(ctx).
-			Where("relation_type = ? AND module_id IN ?", "DEPEND", monitoredModIDList).
-			Find(&dependIfaces).Error; err != nil {
+		if err := db.WithContext(ctx).Preload("Service").
+			Where("consumer_module_id IN ?", monitoredModIDList).
+			Find(&declaredDependencies).Error; err != nil {
 			return nil, err
 		}
 	}
@@ -215,36 +215,47 @@ func VerifySessionTopology(ctx context.Context, db *gorm.DB, sessionID uint64, r
 	edges := make([]ConsistencyEdgeResult, 0)
 	matchedDeclaredCalls := make(map[string]bool) // "srcModID:svc:op" -> true
 
-	for _, dep := range dependIfaces {
-		srcModID := dep.ModuleID
+	for _, dep := range declaredDependencies {
+		srcModID := dep.ConsumerModuleID
 		srcProcID := monitoredModuleIDs[srcModID]
-		svc := strings.TrimSpace(dep.ServiceName)
-		op := strings.TrimSpace(dep.Operation)
-		callKey := svc + ":" + op
+		var svc string
+		if dep.Service != nil {
+			svc = strings.TrimSpace(dep.Service.ServiceName)
+		} else if dep.IsExternal {
+			svc = strings.TrimSpace(dep.ExternalService)
+		}
 
-		dstModIDVal, hasProvider := provideMap[callKey]
 		var dstModID *uint64
-		if hasProvider && dstModIDVal > 0 {
-			dstModID = &dstModIDVal
+		if dep.ProviderModuleID != nil && *dep.ProviderModuleID > 0 {
+			dstModID = dep.ProviderModuleID
+		} else if dep.Service != nil && dep.Service.ModuleID > 0 {
+			mid := dep.Service.ModuleID
+			dstModID = &mid
 		}
 
-		ck := fmt.Sprintf("%d:%s:%s", srcModID, svc, op)
-		obsCount := srcCallCount[ck]
-		sampleIDVal := srcCallSample[ck]
+		ckPrefix := fmt.Sprintf("%d:%s:", srcModID, svc)
+		var obsCount int64
 		var sampleID *uint64
-		if sampleIDVal > 0 {
-			sampleID = &sampleIDVal
+		for ck, cnt := range srcCallCount {
+			if strings.HasPrefix(ck, ckPrefix) {
+				obsCount += cnt
+				if sampleID == nil && srcCallSample[ck] > 0 {
+					sid := srcCallSample[ck]
+					sampleID = &sid
+				}
+				matchedDeclaredCalls[ck] = true
+			}
 		}
 
-		if dstModID == nil {
-			// 未登记外部接口或无供给者
+		if dstModID == nil || dep.IsExternal {
+			// 未登记外部接口或无内部供给者
 			edge := ConsistencyEdgeResult{
 				Status:             StatusNotMonitored,
 				SrcModuleID:        &srcModID,
 				SrcProcessID:       &srcProcID,
 				DstModuleID:        nil,
 				ServiceName:        svc,
-				Operation:          op,
+				Operation:          "",
 				ObservedCallCount:  obsCount,
 				SampleTrafficRecID: sampleID,
 			}
@@ -262,7 +273,7 @@ func VerifySessionTopology(ctx context.Context, db *gorm.DB, sessionID uint64, r
 				SrcProcessID:       &srcProcID,
 				DstModuleID:        dstModID,
 				ServiceName:        svc,
-				Operation:          op,
+				Operation:          "",
 				ObservedCallCount:  obsCount,
 				SampleTrafficRecID: sampleID,
 			}
@@ -278,7 +289,7 @@ func VerifySessionTopology(ctx context.Context, db *gorm.DB, sessionID uint64, r
 				SrcProcessID:       &srcProcID,
 				DstModuleID:        dstModID,
 				ServiceName:        svc,
-				Operation:          op,
+				Operation:          "",
 				ObservedCallCount:  obsCount,
 				SampleTrafficRecID: sampleID,
 			}
@@ -287,7 +298,6 @@ func VerifySessionTopology(ctx context.Context, db *gorm.DB, sessionID uint64, r
 		}
 
 		// 判定 ③: 目标与来源均纳管，检查实测调用
-		matchedDeclaredCalls[ck] = true
 		if obsCount > 0 {
 			// VERIFIED: 静态跨进程声明且实测调用 >= 1
 			edge := ConsistencyEdgeResult{
@@ -296,7 +306,7 @@ func VerifySessionTopology(ctx context.Context, db *gorm.DB, sessionID uint64, r
 				SrcProcessID:       &srcProcID,
 				DstModuleID:        dstModID,
 				ServiceName:        svc,
-				Operation:          op,
+				Operation:          "",
 				ObservedCallCount:  obsCount,
 				SampleTrafficRecID: sampleID,
 				AttributionMode:    AttributionUniqueDepend,
@@ -310,7 +320,7 @@ func VerifySessionTopology(ctx context.Context, db *gorm.DB, sessionID uint64, r
 				SrcProcessID:       &srcProcID,
 				DstModuleID:        dstModID,
 				ServiceName:        svc,
-				Operation:          op,
+				Operation:          "",
 				ObservedCallCount:  0,
 				SampleTrafficRecID: nil,
 			}
@@ -356,7 +366,7 @@ func VerifySessionTopology(ctx context.Context, db *gorm.DB, sessionID uint64, r
 			// 已在第 6 步生成 VERIFIED 边，更新实际 AttributionMode 即可
 			for i := range edges {
 				if edges[i].SrcModuleID != nil && *edges[i].SrcModuleID == groupKey.SrcModID &&
-					edges[i].ServiceName == groupKey.Svc && edges[i].Operation == groupKey.Op &&
+					edges[i].ServiceName == groupKey.Svc &&
 					edges[i].Status == StatusVerified {
 					edges[i].AttributionMode = groupKey.Mode
 					break

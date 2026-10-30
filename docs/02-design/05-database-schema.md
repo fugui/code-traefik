@@ -140,30 +140,45 @@ type Module struct {
 func (Module) TableName() string { return config.TablePrefix + "modules" }
 ```
 
-### 3.2 模块接口契约表（表 4）
+### 3.2 模块服务契约与依赖关系表（表 4-1 与 表 4-2）
+
+契约全面收敛至 Service 级别，废弃旧有的 Operation 冗余声明；并将供给（PROVIDE）与依赖（DEPEND）正交建模为实体服务表与依赖关系表，依赖显式关联提供方 FM 或外部系统。
 
 ```go
-const (
-	InterfaceRelationProvide = "PROVIDE" // 模块对外实现的供给接口 (全局唯一 A-05)
-	InterfaceRelationDepend  = "DEPEND"  // 模块调用下游的依赖接口
-)
-
-// 4. ModuleInterface 模块级供给与依赖接口契约表 (traefik_module_interfaces)
-type ModuleInterface struct {
+// 4-1. ModuleService 模块级对外供给服务契约表 (traefik_module_services)
+type ModuleService struct {
 	ID              uint64         `gorm:"primaryKey;autoIncrement" json:"id"`
-	ModuleID        uint64         `gorm:"not null;uniqueIndex:uk_traefik_mod_iface_tuple,priority:1;index:idx_traefik_mod_iface_mod" json:"module_id"`
-	Module          *Module        `gorm:"foreignKey:ModuleID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"module,omitempty"`
-	RelationType    string         `gorm:"size:16;not null;uniqueIndex:uk_traefik_mod_iface_tuple,priority:2;check:chk_traefik_iface_rel,relation_type IN ('PROVIDE','DEPEND')" json:"relation_type"`
-	ServiceName     string         `gorm:"size:128;not null;uniqueIndex:uk_traefik_mod_iface_tuple,priority:3;uniqueIndex:uk_traefik_provide_service_op,priority:1,where:relation_type = 'PROVIDE';index:idx_traefik_iface_svc_op,priority:1" json:"service_name"` // 格式 {package}-{serviceName}
-	Operation       string         `gorm:"size:128;not null;uniqueIndex:uk_traefik_mod_iface_tuple,priority:4;uniqueIndex:uk_traefik_provide_service_op,priority:2,where:relation_type = 'PROVIDE';index:idx_traefik_iface_svc_op,priority:2" json:"operation"`    // 与 Method 名直接相等
-	DiffIgnorePaths datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"diff_ignore_paths"` // 接口级默认回归 Diff 忽略字段路径 []string (F-14)
-	Description     string         `gorm:"size:512" json:"description"`
+	ModuleID        uint64         `gorm:"not null;index:idx_traefik_mod_svc_mod" json:"module_id"`
+	Module          *Module        `gorm:"foreignKey:ModuleID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"module,omitempty"`
+	ServiceName     string         `gorm:"size:128;not null;uniqueIndex:uk_traefik_mod_svc_name" json:"service_name"` // 格式 {package}-{serviceName}，全系统唯一提供 (A-05)
+	DiffIgnorePaths datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"diff_ignore_paths"`                 // 服务级默认回归 Diff 忽略字段路径 []string (F-14)
+	Description     string         `gorm:"type:text" json:"description"`
 	CreatedBy       uint           `gorm:"not null;default:0" json:"created_by"`
 	CreatedAt       time.Time      `json:"created_at"`
 	UpdatedAt       time.Time      `json:"updated_at"`
 }
 
-func (ModuleInterface) TableName() string { return config.TablePrefix + "module_interfaces" }
+func (ModuleService) TableName() string { return config.TablePrefix + "module_services" }
+
+// 4-2. ModuleDependency 模块间服务依赖关系表 (traefik_module_dependencies)
+type ModuleDependency struct {
+	ID               uint64         `gorm:"primaryKey;autoIncrement" json:"id"`
+	ConsumerModuleID uint64         `gorm:"not null;uniqueIndex:uk_traefik_dep_tuple,priority:1;index:idx_traefik_dep_consumer" json:"consumer_module_id"`
+	ConsumerModule   *Module        `gorm:"foreignKey:ConsumerModuleID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"consumer_module,omitempty"`
+	IsExternal       bool           `gorm:"not null;default:false;index:idx_traefik_dep_external" json:"is_external"` // 是否依赖外部第三方/未登记系统
+	ExternalSystem   string         `gorm:"size:128;not null;default:''" json:"external_system"`                     // 外部系统名称 (如 "WeChatPayGateway")
+	ExternalService  string         `gorm:"size:128;not null;default:''" json:"external_service"`                    // 外部服务名称 (如 "UnifiedOrderService")
+	ServiceID        *uint64        `gorm:"uniqueIndex:uk_traefik_dep_tuple,priority:2;index:idx_traefik_dep_service" json:"service_id,omitempty"` // 内部依赖外键指向 ModuleService
+	Service          *ModuleService `gorm:"foreignKey:ServiceID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"service,omitempty"`
+	ProviderModuleID *uint64        `gorm:"index:idx_traefik_dep_provider" json:"provider_module_id,omitempty"`     // 内部依赖冗余提供方 FM
+	ProviderModule   *Module        `gorm:"foreignKey:ProviderModuleID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"provider_module,omitempty"`
+	Description      string         `gorm:"type:text" json:"description"`                                            // 调用与依赖业务场景说明
+	CreatedBy        uint           `gorm:"not null;default:0" json:"created_by"`
+	CreatedAt        time.Time      `json:"created_at"`
+	UpdatedAt        time.Time      `json:"updated_at"`
+}
+
+func (ModuleDependency) TableName() string { return config.TablePrefix + "module_dependencies" }
 ```
 
 ### 3.3 公私域 Agent 纳管、动态排他租约与进程部署表（表 5 ~ 表 6）
@@ -551,7 +566,8 @@ func (ReplayItem) TableName() string { return config.TablePrefix + "replay_items
 | :--- | :--- | :---: | :---: |
 | 删除 `Subsystem` | 存在 `FunctionalGroup` 或 `Module` 引用 | `409 Conflict` | `ON DELETE RESTRICT` |
 | 删除 `FunctionalGroup` | 存在子 `FunctionalGroup`（`parent_id`）或挂载的 `Module` | `409 Conflict` | `ON DELETE RESTRICT` |
-| 删除 `Module` | 存在已声明的 `ModuleInterface` 或仍被 `ProcessModule` 挂载 | `409 Conflict` | `ModuleInterface` 与 `ProcessModule` 均为 `ON DELETE RESTRICT` |
+| 删除 `Module` | 存在已对外提供且已被其他 FM 依赖的 `ModuleService`，或仍被 `ProcessModule` 挂载 | `409 Conflict` | 存在下游依赖时禁止孤儿删除；`ProcessModule` 为 `RESTRICT` |
+| 删除 `ModuleService` | 该 Service 已被其他内部功能模块作为依赖引用 (`ModuleDependency`) | `409 Conflict` | 拦截强校验，需先移除下游依赖方的契约绑定 |
 | 访问/查看 `PRIVATE` 资源 | 非 `owner_id` 本人且非 `traefik_admin` 操作 `PRIVATE` Agent 或 `PRIVATE` 录制素材 | `403 Forbidden` | 应用层 `owner_id` 鉴权过滤（管理员可穿透查看/审计） |
 | 操作/租用 `PRIVATE` 资源 | 非 `owner_id` 本人尝试修改或租用他人 `PRIVATE` Agent（即使是管理员也不得代为持锁录制） | `403 Forbidden` | 应用层排他租约归属强校验 |
 | 并发租用 `Agent`（录制/重放） | 目标 `Agent`（无论 `SHARED` 还是 `PRIVATE`）存在未过期的活跃租约（`lease_type != '' && now < lease_expires_at`） | `409 Conflict` | 升序 `SELECT ... FOR UPDATE` 行锁 + Agent 内存 `SingleTenantGuard` |

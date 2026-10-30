@@ -17,7 +17,7 @@ type tabler interface {
 	TableName() string
 }
 
-func TestAll13ModelsTablePrefixAndMigration(t *testing.T) {
+func TestAll14ModelsTablePrefixAndMigration(t *testing.T) {
 	db := testdb.SetupIsolatedDB(t, config.ServiceName)
 
 	if err := SetupWithDB(db); err != nil {
@@ -28,7 +28,8 @@ func TestAll13ModelsTablePrefixAndMigration(t *testing.T) {
 		Subsystem{},
 		FunctionalGroup{},
 		Module{},
-		ModuleInterface{},
+		ModuleService{},
+		ModuleDependency{},
 		Agent{},
 		Process{},
 		ProcessModule{},
@@ -41,8 +42,8 @@ func TestAll13ModelsTablePrefixAndMigration(t *testing.T) {
 		TraefikSetting{},
 	}
 
-	if len(modelsList) != 14 {
-		t.Fatalf("模型清单数量期望为 14 (13 张业务模型 + TraefikSetting)，实际为: %d", len(modelsList))
+	if len(modelsList) != 15 {
+		t.Fatalf("模型清单数量期望为 15 (14 张业务模型 + TraefikSetting)，实际为: %d", len(modelsList))
 	}
 
 	for _, m := range modelsList {
@@ -184,47 +185,53 @@ func TestPartialUniqueIndexesAndFKConstraints(t *testing.T) {
 		t.Fatalf("创建 Module2 失败: %v", err)
 	}
 
-	// 1. 验证 DEPEND 相同接口允许共存 vs PROVIDE 相同接口全局拦截
-	dep1 := ModuleInterface{
-		ModuleID:     mod1.ID,
-		RelationType: InterfaceRelationDepend,
-		ServiceName:  "pkg.order-OrderService",
-		Operation:    "GetOrder",
-	}
-	if err := db.Create(&dep1).Error; err != nil {
-		t.Fatalf("Module1 声明 DEPEND 失败: %v", err)
-	}
-
-	dep2 := ModuleInterface{
-		ModuleID:     mod2.ID,
-		RelationType: InterfaceRelationDepend,
-		ServiceName:  "pkg.order-OrderService",
-		Operation:    "GetOrder",
-	}
-	if err := db.Create(&dep2).Error; err != nil {
-		t.Fatalf("Module2 声明相同 DEPEND 应当成功，但报错: %v", err)
-	}
-
-	prov1 := ModuleInterface{
-		ModuleID:     mod1.ID,
-		RelationType: InterfaceRelationProvide,
-		ServiceName:  "pkg.order-OrderService",
-		Operation:    "CreateOrder",
+	// 1. 验证 ModuleService PROVIDE 相同 Service 全局唯一性拦截，以及 ModuleDependency 内部/外部依赖与唯一约束
+	prov1 := ModuleService{
+		ModuleID:    mod1.ID,
+		ServiceName: "pkg.order-OrderService",
 	}
 	if err := db.Create(&prov1).Error; err != nil {
-		t.Fatalf("Module1 声明 PROVIDE 失败: %v", err)
+		t.Fatalf("Module1 声明 PROVIDE Service 失败: %v", err)
 	}
 
-	prov2 := ModuleInterface{
-		ModuleID:     mod2.ID,
-		RelationType: InterfaceRelationProvide,
-		ServiceName:  "pkg.order-OrderService",
-		Operation:    "CreateOrder",
+	prov2 := ModuleService{
+		ModuleID:    mod2.ID,
+		ServiceName: "pkg.order-OrderService",
 	}
-	// 期望被 uk_traefik_provide_service_op 部分唯一索引拦截
+	// 期望被 uk_traefik_mod_svc_name 唯一索引拦截
 	errProv2 := db.Create(&prov2).Error
 	if errProv2 == nil {
-		t.Fatalf("期望不同模块声明相同 PROVIDE 接口被 uk_traefik_provide_service_op 拦截，但成功插入了！")
+		t.Fatalf("期望不同模块声明相同 PROVIDE Service 被 uk_traefik_mod_svc_name 拦截，但成功插入了！")
+	}
+
+	depInternal := ModuleDependency{
+		ConsumerModuleID: mod2.ID,
+		ServiceID:        &prov1.ID,
+		ProviderModuleID: &mod1.ID,
+	}
+	if err := db.Create(&depInternal).Error; err != nil {
+		t.Fatalf("Module2 声明依赖 Module1 的 Service 失败: %v", err)
+	}
+
+	// 尝试重复依赖相同 service 期望拦截
+	depInternalDup := ModuleDependency{
+		ConsumerModuleID: mod2.ID,
+		ServiceID:        &prov1.ID,
+		ProviderModuleID: &mod1.ID,
+	}
+	if err := db.Create(&depInternalDup).Error; err == nil {
+		t.Fatalf("期望重复依赖相同 Service 被 uk_traefik_dep_tuple 拦截，但成功插入了！")
+	}
+
+	// 验证外部系统依赖支持
+	depExternal := ModuleDependency{
+		ConsumerModuleID: mod1.ID,
+		IsExternal:       true,
+		ExternalSystem:   "WeChatPay",
+		ExternalService:  "UnifiedOrder",
+	}
+	if err := db.Create(&depExternal).Error; err != nil {
+		t.Fatalf("Module1 声明依赖外部三方系统失败: %v", err)
 	}
 
 	// 2. 验证不同 ProtoSchema 激活相同 (ServiceName, Operation) 被 uk_traefik_active_proto_op 拦截

@@ -13,6 +13,7 @@ import (
 	"code-traefik/models"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 // SubsystemReq 创建/更新子系统请求体
@@ -49,19 +50,31 @@ type ModuleReq struct {
 	Description string  `json:"description"`
 }
 
-// ModuleInterfaceReq 创建接口契约请求体
-type ModuleInterfaceReq struct {
-	RelationType    string   `json:"relation_type"`
+// ModuleServiceReq 创建供给服务请求体
+type ModuleServiceReq struct {
 	ServiceName     string   `json:"service_name"`
-	Operation       string   `json:"operation"`
 	DiffIgnorePaths []string `json:"diff_ignore_paths"`
 	Description     string   `json:"description"`
 }
 
-// UpdateModuleInterfaceReq 更新接口契约请求体
-type UpdateModuleInterfaceReq struct {
+// UpdateModuleServiceReq 更新供给服务请求体
+type UpdateModuleServiceReq struct {
 	DiffIgnorePaths []string `json:"diff_ignore_paths"`
 	Description     string   `json:"description"`
+}
+
+// ModuleDependencyReq 创建服务依赖请求体
+type ModuleDependencyReq struct {
+	IsExternal      bool    `json:"is_external"`
+	ExternalSystem  string  `json:"external_system"`
+	ExternalService string  `json:"external_service"`
+	ServiceID       *uint64 `json:"service_id"`
+	Description     string  `json:"description"`
+}
+
+// ProcessBindingReq 模块进程装载/绑定请求体
+type ProcessBindingReq struct {
+	ProcessID *uint64 `json:"process_id"`
 }
 
 // normalizePageSize 通用分页归一化 (15/25/50/100，默认 25)
@@ -475,7 +488,7 @@ func GetModule(c *gin.Context) {
 	}
 
 	var mod models.Module
-	if err := models.DB.Preload("Group").Preload("Subsystem").Preload("Process").Preload("Owner").First(&mod, id).Error; err != nil {
+	if err := models.DB.Preload("Group").Preload("Subsystem").Preload("Process.Agent").Preload("Owner").First(&mod, id).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "功能模块不存在"})
 		return
 	}
@@ -483,12 +496,13 @@ func GetModule(c *gin.Context) {
 		mod.Owner.Email = ""
 	}
 
-	ifaces := make([]models.ModuleInterface, 0)
-	_ = models.DB.Where("module_id = ?", mod.ID).Order("relation_type ASC, id ASC").Find(&ifaces).Error
+	services, _ := topology.ListModuleServices(models.DB, mod.ID)
+	dependencies, _ := topology.ListModuleDependencies(models.DB, mod.ID)
 
 	c.JSON(http.StatusOK, gin.H{
-		"module":     mod,
-		"interfaces": ifaces,
+		"module":       mod,
+		"services":     services,
+		"dependencies": dependencies,
 	})
 }
 
@@ -606,13 +620,19 @@ func DeleteModule(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "功能模块已删除"})
 }
 
-// --- Module Interface Handlers ---
+// --- Module Process Binding Handlers ---
 
-// ListModuleInterfaces GET /api/arch/modules/:id/interfaces
-func ListModuleInterfaces(c *gin.Context) {
+// BindModuleProcess POST /api/arch/modules/:id/process-binding (AdminOnly)
+func BindModuleProcess(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "非法的模块 ID"})
+		return
+	}
+
+	var req ProcessBindingReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数不合法"})
 		return
 	}
 
@@ -622,23 +642,68 @@ func ListModuleInterfaces(c *gin.Context) {
 		return
 	}
 
-	relType := strings.ToUpper(strings.TrimSpace(c.Query("relation_type")))
-	query := models.DB.Model(&models.ModuleInterface{}).Where("module_id = ?", id)
-	if relType != "" {
-		query = query.Where("relation_type = ?", relType)
+	oldPID := mod.ProcessID
+	if req.ProcessID != nil && *req.ProcessID > 0 {
+		var proc models.Process
+		if err := models.DB.Preload("Agent").First(&proc, *req.ProcessID).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "目标进程不存在"})
+			return
+		}
+		if proc.Agent != nil && proc.Agent.Scope == models.ScopePrivate {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "公共功能模块不能绑定个人私有 Agent 下的进程作为基线"})
+			return
+		}
+
+		mod.ProcessID = req.ProcessID
+		if err := models.DB.Save(&mod).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "保存模块进程绑定失败"})
+			return
+		}
+
+		// 确保 traefik_process_modules 映射存在
+		var pm models.ProcessModule
+		if err := models.DB.Where("process_id = ? AND module_id = ?", *req.ProcessID, id).First(&pm).Error; errors.Is(err, gorm.ErrRecordNotFound) {
+			models.DB.Create(&models.ProcessModule{ProcessID: *req.ProcessID, ModuleID: id})
+		}
+		// 若此前绑过其他旧进程，清理旧进程模块挂载
+		if oldPID != nil && *oldPID != *req.ProcessID {
+			models.DB.Where("process_id = ? AND module_id = ?", *oldPID, id).Delete(&models.ProcessModule{})
+		}
+	} else {
+		// 解绑公共基线进程
+		mod.ProcessID = nil
+		models.DB.Model(&mod).Update("process_id", nil)
+		if oldPID != nil {
+			models.DB.Where("process_id = ? AND module_id = ?", *oldPID, id).Delete(&models.ProcessModule{})
+		}
 	}
 
-	items := make([]models.ModuleInterface, 0)
-	if err := query.Order("id ASC").Find(&items).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询接口契约失败"})
+	_ = models.DB.Preload("Group").Preload("Subsystem").Preload("Process.Agent").Preload("Owner").First(&mod, id)
+	recordAudit(c, "update", commonModels.AuditLevelP2, fmt.Sprintf("变更模块 [%s] 进程绑定", mod.Name), "module", mod.ID, mod.Name, nil, mod)
+	c.JSON(http.StatusOK, mod)
+}
+
+// --- Module Service & Dependency Handlers ---
+
+// ListModuleServices GET /api/arch/modules/:id/services
+func ListModuleServices(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "非法的模块 ID"})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"items": items})
+	services, err := topology.ListModuleServices(models.DB, id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询供给服务契约失败"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"items": services})
 }
 
-// CreateModuleInterface POST /api/arch/modules/:id/interfaces (AdminOnly)
-func CreateModuleInterface(c *gin.Context) {
+// CreateModuleService POST /api/arch/modules/:id/services (AdminOnly)
+func CreateModuleService(c *gin.Context) {
 	uc := commonAuth.GetUserContext(c)
 	moduleID, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
@@ -646,17 +711,15 @@ func CreateModuleInterface(c *gin.Context) {
 		return
 	}
 
-	var req ModuleInterfaceReq
+	var req ModuleServiceReq
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数不合法"})
 		return
 	}
 
-	item, err := topology.CreateModuleInterface(models.DB, topology.ModuleInterfaceInput{
+	item, err := topology.CreateModuleService(models.DB, topology.ModuleServiceInput{
 		ModuleID:        moduleID,
-		RelationType:    req.RelationType,
 		ServiceName:     req.ServiceName,
-		Operation:       req.Operation,
 		DiffIgnorePaths: req.DiffIgnorePaths,
 		Description:     req.Description,
 		OperatorID:      uc.UserID,
@@ -672,7 +735,7 @@ func CreateModuleInterface(c *gin.Context) {
 			})
 			return
 		}
-		if errors.Is(err, topology.ErrDuplicateModuleInterface) {
+		if errors.Is(err, topology.ErrDuplicateModuleService) {
 			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 			return
 		}
@@ -680,8 +743,7 @@ func CreateModuleInterface(c *gin.Context) {
 			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 			return
 		}
-		if errors.Is(err, topology.ErrInvalidRelationType) || errors.Is(err, topology.ErrInvalidServiceNameFormat) ||
-			errors.Is(err, topology.ErrInvalidOperationFormat) {
+		if errors.Is(err, topology.ErrInvalidServiceNameFormat) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
@@ -689,27 +751,27 @@ func CreateModuleInterface(c *gin.Context) {
 		return
 	}
 
-	recordAudit(c, "create", commonModels.AuditLevelP2, fmt.Sprintf("创建接口契约 [%s:%s]", item.ServiceName, item.Operation), "module_interface", item.ID, item.ServiceName+":"+item.Operation, nil, item)
+	recordAudit(c, "create", commonModels.AuditLevelP2, fmt.Sprintf("创建供给服务契约 [%s]", item.ServiceName), "module_service", item.ID, item.ServiceName, nil, item)
 	c.JSON(http.StatusCreated, item)
 }
 
-// UpdateModuleInterface PUT /api/arch/module-interfaces/:ifaceId (AdminOnly)
-func UpdateModuleInterface(c *gin.Context) {
-	ifaceID, err := strconv.ParseUint(c.Param("ifaceId"), 10, 64)
+// UpdateModuleService PUT /api/arch/module-services/:serviceId (AdminOnly)
+func UpdateModuleService(c *gin.Context) {
+	serviceID, err := strconv.ParseUint(c.Param("serviceId"), 10, 64)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "非法的接口契约 ID"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "非法的服务契约 ID"})
 		return
 	}
 
-	var req UpdateModuleInterfaceReq
+	var req UpdateModuleServiceReq
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数不合法"})
 		return
 	}
 
-	before, after, err := topology.UpdateModuleInterface(models.DB, ifaceID, req.DiffIgnorePaths, req.Description)
+	before, after, err := topology.UpdateModuleService(models.DB, serviceID, req.DiffIgnorePaths, req.Description)
 	if err != nil {
-		if errors.Is(err, topology.ErrModuleInterfaceNotFound) {
+		if errors.Is(err, topology.ErrModuleServiceNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 			return
 		}
@@ -717,21 +779,87 @@ func UpdateModuleInterface(c *gin.Context) {
 		return
 	}
 
-	recordAudit(c, "update", commonModels.AuditLevelP2, fmt.Sprintf("更新接口契约 [%s:%s]", after.ServiceName, after.Operation), "module_interface", after.ID, after.ServiceName+":"+after.Operation, before, after)
+	recordAudit(c, "update", commonModels.AuditLevelP2, fmt.Sprintf("更新供给服务契约 [%s]", after.ServiceName), "module_service", after.ID, after.ServiceName, before, after)
 	c.JSON(http.StatusOK, after)
 }
 
-// DeleteModuleInterface DELETE /api/arch/module-interfaces/:ifaceId (AdminOnly)
-func DeleteModuleInterface(c *gin.Context) {
-	ifaceID, err := strconv.ParseUint(c.Param("ifaceId"), 10, 64)
+// DeleteModuleService DELETE /api/arch/module-services/:serviceId (AdminOnly)
+func DeleteModuleService(c *gin.Context) {
+	serviceID, err := strconv.ParseUint(c.Param("serviceId"), 10, 64)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "非法的接口契约 ID"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "非法的服务契约 ID"})
 		return
 	}
 
-	deleted, err := topology.DeleteModuleInterface(models.DB, ifaceID)
+	deleted, err := topology.DeleteModuleService(models.DB, serviceID)
 	if err != nil {
-		if errors.Is(err, topology.ErrModuleInterfaceNotFound) {
+		if errors.Is(err, topology.ErrModuleServiceNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			return
+		}
+		if errors.Is(err, topology.ErrServiceHasDependencies) {
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	recordAudit(c, "delete", commonModels.AuditLevelP1, fmt.Sprintf("删除供给服务契约 [%s]", deleted.ServiceName), "module_service", deleted.ID, deleted.ServiceName, deleted, nil)
+	c.JSON(http.StatusOK, gin.H{"message": "供给服务契约已删除"})
+}
+
+// ListModuleDependencies GET /api/arch/modules/:id/dependencies
+func ListModuleDependencies(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "非法的模块 ID"})
+		return
+	}
+
+	deps, err := topology.ListModuleDependencies(models.DB, id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询服务依赖关系失败"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"items": deps})
+}
+
+// CreateModuleDependency POST /api/arch/modules/:id/dependencies (AdminOnly)
+func CreateModuleDependency(c *gin.Context) {
+	uc := commonAuth.GetUserContext(c)
+	moduleID, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "非法的模块 ID"})
+		return
+	}
+
+	var req ModuleDependencyReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数不合法"})
+		return
+	}
+
+	item, err := topology.CreateModuleDependency(models.DB, topology.ModuleDependencyInput{
+		ConsumerModuleID: moduleID,
+		IsExternal:       req.IsExternal,
+		ExternalSystem:   req.ExternalSystem,
+		ExternalService:  req.ExternalService,
+		ServiceID:        req.ServiceID,
+		Description:      req.Description,
+		OperatorID:       uc.UserID,
+	})
+	if err != nil {
+		if errors.Is(err, topology.ErrDuplicateDependency) {
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+			return
+		}
+		if errors.Is(err, topology.ErrSelfDependency) || errors.Is(err, topology.ErrInvalidExternalDependency) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		if errors.Is(err, topology.ErrModuleNotFound) || errors.Is(err, topology.ErrModuleServiceNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 			return
 		}
@@ -739,8 +867,41 @@ func DeleteModuleInterface(c *gin.Context) {
 		return
 	}
 
-	recordAudit(c, "delete", commonModels.AuditLevelP1, fmt.Sprintf("删除接口契约 [%s:%s]", deleted.ServiceName, deleted.Operation), "module_interface", deleted.ID, deleted.ServiceName+":"+deleted.Operation, deleted, nil)
-	c.JSON(http.StatusOK, gin.H{"message": "接口契约已删除"})
+	recordAudit(c, "create", commonModels.AuditLevelP2, fmt.Sprintf("添加服务依赖 [模块ID:%d]", moduleID), "module_dependency", item.ID, fmt.Sprintf("dep_%d", item.ID), nil, item)
+	c.JSON(http.StatusCreated, item)
+}
+
+// DeleteModuleDependency DELETE /api/arch/module-dependencies/:depId (AdminOnly)
+func DeleteModuleDependency(c *gin.Context) {
+	depID, err := strconv.ParseUint(c.Param("depId"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "非法的依赖关系 ID"})
+		return
+	}
+
+	deleted, err := topology.DeleteModuleDependency(models.DB, depID)
+	if err != nil {
+		if errors.Is(err, topology.ErrModuleDependencyNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	recordAudit(c, "delete", commonModels.AuditLevelP1, fmt.Sprintf("解除服务依赖 [ID:%d]", deleted.ID), "module_dependency", deleted.ID, fmt.Sprintf("dep_%d", deleted.ID), deleted, nil)
+	c.JSON(http.StatusOK, gin.H{"message": "服务依赖关系已解除"})
+}
+
+// ListAvailableServices GET /api/arch/services/available
+func ListAvailableServices(c *gin.Context) {
+	excludeModID, _ := strconv.ParseUint(c.Query("exclude_module_id"), 10, 64)
+	items, err := topology.ListAvailableServices(models.DB, excludeModID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询可用服务列表失败"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"items": items})
 }
 
 // GetStaticTopology GET /api/arch/topology/static

@@ -39,7 +39,8 @@ func SetupWithDB(db *gorm.DB) error {
 		&Subsystem{},
 		&FunctionalGroup{},
 		&Module{},
-		&ModuleInterface{},
+		&ModuleService{},
+		&ModuleDependency{},
 		&Agent{},
 		&Process{},
 		&ProcessModule{},
@@ -64,7 +65,6 @@ func SetupWithDB(db *gorm.DB) error {
 
 	// 3. 显式创建关键业务部分唯一索引
 	partialIndexes := []string{
-		`CREATE UNIQUE INDEX IF NOT EXISTS uk_traefik_provide_service_op ON traefik_module_interfaces (service_name, operation) WHERE relation_type = 'PROVIDE';`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS uk_traefik_proto_active_name ON traefik_proto_schemas (name) WHERE is_active = true;`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS uk_traefik_active_proto_op ON traefik_proto_operations (service_name, operation) WHERE is_active = true;`,
 	}
@@ -102,11 +102,29 @@ BEGIN
         FOREIGN KEY (group_id) REFERENCES traefik_functional_groups(id)
         ON UPDATE CASCADE ON DELETE RESTRICT;
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_traefik_mod_iface_module') THEN
-        ALTER TABLE traefik_module_interfaces
-        ADD CONSTRAINT fk_traefik_mod_iface_module
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_traefik_mod_svc_module') THEN
+        ALTER TABLE traefik_module_services
+        ADD CONSTRAINT fk_traefik_mod_svc_module
         FOREIGN KEY (module_id) REFERENCES traefik_modules(id)
+        ON UPDATE CASCADE ON DELETE CASCADE;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_traefik_dep_consumer') THEN
+        ALTER TABLE traefik_module_dependencies
+        ADD CONSTRAINT fk_traefik_dep_consumer
+        FOREIGN KEY (consumer_module_id) REFERENCES traefik_modules(id)
+        ON UPDATE CASCADE ON DELETE CASCADE;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_traefik_dep_service') THEN
+        ALTER TABLE traefik_module_dependencies
+        ADD CONSTRAINT fk_traefik_dep_service
+        FOREIGN KEY (service_id) REFERENCES traefik_module_services(id)
         ON UPDATE CASCADE ON DELETE RESTRICT;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_traefik_dep_provider') THEN
+        ALTER TABLE traefik_module_dependencies
+        ADD CONSTRAINT fk_traefik_dep_provider
+        FOREIGN KEY (provider_module_id) REFERENCES traefik_modules(id)
+        ON UPDATE CASCADE ON DELETE SET NULL;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_traefik_proc_agent') THEN
         ALTER TABLE traefik_processes

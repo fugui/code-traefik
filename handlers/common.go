@@ -61,14 +61,14 @@ type DBTopologyResolver struct {
 	DB *gorm.DB
 }
 
-// ResolveDestination 根据服务名与操作名查询提供者模块 ID
+// ResolveDestination 根据服务名查询提供者模块 ID
 func (r *DBTopologyResolver) ResolveDestination(serviceName, operation string) *uint64 {
 	if r.DB == nil {
 		return nil
 	}
-	var iface models.ModuleInterface
-	if err := r.DB.Where("service_name = ? AND operation = ? AND relation_type = 'PROVIDE'", serviceName, operation).First(&iface).Error; err == nil {
-		return &iface.ModuleID
+	var svc models.ModuleService
+	if err := r.DB.Where("service_name = ?", serviceName).First(&svc).Error; err == nil {
+		return &svc.ModuleID
 	}
 	return nil
 }

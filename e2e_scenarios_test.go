@@ -335,15 +335,15 @@ func TestAllScenarios_SC01_To_SC08(t *testing.T) {
 		_ = json.Unmarshal(w.Body.Bytes(), &mod)
 		moduleID = uint64(mod.ID)
 
-		// 3. 声明 PROVIDE 接口契约
-		ifaceBody := `{"relation_type":"PROVIDE","service_name":"dophi.order.v1-OrderService","operation":"CreateOrder","diff_ignore_paths":["header.server_time"]}`
-		req = httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/arch/modules/%d/interfaces", moduleID), bytes.NewBufferString(ifaceBody))
+		// 3. 声明 PROVIDE 服务契约
+		ifaceBody := `{"service_name":"dophi.order.v1-OrderService","diff_ignore_paths":["header.server_time"]}`
+		req = httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/arch/modules/%d/services", moduleID), bytes.NewBufferString(ifaceBody))
 		req.Header.Set("Authorization", "Bearer "+adminToken)
 		req.Header.Set("Content-Type", "application/json")
 		w = httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 		if w.Code != http.StatusCreated {
-			t.Fatalf("SC-02 声明 PROVIDE 接口契约期望 201, 实际 %d: %s", w.Code, w.Body.String())
+			t.Fatalf("SC-02 声明 PROVIDE 服务契约期望 201, 实际 %d: %s", w.Code, w.Body.String())
 		}
 
 		// 4. 获取静态拓扑

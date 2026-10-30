@@ -38,16 +38,54 @@ export interface FunctionalGroup {
   updated_at?: string;
 }
 
-export interface ModuleInterface {
+export interface ModuleService {
   id: string;
   module_id: string;
-  relation_type: 'PROVIDE' | 'DEPEND';
   service_name: string;
-  operation: string;
   diff_ignore_paths?: string[];
+  description?: string;
+  downstream_count?: number;
+  downstream_modules?: string[];
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface ModuleDependency {
+  id: string;
+  consumer_module_id: string;
+  is_external: boolean;
+  external_system?: string;
+  external_service?: string;
+  service_id?: string | null;
+  service?: ModuleService;
+  provider_module_id?: string | null;
+  provider_module?: {
+    id: string;
+    code: string;
+    name: string;
+    subsystem_id?: string;
+    subsystem?: Subsystem;
+    process_id?: string | null;
+    process?: {
+      id: string;
+      name: string;
+      listen_port: number;
+    };
+  };
   description?: string;
   created_at?: string;
   updated_at?: string;
+}
+
+export interface AvailableServiceItem {
+  service_id: string;
+  service_name: string;
+  module_id: string;
+  module_code: string;
+  module_name: string;
+  subsystem_id: string;
+  subsystem_name: string;
+  description?: string;
 }
 
 export interface Module {
@@ -67,9 +105,19 @@ export interface Module {
     name: string;
     listen_port: number;
     agent_id: string;
+    cmd_pattern?: string;
+    agent?: {
+      id: string;
+      name: string;
+      endpoint: string;
+      scope: 'SHARED' | 'PRIVATE';
+      status: string;
+    };
   };
-  interfaces_count?: number;
-  interfaces?: ModuleInterface[];
+  services_count?: number;
+  services?: ModuleService[];
+  dependencies_count?: number;
+  dependencies?: ModuleDependency[];
   created_at?: string;
   updated_at?: string;
 }

@@ -17,9 +17,9 @@ const (
 	AttributionProcessLevel     = "PROCESS_LEVEL"
 )
 
-// ResolveDestinationModule 依据全局唯一供给原则 (A-05) 穿透定位目标功能模块
-func ResolveDestinationModule(provideMap map[string]uint64, serviceName, operation string) *uint64 {
-	key := strings.TrimSpace(serviceName) + ":" + strings.TrimSpace(operation)
+// ResolveDestinationModule 依据全局唯一供给原则 (A-05) 穿透定位目标功能模块 (Service 级别)
+func ResolveDestinationModule(provideMap map[string]uint64, serviceName string) *uint64 {
+	key := strings.TrimSpace(serviceName)
 	if modID, ok := provideMap[key]; ok && modID > 0 {
 		res := modID
 		return &res
@@ -31,7 +31,7 @@ func ResolveDestinationModule(provideMap map[string]uint64, serviceName, operati
 // 优先级：
 // 0. 单模块独占进程：|M(P)| == 1 -> SINGLE_MODULE_PROC
 // 1. Trace Span 匹配：FatherSpanID 匹配同批次该进程入站请求 SpanID -> TRACE_SPAN
-// 2. 唯一 DEPEND 声明：M(P) 中仅有 1 个模块声明了该 DEPEND -> UNIQUE_DEPEND
+// 2. 唯一 DEPEND 声明：M(P) 中仅有 1 个模块声明了对该 Service 的 DEPEND -> UNIQUE_DEPEND
 // 3. 歧义或未声明：返回 PROCESS_LEVEL，SrcModule=nil，candidates 为 M(P)
 func ResolveSourceModule(
 	processModules map[uint64][]uint64,
@@ -70,8 +70,8 @@ func ResolveSourceModule(
 		}
 	}
 
-	// 2. 优先级 ②: 过滤 M(P) 中声明了 DEPEND(svc, op) 的子集
-	callKey := strings.TrimSpace(egressRecord.ServiceName) + ":" + strings.TrimSpace(egressRecord.Operation)
+	// 2. 优先级 ②: 过滤 M(P) 中声明了 DEPEND(svc) 的子集
+	callKey := strings.TrimSpace(egressRecord.ServiceName)
 	var depCandidates []uint64
 	if dependMap != nil {
 		for _, m := range modules {
@@ -92,29 +92,33 @@ func ResolveSourceModule(
 
 // OfflineBatchAttribution 在录制批次停止后，统一归集全链路报文并执行结算 (OfflineBatchAttribution)
 func OfflineBatchAttribution(ctx context.Context, db *gorm.DB, sessionID uint64) error {
-	// 1. 加载全局唯一 PROVIDE 映射
-	var provideIfaces []models.ModuleInterface
-	if err := db.WithContext(ctx).Where("relation_type = ?", "PROVIDE").Find(&provideIfaces).Error; err != nil {
+	// 1. 加载全局唯一 PROVIDE 映射 (Service 级)
+	var services []models.ModuleService
+	if err := db.WithContext(ctx).Find(&services).Error; err != nil {
 		return err
 	}
-	provideMap := make(map[string]uint64, len(provideIfaces))
-	for _, iface := range provideIfaces {
-		key := strings.TrimSpace(iface.ServiceName) + ":" + strings.TrimSpace(iface.Operation)
-		provideMap[key] = iface.ModuleID
+	provideMap := make(map[string]uint64, len(services))
+	for _, svc := range services {
+		key := strings.TrimSpace(svc.ServiceName)
+		provideMap[key] = svc.ModuleID
 	}
 
-	// 2. 加载全局 DEPEND 映射: moduleID -> map[callKey]bool
-	var dependIfaces []models.ModuleInterface
-	if err := db.WithContext(ctx).Where("relation_type = ?", "DEPEND").Find(&dependIfaces).Error; err != nil {
+	// 2. 加载全局 DEPEND 映射: moduleID -> map[serviceName]bool
+	var deps []models.ModuleDependency
+	if err := db.WithContext(ctx).Preload("Service").Find(&deps).Error; err != nil {
 		return err
 	}
 	dependMap := make(map[uint64]map[string]bool)
-	for _, iface := range dependIfaces {
-		if dependMap[iface.ModuleID] == nil {
-			dependMap[iface.ModuleID] = make(map[string]bool)
+	for _, dep := range deps {
+		if dependMap[dep.ConsumerModuleID] == nil {
+			dependMap[dep.ConsumerModuleID] = make(map[string]bool)
 		}
-		key := strings.TrimSpace(iface.ServiceName) + ":" + strings.TrimSpace(iface.Operation)
-		dependMap[iface.ModuleID][key] = true
+		if dep.Service != nil {
+			key := strings.TrimSpace(dep.Service.ServiceName)
+			dependMap[dep.ConsumerModuleID][key] = true
+		} else if dep.IsExternal && dep.ExternalService != "" {
+			dependMap[dep.ConsumerModuleID][strings.TrimSpace(dep.ExternalService)] = true
+		}
 	}
 
 	// 3. 加载进程承载模块映射
@@ -142,7 +146,7 @@ func OfflineBatchAttribution(ctx context.Context, db *gorm.DB, sessionID uint64)
 		rec := &records[i]
 		// 先定位目标模块
 		if rec.DstModuleID == nil {
-			rec.DstModuleID = ResolveDestinationModule(provideMap, rec.ServiceName, rec.Operation)
+			rec.DstModuleID = ResolveDestinationModule(provideMap, rec.ServiceName)
 		}
 		if rec.Direction == models.TrafficDirIngress && rec.SpanID != "" && rec.SpanID != "0" {
 			ingressMap[rec.SpanID] = rec

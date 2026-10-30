@@ -83,8 +83,11 @@ func ValidateReplayProcessCompatibility(
 	hasUnregisteredIface := false
 
 	for _, rec := range selectedRecords {
-		key := strings.TrimSpace(rec.ServiceName) + ":" + strings.TrimSpace(rec.Operation)
-		if dstModID, ok := provideMap[key]; ok {
+		svc := strings.TrimSpace(rec.ServiceName)
+		keyOp := svc + ":" + strings.TrimSpace(rec.Operation)
+		if dstModID, ok := provideMap[svc]; ok {
+			requiredMods[dstModID] = struct{}{}
+		} else if dstModID, ok := provideMap[keyOp]; ok {
 			requiredMods[dstModID] = struct{}{}
 		} else {
 			hasUnregisteredIface = true

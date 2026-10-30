@@ -71,16 +71,15 @@ func TestResolveSourceModuleThreeTierPriority(t *testing.T) {
 		t.Fatalf("绑定 Mod_B 失败: %v", err)
 	}
 
-	// 3. 配置接口契约：
-	// Mod_B 声明 DEPEND("dophi.stock-StockService", "DeductStock")
-	ifaceB := models.ModuleInterface{
-		ModuleID:     modB.ID,
-		RelationType: "DEPEND",
-		ServiceName:  "dophi.stock-StockService",
-		Operation:    "DeductStock",
-		CreatedBy:    1,
+	// 3. 配置服务依赖契约：
+	// Mod_B 声明依赖外部或内部 ("dophi.stock-StockService")
+	depB := models.ModuleDependency{
+		ConsumerModuleID: modB.ID,
+		IsExternal:       true,
+		ExternalService:  "dophi.stock-StockService",
+		CreatedBy:        1,
 	}
-	if err := db.Create(&ifaceB).Error; err != nil {
+	if err := db.Create(&depB).Error; err != nil {
 		t.Fatalf("创建 Mod_B DEPEND 契约失败: %v", err)
 	}
 
@@ -90,6 +89,7 @@ func TestResolveSourceModuleThreeTierPriority(t *testing.T) {
 	}
 	dependMap := map[uint64]map[string]bool{
 		modB.ID: {
+			"dophi.stock-StockService":             true,
 			"dophi.stock-StockService:DeductStock": true,
 		},
 	}
@@ -211,25 +211,32 @@ func TestSC06_ArchitectureConsistencyVerification(t *testing.T) {
 	db.Create(&models.ProcessModule{ProcessID: procC.ID, ModuleID: mod4.ID})
 	db.Create(&models.ProcessModule{ProcessID: procUnmon.ID, ModuleID: modUnmon.ID})
 
-	// 3. 接口契约定义
-	// (1) mod3 PROVIDE dophi.b-ServiceB:MethodB
-	db.Create(&models.ModuleInterface{ModuleID: mod3.ID, RelationType: "PROVIDE", ServiceName: "dophi.b-ServiceB", Operation: "MethodB", CreatedBy: 1})
-	// (2) mod2 PROVIDE dophi.a-ServiceA2:MethodA2 (同在 procA)
-	db.Create(&models.ModuleInterface{ModuleID: mod2.ID, RelationType: "PROVIDE", ServiceName: "dophi.a-ServiceA2", Operation: "MethodA2", CreatedBy: 1})
-	// (3) modUnmon PROVIDE dophi.unmon-ServiceUnmon:MethodUnmon
-	db.Create(&models.ModuleInterface{ModuleID: modUnmon.ID, RelationType: "PROVIDE", ServiceName: "dophi.unmon-ServiceUnmon", Operation: "MethodUnmon", CreatedBy: 1})
-	// (4) mod4 PROVIDE dophi.c-ServiceC:MethodC
-	db.Create(&models.ModuleInterface{ModuleID: mod4.ID, RelationType: "PROVIDE", ServiceName: "dophi.c-ServiceC", Operation: "MethodC", CreatedBy: 1})
+	// 3. 服务契约与依赖定义
+	// (1) mod3 PROVIDE dophi.b-ServiceB
+	svcB := models.ModuleService{ModuleID: mod3.ID, ServiceName: "dophi.b-ServiceB", CreatedBy: 1}
+	db.Create(&svcB)
+	// (2) mod2 PROVIDE dophi.a-ServiceA2 (同在 procA)
+	svcA2 := models.ModuleService{ModuleID: mod2.ID, ServiceName: "dophi.a-ServiceA2", CreatedBy: 1}
+	db.Create(&svcA2)
+	// (3) modUnmon PROVIDE dophi.unmon-ServiceUnmon
+	svcUnmon := models.ModuleService{ModuleID: modUnmon.ID, ServiceName: "dophi.unmon-ServiceUnmon", CreatedBy: 1}
+	db.Create(&svcUnmon)
+	// (4) mod4 PROVIDE dophi.c-ServiceC
+	svcC := models.ModuleService{ModuleID: mod4.ID, ServiceName: "dophi.c-ServiceC", CreatedBy: 1}
+	db.Create(&svcC)
+	// (5) mod3 PROVIDE dophi.v-ViolationService (未被 mod1 声明依赖)
+	svcV := models.ModuleService{ModuleID: mod3.ID, ServiceName: "dophi.v-ViolationService", CreatedBy: 1}
+	db.Create(&svcV)
 
 	// 静态依赖声明：
-	// ① 期望 VERIFIED: mod1 DEPEND mod3(dophi.b-ServiceB:MethodB)
-	db.Create(&models.ModuleInterface{ModuleID: mod1.ID, RelationType: "DEPEND", ServiceName: "dophi.b-ServiceB", Operation: "MethodB", CreatedBy: 1})
-	// ③ 期望 NOT_OBSERVABLE: mod1 DEPEND mod2(dophi.a-ServiceA2:MethodA2) 同进程内依赖
-	db.Create(&models.ModuleInterface{ModuleID: mod1.ID, RelationType: "DEPEND", ServiceName: "dophi.a-ServiceA2", Operation: "MethodA2", CreatedBy: 1})
-	// ④ 期望 NOT_MONITORED: mod1 DEPEND modUnmon(dophi.unmon-ServiceUnmon:MethodUnmon)
-	db.Create(&models.ModuleInterface{ModuleID: mod1.ID, RelationType: "DEPEND", ServiceName: "dophi.unmon-ServiceUnmon", Operation: "MethodUnmon", CreatedBy: 1})
-	// ⑤ 期望 UNCOVERED: mod1 DEPEND mod4(dophi.c-ServiceC:MethodC) 均纳入监控但实测未调用
-	db.Create(&models.ModuleInterface{ModuleID: mod1.ID, RelationType: "DEPEND", ServiceName: "dophi.c-ServiceC", Operation: "MethodC", CreatedBy: 1})
+	// ① 期望 VERIFIED: mod1 DEPEND mod3(dophi.b-ServiceB)
+	db.Create(&models.ModuleDependency{ConsumerModuleID: mod1.ID, ServiceID: &svcB.ID, ProviderModuleID: &mod3.ID, CreatedBy: 1})
+	// ③ 期望 NOT_OBSERVABLE: mod1 DEPEND mod2(dophi.a-ServiceA2) 同进程内依赖
+	db.Create(&models.ModuleDependency{ConsumerModuleID: mod1.ID, ServiceID: &svcA2.ID, ProviderModuleID: &mod2.ID, CreatedBy: 1})
+	// ④ 期望 NOT_MONITORED: mod1 DEPEND modUnmon(dophi.unmon-ServiceUnmon)
+	db.Create(&models.ModuleDependency{ConsumerModuleID: mod1.ID, ServiceID: &svcUnmon.ID, ProviderModuleID: &modUnmon.ID, CreatedBy: 1})
+	// ⑤ 期望 UNCOVERED: mod1 DEPEND mod4(dophi.c-ServiceC) 均纳入监控但实测未调用
+	db.Create(&models.ModuleDependency{ConsumerModuleID: mod1.ID, ServiceID: &svcC.ID, ProviderModuleID: &mod4.ID, CreatedBy: 1})
 
 	// 4. 创建录制批次：纳入 procA, procB, procC (procUnmon 未纳入)
 	targetProcBytes, _ := json.Marshal([]uint64{procA.ID, procB.ID, procC.ID})
@@ -265,14 +272,14 @@ func TestSC06_ArchitectureConsistencyVerification(t *testing.T) {
 	}
 	db.Create(&rec1)
 
-	// 记录 2: 对应 ② VIOLATION (未声明的跨进程调用: mod1 私自调用 mod3 的未声明接口 dophi.b-ServiceB:UndeclaredMethod)
+	// 记录 2: 对应 ② VIOLATION (未声明的跨进程调用: mod1 私自调用 mod3 的未声明服务 dophi.v-ViolationService)
 	rec2 := models.TrafficRecord{
 		SessionID:          session.ID,
 		CreatedAt:          now,
 		AgentID:            agt.ID,
 		ProcessID:          procA.ID,
 		Direction:          models.TrafficDirEgress,
-		ServiceName:        "dophi.b-ServiceB",
+		ServiceName:        "dophi.v-ViolationService",
 		Operation:          "UndeclaredMethod",
 		SrcModuleID:        &mod1.ID,
 		DstModuleID:        &mod3.ID,

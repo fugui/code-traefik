@@ -29,14 +29,16 @@ const (
 )
 
 var (
-	ErrModuleInterfaceNotFound   = errors.New("模块接口契约不存在")
+	ErrModuleServiceNotFound     = errors.New("模块供给服务契约不存在")
+	ErrModuleDependencyNotFound  = errors.New("模块服务依赖关系不存在")
 	ErrAgentNotFound             = errors.New("目标 Agent 不存在")
 	ErrProcessNotFound           = errors.New("目标进程映射不存在")
-	ErrInvalidRelationType       = errors.New("接口关系类型必须为 PROVIDE 或 DEPEND")
 	ErrInvalidServiceNameFormat  = errors.New("服务名必须符合 {package}-{serviceName} 格式且长度为 1..63 位可见 ASCII")
-	ErrInvalidOperationFormat    = errors.New("方法名必须为 1..63 位字母、数字或下划线")
-	ErrDuplicateModuleInterface  = errors.New("同一模块下已存在相同的接口契约声明")
-	ErrDuplicateProvideInterface = errors.New("该供给接口 (PROVIDE) 已被其他功能模块占用")
+	ErrDuplicateModuleService    = errors.New("该服务已被其他功能模块声明提供 (A-05)")
+	ErrDuplicateDependency       = errors.New("当前功能模块已存在相同的下游服务依赖")
+	ErrSelfDependency            = errors.New("功能模块不能依赖自身提供的服务")
+	ErrServiceHasDependencies    = errors.New("该服务已被其他功能模块作为依赖引用，请先解除依赖关系")
+	ErrInvalidExternalDependency = errors.New("外部服务依赖必须填写外部系统名称或外部服务名称")
 	ErrInvalidTopologyView       = errors.New("静态拓扑视角参数非法，仅允许 LOGICAL 或 PHYSICAL")
 	ErrInvalidListenPort         = errors.New("进程监听端口必须在 1..65535 之间")
 	ErrInvalidProcessName        = errors.New("进程名称与命令行匹配模式不能为空")
@@ -51,35 +53,54 @@ var (
 
 // serviceNameRegex: {package}-{serviceName} 或 {serviceName} (1..63 位)
 var serviceNameRegex = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)*-[A-Za-z_][A-Za-z0-9_]*$`)
-var operationRegex = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,62}$`)
 
 // ProvideConflictError 全局唯一供给冲突详情错误 (A-05)
 type ProvideConflictError struct {
 	ServiceName      string `json:"service_name"`
-	Operation        string `json:"operation"`
 	HolderModuleID   uint64 `json:"holder_module_id"`
 	HolderModuleCode string `json:"holder_module_code"`
 	HolderModuleName string `json:"holder_module_name"`
 }
 
 func (e *ProvideConflictError) Error() string {
-	return fmt.Sprintf("供给接口 [%s:%s] 已被功能模块 [%s (%s)] 声明占用",
-		e.ServiceName, e.Operation, e.HolderModuleCode, e.HolderModuleName)
+	return fmt.Sprintf("供给服务 [%s] 已被功能模块 [%s (%s)] 声明占用",
+		e.ServiceName, e.HolderModuleCode, e.HolderModuleName)
 }
 
 func (e *ProvideConflictError) Unwrap() error {
-	return ErrDuplicateProvideInterface
+	return ErrDuplicateModuleService
 }
 
-// ModuleInterfaceInput 模块接口契约新增入参
-type ModuleInterfaceInput struct {
+// ModuleServiceInput 模块供给服务新增入参
+type ModuleServiceInput struct {
 	ModuleID        uint64
-	RelationType    string
 	ServiceName     string
-	Operation       string
 	DiffIgnorePaths []string
 	Description     string
 	OperatorID      uint
+}
+
+// ModuleDependencyInput 模块依赖下游服务新增入参
+type ModuleDependencyInput struct {
+	ConsumerModuleID uint64
+	IsExternal       bool
+	ExternalSystem   string
+	ExternalService  string
+	ServiceID        *uint64
+	Description      string
+	OperatorID       uint
+}
+
+// AvailableServiceDTO 可用服务下拉候选项
+type AvailableServiceDTO struct {
+	ServiceID     uint64 `json:"service_id"`
+	ServiceName   string `json:"service_name"`
+	ModuleID      uint64 `json:"module_id"`
+	ModuleCode    string `json:"module_code"`
+	ModuleName    string `json:"module_name"`
+	SubsystemID   uint64 `json:"subsystem_id"`
+	SubsystemName string `json:"subsystem_name"`
+	Description   string `json:"description"`
 }
 
 // ProcessInput 进程部署与模块承载映射新增/修改入参
@@ -113,16 +134,17 @@ type StaticTopologyNode struct {
 
 // StaticTopologyEdge 静态架构拓扑有向边 DTO
 type StaticTopologyEdge struct {
-	ID           string  `json:"id"`
-	Kind         string  `json:"kind"` // CROSS_PROCESS | INTRA_PROCESS | EXTERNAL_UNREGISTERED
-	SourceNodeID string  `json:"source_node_id"`
-	TargetNodeID string  `json:"target_node_id"`
-	SrcModuleID  uint64  `json:"src_module_id"`
-	DstModuleID  *uint64 `json:"dst_module_id,omitempty"`
-	SrcProcessID *uint64 `json:"src_process_id,omitempty"`
-	DstProcessID *uint64 `json:"dst_process_id,omitempty"`
-	ServiceName  string  `json:"service_name"`
-	Operation    string  `json:"operation"`
+	ID             string  `json:"id"`
+	Kind           string  `json:"kind"` // CROSS_PROCESS | INTRA_PROCESS | EXTERNAL_UNREGISTERED
+	SourceNodeID   string  `json:"source_node_id"`
+	TargetNodeID   string  `json:"target_node_id"`
+	SrcModuleID    uint64  `json:"src_module_id"`
+	DstModuleID    *uint64 `json:"dst_module_id,omitempty"`
+	SrcProcessID   *uint64 `json:"src_process_id,omitempty"`
+	DstProcessID   *uint64 `json:"dst_process_id,omitempty"`
+	ServiceName    string  `json:"service_name"`
+	Operation      string  `json:"operation,omitempty"`
+	ExternalSystem string  `json:"external_system,omitempty"`
 }
 
 // StaticTopologyDTO 静态拓扑响应载荷
@@ -132,21 +154,11 @@ type StaticTopologyDTO struct {
 	Edges []StaticTopologyEdge `json:"edges"`
 }
 
-// CreateModuleInterface 创建接口契约并强制执行全局唯一 PROVIDE 校验 (A-05)
-func CreateModuleInterface(db *gorm.DB, in ModuleInterfaceInput) (*models.ModuleInterface, error) {
-	relType := strings.ToUpper(strings.TrimSpace(in.RelationType))
-	if relType != "PROVIDE" && relType != "DEPEND" {
-		return nil, ErrInvalidRelationType
-	}
-
+// CreateModuleService 创建对外供给服务契约并执行全局唯一 PROVIDE 校验 (A-05)
+func CreateModuleService(db *gorm.DB, in ModuleServiceInput) (*models.ModuleService, error) {
 	serviceName := strings.TrimSpace(in.ServiceName)
 	if len(serviceName) == 0 || len(serviceName) > 63 || !serviceNameRegex.MatchString(serviceName) {
 		return nil, ErrInvalidServiceNameFormat
-	}
-
-	operation := strings.TrimSpace(in.Operation)
-	if len(operation) == 0 || len(operation) > 63 || !operationRegex.MatchString(operation) {
-		return nil, ErrInvalidOperationFormat
 	}
 
 	var mod models.Module
@@ -157,37 +169,20 @@ func CreateModuleInterface(db *gorm.DB, in ModuleInterfaceInput) (*models.Module
 		return nil, err
 	}
 
-	// 模块内本地四元组唯一性检查
-	var localCount int64
-	if err := db.Model(&models.ModuleInterface{}).
-		Where("module_id = ? AND relation_type = ? AND service_name = ? AND operation = ?",
-			in.ModuleID, relType, serviceName, operation).
-		Count(&localCount).Error; err != nil {
-		return nil, err
-	}
-	if localCount > 0 {
-		return nil, ErrDuplicateModuleInterface
-	}
-
 	// 全局 PROVIDE 唯一性检查
-	if relType == "PROVIDE" {
-		var existing models.ModuleInterface
-		err := db.Where("relation_type = 'PROVIDE' AND service_name = ? AND operation = ?", serviceName, operation).
-			First(&existing).Error
-		if err == nil {
-			// 查出占用该接口的模块信息
-			var holder models.Module
-			_ = db.First(&holder, existing.ModuleID).Error
-			return nil, &ProvideConflictError{
-				ServiceName:      serviceName,
-				Operation:        operation,
-				HolderModuleID:   holder.ID,
-				HolderModuleCode: holder.Code,
-				HolderModuleName: holder.Name,
-			}
-		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, err
+	var existing models.ModuleService
+	err := db.Where("service_name = ?", serviceName).First(&existing).Error
+	if err == nil {
+		var holder models.Module
+		_ = db.First(&holder, existing.ModuleID).Error
+		return nil, &ProvideConflictError{
+			ServiceName:      serviceName,
+			HolderModuleID:   holder.ID,
+			HolderModuleCode: holder.Code,
+			HolderModuleName: holder.Name,
 		}
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
 	}
 
 	diffPathsJSON, _ := json.Marshal(in.DiffIgnorePaths)
@@ -195,35 +190,30 @@ func CreateModuleInterface(db *gorm.DB, in ModuleInterfaceInput) (*models.Module
 		diffPathsJSON = []byte("[]")
 	}
 
-	iface := &models.ModuleInterface{
+	svc := &models.ModuleService{
 		ModuleID:        in.ModuleID,
-		RelationType:    relType,
 		ServiceName:     serviceName,
-		Operation:       operation,
 		DiffIgnorePaths: datatypes.JSON(diffPathsJSON),
 		Description:     in.Description,
 		CreatedBy:       in.OperatorID,
 	}
 
-	if err := db.Create(iface).Error; err != nil {
+	if err := db.Create(svc).Error; err != nil {
 		if strings.Contains(err.Error(), "duplicate") || strings.Contains(err.Error(), "23505") {
-			if relType == "PROVIDE" {
-				return nil, ErrDuplicateProvideInterface
-			}
-			return nil, ErrDuplicateModuleInterface
+			return nil, ErrDuplicateModuleService
 		}
 		return nil, err
 	}
 
-	return iface, nil
+	return svc, nil
 }
 
-// UpdateModuleInterface 更新接口契约忽略路径与描述
-func UpdateModuleInterface(db *gorm.DB, ifaceID uint64, diffIgnorePaths []string, description string) (*models.ModuleInterface, *models.ModuleInterface, error) {
-	var before models.ModuleInterface
-	if err := db.First(&before, ifaceID).Error; err != nil {
+// UpdateModuleService 更新供给服务忽略路径与描述
+func UpdateModuleService(db *gorm.DB, serviceID uint64, diffIgnorePaths []string, description string) (*models.ModuleService, *models.ModuleService, error) {
+	var before models.ModuleService
+	if err := db.First(&before, serviceID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, nil, ErrModuleInterfaceNotFound
+			return nil, nil, ErrModuleServiceNotFound
 		}
 		return nil, nil, err
 	}
@@ -237,7 +227,7 @@ func UpdateModuleInterface(db *gorm.DB, ifaceID uint64, diffIgnorePaths []string
 	after.DiffIgnorePaths = datatypes.JSON(diffPathsJSON)
 	after.Description = description
 
-	if err := db.Model(&models.ModuleInterface{}).Where("id = ?", ifaceID).Updates(map[string]interface{}{
+	if err := db.Model(&models.ModuleService{}).Where("id = ?", serviceID).Updates(map[string]interface{}{
 		"diff_ignore_paths": datatypes.JSON(diffPathsJSON),
 		"description":       description,
 	}).Error; err != nil {
@@ -247,20 +237,164 @@ func UpdateModuleInterface(db *gorm.DB, ifaceID uint64, diffIgnorePaths []string
 	return &before, &after, nil
 }
 
-// DeleteModuleInterface 删除接口契约
-func DeleteModuleInterface(db *gorm.DB, ifaceID uint64) (*models.ModuleInterface, error) {
-	var iface models.ModuleInterface
-	if err := db.First(&iface, ifaceID).Error; err != nil {
+// DeleteModuleService 删除供给服务契约 (若已被下游模块依赖则返回 ErrServiceHasDependencies 拦截)
+func DeleteModuleService(db *gorm.DB, serviceID uint64) (*models.ModuleService, error) {
+	var svc models.ModuleService
+	if err := db.First(&svc, serviceID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrModuleInterfaceNotFound
+			return nil, ErrModuleServiceNotFound
 		}
 		return nil, err
 	}
 
-	if err := db.Delete(&iface).Error; err != nil {
+	var depCount int64
+	if err := db.Model(&models.ModuleDependency{}).Where("service_id = ?", serviceID).Count(&depCount).Error; err != nil {
 		return nil, err
 	}
-	return &iface, nil
+	if depCount > 0 {
+		return nil, ErrServiceHasDependencies
+	}
+
+	if err := db.Delete(&svc).Error; err != nil {
+		return nil, err
+	}
+	return &svc, nil
+}
+
+// ListModuleServices 获取模块提供的服务，并统计被依赖数量
+func ListModuleServices(db *gorm.DB, moduleID uint64) ([]models.ModuleService, error) {
+	var services []models.ModuleService
+	if err := db.Where("module_id = ?", moduleID).Order("id ASC").Find(&services).Error; err != nil {
+		return nil, err
+	}
+
+	for i := range services {
+		var deps []models.ModuleDependency
+		_ = db.Preload("ConsumerModule").Where("service_id = ?", services[i].ID).Find(&deps).Error
+		services[i].DownstreamCount = len(deps)
+		modNames := make([]string, 0, len(deps))
+		for _, d := range deps {
+			if d.ConsumerModule != nil {
+				modNames = append(modNames, d.ConsumerModule.Name)
+			}
+		}
+		services[i].DownstreamModules = modNames
+	}
+	return services, nil
+}
+
+// CreateModuleDependency 创建模块对下游服务的依赖 (支持内部 FM 服务或外部三方系统)
+func CreateModuleDependency(db *gorm.DB, in ModuleDependencyInput) (*models.ModuleDependency, error) {
+	var consumer models.Module
+	if err := db.First(&consumer, in.ConsumerModuleID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrModuleNotFound
+		}
+		return nil, err
+	}
+
+	dep := &models.ModuleDependency{
+		ConsumerModuleID: in.ConsumerModuleID,
+		IsExternal:       in.IsExternal,
+		Description:      in.Description,
+		CreatedBy:        in.OperatorID,
+	}
+
+	if in.IsExternal {
+		extSys := strings.TrimSpace(in.ExternalSystem)
+		extSvc := strings.TrimSpace(in.ExternalService)
+		if extSys == "" && extSvc == "" {
+			return nil, ErrInvalidExternalDependency
+		}
+		dep.ExternalSystem = extSys
+		dep.ExternalService = extSvc
+	} else {
+		if in.ServiceID == nil || *in.ServiceID == 0 {
+			return nil, errors.New("内部服务依赖必须指定目标 service_id")
+		}
+		var targetSvc models.ModuleService
+		if err := db.First(&targetSvc, *in.ServiceID).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil, ErrModuleServiceNotFound
+			}
+			return nil, err
+		}
+
+		if targetSvc.ModuleID == in.ConsumerModuleID {
+			return nil, ErrSelfDependency
+		}
+
+		dep.ServiceID = in.ServiceID
+		dep.ProviderModuleID = &targetSvc.ModuleID
+	}
+
+	if err := db.Create(dep).Error; err != nil {
+		if strings.Contains(err.Error(), "duplicate") || strings.Contains(err.Error(), "23505") {
+			return nil, ErrDuplicateDependency
+		}
+		return nil, err
+	}
+
+	return dep, nil
+}
+
+// DeleteModuleDependency 解除模块依赖关系
+func DeleteModuleDependency(db *gorm.DB, depID uint64) (*models.ModuleDependency, error) {
+	var dep models.ModuleDependency
+	if err := db.First(&dep, depID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrModuleDependencyNotFound
+		}
+		return nil, err
+	}
+
+	if err := db.Delete(&dep).Error; err != nil {
+		return nil, err
+	}
+	return &dep, nil
+}
+
+// ListModuleDependencies 获取指定模块的所有下游依赖
+func ListModuleDependencies(db *gorm.DB, moduleID uint64) ([]models.ModuleDependency, error) {
+	var deps []models.ModuleDependency
+	if err := db.Preload("Service").Preload("ProviderModule").Preload("ProviderModule.Process").
+		Where("consumer_module_id = ?", moduleID).
+		Order("id ASC").Find(&deps).Error; err != nil {
+		return nil, err
+	}
+	return deps, nil
+}
+
+// ListAvailableServices 查询系统中所有可供依赖的内部服务清单 (排除自身)
+func ListAvailableServices(db *gorm.DB, excludeModuleID uint64) ([]AvailableServiceDTO, error) {
+	var services []models.ModuleService
+	query := db.Preload("Module").Preload("Module.Subsystem")
+	if excludeModuleID > 0 {
+		query = query.Where("module_id != ?", excludeModuleID)
+	}
+	if err := query.Order("id ASC").Find(&services).Error; err != nil {
+		return nil, err
+	}
+
+	result := make([]AvailableServiceDTO, 0, len(services))
+	for _, s := range services {
+		item := AvailableServiceDTO{
+			ServiceID:   s.ID,
+			ServiceName: s.ServiceName,
+			ModuleID:    s.ModuleID,
+			Description: s.Description,
+		}
+		if s.Module != nil {
+			item.ModuleCode = s.Module.Code
+			item.ModuleName = s.Module.Name
+			item.SubsystemID = s.Module.SubsystemID
+			if s.Module.Subsystem != nil {
+				item.SubsystemName = s.Module.Subsystem.Name
+			}
+		}
+		result = append(result, item)
+	}
+	return result, nil
 }
 
 // validateIPv4Endpoint 校验 IPv4:Port
@@ -686,20 +820,9 @@ func BuildStaticTopology(db *gorm.DB, view string, subsystemID *uint64) (*Static
 		moduleProcMap[pm.ModuleID] = pm.ProcessID
 	}
 
-	var ifaces []models.ModuleInterface
-	if err := db.Find(&ifaces).Error; err != nil {
+	var dependencies []models.ModuleDependency
+	if err := db.Preload("Service").Preload("ProviderModule").Find(&dependencies).Error; err != nil {
 		return nil, err
-	}
-
-	provideMap := make(map[string]models.ModuleInterface) // key: serviceName + ":" + operation -> PROVIDE iface
-	var dependIfaces []models.ModuleInterface
-	for _, iface := range ifaces {
-		key := iface.ServiceName + ":" + iface.Operation
-		if iface.RelationType == "PROVIDE" {
-			provideMap[key] = iface
-		} else if iface.RelationType == "DEPEND" {
-			dependIfaces = append(dependIfaces, iface)
-		}
 	}
 
 	nodes := make([]StaticTopologyNode, 0)
@@ -771,18 +894,16 @@ func BuildStaticTopology(db *gorm.DB, view string, subsystemID *uint64) (*Static
 	// 构建依赖边
 	edgeSet := make(map[string]bool)
 
-	for _, dep := range dependIfaces {
-		key := dep.ServiceName + ":" + dep.Operation
-		srcModID := dep.ModuleID
+	for _, dep := range dependencies {
+		srcModID := dep.ConsumerModuleID
 		srcProcIDVal, hasSrcProc := moduleProcMap[srcModID]
 		var srcProcID *uint64
 		if hasSrcProc {
 			srcProcID = &srcProcIDVal
 		}
 
-		provider, exists := provideMap[key]
-		if !exists {
-			// 指向外部未登记系统
+		if dep.IsExternal || dep.ServiceID == nil || dep.Service == nil {
+			// 指向外部系统
 			hasExternalNode = true
 			var srcNodeID, tgtNodeID string
 			if view == TopologyViewLogical {
@@ -797,24 +918,28 @@ func BuildStaticTopology(db *gorm.DB, view string, subsystemID *uint64) (*Static
 				tgtNodeID = VirtualExternalNodeID
 			}
 
-			edgeID := fmt.Sprintf("edge_ext_%d_%s", srcModID, key)
+			svcLabel := dep.ExternalService
+			if svcLabel == "" {
+				svcLabel = "ExternalService"
+			}
+			edgeID := fmt.Sprintf("edge_ext_%d_%s", srcModID, svcLabel)
 			if !edgeSet[edgeID] {
 				edgeSet[edgeID] = true
 				edges = append(edges, StaticTopologyEdge{
-					ID:           edgeID,
-					Kind:         EdgeKindExternalUnregistered,
-					SourceNodeID: srcNodeID,
-					TargetNodeID: tgtNodeID,
-					SrcModuleID:  srcModID,
-					SrcProcessID: srcProcID,
-					ServiceName:  dep.ServiceName,
-					Operation:    dep.Operation,
+					ID:             edgeID,
+					Kind:           EdgeKindExternalUnregistered,
+					SourceNodeID:   srcNodeID,
+					TargetNodeID:   tgtNodeID,
+					SrcModuleID:    srcModID,
+					SrcProcessID:   srcProcID,
+					ServiceName:    svcLabel,
+					ExternalSystem: dep.ExternalSystem,
 				})
 			}
 			continue
 		}
 
-		dstModID := provider.ModuleID
+		dstModID := dep.Service.ModuleID
 		dstProcIDVal, hasDstProc := moduleProcMap[dstModID]
 		var dstProcID *uint64
 		if hasDstProc {
@@ -844,7 +969,7 @@ func BuildStaticTopology(db *gorm.DB, view string, subsystemID *uint64) (*Static
 			}
 		}
 
-		edgeID := fmt.Sprintf("edge_%d_%d_%s", srcModID, dstModID, key)
+		edgeID := fmt.Sprintf("edge_%d_%d_%s", srcModID, dstModID, dep.Service.ServiceName)
 		if !edgeSet[edgeID] {
 			edgeSet[edgeID] = true
 			edges = append(edges, StaticTopologyEdge{
@@ -856,8 +981,7 @@ func BuildStaticTopology(db *gorm.DB, view string, subsystemID *uint64) (*Static
 				DstModuleID:  &dstModID,
 				SrcProcessID: srcProcID,
 				DstProcessID: dstProcID,
-				ServiceName:  dep.ServiceName,
-				Operation:    dep.Operation,
+				ServiceName:  dep.Service.ServiceName,
 			})
 		}
 	}
@@ -896,36 +1020,31 @@ func CompileProcessDownstreams(db *gorm.DB, procID uint64, batchProcessIDs []uin
 		moduleIDs = append(moduleIDs, pm.ModuleID)
 	}
 
-	// 1. 契约声明下游：从所承载模块的 DEPEND 接口反查提供该接口的 PROVIDE 模块及对应进程
+	// 1. 契约声明下游：从所承载模块的 DEPEND 依赖反查提供该服务的 PROVIDE 模块及对应进程
 	var declaredEndpoints []agentproto.DownstreamEndpoint
 	if len(moduleIDs) > 0 {
-		var dependIfaces []models.ModuleInterface
-		_ = db.Where("module_id IN ? AND relation_type = 'DEPEND'", moduleIDs).Find(&dependIfaces).Error
+		var deps []models.ModuleDependency
+		_ = db.Preload("ProviderModule").Where("consumer_module_id IN ? AND is_external = false", moduleIDs).Find(&deps).Error
 
-		for _, dep := range dependIfaces {
-			var provider models.ModuleInterface
-			err := db.Where("relation_type = 'PROVIDE' AND service_name = ? AND operation = ?", dep.ServiceName, dep.Operation).First(&provider).Error
-			if err == nil {
-				var targetMod models.Module
-				if err := db.First(&targetMod, provider.ModuleID).Error; err == nil && targetMod.ProcessID != nil {
-					var tgtProc models.Process
-					if err := db.Preload("Agent").First(&tgtProc, *targetMod.ProcessID).Error; err == nil && tgtProc.Agent != nil {
-						ip := parseHostFromEndpoint(tgtProc.Agent.Endpoint)
-						if tgtProc.AdvertiseIP != "" {
-							ip = tgtProc.AdvertiseIP
-						}
-						if ip != "" && tgtProc.ListenPort > 0 {
+		for _, dep := range deps {
+			if dep.ProviderModule != nil && dep.ProviderModule.ProcessID != nil {
+				var tgtProc models.Process
+				if err := db.Preload("Agent").First(&tgtProc, *dep.ProviderModule.ProcessID).Error; err == nil && tgtProc.Agent != nil {
+					ip := parseHostFromEndpoint(tgtProc.Agent.Endpoint)
+					if tgtProc.AdvertiseIP != "" {
+						ip = tgtProc.AdvertiseIP
+					}
+					if ip != "" && tgtProc.ListenPort > 0 {
+						declaredEndpoints = append(declaredEndpoints, agentproto.DownstreamEndpoint{
+							IP:   ip,
+							Port: uint16(tgtProc.ListenPort),
+						})
+						// 同机 127.0.0.1 别名探测
+						if proc.AgentID == tgtProc.AgentID {
 							declaredEndpoints = append(declaredEndpoints, agentproto.DownstreamEndpoint{
-								IP:   ip,
+								IP:   "127.0.0.1",
 								Port: uint16(tgtProc.ListenPort),
 							})
-							// 同机 127.0.0.1 别名探测
-							if proc.AgentID == tgtProc.AgentID {
-								declaredEndpoints = append(declaredEndpoints, agentproto.DownstreamEndpoint{
-									IP:   "127.0.0.1",
-									Port: uint16(tgtProc.ListenPort),
-								})
-							}
 						}
 					}
 				}

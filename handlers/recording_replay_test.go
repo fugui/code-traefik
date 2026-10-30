@@ -189,25 +189,22 @@ func TestSC05_SC07_SC08_EndToEndRecordingAndReplayPipeline(t *testing.T) {
 		t.Fatalf("创建 Mod_Stock 失败: %v", err)
 	}
 
-	// 接口契约：Mod_Order PROVIDE OrderService:CreateOrder, DEPEND StockService:DeductStock
-	ifaceProvide := models.ModuleInterface{
-		ModuleID:     modOrder.ID,
-		RelationType: "PROVIDE",
-		ServiceName:  "OrderService",
-		Operation:    "CreateOrder",
+	// 接口契约：Mod_Order PROVIDE OrderService, DEPEND StockService
+	svcProvide := models.ModuleService{
+		ModuleID:    modOrder.ID,
+		ServiceName: "OrderService",
 	}
-	if err := db.Create(&ifaceProvide).Error; err != nil {
+	if err := db.Create(&svcProvide).Error; err != nil {
 		t.Fatalf("创建 OrderService 契约失败: %v", err)
 	}
 
-	ifaceDepend := models.ModuleInterface{
-		ModuleID:     modOrder.ID,
-		RelationType: "DEPEND",
-		ServiceName:  "StockService",
-		Operation:    "DeductStock",
+	depStock := models.ModuleDependency{
+		ConsumerModuleID: modOrder.ID,
+		IsExternal:       true,
+		ExternalService:  "StockService",
 	}
-	if err := db.Create(&ifaceDepend).Error; err != nil {
-		t.Fatalf("创建 StockService 契约失败: %v", err)
+	if err := db.Create(&depStock).Error; err != nil {
+		t.Fatalf("创建 StockService 依赖失败: %v", err)
 	}
 
 	// 激活 Proto 描述集

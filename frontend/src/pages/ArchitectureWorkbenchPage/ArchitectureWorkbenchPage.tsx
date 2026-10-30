@@ -11,7 +11,8 @@ import type {
   Subsystem,
   FunctionalGroupTreeNode,
   Module,
-  ModuleInterface,
+  ModuleService,
+  ModuleDependency,
   StaticTopologyDTO,
   ConsistencyReportDTO,
   RecordingSession,
@@ -67,7 +68,8 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
   const [subsystemModules, setSubsystemModules] = useState<Module[]>([]);
   const [selectedModuleId, setSelectedModuleId] = useState<string>(urlModuleId);
   const [selectedModule, setSelectedModule] = useState<Module | null>(null);
-  const [interfaces, setInterfaces] = useState<ModuleInterface[]>([]);
+  const [services, setServices] = useState<ModuleService[]>([]);
+  const [dependencies, setDependencies] = useState<ModuleDependency[]>([]);
 
   // 拓扑与一致性数据
   const [topology, setTopology] = useState<StaticTopologyDTO | null>(null);
@@ -142,21 +144,6 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
   });
   const [quickProcessOpen, setQuickProcessOpen] = useState(false);
   const [quickProcessForm, setQuickProcessForm] = useState({ group_name: '', name: '', listen_port: '' });
-
-  const [ifaceDrawerOpen, setIfaceDrawerOpen] = useState(false);
-  const [ifaceForm, setIfaceForm] = useState<{
-    relation_type: 'PROVIDE' | 'DEPEND';
-    service_name: string;
-    operation: string;
-    diff_ignore_paths: string;
-    description: string;
-  }>({
-    relation_type: 'PROVIDE',
-    service_name: '',
-    operation: '',
-    diff_ignore_paths: '',
-    description: '',
-  });
 
   // 更新 URL Search Params 辅助函数
   const updateParams = useCallback(
@@ -335,7 +322,8 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
         } else {
           setSelectedModuleId('');
           setSelectedModule(null);
-          setInterfaces([]);
+          setServices([]);
+          setDependencies([]);
         }
       } catch (err) {
         toast.error(err instanceof Error ? err.message : '加载模块失败');
@@ -343,22 +331,32 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
     })();
   }, [selectedGroupId, toast]);
 
-  // 当模块切换时，加载模块详情与接口契约
-  useEffect(() => {
-    if (!selectedModuleId) return;
-    void (async () => {
+  // 加载与刷新模块详情、对外供给服务与下游服务依赖
+  const refreshCurrentModule = useCallback(
+    async (modId: string) => {
+      if (!modId) return null;
       try {
-        const res = await archApi.getModule(selectedModuleId);
+        const res = await archApi.getModule(modId);
         setSelectedModule(res.module);
-        setInterfaces(res.interfaces ?? []);
+        setServices(res.services ?? []);
+        setDependencies(res.dependencies ?? []);
         if (res.module?.group_id) {
           setSelectedGroupId(res.module.group_id);
         }
+        return res;
       } catch (err) {
         toast.error(err instanceof Error ? err.message : '加载模块契约失败');
+        return null;
       }
-    })();
-  }, [selectedModuleId, toast]);
+    },
+    [toast]
+  );
+
+  // 当模块切换时，加载模块详情与服务契约
+  useEffect(() => {
+    if (!selectedModuleId) return;
+    void refreshCurrentModule(selectedModuleId);
+  }, [selectedModuleId, refreshCurrentModule]);
 
   // 拓扑加载
   const loadTopology = useCallback(
@@ -736,49 +734,86 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
     }
   };
 
-  // 接口契约 CRUD
-  const handleSaveInterface = async () => {
+  // Service 供给与依赖处理函数
+  const handleCreateService = async (data: {
+    service_name: string;
+    diff_ignore_paths?: string[];
+    description?: string;
+  }) => {
     if (!selectedModuleId) return;
     try {
-      const paths = ifaceForm.diff_ignore_paths
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean);
-      await archApi.createModuleInterface(selectedModuleId, {
-        relation_type: ifaceForm.relation_type,
-        service_name: ifaceForm.service_name,
-        operation: ifaceForm.operation,
-        diff_ignore_paths: paths,
-        description: ifaceForm.description,
-      });
-      toast.success('接口契约添加成功');
-      setIfaceDrawerOpen(false);
-      const res = await archApi.getModule(selectedModuleId);
-      setInterfaces(res.interfaces);
+      await archApi.createModuleService(selectedModuleId, data);
+      toast.success(`对外服务 [${data.service_name}] 声明成功`);
+      await refreshCurrentModule(selectedModuleId);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : '添加接口契约失败');
+      toast.error(err instanceof Error ? err.message : '声明服务失败');
+      throw err;
     }
   };
 
-  const handleDeleteInterface = async (ifaceId: string) => {
+  const handleUpdateServiceIgnorePaths = async (serviceId: string, paths: string[]) => {
+    if (!selectedModuleId) return;
     try {
-      await archApi.deleteModuleInterface(ifaceId);
-      toast.success('接口契约已删除');
-      const res = await archApi.getModule(selectedModuleId);
-      setInterfaces(res.interfaces);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : '删除接口契约失败');
-    }
-  };
-
-  const handleUpdateIgnorePaths = async (ifaceId: string, paths: string[]) => {
-    try {
-      await archApi.updateModuleInterface(ifaceId, { diff_ignore_paths: paths });
+      await archApi.updateModuleService(serviceId, { diff_ignore_paths: paths });
       toast.success('忽略路径已更新');
-      const res = await archApi.getModule(selectedModuleId);
-      setInterfaces(res.interfaces);
+      await refreshCurrentModule(selectedModuleId);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '更新忽略路径失败');
+      throw err;
+    }
+  };
+
+  const handleDeleteService = async (serviceId: string) => {
+    if (!selectedModuleId) return;
+    try {
+      await archApi.deleteModuleService(serviceId);
+      toast.success('对外服务已删除');
+      await refreshCurrentModule(selectedModuleId);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '删除服务失败');
+      throw err;
+    }
+  };
+
+  const handleCreateDependency = async (data: {
+    is_external: boolean;
+    external_system?: string;
+    external_service?: string;
+    service_id?: string;
+    description?: string;
+  }) => {
+    if (!selectedModuleId) return;
+    try {
+      await archApi.createModuleDependency(selectedModuleId, data);
+      toast.success('下游服务依赖添加成功');
+      await refreshCurrentModule(selectedModuleId);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '添加依赖失败');
+      throw err;
+    }
+  };
+
+  const handleDeleteDependency = async (depId: string) => {
+    if (!selectedModuleId) return;
+    try {
+      await archApi.deleteModuleDependency(depId);
+      toast.success('下游依赖已解除');
+      await refreshCurrentModule(selectedModuleId);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '解除依赖失败');
+      throw err;
+    }
+  };
+
+  const handleBindModuleProcess = async (moduleId: string, processId: string | null) => {
+    try {
+      await archApi.bindModuleProcess(moduleId, processId);
+      toast.success(processId ? '物理进程装载成功' : '已解除物理进程装配');
+      await refreshCurrentModule(moduleId);
+      void loadProcesses();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '装配物理进程失败');
+      throw err;
     }
   };
 
@@ -998,7 +1033,9 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
                   updateParams({ module_id: id });
                 }}
                 selectedModule={selectedModule}
-                interfaces={interfaces}
+                services={services}
+                dependencies={dependencies}
+                allProcesses={processes}
                 isAdmin={isAdmin}
                 currentSubsystem={subsystems.find((s) => s.id === selectedSubsystemId) || null}
                 currentGroup={selectedGroupId ? findGroupInTree(groupTree, selectedGroupId) : null}
@@ -1032,18 +1069,12 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
                   setModuleDrawerOpen(true);
                 }}
                 onDeleteModule={(id) => void handleDeleteModule(id)}
-                onCreateInterface={() => {
-                  setIfaceForm({
-                    relation_type: 'PROVIDE',
-                    service_name: '',
-                    operation: '',
-                    diff_ignore_paths: '',
-                    description: '',
-                  });
-                  setIfaceDrawerOpen(true);
-                }}
-                onDeleteInterface={(id) => void handleDeleteInterface(id)}
-                onUpdateIgnorePaths={(ifaceId, paths) => void handleUpdateIgnorePaths(ifaceId, paths)}
+                onCreateService={handleCreateService}
+                onUpdateServiceIgnorePaths={handleUpdateServiceIgnorePaths}
+                onDeleteService={handleDeleteService}
+                onCreateDependency={handleCreateDependency}
+                onDeleteDependency={handleDeleteDependency}
+                onBindProcess={handleBindModuleProcess}
               />
             )}
           </div>
@@ -1524,90 +1555,6 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
         </div>
       </Drawer>
 
-      {/* 7. 接口契约侧边栏 (Drawer) */}
-      <Drawer
-        open={ifaceDrawerOpen}
-        onClose={() => setIfaceDrawerOpen(false)}
-        title={`声明模块接口契约 [${selectedModule?.name || ''}]`}
-        subtitle="声明 PROVIDE (对外暴露) 或 DEPEND (下游依赖) 契约方法"
-        width="md"
-        footer={
-          <div className="code-drawer-footer">
-            <button
-              type="button"
-              className="code-btn code-btn--secondary"
-              onClick={() => setIfaceDrawerOpen(false)}
-            >
-              取消
-            </button>
-            <button
-              type="button"
-              className="code-btn code-btn--primary"
-              onClick={() => void handleSaveInterface()}
-            >
-              确认声明
-            </button>
-          </div>
-        }
-      >
-        <div className="code-form">
-          <div className="code-form-item">
-            <label className="code-form-label">关系类型:</label>
-            <select
-              className="code-select"
-              value={ifaceForm.relation_type}
-              onChange={(e) =>
-                setIfaceForm({
-                  ...ifaceForm,
-                  relation_type: e.target.value as 'PROVIDE' | 'DEPEND',
-                })
-              }
-            >
-              <option value="PROVIDE">PROVIDE (本模块对外暴露并实现的服务)</option>
-              <option value="DEPEND">DEPEND (本模块运行依赖的下游服务)</option>
-            </select>
-          </div>
-          <div className="code-form-item">
-            <label className="code-form-label">服务名称 (格式: {'{package}-{serviceName}'}):</label>
-            <input
-              type="text"
-              className="code-input"
-              value={ifaceForm.service_name}
-              onChange={(e) => setIfaceForm({ ...ifaceForm, service_name: e.target.value })}
-              placeholder="如 dophi.account.v1-AccountService"
-            />
-          </div>
-          <div className="code-form-item">
-            <label className="code-form-label">调用方法名 (operation):</label>
-            <input
-              type="text"
-              className="code-input"
-              value={ifaceForm.operation}
-              onChange={(e) => setIfaceForm({ ...ifaceForm, operation: e.target.value })}
-              placeholder="如 GetAccountBalance"
-            />
-          </div>
-          <div className="code-form-item">
-            <label className="code-form-label">默认 Diff 忽略字段路径 (点分路径逗号分隔):</label>
-            <input
-              type="text"
-              className="code-input"
-              value={ifaceForm.diff_ignore_paths}
-              onChange={(e) => setIfaceForm({ ...ifaceForm, diff_ignore_paths: e.target.value })}
-              placeholder="如 header.timestamp, meta.token"
-            />
-          </div>
-          <div className="code-form-item">
-            <label className="code-form-label">说明:</label>
-            <input
-              type="text"
-              className="code-input"
-              value={ifaceForm.description}
-              onChange={(e) => setIfaceForm({ ...ifaceForm, description: e.target.value })}
-            />
-          </div>
-        </div>
-      </Drawer>
     </div>
   );
 };

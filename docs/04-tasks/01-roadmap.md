@@ -55,7 +55,7 @@ flowchart LR
 | 特性编号 | 特性名称 | 落位里程碑 | 目标测试文件 | 关键先行测试函数 |
 | :--- | :--- | :---: | :--- | :--- |
 | **F-01** | 三级架构元素建模 | M1, M2 | `models/models_test.go`<br>`handlers/arch_proto_agent_test.go` | `TestArchHierarchyCRUDAndMoveValidation`<br>`TestDeleteNonEmptyArchElementsConflict` |
-| **F-02** | 进程部署映射与模块接口契约 | M1, M2 | `internal/server/topology/topology_test.go`<br>`handlers/arch_proto_agent_test.go` | `TestModuleInterfaceProvideGlobalUnique`<br>`TestProcessModuleBindingPublicVsPrivate` |
+| **F-02** | 进程部署映射与模块服务契约依赖 | M1, M2 | `internal/server/topology/topology_test.go`<br>`handlers/arch_proto_agent_test.go` | `TestModuleServiceProvideGlobalUnique`<br>`TestModuleDependenciesAndExternalSystem`<br>`TestProcessModuleBindingPublicVsPrivate` |
 | **F-03** | Protobuf 描述集注册与接口映射 | M2 | `internal/server/decoder/decoder_test.go`<br>`handlers/arch_proto_agent_test.go` | `TestProtoSchemaUploadAndDashServiceName`<br>`TestProtoSchemaActivateConflictAndHistoryImmutability` |
 | **F-04** | 静态架构拓扑视图 | M2, M5 | `internal/server/topology/topology_test.go`<br>`frontend/src/__tests__/WorkbenchRBAC.test.tsx` | `TestBuildStaticTopologyLogicalAndPhysical` |
 | **F-05** | 实测调用拓扑还原与架构一致性验证 | M4 | `internal/server/topology/consistency_test.go` | `TestResolveSourceModuleThreeTierPriority`<br>`TestVerifySessionTopologySixCategories` |

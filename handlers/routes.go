@@ -80,11 +80,18 @@ func RegisterAPIRoutes(r *gin.Engine) {
 		protected.POST("/arch/modules", requireAdmin, CreateModule)
 		protected.PUT("/arch/modules/:id", requireAdmin, UpdateModule)
 		protected.DELETE("/arch/modules/:id", requireAdmin, DeleteModule)
+		protected.POST("/arch/modules/:id/process-binding", requireAdmin, BindModuleProcess)
 
-		protected.GET("/arch/modules/:id/interfaces", ListModuleInterfaces)
-		protected.POST("/arch/modules/:id/interfaces", requireAdmin, CreateModuleInterface)
-		protected.PUT("/arch/module-interfaces/:ifaceId", requireAdmin, UpdateModuleInterface)
-		protected.DELETE("/arch/module-interfaces/:ifaceId", requireAdmin, DeleteModuleInterface)
+		protected.GET("/arch/modules/:id/services", ListModuleServices)
+		protected.POST("/arch/modules/:id/services", requireAdmin, CreateModuleService)
+		protected.PUT("/arch/module-services/:serviceId", requireAdmin, UpdateModuleService)
+		protected.DELETE("/arch/module-services/:serviceId", requireAdmin, DeleteModuleService)
+
+		protected.GET("/arch/modules/:id/dependencies", ListModuleDependencies)
+		protected.POST("/arch/modules/:id/dependencies", requireAdmin, CreateModuleDependency)
+		protected.DELETE("/arch/module-dependencies/:depId", requireAdmin, DeleteModuleDependency)
+
+		protected.GET("/arch/services/available", ListAvailableServices)
 
 		protected.GET("/arch/topology/static", GetStaticTopology)
 
