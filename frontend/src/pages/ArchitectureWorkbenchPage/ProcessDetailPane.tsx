@@ -157,3 +157,4 @@ export const ProcessDetailPane: React.FC<ProcessDetailPaneProps> = ({
     </div>
   );
 };
+

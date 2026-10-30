@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Plus, Server } from 'lucide-react';
-import { Modal } from '@code/common';
+import { Drawer } from '@code/common';
 import { useToast } from '../../utils/toast';
 import { useModuleUser } from '../../context/ModuleUserContext';
 import * as archApi from '../../api/arch';
@@ -44,19 +44,28 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
   const toast = useToast();
   const isAdmin = Boolean(user?.is_module_admin || user?.is_super_admin);
 
-  // URL 状态同步
-  const activeTab = (searchParams.get('tab') as 'logical' | 'physical' | 'verify') || 'logical';
+  // URL 状态读取
+  const urlTab = (searchParams.get('tab') as 'logical' | 'physical' | 'verify') || 'logical';
+  const urlViewMode = (searchParams.get('view_mode') as TreeViewMode) || 'LOGICAL';
   const urlSubsystemId = searchParams.get('subsystem_id') || '';
+  const urlGroupId = searchParams.get('group_id') || '';
+  const urlModuleId = searchParams.get('module_id') || '';
+  const urlProcessId = searchParams.get('process_id') || '';
   const urlSessionId = searchParams.get('session_id') || '';
+
+  // 顶层 Tab 与左侧视角 Tab
+  const [activeTab, setActiveTab] = useState<'logical' | 'physical' | 'verify'>(urlTab);
+  const [treeViewMode, setTreeViewMode] = useState<TreeViewMode>(urlViewMode);
 
   // 基础数据状态
   const [subsystems, setSubsystems] = useState<Subsystem[]>([]);
   const [selectedSubsystemId, setSelectedSubsystemId] = useState<string>(urlSubsystemId);
   const [groupTree, setGroupTree] = useState<FunctionalGroupTreeNode[]>([]);
   const [groupTreeMap, setGroupTreeMap] = useState<Record<string, FunctionalGroupTreeNode[]>>({});
-  const [selectedGroupId, setSelectedGroupId] = useState<string>('');
+  const [selectedGroupId, setSelectedGroupId] = useState<string>(urlGroupId);
   const [modules, setModules] = useState<Module[]>([]);
-  const [selectedModuleId, setSelectedModuleId] = useState<string>('');
+  const [subsystemModules, setSubsystemModules] = useState<Module[]>([]);
+  const [selectedModuleId, setSelectedModuleId] = useState<string>(urlModuleId);
   const [selectedModule, setSelectedModule] = useState<Module | null>(null);
   const [interfaces, setInterfaces] = useState<ModuleInterface[]>([]);
 
@@ -69,30 +78,49 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
   const [consistencyReport, setConsistencyReport] = useState<ConsistencyReportDTO | null>(null);
   const [loadingReport, setLoadingReport] = useState(false);
 
-  // 弹窗与表单状态
-  const [subsystemModalOpen, setSubsystemModalOpen] = useState(false);
+  // 物理进程数据状态与分组
+  const [processes, setProcesses] = useState<Process[]>([]);
+  const [selectedProcessId, setSelectedProcessId] = useState<string>(urlProcessId);
+  const [selectedProcessGroupName, setSelectedProcessGroupName] = useState<string>('');
+  const [agents, setAgents] = useState<Agent[]>([]);
+  const [customProcessGroups, setCustomProcessGroups] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('traefik_custom_proc_groups');
+      if (saved) return JSON.parse(saved);
+    } catch {
+      // ignore
+    }
+    return ['核心业务组', '支撑服务组'];
+  });
+
+  const saveCustomProcessGroups = (groups: string[]) => {
+    setCustomProcessGroups(groups);
+    try {
+      localStorage.setItem('traefik_custom_proc_groups', JSON.stringify(groups));
+    } catch {
+      // ignore
+    }
+  };
+
+  // 抽屉（Drawer）与表单状态
+  const [subsystemDrawerOpen, setSubsystemDrawerOpen] = useState(false);
   const [editingSubsystem, setEditingSubsystem] = useState<Subsystem | null>(null);
   const [subsystemForm, setSubsystemForm] = useState({ code: '', name: '', description: '' });
 
-  const [groupModalOpen, setGroupModalOpen] = useState(false);
+  const [groupDrawerOpen, setGroupDrawerOpen] = useState(false);
   const [groupParentId, setGroupParentId] = useState<string | null>(null);
   const [editingGroup, setEditingGroup] = useState<FunctionalGroupTreeNode | null>(null);
-  const [groupForm, setGroupForm] = useState({ code: '', name: '', description: '' });
+  const [groupForm, setGroupForm] = useState({ code: '', name: '', description: '', sort_order: 1 });
 
-  const [moveModalOpen, setMoveModalOpen] = useState(false);
+  const [moveGroupDrawerOpen, setMoveGroupDrawerOpen] = useState(false);
   const [movingGroup, setMovingGroup] = useState<FunctionalGroupTreeNode | null>(null);
   const [newParentId, setNewParentId] = useState<string>('');
 
-  // 视角模式状态（逻辑业务树 vs 物理架构树）
-  const [treeViewMode, setTreeViewMode] = useState<TreeViewMode>('LOGICAL');
+  const [processGroupDrawerOpen, setProcessGroupDrawerOpen] = useState(false);
+  const [editingProcessGroupName, setEditingProcessGroupName] = useState<string | null>(null);
+  const [processGroupForm, setProcessGroupForm] = useState({ name: '' });
 
-  // 物理进程数据状态
-  const [processes, setProcesses] = useState<Process[]>([]);
-  const [selectedProcessId, setSelectedProcessId] = useState<string>('');
-  const [agents, setAgents] = useState<Agent[]>([]);
-
-  // 进程弹窗状态
-  const [processModalOpen, setProcessModalOpen] = useState(false);
+  const [processDrawerOpen, setProcessDrawerOpen] = useState(false);
   const [editingProcess, setEditingProcess] = useState<Process | null>(null);
   const [processForm, setProcessForm] = useState({
     group_name: '',
@@ -103,14 +131,19 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
     description: '',
   });
 
-  // FM 模块编辑弹窗（增加 process_id 与快速新建进程面板状态）
-  const [moduleModalOpen, setModuleModalOpen] = useState(false);
+  const [moduleDrawerOpen, setModuleDrawerOpen] = useState(false);
   const [editingMod, setEditingMod] = useState<Module | null>(null);
-  const [moduleForm, setModuleForm] = useState({ code: '', name: '', description: '', process_id: '' });
+  const [moduleForm, setModuleForm] = useState({
+    code: '',
+    name: '',
+    description: '',
+    process_id: '',
+    group_id: '',
+  });
   const [quickProcessOpen, setQuickProcessOpen] = useState(false);
   const [quickProcessForm, setQuickProcessForm] = useState({ group_name: '', name: '', listen_port: '' });
 
-  const [ifaceModalOpen, setIfaceModalOpen] = useState(false);
+  const [ifaceDrawerOpen, setIfaceDrawerOpen] = useState(false);
   const [ifaceForm, setIfaceForm] = useState<{
     relation_type: 'PROVIDE' | 'DEPEND';
     service_name: string;
@@ -125,9 +158,9 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
     description: '',
   });
 
-  // 更新 URL 辅助函数
+  // 更新 URL Search Params 辅助函数
   const updateParams = useCallback(
-    (updates: Record<string, string | undefined>) => {
+    (updates: Record<string, string | null | undefined>) => {
       setSearchParams((prev) => {
         const next = new URLSearchParams(prev);
         Object.entries(updates).forEach(([k, v]) => {
@@ -139,6 +172,25 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
     },
     [setSearchParams]
   );
+
+  // 监听浏览器 URL 变化（支持前进/后退/外链深度直达）
+  useEffect(() => {
+    const tab = (searchParams.get('tab') as 'logical' | 'physical' | 'verify') || 'logical';
+    const vm = (searchParams.get('view_mode') as TreeViewMode) || 'LOGICAL';
+    const subId = searchParams.get('subsystem_id') || '';
+    const grpId = searchParams.get('group_id') || '';
+    const modId = searchParams.get('module_id') || '';
+    const procId = searchParams.get('process_id') || '';
+    const sessId = searchParams.get('session_id') || '';
+
+    setActiveTab(tab);
+    setTreeViewMode(vm);
+    if (subId) setSelectedSubsystemId(subId);
+    if (grpId) setSelectedGroupId(grpId);
+    if (modId) setSelectedModuleId(modId);
+    if (procId) setSelectedProcessId(procId);
+    if (sessId) setSelectedSessionId(sessId);
+  }, [searchParams]);
 
   // 加载子系统列表
   const loadSubsystems = useCallback(async () => {
@@ -163,6 +215,27 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
   useEffect(() => {
     void loadSubsystems();
   }, [loadSubsystems]);
+
+  // 加载当前子系统的所有功能模块（用于逻辑树直接展开至 FM）
+  const loadSubsystemModules = useCallback(async (subsystemId: string) => {
+    if (!subsystemId) {
+      setSubsystemModules([]);
+      return [];
+    }
+    try {
+      const res = await archApi.listModules({ subsystem_id: subsystemId, page_size: 1000 });
+      const items = res.items ?? [];
+      setSubsystemModules(items);
+      return items;
+    } catch {
+      return [];
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!selectedSubsystemId) return;
+    void loadSubsystemModules(selectedSubsystemId);
+  }, [selectedSubsystemId, loadSubsystemModules]);
 
   // 加载物理进程列表
   const loadProcesses = useCallback(async () => {
@@ -249,7 +322,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
     })();
   }, [selectedSubsystemId, toast]);
 
-  // 当功能组切换时，加载模块列表
+  // 当功能组切换时，加载该组下的模块列表
   useEffect(() => {
     if (!selectedGroupId) return;
     void (async () => {
@@ -258,7 +331,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
         const items = res.items ?? [];
         setModules(items);
         if (items.length > 0) {
-          setSelectedModuleId(items[0].id);
+          setSelectedModuleId((prev) => (items.some((m) => m.id === prev) ? prev : items[0].id));
         } else {
           setSelectedModuleId('');
           setSelectedModule(null);
@@ -278,6 +351,9 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
         const res = await archApi.getModule(selectedModuleId);
         setSelectedModule(res.module);
         setInterfaces(res.interfaces ?? []);
+        if (res.module?.group_id) {
+          setSelectedGroupId(res.module.group_id);
+        }
       } catch (err) {
         toast.error(err instanceof Error ? err.message : '加载模块契约失败');
       }
@@ -354,7 +430,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
         await archApi.createSubsystem(subsystemForm);
         toast.success('子系统创建成功');
       }
-      setSubsystemModalOpen(false);
+      setSubsystemDrawerOpen(false);
       void loadSubsystems();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '操作子系统失败');
@@ -366,6 +442,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
       await archApi.deleteSubsystem(id);
       toast.success('子系统已删除');
       setSelectedSubsystemId('');
+      updateParams({ subsystem_id: null, group_id: null, module_id: null });
       void loadSubsystems();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '删除子系统失败');
@@ -377,17 +454,25 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
     if (!selectedSubsystemId) return;
     try {
       if (editingGroup) {
-        await archApi.updateFunctionalGroup(editingGroup.id, groupForm);
+        await archApi.updateFunctionalGroup(editingGroup.id, {
+          code: groupForm.code,
+          name: groupForm.name,
+          description: groupForm.description,
+          sort_order: groupForm.sort_order,
+        });
         toast.success('功能组更新成功');
       } else {
         await archApi.createFunctionalGroup({
           subsystem_id: selectedSubsystemId,
           parent_id: groupParentId,
-          ...groupForm,
+          code: groupForm.code,
+          name: groupForm.name,
+          description: groupForm.description,
+          sort_order: groupForm.sort_order,
         });
         toast.success('功能组创建成功');
       }
-      setGroupModalOpen(false);
+      setGroupDrawerOpen(false);
       const res = await archApi.getFunctionalGroupTree(selectedSubsystemId);
       const safeTree = res.tree ?? [];
       setGroupTree(safeTree);
@@ -404,7 +489,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
         new_parent_id: newParentId ? newParentId : null,
       });
       toast.success('功能组层级调整成功');
-      setMoveModalOpen(false);
+      setMoveGroupDrawerOpen(false);
       const res = await archApi.getFunctionalGroupTree(selectedSubsystemId);
       const safeTree = res.tree ?? [];
       setGroupTree(safeTree);
@@ -422,6 +507,10 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
       const safeTree = res.tree ?? [];
       setGroupTree(safeTree);
       setGroupTreeMap((prev) => ({ ...prev, [selectedSubsystemId]: safeTree }));
+      if (selectedGroupId === id) {
+        setSelectedGroupId('');
+        updateParams({ group_id: null, module_id: null });
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '删除功能组失败');
     }
@@ -429,12 +518,16 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
 
   // 模块 CRUD
   const handleSaveModule = async () => {
-    if (!selectedGroupId) return;
+    const targetGroupId = moduleForm.group_id || selectedGroupId;
+    if (!targetGroupId) {
+      toast.error('请选择所属功能组');
+      return;
+    }
     try {
       const procId = moduleForm.process_id ? moduleForm.process_id : null;
       if (editingMod) {
         await archApi.updateModule(editingMod.id, {
-          group_id: selectedGroupId,
+          group_id: targetGroupId,
           code: moduleForm.code,
           name: moduleForm.name,
           description: moduleForm.description,
@@ -442,18 +535,24 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
         });
         toast.success('模块修改成功');
       } else {
-        await archApi.createModule({
-          group_id: selectedGroupId,
+        const created = await archApi.createModule({
+          group_id: targetGroupId,
           code: moduleForm.code,
           name: moduleForm.name,
           description: moduleForm.description,
           process_id: procId,
         });
         toast.success('模块创建成功');
+        setSelectedModuleId(created.id);
+        updateParams({ module_id: created.id, group_id: targetGroupId, view_mode: 'LOGICAL' });
       }
-      setModuleModalOpen(false);
-      const res = await archApi.listModules({ group_id: selectedGroupId, page_size: 100 });
+      setModuleDrawerOpen(false);
+      // 重新加载组内模块与子系统全量模块
+      const res = await archApi.listModules({ group_id: targetGroupId, page_size: 100 });
       setModules(res.items);
+      if (selectedSubsystemId) {
+        void loadSubsystemModules(selectedSubsystemId);
+      }
       if (selectedModuleId) {
         const modRes = await archApi.getModule(selectedModuleId);
         setSelectedModule(modRes.module);
@@ -464,7 +563,29 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
     }
   };
 
-  // 在创建/编辑 FM 模块时，快速创建物理进程并直接绑定
+  const handleDeleteModule = async (id: string) => {
+    try {
+      await archApi.deleteModule(id);
+      toast.success('模块已删除');
+      if (selectedGroupId) {
+        const res = await archApi.listModules({ group_id: selectedGroupId, page_size: 100 });
+        setModules(res.items);
+      }
+      if (selectedSubsystemId) {
+        void loadSubsystemModules(selectedSubsystemId);
+      }
+      if (selectedModuleId === id) {
+        setSelectedModuleId('');
+        setSelectedModule(null);
+        updateParams({ module_id: null });
+      }
+      void loadProcesses();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '删除模块失败');
+    }
+  };
+
+  // 在创建/编辑 FM 模块时快速新建物理进程并直接绑定
   const handleQuickCreateProcess = async () => {
     if (!quickProcessForm.name.trim()) {
       toast.error('请输入进程名称');
@@ -477,9 +598,10 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
     }
     try {
       const defaultAgentId = agents.length > 0 ? agents[0].id : '';
+      const groupName = quickProcessForm.group_name.trim() || '默认进程组';
       const newProc = await agentApi.createProcess({
         agent_id: defaultAgentId,
-        group_name: quickProcessForm.group_name.trim() || '默认进程组',
+        group_name: groupName,
         name: quickProcessForm.name.trim(),
         listen_port: port,
         cmd_pattern: `./bin/${quickProcessForm.name.trim()}`,
@@ -488,6 +610,10 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
       const res = await agentApi.listProcesses({ page_size: 1000 });
       const items = res.items ?? [];
       setProcesses(items);
+      // 若是全新进程组，加入自定义组列表
+      if (!customProcessGroups.includes(groupName) && groupName !== '默认进程组') {
+        saveCustomProcessGroups([...customProcessGroups, groupName]);
+      }
       setModuleForm((prev) => ({ ...prev, process_id: newProc.id }));
       setQuickProcessOpen(false);
       setQuickProcessForm({ group_name: '', name: '', listen_port: '' });
@@ -496,7 +622,57 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
     }
   };
 
-  // 物理进程独立 CRUD
+  // 物理进程组 CRUD
+  const handleSaveProcessGroup = async () => {
+    const newName = processGroupForm.name.trim();
+    if (!newName) {
+      toast.error('请输入进程组名称');
+      return;
+    }
+    if (editingProcessGroupName) {
+      try {
+        const procsInGroup = processes.filter((p) => (p.group_name || '默认进程组') === editingProcessGroupName);
+        for (const p of procsInGroup) {
+          await agentApi.updateProcess(p.id, {
+            name: p.name,
+            group_name: newName,
+            listen_port: p.listen_port,
+            advertise_ip: p.advertise_ip,
+            cmd_pattern: p.cmd_pattern,
+            description: p.description,
+          });
+        }
+        const updated = customProcessGroups.map((g) => (g === editingProcessGroupName ? newName : g));
+        saveCustomProcessGroups(updated);
+        toast.success(`进程组已重命名为 [${newName}]`);
+        setProcessGroupDrawerOpen(false);
+        void loadProcesses();
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : '重命名进程组失败');
+      }
+    } else {
+      if (customProcessGroups.includes(newName) || newName === '默认进程组') {
+        toast.error('该进程组已存在');
+        return;
+      }
+      saveCustomProcessGroups([...customProcessGroups, newName]);
+      toast.success(`进程组 [${newName}] 创建成功`);
+      setProcessGroupDrawerOpen(false);
+    }
+  };
+
+  const handleDeleteProcessGroup = (groupName: string) => {
+    const procsInGroup = processes.filter((p) => (p.group_name || '默认进程组') === groupName);
+    if (procsInGroup.length > 0) {
+      toast.error(`进程组 [${groupName}] 下仍有 ${procsInGroup.length} 个业务进程，请先迁移或清空组内进程`);
+      return;
+    }
+    const updated = customProcessGroups.filter((g) => g !== groupName);
+    saveCustomProcessGroups(updated);
+    toast.success(`进程组 [${groupName}] 已移除`);
+  };
+
+  // 物理进程 CRUD
   const handleSaveProcess = async () => {
     if (!processForm.name.trim()) {
       toast.error('请输入进程名称');
@@ -507,11 +683,12 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
       toast.error('监听端口必须为 1~65535 之间的合法数字');
       return;
     }
+    const groupName = processForm.group_name.trim() || '默认进程组';
     try {
       if (editingProcess) {
         await agentApi.updateProcess(editingProcess.id, {
           name: processForm.name.trim(),
-          group_name: processForm.group_name.trim() || '默认进程组',
+          group_name: groupName,
           listen_port: port,
           cmd_pattern: processForm.cmd_pattern.trim() || `./bin/${processForm.name.trim()}`,
           description: processForm.description.trim(),
@@ -521,7 +698,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
         const defaultAgentId = processForm.agent_id || (agents.length > 0 ? agents[0].id : '');
         const newProc = await agentApi.createProcess({
           agent_id: defaultAgentId,
-          group_name: processForm.group_name.trim() || '默认进程组',
+          group_name: groupName,
           name: processForm.name.trim(),
           listen_port: port,
           cmd_pattern: processForm.cmd_pattern.trim() || `./bin/${processForm.name.trim()}`,
@@ -529,8 +706,12 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
         });
         toast.success('进程创建成功');
         setSelectedProcessId(newProc.id);
+        updateParams({ process_id: newProc.id, view_mode: 'PHYSICAL' });
       }
-      setProcessModalOpen(false);
+      if (!customProcessGroups.includes(groupName) && groupName !== '默认进程组') {
+        saveCustomProcessGroups([...customProcessGroups, groupName]);
+      }
+      setProcessDrawerOpen(false);
       void loadProcesses();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '保存进程失败');
@@ -543,6 +724,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
       toast.success('物理进程已删除');
       if (selectedProcessId === id) {
         setSelectedProcessId('');
+        updateParams({ process_id: null });
       }
       void loadProcesses();
       if (selectedModuleId) {
@@ -551,18 +733,6 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
       }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '删除物理进程失败');
-    }
-  };
-
-  const handleDeleteModule = async (id: string) => {
-    try {
-      await archApi.deleteModule(id);
-      toast.success('模块已删除');
-      const res = await archApi.listModules({ group_id: selectedGroupId, page_size: 100 });
-      setModules(res.items);
-      setSelectedModule(null);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : '删除模块失败');
     }
   };
 
@@ -582,7 +752,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
         description: ifaceForm.description,
       });
       toast.success('接口契约添加成功');
-      setIfaceModalOpen(false);
+      setIfaceDrawerOpen(false);
       const res = await archApi.getModule(selectedModuleId);
       setInterfaces(res.interfaces);
     } catch (err) {
@@ -627,21 +797,30 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
           <button
             type="button"
             className={`code-pill-btn ${activeTab === 'logical' ? 'code-pill-btn--active' : ''}`}
-            onClick={() => updateParams({ tab: 'logical' })}
+            onClick={() => {
+              setActiveTab('logical');
+              updateParams({ tab: 'logical' });
+            }}
           >
             架构建模与模块契约
           </button>
           <button
             type="button"
             className={`code-pill-btn ${activeTab === 'physical' ? 'code-pill-btn--active' : ''}`}
-            onClick={() => updateParams({ tab: 'physical' })}
+            onClick={() => {
+              setActiveTab('physical');
+              updateParams({ tab: 'physical' });
+            }}
           >
             静态拓扑视图
           </button>
           <button
             type="button"
             className={`code-pill-btn ${activeTab === 'verify' ? 'code-pill-btn--active' : ''}`}
-            onClick={() => updateParams({ tab: 'verify' })}
+            onClick={() => {
+              setActiveTab('verify');
+              updateParams({ tab: 'verify' });
+            }}
           >
             架构一致性比对
           </button>
@@ -654,32 +833,87 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
           <div className="code-arch-split-layout">
             <SubsystemGroupTreePanel
               viewMode={treeViewMode}
-              onViewModeChange={setTreeViewMode}
+              onViewModeChange={(mode) => {
+                setTreeViewMode(mode);
+                updateParams({ view_mode: mode });
+              }}
               subsystems={subsystems}
               selectedSubsystemId={selectedSubsystemId}
               onSelectSubsystem={(id) => {
                 setSelectedSubsystemId(id);
-                updateParams({ subsystem_id: id });
+                setSelectedGroupId('');
+                setSelectedModuleId('');
+                updateParams({ subsystem_id: id, group_id: null, module_id: null });
               }}
               groupTree={groupTree}
               groupTreeMap={groupTreeMap}
               onLoadSubsystemTree={loadSubsystemTree}
               selectedGroupId={selectedGroupId}
-              onSelectGroup={setSelectedGroupId}
+              onSelectGroup={(id) => {
+                setSelectedGroupId(id);
+                setSelectedModuleId('');
+                updateParams({ group_id: id, module_id: null });
+              }}
+              modules={subsystemModules}
+              selectedModuleId={selectedModuleId}
+              onSelectModule={(modId) => {
+                setSelectedModuleId(modId);
+                updateParams({ module_id: modId, view_mode: 'LOGICAL' });
+              }}
+              onCreateModule={(groupId) => {
+                setEditingMod(null);
+                setModuleForm({ code: '', name: '', description: '', process_id: '', group_id: groupId });
+                setQuickProcessOpen(false);
+                setModuleDrawerOpen(true);
+              }}
+              onEditModule={(mod) => {
+                setEditingMod(mod);
+                setModuleForm({
+                  code: mod.code,
+                  name: mod.name,
+                  description: mod.description || '',
+                  process_id: mod.process_id || (mod.process?.id ?? ''),
+                  group_id: mod.group_id,
+                });
+                setQuickProcessOpen(false);
+                setModuleDrawerOpen(true);
+              }}
+              onDeleteModule={(id) => void handleDeleteModule(id)}
               processes={processes}
               selectedProcessId={selectedProcessId}
-              onSelectProcess={(id) => setSelectedProcessId(id)}
-              onCreateProcess={() => {
+              onSelectProcess={(id) => {
+                setSelectedProcessId(id);
+                setSelectedProcessGroupName('');
+                updateParams({ process_id: id, view_mode: 'PHYSICAL' });
+              }}
+              customProcessGroups={customProcessGroups}
+              selectedProcessGroupName={selectedProcessGroupName}
+              onSelectProcessGroup={(groupName) => {
+                setSelectedProcessGroupName(groupName);
+                setSelectedProcessId('');
+              }}
+              onCreateProcessGroup={() => {
+                setEditingProcessGroupName(null);
+                setProcessGroupForm({ name: '' });
+                setProcessGroupDrawerOpen(true);
+              }}
+              onEditProcessGroup={(groupName) => {
+                setEditingProcessGroupName(groupName);
+                setProcessGroupForm({ name: groupName });
+                setProcessGroupDrawerOpen(true);
+              }}
+              onDeleteProcessGroup={handleDeleteProcessGroup}
+              onCreateProcess={(targetGroupName) => {
                 setEditingProcess(null);
                 setProcessForm({
-                  group_name: '',
+                  group_name: targetGroupName || '默认进程组',
                   name: '',
                   listen_port: '',
                   agent_id: agents.length > 0 ? agents[0].id : '',
                   cmd_pattern: '',
                   description: '',
                 });
-                setProcessModalOpen(true);
+                setProcessDrawerOpen(true);
               }}
               onEditProcess={(proc) => {
                 setEditingProcess(proc);
@@ -691,23 +925,19 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
                   cmd_pattern: proc.cmd_pattern || '',
                   description: proc.description || '',
                 });
-                setProcessModalOpen(true);
+                setProcessDrawerOpen(true);
               }}
               onDeleteProcess={(id) => void handleDeleteProcess(id)}
-              onSelectModule={(modId) => {
-                setSelectedModuleId(modId);
-                setTreeViewMode('LOGICAL');
-              }}
               isAdmin={isAdmin}
               onCreateSubsystem={() => {
                 setEditingSubsystem(null);
                 setSubsystemForm({ code: '', name: '', description: '' });
-                setSubsystemModalOpen(true);
+                setSubsystemDrawerOpen(true);
               }}
               onEditSubsystem={(sub) => {
                 setEditingSubsystem(sub);
                 setSubsystemForm({ code: sub.code, name: sub.name, description: sub.description || '' });
-                setSubsystemModalOpen(true);
+                setSubsystemDrawerOpen(true);
               }}
               onDeleteSubsystem={(id) => void handleDeleteSubsystem(id)}
               onCreateGroup={(parentId, targetSubsystemId) => {
@@ -717,18 +947,23 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
                 }
                 setEditingGroup(null);
                 setGroupParentId(parentId ?? null);
-                setGroupForm({ code: '', name: '', description: '' });
-                setGroupModalOpen(true);
+                setGroupForm({ code: '', name: '', description: '', sort_order: 1 });
+                setGroupDrawerOpen(true);
               }}
               onEditGroup={(grp) => {
                 setEditingGroup(grp);
-                setGroupForm({ code: grp.code, name: grp.name, description: grp.description || '' });
-                setGroupModalOpen(true);
+                setGroupForm({
+                  code: grp.code,
+                  name: grp.name,
+                  description: grp.description || '',
+                  sort_order: grp.sort_order || 1,
+                });
+                setGroupDrawerOpen(true);
               }}
               onMoveGroup={(grp) => {
                 setMovingGroup(grp);
                 setNewParentId('');
-                setMoveModalOpen(true);
+                setMoveGroupDrawerOpen(true);
               }}
               onDeleteGroup={(id) => void handleDeleteGroup(id)}
             />
@@ -737,7 +972,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
               selectedProcess ? (
                 <ProcessDetailPane
                   process={selectedProcess}
-                  allModules={modules}
+                  allModules={subsystemModules.length > 0 ? subsystemModules : modules}
                   isAdmin={isAdmin}
                   onEditProcess={(proc) => {
                     setEditingProcess(proc);
@@ -749,12 +984,13 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
                       cmd_pattern: proc.cmd_pattern || '',
                       description: proc.description || '',
                     });
-                    setProcessModalOpen(true);
+                    setProcessDrawerOpen(true);
                   }}
                   onDeleteProcess={(id) => void handleDeleteProcess(id)}
                   onSelectModule={(modId) => {
                     setSelectedModuleId(modId);
                     setTreeViewMode('LOGICAL');
+                    updateParams({ module_id: modId, view_mode: 'LOGICAL' });
                   }}
                 />
               ) : (
@@ -770,7 +1006,10 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
               <ModuleContractDetailPane
                 modules={modules}
                 selectedModuleId={selectedModuleId}
-                onSelectModule={setSelectedModuleId}
+                onSelectModule={(id) => {
+                  setSelectedModuleId(id);
+                  updateParams({ module_id: id });
+                }}
                 selectedModule={selectedModule}
                 interfaces={interfaces}
                 isAdmin={isAdmin}
@@ -779,12 +1018,19 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
                 onViewProcess={(procId) => {
                   setTreeViewMode('PHYSICAL');
                   setSelectedProcessId(procId);
+                  updateParams({ process_id: procId, view_mode: 'PHYSICAL' });
                 }}
                 onCreateModule={() => {
                   setEditingMod(null);
-                  setModuleForm({ code: '', name: '', description: '', process_id: '' });
+                  setModuleForm({
+                    code: '',
+                    name: '',
+                    description: '',
+                    process_id: '',
+                    group_id: selectedGroupId,
+                  });
                   setQuickProcessOpen(false);
-                  setModuleModalOpen(true);
+                  setModuleDrawerOpen(true);
                 }}
                 onEditModule={(mod) => {
                   setEditingMod(mod);
@@ -793,9 +1039,10 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
                     name: mod.name,
                     description: mod.description || '',
                     process_id: mod.process_id || (mod.process?.id ?? ''),
+                    group_id: mod.group_id,
                   });
                   setQuickProcessOpen(false);
-                  setModuleModalOpen(true);
+                  setModuleDrawerOpen(true);
                 }}
                 onDeleteModule={(id) => void handleDeleteModule(id)}
                 onCreateInterface={() => {
@@ -806,7 +1053,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
                     diff_ignore_paths: '',
                     description: '',
                   });
-                  setIfaceModalOpen(true);
+                  setIfaceDrawerOpen(true);
                 }}
                 onDeleteInterface={(id) => void handleDeleteInterface(id)}
                 onUpdateIgnorePaths={(ifaceId, paths) => void handleUpdateIgnorePaths(ifaceId, paths)}
@@ -855,17 +1102,19 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
         )}
       </div>
 
-      {/* 子系统编辑弹窗 */}
-      <Modal
-        open={subsystemModalOpen}
-        onClose={() => setSubsystemModalOpen(false)}
+      {/* 1. 子系统侧边栏 (Drawer) */}
+      <Drawer
+        open={subsystemDrawerOpen}
+        onClose={() => setSubsystemDrawerOpen(false)}
         title={editingSubsystem ? '编辑子系统' : '新建子系统'}
+        subtitle="定义顶层业务系统架构边界与唯一编码"
+        width="md"
         footer={
-          <div className="code-modal-footer">
+          <div className="code-drawer-footer">
             <button
               type="button"
               className="code-btn code-btn--secondary"
-              onClick={() => setSubsystemModalOpen(false)}
+              onClick={() => setSubsystemDrawerOpen(false)}
             >
               取消
             </button>
@@ -911,19 +1160,21 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
             />
           </div>
         </div>
-      </Modal>
+      </Drawer>
 
-      {/* 功能组编辑弹窗 */}
-      <Modal
-        open={groupModalOpen}
-        onClose={() => setGroupModalOpen(false)}
+      {/* 2. 功能组侧边栏 (Drawer) */}
+      <Drawer
+        open={groupDrawerOpen}
+        onClose={() => setGroupDrawerOpen(false)}
         title={editingGroup ? '编辑功能组' : '新建功能组'}
+        subtitle="规划 1~8 级业务功能边界划分"
+        width="md"
         footer={
-          <div className="code-modal-footer">
+          <div className="code-drawer-footer">
             <button
               type="button"
               className="code-btn code-btn--secondary"
-              onClick={() => setGroupModalOpen(false)}
+              onClick={() => setGroupDrawerOpen(false)}
             >
               取消
             </button>
@@ -959,6 +1210,15 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
             />
           </div>
           <div className="code-form-item">
+            <label className="code-form-label">排序权重 (数字越小越靠前):</label>
+            <input
+              type="number"
+              className="code-input"
+              value={groupForm.sort_order}
+              onChange={(e) => setGroupForm({ ...groupForm, sort_order: parseInt(e.target.value, 10) || 1 })}
+            />
+          </div>
+          <div className="code-form-item">
             <label className="code-form-label">描述说明:</label>
             <textarea
               className="code-textarea"
@@ -967,19 +1227,21 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
             />
           </div>
         </div>
-      </Modal>
+      </Drawer>
 
-      {/* 移动功能组弹窗 */}
-      <Modal
-        open={moveModalOpen}
-        onClose={() => setMoveModalOpen(false)}
-        title={`调整功能组 [${movingGroup?.name}] 层级 (防成环保护)`}
+      {/* 3. 移动功能组侧边栏 (Drawer) */}
+      <Drawer
+        open={moveGroupDrawerOpen}
+        onClose={() => setMoveGroupDrawerOpen(false)}
+        title={`调整功能组 [${movingGroup?.name}] 层级`}
+        subtitle="防成环保护，变更上级父节点"
+        width="md"
         footer={
-          <div className="code-modal-footer">
+          <div className="code-drawer-footer">
             <button
               type="button"
               className="code-btn code-btn--secondary"
-              onClick={() => setMoveModalOpen(false)}
+              onClick={() => setMoveGroupDrawerOpen(false)}
             >
               取消
             </button>
@@ -995,7 +1257,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
       >
         <div className="code-form">
           <div className="code-form-item">
-            <label className="code-form-label">选择新的目标父节点 (留空表示移至根节点):</label>
+            <label className="code-form-label">选择新的目标父节点 (留空表示移为一级根节点):</label>
             <select
               className="code-select"
               value={newParentId}
@@ -1010,19 +1272,156 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
             </select>
           </div>
         </div>
-      </Modal>
+      </Drawer>
 
-      {/* 模块编辑弹窗 */}
-      <Modal
-        open={moduleModalOpen}
-        onClose={() => setModuleModalOpen(false)}
-        title={editingMod ? '编辑功能模块' : '新建功能模块'}
+      {/* 4. 进程组管理侧边栏 (Drawer) */}
+      <Drawer
+        open={processGroupDrawerOpen}
+        onClose={() => setProcessGroupDrawerOpen(false)}
+        title={editingProcessGroupName ? `重命名进程组 [${editingProcessGroupName}]` : '新建进程分组'}
+        subtitle="物理架构二级聚合，按业务单元归集业务进程"
+        width="md"
         footer={
-          <div className="code-modal-footer">
+          <div className="code-drawer-footer">
             <button
               type="button"
               className="code-btn code-btn--secondary"
-              onClick={() => setModuleModalOpen(false)}
+              onClick={() => setProcessGroupDrawerOpen(false)}
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              className="code-btn code-btn--primary"
+              onClick={() => void handleSaveProcessGroup()}
+            >
+              保存
+            </button>
+          </div>
+        }
+      >
+        <div className="code-form">
+          <div className="code-form-item">
+            <label className="code-form-label">进程组名称 (建议简洁明了):</label>
+            <input
+              type="text"
+              className="code-input"
+              value={processGroupForm.name}
+              onChange={(e) => setProcessGroupForm({ name: e.target.value })}
+              placeholder="如 核心交易组、网关路由组、基础存储组"
+            />
+          </div>
+        </div>
+      </Drawer>
+
+      {/* 5. 物理进程侧边栏 (Drawer) */}
+      <Drawer
+        open={processDrawerOpen}
+        onClose={() => setProcessDrawerOpen(false)}
+        title={editingProcess ? `编辑业务进程 [${editingProcess.name}]` : '新建业务进程'}
+        subtitle="配置运行在宿主机操作系统上的物理进程容器"
+        width="md"
+        footer={
+          <div className="code-drawer-footer">
+            <button
+              type="button"
+              className="code-btn code-btn--secondary"
+              onClick={() => setProcessDrawerOpen(false)}
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              className="code-btn code-btn--primary"
+              onClick={() => void handleSaveProcess()}
+            >
+              保存
+            </button>
+          </div>
+        }
+      >
+        <div className="code-form">
+          <div className="code-form-item">
+            <label className="code-form-label">所属进程组 (两级目录聚合):</label>
+            <input
+              type="text"
+              className="code-input"
+              value={processForm.group_name}
+              onChange={(e) => setProcessForm({ ...processForm, group_name: e.target.value })}
+              placeholder="如 核心交易组、基础支撑组、默认进程组"
+            />
+          </div>
+          <div className="code-form-item">
+            <label className="code-form-label">进程名称 (系统进程标识):</label>
+            <input
+              type="text"
+              className="code-input"
+              value={processForm.name}
+              onChange={(e) => setProcessForm({ ...processForm, name: e.target.value })}
+              placeholder="如 backend-inventory, sut-order"
+            />
+          </div>
+          <div className="code-form-item">
+            <label className="code-form-label">监听端口 (Listen Port 1~65535):</label>
+            <input
+              type="number"
+              className="code-input"
+              value={processForm.listen_port}
+              onChange={(e) => setProcessForm({ ...processForm, listen_port: e.target.value })}
+              placeholder="如 9003"
+            />
+          </div>
+          {agents.length > 1 && (
+            <div className="code-form-item">
+              <label className="code-form-label">宿主 Agent:</label>
+              <select
+                className="code-select"
+                value={processForm.agent_id}
+                onChange={(e) => setProcessForm({ ...processForm, agent_id: e.target.value })}
+              >
+                {agents.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name} ({a.endpoint} - {a.scope})
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+          <div className="code-form-item">
+            <label className="code-form-label">命令行特征 (cmd_pattern):</label>
+            <input
+              type="text"
+              className="code-input"
+              value={processForm.cmd_pattern}
+              onChange={(e) => setProcessForm({ ...processForm, cmd_pattern: e.target.value })}
+              placeholder="如 ./bin/backend-inventory (留空将自动生成)"
+            />
+          </div>
+          <div className="code-form-item">
+            <label className="code-form-label">描述说明:</label>
+            <textarea
+              className="code-textarea"
+              value={processForm.description}
+              onChange={(e) => setProcessForm({ ...processForm, description: e.target.value })}
+              placeholder="说明物理进程的部署与职责"
+            />
+          </div>
+        </div>
+      </Drawer>
+
+      {/* 6. 功能模块侧边栏 (Drawer) */}
+      <Drawer
+        open={moduleDrawerOpen}
+        onClose={() => setModuleDrawerOpen(false)}
+        title={editingMod ? '编辑功能模块' : '新建功能模块'}
+        subtitle="维护功能模块契约与宿主业务进程装配绑定"
+        width="lg"
+        footer={
+          <div className="code-drawer-footer">
+            <button
+              type="button"
+              className="code-btn code-btn--secondary"
+              onClick={() => setModuleDrawerOpen(false)}
             >
               取消
             </button>
@@ -1136,112 +1535,21 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
             />
           </div>
         </div>
-      </Modal>
+      </Drawer>
 
-      {/* 物理进程创建/编辑独立弹窗 */}
-      <Modal
-        open={processModalOpen}
-        onClose={() => setProcessModalOpen(false)}
-        title={editingProcess ? `编辑业务进程 [${editingProcess.name}]` : '新建业务进程'}
+      {/* 7. 接口契约侧边栏 (Drawer) */}
+      <Drawer
+        open={ifaceDrawerOpen}
+        onClose={() => setIfaceDrawerOpen(false)}
+        title={`声明模块接口契约 [${selectedModule?.name || ''}]`}
+        subtitle="声明 PROVIDE (对外暴露) 或 DEPEND (下游依赖) 契约方法"
+        width="md"
         footer={
-          <div className="code-modal-footer">
+          <div className="code-drawer-footer">
             <button
               type="button"
               className="code-btn code-btn--secondary"
-              onClick={() => setProcessModalOpen(false)}
-            >
-              取消
-            </button>
-            <button
-              type="button"
-              className="code-btn code-btn--primary"
-              onClick={() => void handleSaveProcess()}
-            >
-              保存
-            </button>
-          </div>
-        }
-      >
-        <div className="code-form">
-          <div className="code-form-item">
-            <label className="code-form-label">所属进程组 (两级目录聚合):</label>
-            <input
-              type="text"
-              className="code-input"
-              value={processForm.group_name}
-              onChange={(e) => setProcessForm({ ...processForm, group_name: e.target.value })}
-              placeholder="如 核心交易组、基础支撑组、默认进程组"
-            />
-          </div>
-          <div className="code-form-item">
-            <label className="code-form-label">进程名称 (系统进程标识):</label>
-            <input
-              type="text"
-              className="code-input"
-              value={processForm.name}
-              onChange={(e) => setProcessForm({ ...processForm, name: e.target.value })}
-              placeholder="如 backend-inventory, sut-order"
-            />
-          </div>
-          <div className="code-form-item">
-            <label className="code-form-label">监听端口 (Listen Port 1~65535):</label>
-            <input
-              type="number"
-              className="code-input"
-              value={processForm.listen_port}
-              onChange={(e) => setProcessForm({ ...processForm, listen_port: e.target.value })}
-              placeholder="如 9003"
-            />
-          </div>
-          {agents.length > 1 && (
-            <div className="code-form-item">
-              <label className="code-form-label">宿主 Agent:</label>
-              <select
-                className="code-select"
-                value={processForm.agent_id}
-                onChange={(e) => setProcessForm({ ...processForm, agent_id: e.target.value })}
-              >
-                {agents.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.name} ({a.endpoint} - {a.scope})
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
-          <div className="code-form-item">
-            <label className="code-form-label">命令行特征 (cmd_pattern):</label>
-            <input
-              type="text"
-              className="code-input"
-              value={processForm.cmd_pattern}
-              onChange={(e) => setProcessForm({ ...processForm, cmd_pattern: e.target.value })}
-              placeholder="如 ./bin/backend-inventory (留空将自动生成)"
-            />
-          </div>
-          <div className="code-form-item">
-            <label className="code-form-label">描述说明:</label>
-            <textarea
-              className="code-textarea"
-              value={processForm.description}
-              onChange={(e) => setProcessForm({ ...processForm, description: e.target.value })}
-              placeholder="说明物理进程的部署与职责"
-            />
-          </div>
-        </div>
-      </Modal>
-
-      {/* 接口契约添加弹窗 */}
-      <Modal
-        open={ifaceModalOpen}
-        onClose={() => setIfaceModalOpen(false)}
-        title={`为模块 [${selectedModule?.name}] 声明接口契约`}
-        footer={
-          <div className="code-modal-footer">
-            <button
-              type="button"
-              className="code-btn code-btn--secondary"
-              onClick={() => setIfaceModalOpen(false)}
+              onClick={() => setIfaceDrawerOpen(false)}
             >
               取消
             </button>
@@ -1293,7 +1601,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
             />
           </div>
           <div className="code-form-item">
-            <label className="code-form-label">默认 Diff 忽略路径 (点分路径逗号分隔):</label>
+            <label className="code-form-label">默认 Diff 忽略字段路径 (点分路径逗号分隔):</label>
             <input
               type="text"
               className="code-input"
@@ -1312,7 +1620,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
             />
           </div>
         </div>
-      </Modal>
+      </Drawer>
     </div>
   );
 };
