@@ -1,21 +1,18 @@
 import React from 'react';
-import { ChevronRight, Cpu, Server, FileCode, Trash2, Edit } from 'lucide-react';
+import { ChevronRight, Cpu, Server, FileCode } from 'lucide-react';
 import type { Process, Module } from '../../types';
 
 export interface ProcessDetailPaneProps {
   process: Process;
   allModules: Module[];
   isAdmin: boolean;
-  onEditProcess: (proc: Process) => void;
-  onDeleteProcess: (procId: string) => void;
+  onEditProcess?: (proc: Process) => void;
+  onDeleteProcess?: (procId: string) => void;
   onSelectModule: (moduleId: string) => void;
 }
 
 export const ProcessDetailPane: React.FC<ProcessDetailPaneProps> = ({
   process,
-  isAdmin,
-  onEditProcess,
-  onDeleteProcess,
   onSelectModule,
 }) => {
   const boundModules = process.process_modules ?? [];
@@ -53,26 +50,6 @@ export const ProcessDetailPane: React.FC<ProcessDetailPaneProps> = ({
               </p>
             </div>
           </div>
-          {isAdmin && (
-            <div className="code-module-card-actions">
-              <button
-                type="button"
-                className="code-btn code-btn--secondary code-btn--xs"
-                onClick={() => onEditProcess(process)}
-                style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}
-              >
-                <Edit size={13} /> 编辑进程
-              </button>
-              <button
-                type="button"
-                className="code-btn code-btn--danger code-btn--xs"
-                onClick={() => onDeleteProcess(process.id)}
-                style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}
-              >
-                <Trash2 size={13} /> 删除进程
-              </button>
-            </div>
-          )}
         </div>
 
         <div className="code-meta-grid" style={{ marginTop: '0.875rem' }}>

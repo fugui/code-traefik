@@ -974,19 +974,6 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
                   process={selectedProcess}
                   allModules={subsystemModules.length > 0 ? subsystemModules : modules}
                   isAdmin={isAdmin}
-                  onEditProcess={(proc) => {
-                    setEditingProcess(proc);
-                    setProcessForm({
-                      group_name: proc.group_name || '默认进程组',
-                      name: proc.name,
-                      listen_port: String(proc.listen_port),
-                      agent_id: proc.agent_id || '',
-                      cmd_pattern: proc.cmd_pattern || '',
-                      description: proc.description || '',
-                    });
-                    setProcessDrawerOpen(true);
-                  }}
-                  onDeleteProcess={(id) => void handleDeleteProcess(id)}
                   onSelectModule={(modId) => {
                     setSelectedModuleId(modId);
                     setTreeViewMode('LOGICAL');
