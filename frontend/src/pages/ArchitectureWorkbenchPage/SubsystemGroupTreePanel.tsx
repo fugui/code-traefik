@@ -555,14 +555,6 @@ export const SubsystemGroupTreePanel: React.FC<SubsystemGroupTreePanelProps> = (
                       {mod.name}
                       <span className="code-tree-node__code">[{mod.code}]</span>
                     </span>
-                    {mod.process && (
-                      <span
-                        className="code-tree-node__proc-tag"
-                        title={`宿主进程: ${mod.process.name} (: ${mod.process.listen_port})`}
-                      >
-                        :{mod.process.listen_port}
-                      </span>
-                    )}
                   </div>
 
                   {isAdmin && (

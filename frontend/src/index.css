@@ -1420,18 +1420,6 @@ body {
   align-items: center;
 }
 
-/* 树节点模块挂载进程标签 */
-.code-tree-node__proc-tag {
-  font-size: 0.7rem;
-  padding: 0.05rem 0.35rem;
-  border-radius: var(--radius-xs);
-  background: var(--color-bg-muted);
-  color: var(--color-info, #0284c7);
-  font-family: var(--font-family-mono);
-  margin-left: 0.35rem;
-  flex-shrink: 0;
-}
-
 /* 通用抽屉底部操作区 */
 .code-drawer-footer {
   display: flex;
