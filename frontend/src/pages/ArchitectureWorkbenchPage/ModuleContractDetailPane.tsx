@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import type { Module, ModuleInterface } from '../../types';
+import { ChevronRight } from 'lucide-react';
+import type { Module, ModuleInterface, Subsystem, FunctionalGroupTreeNode } from '../../types';
 
 export interface ModuleContractDetailPaneProps {
   modules: Module[];
@@ -14,6 +15,8 @@ export interface ModuleContractDetailPaneProps {
   onCreateInterface: () => void;
   onDeleteInterface: (ifaceId: string) => void;
   onUpdateIgnorePaths: (ifaceId: string, paths: string[]) => void;
+  currentSubsystem?: Subsystem | null;
+  currentGroup?: FunctionalGroupTreeNode | null;
 }
 
 export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> = ({
@@ -29,6 +32,8 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
   onCreateInterface,
   onDeleteInterface,
   onUpdateIgnorePaths,
+  currentSubsystem,
+  currentGroup,
 }) => {
   const [editingIfaceId, setEditingIfaceId] = useState<string | null>(null);
   const [ignorePathInput, setIgnorePathInput] = useState<string>('');
@@ -49,6 +54,25 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
 
   return (
     <div className="code-module-pane">
+      {/* 顶部面包屑路径 */}
+      <div className="code-module-breadcrumb">
+        <span className="code-module-breadcrumb__item">架构根节点</span>
+        {currentSubsystem && (
+          <>
+            <ChevronRight size={13} className="code-module-breadcrumb__sep" />
+            <span className="code-module-breadcrumb__item">{currentSubsystem.name}</span>
+          </>
+        )}
+        {currentGroup && (
+          <>
+            <ChevronRight size={13} className="code-module-breadcrumb__sep" />
+            <span className="code-module-breadcrumb__item code-module-breadcrumb__item--current">
+              {currentGroup.name}
+            </span>
+          </>
+        )}
+      </div>
+
       {/* 模块选择与概览卡片 */}
       <div className="code-module-pane__header">
         <div className="code-module-pane__title-row">

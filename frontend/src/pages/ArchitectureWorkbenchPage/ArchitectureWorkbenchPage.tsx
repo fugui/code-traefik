@@ -19,6 +19,20 @@ import { ModuleContractDetailPane } from './ModuleContractDetailPane';
 import { StaticTopologyCanvas } from './StaticTopologyCanvas';
 import { ConsistencyVerifyOverlay } from './ConsistencyVerifyOverlay';
 
+function findGroupInTree(
+  nodes: FunctionalGroupTreeNode[],
+  targetId: string
+): FunctionalGroupTreeNode | null {
+  for (const node of nodes) {
+    if (node.id === targetId) return node;
+    if (node.children && node.children.length > 0) {
+      const found = findGroupInTree(node.children, targetId);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
 export const ArchitectureWorkbenchPage: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const { user } = useModuleUser();
@@ -34,6 +48,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
   const [subsystems, setSubsystems] = useState<Subsystem[]>([]);
   const [selectedSubsystemId, setSelectedSubsystemId] = useState<string>(urlSubsystemId);
   const [groupTree, setGroupTree] = useState<FunctionalGroupTreeNode[]>([]);
+  const [groupTreeMap, setGroupTreeMap] = useState<Record<string, FunctionalGroupTreeNode[]>>({});
   const [selectedGroupId, setSelectedGroupId] = useState<string>('');
   const [modules, setModules] = useState<Module[]>([]);
   const [selectedModuleId, setSelectedModuleId] = useState<string>('');
@@ -121,6 +136,21 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
     void loadSubsystems();
   }, [loadSubsystems]);
 
+  const loadSubsystemTree = useCallback(
+    async (subsystemId: string) => {
+      try {
+        const res = await archApi.getFunctionalGroupTree(subsystemId);
+        const safeTree = res.tree ?? [];
+        setGroupTreeMap((prev) => ({ ...prev, [subsystemId]: safeTree }));
+        return safeTree;
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : '加载功能组失败');
+        return [];
+      }
+    },
+    [toast]
+  );
+
   // 当子系统切换时，加载功能组树
   useEffect(() => {
     if (!selectedSubsystemId) return;
@@ -129,8 +159,9 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
         const res = await archApi.getFunctionalGroupTree(selectedSubsystemId);
         const safeTree = res.tree ?? [];
         setGroupTree(safeTree);
+        setGroupTreeMap((prev) => ({ ...prev, [selectedSubsystemId]: safeTree }));
         if (safeTree.length > 0) {
-          setSelectedGroupId(safeTree[0].id);
+          setSelectedGroupId((prev) => (findGroupInTree(safeTree, prev) ? prev : safeTree[0].id));
         } else {
           setSelectedGroupId('');
           setModules([]);
@@ -282,7 +313,9 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
       }
       setGroupModalOpen(false);
       const res = await archApi.getFunctionalGroupTree(selectedSubsystemId);
-      setGroupTree(res.tree ?? []);
+      const safeTree = res.tree ?? [];
+      setGroupTree(safeTree);
+      setGroupTreeMap((prev) => ({ ...prev, [selectedSubsystemId]: safeTree }));
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '操作功能组失败');
     }
@@ -297,7 +330,9 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
       toast.success('功能组层级调整成功');
       setMoveModalOpen(false);
       const res = await archApi.getFunctionalGroupTree(selectedSubsystemId);
-      setGroupTree(res.tree ?? []);
+      const safeTree = res.tree ?? [];
+      setGroupTree(safeTree);
+      setGroupTreeMap((prev) => ({ ...prev, [selectedSubsystemId]: safeTree }));
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '移动功能组失败');
     }
@@ -308,7 +343,9 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
       await archApi.deleteFunctionalGroup(id);
       toast.success('功能组已删除');
       const res = await archApi.getFunctionalGroupTree(selectedSubsystemId);
-      setGroupTree(res.tree ?? []);
+      const safeTree = res.tree ?? [];
+      setGroupTree(safeTree);
+      setGroupTreeMap((prev) => ({ ...prev, [selectedSubsystemId]: safeTree }));
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '删除功能组失败');
     }
@@ -445,6 +482,8 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
                 updateParams({ subsystem_id: id });
               }}
               groupTree={groupTree}
+              groupTreeMap={groupTreeMap}
+              onLoadSubsystemTree={loadSubsystemTree}
               selectedGroupId={selectedGroupId}
               onSelectGroup={setSelectedGroupId}
               isAdmin={isAdmin}
@@ -459,7 +498,11 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
                 setSubsystemModalOpen(true);
               }}
               onDeleteSubsystem={(id) => void handleDeleteSubsystem(id)}
-              onCreateGroup={(parentId) => {
+              onCreateGroup={(parentId, targetSubsystemId) => {
+                if (targetSubsystemId && targetSubsystemId !== selectedSubsystemId) {
+                  setSelectedSubsystemId(targetSubsystemId);
+                  updateParams({ subsystem_id: targetSubsystemId });
+                }
                 setEditingGroup(null);
                 setGroupParentId(parentId ?? null);
                 setGroupForm({ code: '', name: '', description: '' });
@@ -485,6 +528,8 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
               selectedModule={selectedModule}
               interfaces={interfaces}
               isAdmin={isAdmin}
+              currentSubsystem={subsystems.find((s) => s.id === selectedSubsystemId) || null}
+              currentGroup={selectedGroupId ? findGroupInTree(groupTree, selectedGroupId) : null}
               onCreateModule={() => {
                 setEditingMod(null);
                 setModuleForm({ code: '', name: '', description: '' });
