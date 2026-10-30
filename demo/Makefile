@@ -6,10 +6,12 @@ BIN_DIR := bin
 
 all: build
 
-# 重新生成 Protobuf 代码
+# 重新生成 Protobuf 代码与二进制描述集
 proto:
-	@echo "Compiling Protobuf definitions..."
-	cd .. && protoc --go_out=. --go_opt=module=code-traefik demo/proto/order.proto demo/proto/account.proto demo/proto/inventory.proto
+	@echo "Compiling Protobuf definitions and descriptor set..."
+	cd .. && protoc --go_out=. --go_opt=module=code-traefik \
+		--descriptor_set_out=demo/demo.pb --include_imports \
+		demo/proto/order.proto demo/proto/account.proto demo/proto/inventory.proto
 
 # 编译四个进程的二进制产物
 build: proto
