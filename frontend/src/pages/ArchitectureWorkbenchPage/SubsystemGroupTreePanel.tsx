@@ -181,9 +181,8 @@ export const SubsystemGroupTreePanel: React.FC<SubsystemGroupTreePanelProps> = (
   );
   const [expandedGroupIds, setExpandedGroupIds] = useState<Set<string>>(new Set());
 
-  // 物理架构树状态（两级目录：进程分组 ➔ 进程 ➔ 承载模块）
+  // 物理架构树状态（两级目录：进程分组 ➔ 业务进程）
   const [expandedProcessGroupNames, setExpandedProcessGroupNames] = useState<Set<string>>(new Set());
-  const [expandedProcessIds, setExpandedProcessIds] = useState<Set<string>>(new Set());
 
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -300,17 +299,6 @@ export const SubsystemGroupTreePanel: React.FC<SubsystemGroupTreePanelProps> = (
     });
   };
 
-  // 切换进程节点展开
-  const toggleProcessExpand = (procId: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setExpandedProcessIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(procId)) next.delete(procId);
-      else next.add(procId);
-      return next;
-    });
-  };
-
   // 搜索时自动展开匹配路径
   useEffect(() => {
     if (!searchQuery.trim()) return;
@@ -332,9 +320,8 @@ export const SubsystemGroupTreePanel: React.FC<SubsystemGroupTreePanelProps> = (
       setExpandedSubsystemIds((prev) => new Set([...prev, ...toExpandSub]));
       setExpandedGroupIds((prev) => new Set([...prev, ...toExpandGrp]));
     } else {
-      // 物理进程树搜索：展开匹配的组和进程
+      // 物理进程树搜索：展开匹配的组
       const toExpandGroups = new Set<string>();
-      const toExpandProcs = new Set<string>();
 
       for (const p of processes) {
         const groupName = p.group_name || '默认进程组';
@@ -358,9 +345,6 @@ export const SubsystemGroupTreePanel: React.FC<SubsystemGroupTreePanelProps> = (
         if (groupMatched || procMatched || moduleMatched) {
           toExpandGroups.add(groupName);
         }
-        if (moduleMatched) {
-          toExpandProcs.add(p.id);
-        }
       }
 
       for (const g of customProcessGroups) {
@@ -370,7 +354,6 @@ export const SubsystemGroupTreePanel: React.FC<SubsystemGroupTreePanelProps> = (
       }
 
       setExpandedProcessGroupNames((prev) => new Set([...prev, ...toExpandGroups]));
-      setExpandedProcessIds((prev) => new Set([...prev, ...toExpandProcs]));
     }
   }, [searchQuery, subsystems, processes, customProcessGroups, viewMode, getSubsystemGroupTree, modulesByGroupId]);
 
@@ -759,42 +742,33 @@ export const SubsystemGroupTreePanel: React.FC<SubsystemGroupTreePanelProps> = (
           )}
         </div>
 
-        {/* 组内进程列表（二级目录） */}
+        {/* 组内进程列表（二级目录，仅展示业务进程节点） */}
         {isExpanded && (
           <div className="code-tree-children">
             {g.processes.map((proc) => {
-              const procExpanded = expandedProcessIds.has(proc.id) || Boolean(searchQuery.trim());
               const isSelected = selectedProcessId === proc.id;
               const boundMods = proc.process_modules ?? [];
-              const hasModules = boundMods.length > 0;
 
               return (
                 <div key={proc.id} className="code-tree-node-wrapper">
                   <div
                     className={`code-tree-node code-tree-node--process ${isSelected ? 'code-tree-node--selected' : ''}`}
-                    style={{ paddingLeft: '24px' }}
+                    style={{ paddingLeft: '28px' }}
                     onClick={() => {
                       if (onSelectProcess) onSelectProcess(proc.id);
                     }}
                   >
                     <div className="code-tree-node__left">
-                      <button
-                        type="button"
-                        className="code-tree-expand-btn"
-                        onClick={(e) => toggleProcessExpand(proc.id, e)}
-                        style={{ visibility: hasModules ? 'visible' : 'hidden' }}
-                        title={procExpanded ? '折叠模块' : '展开模块'}
-                      >
-                        {procExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                      </button>
-                      <Server size={15} style={{ color: 'var(--color-info, #0284c7)' }} />
+                      <Server size={15} style={{ color: 'var(--color-info, #0284c7)', flexShrink: 0 }} />
                       <span className="code-tree-node__name" title={`${proc.name} (Port: ${proc.listen_port})`}>
                         {proc.name}
                         <span className="code-tree-node__code">: {proc.listen_port}</span>
                       </span>
-                      <span className="code-tree-node__badge" title={`承载 ${boundMods.length} 个功能模块`}>
-                        {boundMods.length} FM
-                      </span>
+                      {boundMods.length > 0 && (
+                        <span className="code-tree-node__badge" title={`承载 ${boundMods.length} 个功能模块`}>
+                          {boundMods.length} FM
+                        </span>
+                      )}
                     </div>
 
                     {isAdmin && (
@@ -822,33 +796,6 @@ export const SubsystemGroupTreePanel: React.FC<SubsystemGroupTreePanelProps> = (
                       </div>
                     )}
                   </div>
-
-                  {/* 进程承载的模块（三级装配叶子） */}
-                  {hasModules && procExpanded && (
-                    <div className="code-tree-children">
-                      {boundMods.map((pm) => (
-                        <div
-                          key={pm.module_id}
-                          className="code-tree-node code-tree-node--module-leaf"
-                          style={{ paddingLeft: '44px' }}
-                          onClick={() => {
-                            if (onSelectModule) onSelectModule(pm.module_id);
-                          }}
-                        >
-                          <div className="code-tree-node__left">
-                            <span style={{ width: '16px' }} />
-                            <FileCode size={14} style={{ color: '#10b981' }} />
-                            <span className="code-tree-node__name">
-                              {pm.module?.name || `模块 #${pm.module_id}`}
-                              <span className="code-tree-node__code">
-                                [{pm.module?.code || pm.module_id}]
-                              </span>
-                            </span>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
                 </div>
               );
             })}
