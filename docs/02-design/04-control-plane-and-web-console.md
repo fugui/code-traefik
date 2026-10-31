@@ -1,8 +1,8 @@
 # 业务流量监控与重放 (`code-traefik`) 管理面服务、微前端控制台与回归断言设计
 
 - **文档编号**：`04-control-plane-and-web-console.md`
-- **文档版本**：v1.2.0
-- **更新日期**：2026-10-29
+- **文档版本**：v1.3.0
+- **更新日期**：2026-10-31
 - **归属阶段**：阶段二：系统架构与数据模型设计 (`02-design`)
 - **状态**：定稿待审 (Ready for Review)
 - **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.6.0)、[`01-system-architecture.md`](./01-system-architecture.md)、[`02-data-plane-and-cros-rpc-engine.md`](./02-data-plane-and-cros-rpc-engine.md)、[`03-architecture-elements-and-topology.md`](./03-architecture-elements-and-topology.md)
@@ -215,50 +215,54 @@ type FieldDiff struct {
 
 ```text
 src/
-├── components/ArchCanvas/                 # 通用分层复合架构拓扑引擎 (React Flow + ELK Worker)
-│   ├── ArchCanvas.tsx                     # 视口底座 (平移/缩放/拖拽/小地图/LOD class)
-│   ├── layout/
-│   │   ├── elk.worker.ts                  # ELK 复合图分层正交排版 Web Worker
-│   │   └── useElkLayout.ts                # 异步排版请求防抖、锚点保持算法与平滑补正
-│   ├── model/
-│   │   ├── hierarchy.ts                   # 树索引与祖先物化路径纯函数
-│   │   ├── rollup.ts                      # 纯前端实时边汇总与最近可见祖先查找 (rep)
-│   │   └── metrics.ts                     # Tarjan SCC 循环依赖分析与扇入扇出统计
-│   ├── nodes/
-│   │   ├── ContainerNode.tsx              # 矩形嵌套容器 (子系统/功能组/进程组/物理进程)
-│   │   ├── ModuleLeafNode.tsx             # 功能模块叶子卡片 (未装载虚线告警)
-│   │   └── ExternalNode.tsx               # 外部系统/外部端点卡片
-│   ├── edges/
-│   │   └── RollupEdge.tsx                 # 正交折线汇总边 (支持粗细映射、六分类状态着色与跳动脉冲)
-│   └── panels/
-│       ├── CanvasToolbar.tsx              # 工具栏: 逻辑/物理切换、层级滑杆、自动展开开关、重置布局
-│       ├── CanvasSearchBox.tsx            # 全图模块/服务快捷搜索与居中锚定
-│       ├── ElementInspectorDrawer.tsx     # 选中节点属性画像与 PROVIDE/DEPEND 快速跳转抽屉
-│       └── EdgeDetailDrawer.tsx           # 汇总边底层契约明细与一致性抽样报文联动抽屉
+├── components/
+│   ├── ArchCanvas/                         # 通用分层复合架构拓扑引擎 (React Flow v12 + ELK Inline Worker)
+│   │   ├── ArchCanvas.tsx                  # 视口底座 (.code-arch-canvas 作用域 / 平移缩放 / 小地图 / LOD 类名)
+│   │   ├── ArchCanvas.css                  # 100% --color-* Token 样式及 .react-flow__* 亮暗主题覆写
+│   │   ├── layout/
+│   │   │   ├── elk.worker.ts               # ELK 复合图分层正交排版内联 Worker (?worker&inline)
+│   │   │   └── useElkLayout.ts             # 父先于子拓扑序、跨层拐点全局坐标换算、锚点保持与拖拽 SmoothStep 退化
+│   │   ├── model/
+│   │   │   ├── hierarchy.ts                # 树索引、祖先物化路径与 LCA (最近公共祖先) 纯函数
+│   │   │   ├── rollup.ts                   # 纯前端边汇总 (rep)、动态 VIOLATION/UNATTRIBUTED 融合与最差状态收敛
+│   │   │   └── metrics.ts                  # Tarjan SCC 循环依赖分析与扇入扇出统计
+│   │   ├── nodes/
+│   │   │   ├── ContainerNode.tsx           # 矩形嵌套容器 (子系统/功能组/进程组/物理进程，支持双击下钻)
+│   │   │   ├── ModuleLeafNode.tsx          # 功能模块叶子卡片 (未装载虚线告警)
+│   │   │   └── ExternalNode.tsx            # 外部系统/外部端点/未登记接口卡片
+│   │   ├── edges/
+│   │   │   └── RollupEdge.tsx              # 正交折线汇总边 (对数线宽、六分类着色、脉冲告警与拖拽自适应)
+│   │   └── panels/
+│   │       ├── CanvasToolbar.tsx           # 工具栏: 逻辑/物理切换、L0~Ln 层级滑杆、自动展开开关、重置布局
+│   │       ├── CanvasSearchBox.tsx         # 全图模块/服务快捷搜索与居中锚定
+│   │       ├── ElementInspectorDrawer.tsx  # 选中节点属性画像与 PROVIDE/DEPEND 快速跳转抽屉
+│   │       └── EdgeDetailDrawer.tsx        # 汇总边底层契约明细与一致性抽样报文联动抽屉
+│   └── PacketAnatomyDrawer/                # 公共四段式 CROS RPC 深度解剖抽屉 (供流量台与拓扑一致性边共同复用)
+│       ├── PacketAnatomyDrawer.tsx         # 单条往返内「请求帧 REQ <-> 应答帧 RSP」零延迟切换外壳
+│       ├── CommHeadBitmapCard.tsx          # ① 24B 公共头字节偏移位图可视化卡片
+│       ├── SessionHeadDetailCard.tsx       # ② 会话头版本识别、字段表与客户端/服务端耗时拆解条
+│       ├── ExtendHeadTraceCard.tsx         # ③ DOTR TraceID/SpanID/FatherSpanID 链路跳转与入队等待耗时
+│       └── PayloadJsonHexSplitView.tsx     # ④ 左栏 payload_json.{req|rsp} 树 <-> 右栏 raw_{req|rsp}_packet 16B 对齐 Hex 对照
 ├── pages/
-│   ├── ArchitectureWorkbenchPage/         # 1. 架构中心与拓扑工作台
-│   │   ├── SubsystemGroupTreePanel.tsx    # 架构建模页: 子系统切换 + 8级功能组树
-│   │   ├── ModuleContractDetailPane.tsx   # 架构建模页: 功能模块详情与双表格契约维护
-│   │   └── ArchTopologyTabPane.tsx        # 拓扑视图页: 逻辑/物理视图适配器 + 一致性叠加层挂载
-│   ├── AgentManagementPage/               # 2. 公私域 Agent 纳管与排他租约看板 (纯探测器运维管理)
-│   │   ├── AgentScopeTabs.tsx             # 切换「团队公共 Agent (SHARED)」与「我的私有 Agent (PRIVATE)」
-│   │   ├── AgentLeaseStatusBadge.tsx      # 实时展示空闲 / 录制占用(持锁人+剩余TTL) / 重放占用，管理员支持强制解锁
-│   │   └── ProcessModuleBinderModal.tsx   # 进程探查与挂载复用全局公共架构模块 (ModuleIDs) 配置弹窗
-│   ├── ProtoSchemaWorkbenchPage/          # 3. 接口文档与 IDL 描述集工作台
-│   │   ├── SchemaUploadModal.tsx          # .pb 上传弹窗（<=4MB 预检、版本备注）
-│   │   ├── SchemaVersionList.tsx          # 同名描述集多版本时间线与一键生效切换（409 冲突明细展示）
-│   │   ├── OperationMappingTable.tsx      # {package}-{serviceName} 映射检索表 + 接口默认忽略路径编辑器
-│   │   └── OperationDocDrawer.tsx         # 入参/出参 Message 字段树与模块关联抽屉（兼顾 P0 映射详情与 P1 F-18 演进槽位）
-│   ├── TrafficMonitorWorkbenchPage/       # 4. 协同录制与流量解剖工作台
-│   │   ├── RecordingSessionBar.tsx        # 批次控制栏：公私域进程选择器(含租约冲突置灰提示)、素材作用域(SHARED/PRIVATE)、A-01 重连横幅
-│   │   ├── LiveTrafficFilterForm.tsx      # 多维 URL 同步筛选器(含 payload_json GIN 关键字检索) + SSE 实时流暂停/继续开关
-│   │   ├── TrafficRecordTable.tsx         # 往返归档主表（方向徽章、ExchangeType、往返耗时、穿透源/目模块标签）
-│   │   └── PacketAnatomyDrawer/           # 右侧四段式 CROS RPC 深度解剖抽屉（支持单条往返内「请求帧 REQ <-> 应答帧 RSP」无缝切换）
-│   │       ├── CommHeadBitmapCard.tsx     # ① 24B 公共头字节偏移位图可视化卡片
-│   │       ├── SessionHeadDetailCard.tsx  # ② 会话头版本识别、字段表与客户端/服务端耗时拆解条
-│   │       ├── ExtendHeadTraceCard.tsx    # ③ DOTR TraceID/SpanID/FatherSpanID 链路跳转与入队等待耗时
-│   │       └── PayloadJsonHexSplitView.tsx# ④ 左栏 payload_json.{req|rsp} 树 <-> 右栏 raw_{req|rsp}_packet 16B 对齐 Hex 对照
-│   └── ReplayWorkbenchPage/               # 5. 跨 Agent 同构离线重放与双层回归断言工作台
+│   ├── ArchitectureWorkbenchPage/          # 1. 架构中心与拓扑工作台 (兼容旧 tab=logical|physical|verify 重定向)
+│   │   ├── SubsystemGroupTreePanel.tsx     # 架构建模页: 子系统切换 + 8级功能组树 + 物理进程组树
+│   │   ├── ModuleContractDetailPane.tsx    # 架构建模页: 功能模块详情与双表格契约维护
+│   │   ├── ProcessDetailPane.tsx           # 架构建模页: 物理进程详情与模块装配面板
+│   │   └── ArchTopologyTabPane.tsx         # 拓扑视图页 (React.lazy 异步分包): 视图切换 + 批次叠加器 + 一致性摘要栏
+│   ├── AgentManagementPage/                # 2. 公私域 Agent 纳管与排他租约看板 (纯探测器运维管理)
+│   │   ├── AgentScopeTabs.tsx              # 切换「团队公共 Agent (SHARED)」与「我的私有 Agent (PRIVATE)」
+│   │   ├── AgentLeaseStatusBadge.tsx       # 实时展示空闲 / 录制占用(持锁人+剩余TTL) / 重放占用，管理员支持强制解锁
+│   │   └── ProcessModuleBinderModal.tsx    # 进程探查与挂载复用全局公共架构模块 (ModuleIDs) 配置弹窗
+│   ├── ProtoSchemaWorkbenchPage/           # 3. 接口文档与 IDL 描述集工作台
+│   │   ├── SchemaUploadModal.tsx           # .pb 上传弹窗（<=4MB 预检、版本备注）
+│   │   ├── SchemaVersionList.tsx           # 同名描述集多版本时间线与一键生效切换（409 冲突明细展示）
+│   │   ├── OperationMappingTable.tsx       # {package}.{serviceName} 映射检索表 + 接口默认忽略路径编辑器
+│   │   └── OperationDocDrawer.tsx          # 入参/出参 Message 字段树与模块关联抽屉（兼顾 P0 映射详情与 P1 F-18 演进槽位）
+│   ├── TrafficMonitorWorkbenchPage/        # 4. 协同录制与流量解剖工作台
+│   │   ├── RecordingSessionBar.tsx         # 批次控制栏：公私域进程选择器(含租约冲突置灰提示)、素材作用域(SHARED/PRIVATE)、A-01 重连横幅
+│   │   ├── LiveTrafficFilterForm.tsx       # 多维 URL 同步筛选器(含 payload_json GIN 关键字检索) + SSE 实时流暂停/继续开关
+│   │   └── TrafficRecordTable.tsx          # 往返归档主表（点击行唤起公共 components/PacketAnatomyDrawer）
+│   └── ReplayWorkbenchPage/                # 5. 跨 Agent 同构离线重放与双层回归断言工作台
 │       ├── ReplayTaskCreatorModal.tsx     # 选定有权限的录制素材 -> 自动过滤承载相同公共模块的目标进程(含本人 PRIVATE Agent) -> 勾选请求
 │       ├── ReplayTaskTable.tsx            # 重放任务列表（PASS/FAILED/MOCK_MISS/TIMEOUT/ERROR 状态标签）
 │       └── ReplayReportDrawer/            # 重放回归报告详情抽屉

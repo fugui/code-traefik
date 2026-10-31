@@ -1,8 +1,8 @@
 # 业务流量监控与重放 (`code-traefik`) 架构元素建模与拓扑一致性验证设计
 
 - **文档编号**：`03-architecture-elements-and-topology.md`
-- **文档版本**：v1.2.0
-- **更新日期**：2026-10-29
+- **文档版本**：v1.3.0
+- **更新日期**：2026-10-31
 - **归属阶段**：阶段二：系统架构与数据模型设计 (`02-design`)
 - **状态**：定稿待审 (Ready for Review)
 - **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.6.0)、[`01-system-architecture.md`](./01-system-architecture.md)
@@ -259,39 +259,44 @@ func ValidateReplayProcessCompatibility(
 
 ## 4. 全系统分层复合架构拓扑推导与边汇总引擎 (`BuildTopologyGraph`)
 
-依据 ADR-05，架构拓扑引擎从局部的单子系统扁平图全面升级为**全系统分层复合有向图（Hierarchical Compound Graph）**，统一支持**逻辑架构视角 (`LOGICAL`)** 与**物理部署视角 (`PHYSICAL`)**，由后端输出全量层级树与原子叶子边，前端通过纯函数进行实时边汇总与按需下钻展开。
+依据 [`ADR-05`](../05-adr/05-hierarchical-topology-canvas-redesign.md)，架构拓扑引擎从局部的单子系统扁平图全面升级为**全系统分层复合有向图（Hierarchical Compound Graph）**，统一支持**逻辑架构视角 (`LOGICAL`)** 与**物理部署视角 (`PHYSICAL`)**。后端单次输出全量层级节点（顶层 `depth=0` 直接为子系统或进程组，不下发冗余外层 `SYSTEM` 巨框）与原子叶子边，前端通过纯函数执行实时边汇总与按需下钻展开。
 
 ### 4.1 双重视角分层树模型（彻底去 Agent 化）
 
 #### 1. 逻辑架构视角 (`view=LOGICAL`)
 ```text
-System (全局业务系统根节点)
- ├── Subsystem (L0: 业务子系统容器，如 TRADE_SYS, RISK_SYS)
- │    ├── FunctionalGroup L1 (L1: 一级功能组容器)
- │    │    ├── FunctionalGroup L2...L8 (多级功能组自嵌套容器)
- │    │    └── Module (叶子卡片: 最小契约功能模块)
- │    └── Module (直接挂载于子系统根下的模块)
- └── External Systems (虚拟占位容器)
-      ├── ExternalSystem_A (按 external_system 名称实体化，如 WeChatPay)
-      └── ExternalSystem_B (如 UnionPay)
+(画布根视口 Viewport)
+ ├── Subsystem (depth=0 / L0: 业务子系统容器，如 TRADE_SYS, RISK_SYS)
+ │    └── FunctionalGroup L1 (depth=1 / L1: 一级功能组容器)
+ │         ├── FunctionalGroup L2...L8 (depth=2..8: 多级功能组自嵌套容器)
+ │         │    └── Module (叶子卡片: 最小契约功能模块)
+ │         └── Module (挂载于一级功能组下的模块)
+ ├── ExternalContainer (depth=0 / L0: 外部依赖系统容器，仅存在外部依赖时生成)
+ │    ├── ExternalSystem_A (按 external_system 名称实体化，如 WeChatPay)
+ │    └── ExternalSystem_B (如 UnionPay)
+ └── UnregisteredInterface (动态虚拟节点: 仅在一致性叠加层检出调用未登记接口时由前端按需注入)
 ```
+> **外键对齐说明**：`traefik_modules.group_id` 为 `NOT NULL` 外键，合法模块均挂载于某级 `FunctionalGroup` 下；前端 `hierarchy.ts` 对异常缺失父功能组的数据保留回退挂载至 `sub_<SubsystemID>` 的防御性兜底。
 
 #### 2. 物理部署视角 (`view=PHYSICAL`，去 Agent 化)
 > [!IMPORTANT]
-> **物理拓扑去 Agent 化铁律**：`Agent` 仅作为宿主机上无状态的字节流采集探测器与 eBPF 探针载体，不是系统业务架构的构成元素。物理部署视图中**绝对不出现 `AGENT` 节点**，拓扑严格围绕进程组与物理网络监听端点展开：
+> **物理拓扑去 Agent 化铁律**：`Agent` 仅作为宿主机上无状态的字节流采集探测器与 eBPF 探针载体，不是系统业务架构的构成元素。物理部署视图中**绝对不出现 `AGENT` 节点，且 `meta` 中严禁透出 `agent_id`**；后端内部查询 `SHARED` 进程时结合 `Process.AdvertiseIP`（优先）与所属 `Agent.Endpoint` Hostname 计算完整 `EffectiveIP:ListenPort` 填入 `meta.endpoint`：
 
 ```text
-System (全局物理部署根节点)
- ├── ProcessGroup (L0: 进程组容器，按 Process.group_name 聚合，如 "交易核心集群"、"风控服务集群")
- │    └── Process (L1: 物理运行进程容器，标识进程名与唯一监听端口 AdvertiseIP:ListenPort)
- │         └── Module (L2: 进程承载的公共功能模块实例)
- ├── Undeployed Modules (虚拟容器: 尚未在当前环境装载至任何物理进程的模块)
- └── External Endpoints (外部网络端点容器，由 Process.extra_downstreams 聚合)
+(画布根视口 Viewport)
+ ├── ProcessGroup (depth=0 / L0: 进程组容器，按 Process.group_name 聚合，空值归一为 "默认进程组")
+ │    └── Process (depth=1 / L1: 物理运行进程容器，标识进程名与监听端点 EffectiveIP:ListenPort)
+ │         └── Module (depth=2 / L2: 该公共进程承载的功能模块实例)
+ ├── UndeployedContainer (depth=0 / L0: 尚未在公共环境装载至任何物理进程的孤立模块容器)
+ │    └── Module (depth=1: 未部署模块叶子卡片)
+ └── ExternalContainer (depth=0 / L0: 外部依赖与网络端点容器，按需生成)
+      ├── ExternalSystem (承接模块声明的 is_external=true 业务外部系统)
+      └── ExternalEndpoint (承接 Process.extra_downstreams 登记的固定 IPv4:Port 端点)
 ```
 
-### 4.2 前端实时边汇总算法 (Edge Rollup)
+### 4.2 前端实时边汇总算法 (Edge Rollup) 与复合坐标规则
 
-后端接口一次性返回全系统架构树与最细粒度的**模块级原子叶子边**集合。在前端画布中，无论用户如何展开或折叠容器，有向连线始终动态聚合连接至**当前状态下两端最近的可见代表节点 (Representative Visible Ancestor)**：
+后端接口一次性返回全系统架构节点与最细粒度的**模块/外部端点级原子叶子边**集合。在前端画布中，无论用户如何展开或折叠容器，有向连线始终动态聚合连接至**当前状态下两端最近的可见代表节点 (Representative Visible Ancestor)**：
 
 ```mermaid
 flowchart LR
@@ -313,13 +318,14 @@ flowchart LR
     Grp2 == "聚合汇总边 (3 条契约)" ==> SubB
 ```
 
-#### 边汇总纯函数规则：
-1. **代表节点查找 (`rep(nodeId)`)**：沿当前节点的 `ancestors[]` 路径从根向下查找，首个处于“折叠 (Collapsed)”状态的祖先容器即为其可见代表节点；若其所有祖先均处于展开状态，则该节点自身即为代表节点；
-2. **同容器内收敛 (Internal Dependency)**：若源模块与目标模块的代表节点相同（即两模块落在同一个折叠容器内部）：
-   - **逻辑视图**：在折叠容器的角标处累计为「内部依赖: $N$」；
-   - **物理视图**：若源与目标落在同一 `Process` 容器内，自动标记为「进程内调用: $N$」（完全对应 A-04 不经过内核 Socket、物理不可观测语义）；
-3. **跨容器聚合边 (Rollup Edge)**：若代表节点不同（$S_{\text{rep}} \neq T_{\text{rep}}$），将所有底层叶子边按对偶元组 `(S_rep, T_rep)` 归并为一条汇总边，附带明细契约清单，线宽依据 $\log_2(\text{count} + 1)$ 动态缩放；
-4. **环路标红 (Cycle Detection)**：在当前可见节点导出的有向图上执行 Tarjan 强连通分量 (SCC) 算法，若两可见容器间存在双向依赖或深层环路，整条汇总边以 `--color-danger` 高亮报警。
+#### 边汇总与复合排版核心不变量：
+1. **代表节点查找 (`rep(nodeId)`)**：沿当前节点的 `ancestors[]` 路径从顶层根（`depth=0`）向下扫描，首个处于“折叠 (Collapsed)”状态的容器即为其可见代表节点；若其所有祖先均处于展开状态，则该叶子节点自身即为代表节点；
+2. **同容器内收敛 (Internal Dependency)**：若源与目标的代表节点相同（$S_{\text{rep}} = T_{\text{rep}}$，即两端落在同一个折叠容器内部）：
+   - **逻辑视图**：在折叠容器的标题栏徽章累计为「内部依赖: $N$」；
+   - **物理视图**：若两端落在同一折叠 `Process` 容器内，自动收敛为进程卡片右上角的「进程内调用: $N$」徽章（契合 A-04 不经内核 Socket、物理不可观测语义）；
+3. **跨容器聚合边 (Rollup Edge)**：若代表节点不同（$S_{\text{rep}} \neq T_{\text{rep}}$），将底层叶子边按有向对偶元组 `(S_rep, T_rep)` 归并为一条汇总边，附带聚合去重后的契约清单，线宽依据 $\log_2(\text{count} + 1)$ 动态缩放；
+4. **环路标红 (Cycle Detection)**：在当前可见代表节点导出的有向图上执行 Tarjan 强连通分量 (SCC) 算法，处于大小 $\ge 2$ 强连通分量内的汇总边标记 `isCycle = true` 并以 `--color-danger` 高亮报警；
+5. **React Flow v12 父先于子拓扑序与全局拐点换算**：输出给 React Flow 的可见节点必须按 `depth` 升序排列（确保 `parentId` 父容器先于子节点出现）；ELK `INCLUDE_CHILDREN` 输出的跨层边 `bendPoints` 必须累加所属 `containingNode` 的全局绝对坐标 `(absX, absY)`，且在节点被用户手动拖拽后自动退化为 `SmoothStep` 动态正交路径。
 
 ### 4.3 静态拓扑图完整 DTO 契约 (`TopologyGraphDTO`)
 
@@ -330,47 +336,47 @@ package topology
 type GraphNodeType string
 
 const (
-	NodeTypeSystem              GraphNodeType = "SYSTEM"
-	NodeTypeSubsystem           GraphNodeType = "SUBSYSTEM"
-	NodeTypeFunctionalGroup     GraphNodeType = "FUNCTIONAL_GROUP"
-	NodeTypeModule              GraphNodeType = "MODULE"
-	NodeTypeExternalContainer   GraphNodeType = "EXTERNAL_CONTAINER"
-	NodeTypeExternalSystem      GraphNodeType = "EXTERNAL_SYSTEM"
-	NodeTypeProcessGroup        GraphNodeType = "PROCESS_GROUP"
-	NodeTypeProcess             GraphNodeType = "PROCESS"
-	NodeTypeUndeployedContainer GraphNodeType = "UNDEPLOYED_CONTAINER"
-	NodeTypeExternalEndpoint    GraphNodeType = "EXTERNAL_ENDPOINT"
+	NodeTypeSubsystem             GraphNodeType = "SUBSYSTEM"
+	NodeTypeFunctionalGroup       GraphNodeType = "FUNCTIONAL_GROUP"
+	NodeTypeModule                GraphNodeType = "MODULE"
+	NodeTypeExternalContainer     GraphNodeType = "EXTERNAL_CONTAINER"
+	NodeTypeExternalSystem        GraphNodeType = "EXTERNAL_SYSTEM"
+	NodeTypeProcessGroup          GraphNodeType = "PROCESS_GROUP"
+	NodeTypeProcess               GraphNodeType = "PROCESS"
+	NodeTypeUndeployedContainer   GraphNodeType = "UNDEPLOYED_CONTAINER"
+	NodeTypeExternalEndpoint      GraphNodeType = "EXTERNAL_ENDPOINT"
+	NodeTypeUnregisteredInterface GraphNodeType = "UNREGISTERED_INTERFACE" // 前端一致性叠加态按需动态注入
 )
 
 // GraphNode 复合图节点传输对象
 type GraphNode struct {
 	ID        string         `json:"id"`                   // 唯一标识: "sub_1", "grp_10", "mod_101", "pgrp_交易核心", "proc_7"
-	Type      GraphNodeType  `json:"type"`                 // 节点类型枚举
-	ParentID  string         `json:"parent_id,omitempty"`  // 父节点 ID，根节点为空
-	Ancestors []string       `json:"ancestors"`            // 从根节点至父节点的物化路径数组，加速前端 rep() 计算
-	Depth     int            `json:"depth"`                // 所在层级深度 (0: 顶层根)
+	Type      GraphNodeType  `json:"type"`                 // 节点类型枚举（严禁出现 AGENT）
+	ParentID  string         `json:"parent_id,omitempty"`  // 父节点 ID，顶层节点 (depth=0) 为空字符串
+	Ancestors []string       `json:"ancestors"`            // 从顶层祖先至直接父节点的有序 ID 数组，加速前端 rep() 计算
+	Depth     int            `json:"depth"`                // 所在层级深度 (0: 顶层子系统/进程组/虚拟根容器)
 	EntityID  uint64         `json:"entity_id,omitempty"`  // 对应业务数据库主键 (Subsystem.ID, Module.ID, Process.ID)
 	Code      string         `json:"code,omitempty"`       // 业务编码 (如 "TRADE_SYS", "MOD_ORDER")
 	Name      string         `json:"name"`                 // 展示名称
 	SortOrder int            `json:"sort_order"`           // 排序权重，供 ELK considerModelOrder 保持排版稳定
-	Meta      map[string]any `json:"meta,omitempty"`       // 视图专有元数据 (如 listen_port, advertise_ip, process_id)
+	Meta      map[string]any `json:"meta,omitempty"`       // 视图专有元数据 (如 endpoint, listen_port, provide_count, owner_name；严禁含 agent_id)
 }
 
 // EdgeServiceItem 底层服务契约明细
 type EdgeServiceItem struct {
 	ServiceID    *uint64 `json:"service_id,omitempty"`
 	ServiceName  string  `json:"service_name"`
-	DependencyID uint64  `json:"dependency_id"`
+	DependencyID uint64  `json:"dependency_id,omitempty"`
 	Description  string  `json:"description,omitempty"`
 }
 
 // GraphEdge 原子叶子依赖边传输对象
 type GraphEdge struct {
-	ID             string            `json:"id"`               // "edge_m101_m102"
-	Kind           string            `json:"kind"`             // CROSS_PROCESS | INTRA_PROCESS | EXTERNAL_UNREGISTERED
-	SourceNodeID   string            `json:"source_node_id"`   // 源模块节点 ID ("mod_101")
-	TargetNodeID   string            `json:"target_node_id"`   // 目标模块节点 ID ("mod_102" 或 "ext_WeChatPay")
-	SrcModuleID    uint64            `json:"src_module_id"`
+	ID             string            `json:"id"`               // 如 "edge_m101_m102" 或 "edge_ext_m101_WeChatPay"
+	Kind           string            `json:"kind"`             // CROSS_PROCESS | INTRA_PROCESS | EXTERNAL_UNREGISTERED | UNDEPLOYED
+	SourceNodeID   string            `json:"source_node_id"`   // 源叶子节点 ID ("mod_101" 或 "proc_7")
+	TargetNodeID   string            `json:"target_node_id"`   // 目标叶子节点 ID ("mod_102" / "ext_sys_WeChatPay" / "ext_ep_10.0.0.8:3306")
+	SrcModuleID    uint64            `json:"src_module_id,omitempty"`
 	DstModuleID    *uint64           `json:"dst_module_id,omitempty"`
 	SrcProcessID   *uint64           `json:"src_process_id,omitempty"`
 	DstProcessID   *uint64           `json:"dst_process_id,omitempty"`
@@ -381,7 +387,7 @@ type GraphEdge struct {
 // TopologyGraphDTO 全量架构拓扑图响应载荷
 type TopologyGraphDTO struct {
 	View         string      `json:"view"`          // LOGICAL | PHYSICAL
-	ModelVersion time.Time   `json:"model_version"` // 架构版本快照 (支持 ETag 缓存)
+	ModelVersion string      `json:"model_version"` // 基于规范化 nodes+edges 计算的 SHA-256 内容指纹 (如 "v1-LOGICAL-9f86d081884c7d65")，100% 感知硬删除并作为 HTTP ETag
 	Nodes        []GraphNode `json:"nodes"`
 	Edges        []GraphEdge `json:"edges"`
 }
@@ -434,7 +440,7 @@ flowchart TD
 | **`VERIFIED`** | 已验证合规 | 静态声明跨进程依赖 `SrcModule --DEPEND--> (svc, op)`，且实测归属到 `SrcModule` 的跨进程调用 $\ge 1$ | 架构设计与实测运行完全一致（`--color-success` 绿色实线） |
 | **`VIOLATION`** | 架构漂移越权 | 实测精确定位到 `SrcModule`，但 `SrcModule` **未声明**该 `DEPEND(svc, op)`（含调用未登记接口或已登记其他模块） | **高优架构漂移告警**：源码存在未备案的私自跨进程调用（`--color-danger` 红色告警实线） |
 | **`UNCOVERED`** | 本次未触发 | 静态声明为跨进程依赖，源模块与目标供给模块所在进程**均在本次协同监控集合中**，但本次任务未捕获该调用 | 依赖已就绪但当前业务测试用例未覆盖该调用路径（`--color-text-muted` 灰色虚线） |
-| **`NOT_MONITORED`** | 目标未纳管 | 静态声明为跨进程依赖，源模块所在进程已被监控，但**目标供给模块所在物理进程未加入本次监控批次** | 物理上不可观测，**不计入 `UNCOVERED` 覆盖率分母**（`--color-text-tertiary` 浅灰点划线） |
+| **`NOT_MONITORED`** | 目标未纳管 | 静态声明为跨进程依赖，源模块所在进程已被监控，但**目标供给模块所在物理进程未加入本次监控批次** | 物理上不可观测，**不计入 `UNCOVERED` 覆盖率分母**（`--color-text-muted` 浅灰点划线） |
 | **`NOT_OBSERVABLE`** | 进程内不可观测 | 静态声明为同进程内两模块调用（依据该批次快照 `SrcModule` 与 `DstModule` 绑定在同一 `ProcessID`） | 物理上走函数调用不经过内核网络栈，**不计入 `UNCOVERED` 分母**（`--color-info` 蓝色徽章） |
 | **`UNATTRIBUTED`** | 进程级待定归属 | 多模块进程发出的调用缺少父 Trace 且存在重复声明，只能定位于 `Process_P -> DstModule` | 提示在源码中补充 DOTR Trace 扩展头或在架构中心收敛重复契约（`--color-warning` 琥珀色边） |
 
@@ -482,15 +488,16 @@ type ConsistencyReportDTO struct {
 
 ### 5.4 拓扑画布一致性比对叠加层机制 (Consistency Canvas Overlay)
 
-依据 ADR-05，架构一致性验证结果不再孤立于独立二级页签，而是作为静态拓扑画布上的**动态增强图层 (Overlay)**：
+依据 [`ADR-05`](../05-adr/05-hierarchical-topology-canvas-redesign.md)，架构一致性验证结果不再孤立于独立二级页签，而是作为静态拓扑画布上的**动态增强图层 (Overlay)**：
 
-1. **画布融合与状态上卷**：
-   - 用户在拓扑画布顶部选择关联的录制批次后，引擎将 `ConsistencyReportDTO` 的边结果与全量静态边结合；
-   - 当多个底层模块调用被上卷至折叠容器（如子系统间、进程组间）时，汇总边采用**最差优先级收敛**：
-     $$\text{VIOLATION} > \text{UNATTRIBUTED} > \text{UNCOVERED} > \text{NOT\_MONITORED} > \text{NOT\_OBSERVABLE} > \text{VERIFIED}$$
-   - 若某子系统间存在哪怕 1 条未声明的跨子系统调用，整条聚合连线即被渲染为告警红实线（`VIOLATION`），并伴随跳动脉冲动效；
-2. **流量热力与实测调用计数**：
-   - 汇总边标签展示底层实测调用总次数（如 `∑calls: 1,420`），并提供线宽与色调热力映射；
-3. **闭环穿透至四段解剖**：
-   - 用户点击任何一条一致性边，右侧滑出依赖明细抽屉；点击任意包含 `SampleTrafficRecID` 的接口项，直接弹出 `PacketAnatomyDrawer` 四段报文解剖（公共头位图、会话头拆解、DOTR Trace、Protobuf JSON 树与 Hex 字节），实现从“宏观架构违规”到“微观网络字节”的完整追溯闭环。
+1. **静态边归并、动态违规边合成与 `UNATTRIBUTED` 双视图归属**：
+   - **静态已声明边归并**：`VERIFIED / UNCOVERED / NOT_MONITORED / NOT_OBSERVABLE` 按公共架构元素键 `(src_module_id, dst_module_id, service_name)` 精确绑定至静态叶子边（即使选定的是复用公共模块的个人 `PRIVATE` 录制批次亦可无损映射）；
+   - **`VIOLATION` 动态叶子边合成**：因静态 `traefik_module_dependencies` 表中不存在未声明越权调用，叠加引擎自动将 `status == 'VIOLATION'` 的结果动态合成为临时告警叶子边并并入 `rollup` 输入边集触发 ELK 增量重排；若 `dst_module_id == nil`，自动注入虚拟节点 `VIRTUAL_UNREGISTERED_INTERFACE`（「未登记接口」）作为连线终点；
+   - **`UNATTRIBUTED` 跨视图归属降级**：因 `src_module_id == nil`，在物理视图 (`PHYSICAL`) 下直接挂载于源进程 `proc_<src_process_id>`（若为 `PRIVATE` 私有进程则映射至 `candidate_module_ids` 所属的公共物理容器）；在逻辑视图 (`LOGICAL`) 下取 `candidate_module_ids` 在逻辑层级树中的**最近公共祖先（LCA，如同一功能组或子系统）**作为源节点参与上卷，若候选模块跨多个顶层子系统无单一容器祖先，则收敛至画布顶部一致性摘要栏的「待定归属 (`N`)」独立徽章抽屉展示；
+2. **最差状态优先级收敛与实测调用热力**：
+   - 当多个底层模块调用被上卷至折叠容器（如子系统间、进程组间）时，汇总边状态严格遵循**最差优先级收敛**：
+     $$\text{VIOLATION} \succ \text{UNATTRIBUTED} \succ \text{UNCOVERED} \succ \text{NOT\_MONITORED} \succ \text{NOT\_OBSERVABLE} \succ \text{VERIFIED}$$
+   - 若某子系统间存在哪怕 1 条未声明的跨子系统调用，整条聚合连线即被渲染为 `--color-danger` 告警红实线并伴随脉冲动效；边标签同步展示实测调用总次数（如 `∑calls: 1,420`）；
+3. **闭环穿透至公共四段解剖抽屉**：
+   - 用户点击任何一条一致性边，右侧滑出 `EdgeDetailDrawer` 依赖明细抽屉；点击任意包含 `SampleTrafficRecID` 的接口项，直接调用公共组件 `PacketAnatomyDrawer` 检视四段二进制报文（公共头位图、会话头拆解、DOTR Trace、Protobuf JSON 树与 Hex 字节），实现从“宏观架构违规”到“微观网络字节”的完整追溯闭环。
 
