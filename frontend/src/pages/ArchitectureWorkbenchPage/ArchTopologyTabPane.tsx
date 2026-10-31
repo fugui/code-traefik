@@ -59,6 +59,52 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
   const [consistencyReport, setConsistencyReport] = useState<ConsistencyReportDTO | null>(null);
   const [loadingReport, setLoadingReport] = useState(false);
 
+  // 监听浏览器 URL 前进/后退/直达变化
+  useEffect(() => {
+    const pv = (searchParams.get('view')?.toUpperCase() as 'LOGICAL' | 'PHYSICAL') || initialView;
+    const nextView = pv === 'PHYSICAL' ? 'PHYSICAL' : 'LOGICAL';
+    setView((curr) => (curr !== nextView ? nextView : curr));
+
+    const ps = searchParams.get('session_id') || initialSessionId || null;
+    setSelectedSessionId((curr) => (curr !== ps ? ps : curr));
+  }, [searchParams, initialView, initialSessionId]);
+
+  // 搜索关键字联动：当输入 searchKeyword 时，自动沿父链展开命中节点的容器
+  useEffect(() => {
+    const kw = searchKeyword.trim().toLowerCase();
+    if (!kw || !graphData || !graphData.nodes) return;
+
+    const parentMap = new Map<string, string | null>();
+    graphData.nodes.forEach((n) => {
+      parentMap.set(n.id, n.parent_id ?? null);
+    });
+
+    const toExpand: ExpandStateMap = {};
+    let hasMatch = false;
+
+    graphData.nodes.forEach((n) => {
+      const match =
+        n.name.toLowerCase().includes(kw) ||
+        (n.code && n.code.toLowerCase().includes(kw)) ||
+        n.id.toLowerCase().includes(kw);
+      if (match) {
+        hasMatch = true;
+        let curr = parentMap.get(n.id);
+        while (curr) {
+          toExpand[curr] = true;
+          curr = parentMap.get(curr);
+        }
+      }
+    });
+
+    if (hasMatch && Object.keys(toExpand).length > 0) {
+      setExpandState((prev) => ({
+        ...prev,
+        ...toExpand,
+      }));
+    }
+  }, [searchKeyword, graphData]);
+
   // 3. 抽屉状态
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
   const [isNodeDrawerOpen, setIsNodeDrawerOpen] = useState(false);
@@ -325,6 +371,11 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
           consistencyReport={consistencyReport}
           view={view}
           resetKey={resetKey}
+          searchKeyword={searchKeyword}
+          wheelAutoExpand={wheelAutoExpand}
+          depthLevel={depthLevel}
+          maxDepth={maxDepth}
+          onDepthLevelChange={handleDepthLevelChange}
           className="code-arch-canvas--full"
         />
       </div>

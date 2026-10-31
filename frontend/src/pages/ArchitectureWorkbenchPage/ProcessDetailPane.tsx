@@ -1,5 +1,5 @@
 import React from 'react';
-import { ChevronRight, Cpu, Server, FileCode } from 'lucide-react';
+import { ChevronRight, Cpu, Server, FileCode, Edit3, Trash2 } from 'lucide-react';
 import type { Process, Module } from '../../types';
 
 export interface ProcessDetailPaneProps {
@@ -13,6 +13,9 @@ export interface ProcessDetailPaneProps {
 
 export const ProcessDetailPane: React.FC<ProcessDetailPaneProps> = ({
   process,
+  isAdmin,
+  onEditProcess,
+  onDeleteProcess,
   onSelectModule,
 }) => {
   const boundModules = process.process_modules ?? [];
@@ -32,7 +35,7 @@ export const ProcessDetailPane: React.FC<ProcessDetailPaneProps> = ({
 
       {/* 进程基本信息概览卡片 */}
       <div className="code-module-meta-card">
-        <div className="code-module-meta-header">
+        <div className="code-module-meta-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
             <Server size={22} style={{ color: 'var(--color-primary)' }} />
             <div>
@@ -50,6 +53,28 @@ export const ProcessDetailPane: React.FC<ProcessDetailPaneProps> = ({
               </p>
             </div>
           </div>
+          {isAdmin && (
+            <div className="code-module-form-actions" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              {onEditProcess && (
+                <button
+                  type="button"
+                  className="code-btn code-btn--secondary code-btn--xs"
+                  onClick={() => onEditProcess(process)}
+                >
+                  <Edit3 size={13} style={{ marginRight: '0.25rem' }} /> 编辑进程
+                </button>
+              )}
+              {onDeleteProcess && (
+                <button
+                  type="button"
+                  className="code-btn code-btn--danger-outline code-btn--xs"
+                  onClick={() => onDeleteProcess(process.id)}
+                >
+                  <Trash2 size={13} style={{ marginRight: '0.25rem' }} /> 删除进程
+                </button>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="code-meta-grid" style={{ marginTop: '0.875rem' }}>

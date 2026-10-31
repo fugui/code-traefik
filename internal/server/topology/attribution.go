@@ -131,6 +131,24 @@ func OfflineBatchAttribution(ctx context.Context, db *gorm.DB, sessionID uint64)
 		processModules[pm.ProcessID] = append(processModules[pm.ProcessID], pm.ModuleID)
 	}
 
+	// 补充通过 module.process_id 关联的承载模块 (双保险)
+	var allModules []models.Module
+	if err := db.WithContext(ctx).Where("process_id IS NOT NULL AND process_id > 0").Find(&allModules).Error; err == nil {
+		for _, m := range allModules {
+			pid := *m.ProcessID
+			already := false
+			for _, mid := range processModules[pid] {
+				if mid == m.ID {
+					already = true
+					break
+				}
+			}
+			if !already {
+				processModules[pid] = append(processModules[pid], m.ID)
+			}
+		}
+	}
+
 	// 4. 查询该 session 的所有流量记录
 	var records []models.TrafficRecord
 	if err := db.WithContext(ctx).Where("session_id = ?", sessionID).Order("id ASC").Find(&records).Error; err != nil {
@@ -144,9 +162,9 @@ func OfflineBatchAttribution(ctx context.Context, db *gorm.DB, sessionID uint64)
 	ingressMap := make(map[string]*models.TrafficRecord)
 	for i := range records {
 		rec := &records[i]
-		// 先定位目标模块
-		if rec.DstModuleID == nil {
-			rec.DstModuleID = ResolveDestinationModule(provideMap, rec.ServiceName)
+		// 定位目标模块 (按最新契约补全或更新)
+		if dstID := ResolveDestinationModule(provideMap, rec.ServiceName); dstID != nil {
+			rec.DstModuleID = dstID
 		}
 		if rec.Direction == models.TrafficDirIngress && rec.SpanID != "" && rec.SpanID != "0" {
 			ingressMap[rec.SpanID] = rec
@@ -157,14 +175,17 @@ func OfflineBatchAttribution(ctx context.Context, db *gorm.DB, sessionID uint64)
 	for i := range records {
 		rec := &records[i]
 		if rec.Direction == models.TrafficDirEgress {
-			srcID, mode, candidates := ResolveSourceModule(processModules, ingressMap, rec, dependMap)
-			rec.SrcModuleID = srcID
-			rec.SrcAttributionMode = mode
-			if len(candidates) > 0 {
-				candBytes, _ := json.Marshal(candidates)
-				rec.SrcCandidateModuleIDs = datatypes.JSON(candBytes)
-			} else {
-				rec.SrcCandidateModuleIDs = nil
+			// 如果记录已具备明确有效的来源模块归属（如仿真测试或前序结算），予以保留
+			if rec.SrcAttributionMode == "" || rec.SrcModuleID == nil {
+				srcID, mode, candidates := ResolveSourceModule(processModules, ingressMap, rec, dependMap)
+				rec.SrcModuleID = srcID
+				rec.SrcAttributionMode = mode
+				if len(candidates) > 0 {
+					candBytes, _ := json.Marshal(candidates)
+					rec.SrcCandidateModuleIDs = datatypes.JSON(candBytes)
+				} else {
+					rec.SrcCandidateModuleIDs = nil
+				}
 			}
 		}
 

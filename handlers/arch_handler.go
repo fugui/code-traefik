@@ -26,28 +26,28 @@ type SubsystemReq struct {
 
 // FunctionalGroupReq 创建/更新功能组请求体
 type FunctionalGroupReq struct {
-	SubsystemID uint64  `json:"subsystem_id"`
-	ParentID    *uint64 `json:"parent_id"`
-	Code        string  `json:"code"`
-	Name        string  `json:"name"`
-	SortOrder   int     `json:"sort_order"`
-	Description string  `json:"description"`
+	SubsystemID FlexUint64  `json:"subsystem_id"`
+	ParentID    *FlexUint64 `json:"parent_id"`
+	Code        string      `json:"code"`
+	Name        string      `json:"name"`
+	SortOrder   int         `json:"sort_order"`
+	Description string      `json:"description"`
 }
 
 // MoveFunctionalGroupReq 移动功能组请求体
 type MoveFunctionalGroupReq struct {
-	NewParentID *uint64 `json:"new_parent_id"`
-	SortOrder   *int    `json:"sort_order"`
+	NewParentID *FlexUint64 `json:"new_parent_id"`
+	SortOrder   *int        `json:"sort_order"`
 }
 
 // ModuleReq 创建/更新功能模块请求体
 type ModuleReq struct {
-	GroupID     uint64  `json:"group_id"`
-	Code        string  `json:"code"`
-	Name        string  `json:"name"`
-	OwnerID     *uint   `json:"owner_id"`
-	ProcessID   *uint64 `json:"process_id"`
-	Description string  `json:"description"`
+	GroupID     FlexUint64  `json:"group_id"`
+	Code        string      `json:"code"`
+	Name        string      `json:"name"`
+	OwnerID     *uint       `json:"owner_id"`
+	ProcessID   *FlexUint64 `json:"process_id"`
+	Description string      `json:"description"`
 }
 
 // ModuleServiceReq 创建供给服务请求体
@@ -65,16 +65,16 @@ type UpdateModuleServiceReq struct {
 
 // ModuleDependencyReq 创建服务依赖请求体
 type ModuleDependencyReq struct {
-	IsExternal      bool    `json:"is_external"`
-	ExternalSystem  string  `json:"external_system"`
-	ExternalService string  `json:"external_service"`
-	ServiceID       *uint64 `json:"service_id"`
-	Description     string  `json:"description"`
+	IsExternal      bool        `json:"is_external"`
+	ExternalSystem  string      `json:"external_system"`
+	ExternalService string      `json:"external_service"`
+	ServiceID       *FlexUint64 `json:"service_id"`
+	Description     string      `json:"description"`
 }
 
 // ProcessBindingReq 模块进程装载/绑定请求体
 type ProcessBindingReq struct {
-	ProcessID *uint64 `json:"process_id"`
+	ProcessID *FlexUint64 `json:"process_id"`
 }
 
 // normalizePageSize 通用分页归一化 (15/25/50/100，默认 25)
@@ -286,8 +286,8 @@ func CreateFunctionalGroup(c *gin.Context) {
 	}
 
 	item, err := topology.CreateFunctionalGroup(models.DB, topology.FunctionalGroupInput{
-		SubsystemID: req.SubsystemID,
-		ParentID:    req.ParentID,
+		SubsystemID: req.SubsystemID.Uint64(),
+		ParentID:    req.ParentID.Uint64Ptr(),
 		Code:        req.Code,
 		Name:        req.Name,
 		SortOrder:   req.SortOrder,
@@ -373,7 +373,7 @@ func MoveFunctionalGroup(c *gin.Context) {
 		return
 	}
 
-	before, after, updatedCount, err := topology.MoveFunctionalGroupWithResult(models.DB, id, req.NewParentID, req.SortOrder, uc.UserID)
+	before, after, updatedCount, err := topology.MoveFunctionalGroupWithResult(models.DB, id, req.NewParentID.Uint64Ptr(), req.SortOrder, uc.UserID)
 	if err != nil {
 		if errors.Is(err, topology.ErrGroupNotFound) || errors.Is(err, topology.ErrParentGroupNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
@@ -516,12 +516,12 @@ func CreateModule(c *gin.Context) {
 	}
 
 	item, err := topology.CreateModule(models.DB, topology.ModuleInput{
-		GroupID:      req.GroupID,
+		GroupID:      req.GroupID.Uint64(),
 		Code:         req.Code,
 		Name:         req.Name,
 		OwnerID:      req.OwnerID,
-		ProcessID:    req.ProcessID,
-		HasProcessID: req.ProcessID != nil,
+		ProcessID:    req.ProcessID.Uint64Ptr(),
+		HasProcessID: req.ProcessID != nil && req.ProcessID.Uint64Ptr() != nil,
 		Description:  req.Description,
 		OperatorID:   uc.UserID,
 	})
@@ -563,11 +563,11 @@ func UpdateModule(c *gin.Context) {
 	}
 
 	before, after, err := topology.UpdateModule(models.DB, id, topology.ModuleInput{
-		GroupID:      req.GroupID,
+		GroupID:      req.GroupID.Uint64(),
 		Code:         req.Code,
 		Name:         req.Name,
 		OwnerID:      req.OwnerID,
-		ProcessID:    req.ProcessID,
+		ProcessID:    req.ProcessID.Uint64Ptr(),
 		HasProcessID: true,
 		Description:  req.Description,
 		OperatorID:   uc.UserID,
@@ -643,9 +643,10 @@ func BindModuleProcess(c *gin.Context) {
 	}
 
 	oldPID := mod.ProcessID
-	if req.ProcessID != nil && *req.ProcessID > 0 {
+	pid := req.ProcessID.Uint64Ptr()
+	if pid != nil && *pid > 0 {
 		var proc models.Process
-		if err := models.DB.Preload("Agent").First(&proc, *req.ProcessID).Error; err != nil {
+		if err := models.DB.Preload("Agent").First(&proc, *pid).Error; err != nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "目标进程不存在"})
 			return
 		}
@@ -654,7 +655,7 @@ func BindModuleProcess(c *gin.Context) {
 			return
 		}
 
-		mod.ProcessID = req.ProcessID
+		mod.ProcessID = pid
 		if err := models.DB.Save(&mod).Error; err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "保存模块进程绑定失败"})
 			return
@@ -662,11 +663,11 @@ func BindModuleProcess(c *gin.Context) {
 
 		// 确保 traefik_process_modules 映射存在
 		var pm models.ProcessModule
-		if err := models.DB.Where("process_id = ? AND module_id = ?", *req.ProcessID, id).First(&pm).Error; errors.Is(err, gorm.ErrRecordNotFound) {
-			models.DB.Create(&models.ProcessModule{ProcessID: *req.ProcessID, ModuleID: id})
+		if err := models.DB.Where("process_id = ? AND module_id = ?", *pid, id).First(&pm).Error; errors.Is(err, gorm.ErrRecordNotFound) {
+			models.DB.Create(&models.ProcessModule{ProcessID: *pid, ModuleID: id})
 		}
 		// 若此前绑过其他旧进程，清理旧进程模块挂载
-		if oldPID != nil && *oldPID != *req.ProcessID {
+		if oldPID != nil && *oldPID != *pid {
 			models.DB.Where("process_id = ? AND module_id = ?", *oldPID, id).Delete(&models.ProcessModule{})
 		}
 	} else {
@@ -846,7 +847,7 @@ func CreateModuleDependency(c *gin.Context) {
 		IsExternal:       req.IsExternal,
 		ExternalSystem:   req.ExternalSystem,
 		ExternalService:  req.ExternalService,
-		ServiceID:        req.ServiceID,
+		ServiceID:        req.ServiceID.Uint64Ptr(),
 		Description:      req.Description,
 		OperatorID:       uc.UserID,
 	})

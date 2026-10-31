@@ -60,7 +60,11 @@ export async function createFunctionalGroup(data: {
 }) {
   return apiRequest<FunctionalGroup>('/arch/functional-groups', {
     method: 'POST',
-    body: JSON.stringify(data),
+    body: JSON.stringify({
+      ...data,
+      subsystem_id: Number(data.subsystem_id),
+      parent_id: data.parent_id ? Number(data.parent_id) : null,
+    }),
   });
 }
 
@@ -82,7 +86,10 @@ export async function moveFunctionalGroup(id: string, data: {
 }) {
   return apiRequest<{ group: FunctionalGroup; updated_descendants: number }>(`/arch/functional-groups/${id}/move`, {
     method: 'PATCH',
-    body: JSON.stringify(data),
+    body: JSON.stringify({
+      ...data,
+      new_parent_id: data.new_parent_id ? Number(data.new_parent_id) : null,
+    }),
   });
 }
 
@@ -125,7 +132,12 @@ export async function createModule(data: {
 }) {
   return apiRequest<Module>('/arch/modules', {
     method: 'POST',
-    body: JSON.stringify(data),
+    body: JSON.stringify({
+      ...data,
+      group_id: Number(data.group_id),
+      process_id: data.process_id ? Number(data.process_id) : null,
+      owner_id: data.owner_id ? Number(data.owner_id) : undefined,
+    }),
   });
 }
 
@@ -139,7 +151,12 @@ export async function updateModule(id: string, data: {
 }) {
   return apiRequest<Module>(`/arch/modules/${id}`, {
     method: 'PUT',
-    body: JSON.stringify(data),
+    body: JSON.stringify({
+      ...data,
+      group_id: Number(data.group_id),
+      process_id: data.process_id ? Number(data.process_id) : null,
+      owner_id: data.owner_id ? Number(data.owner_id) : undefined,
+    }),
   });
 }
 
@@ -152,7 +169,7 @@ export async function deleteModule(id: string) {
 export async function bindModuleProcess(moduleId: string, processId: string | null) {
   return apiRequest<Module>(`/arch/modules/${moduleId}/process-binding`, {
     method: 'POST',
-    body: JSON.stringify({ process_id: processId }),
+    body: JSON.stringify({ process_id: processId ? Number(processId) : null }),
   });
 }
 
@@ -202,7 +219,10 @@ export async function createModuleDependency(moduleId: string, data: {
 }) {
   return apiRequest<ModuleDependency>(`/arch/modules/${moduleId}/dependencies`, {
     method: 'POST',
-    body: JSON.stringify(data),
+    body: JSON.stringify({
+      ...data,
+      service_id: data.service_id ? Number(data.service_id) : undefined,
+    }),
   });
 }
 

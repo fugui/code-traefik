@@ -58,6 +58,15 @@ type ConsistencyReportDTO struct {
 
 // VerifySessionTopology 动态报文穿透还原实际调用并与静态契约比对 (F-05.3, SC-06)
 func VerifySessionTopology(ctx context.Context, db *gorm.DB, sessionID uint64, refresh bool) (*ConsistencyReportDTO, error) {
+	// 若存在尚未执行归属结算的出站报文，触发离线批量对账
+	var unattrCount int64
+	_ = db.WithContext(ctx).Model(&models.TrafficRecord{}).
+		Where("session_id = ? AND direction = ? AND (src_attribution_mode = '' OR src_attribution_mode IS NULL)", sessionID, models.TrafficDirEgress).
+		Count(&unattrCount).Error
+	if unattrCount > 0 {
+		_ = OfflineBatchAttribution(ctx, db, sessionID)
+	}
+
 	var session models.RecordingSession
 	if err := db.WithContext(ctx).First(&session, sessionID).Error; err != nil {
 		return nil, err

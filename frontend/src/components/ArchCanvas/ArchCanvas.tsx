@@ -36,6 +36,11 @@ export interface ArchCanvasProps {
   view: 'LOGICAL' | 'PHYSICAL';
   className?: string;
   resetKey?: number;
+  searchKeyword?: string;
+  wheelAutoExpand?: boolean;
+  depthLevel?: number;
+  maxDepth?: number;
+  onDepthLevelChange?: (level: number) => void;
 }
 
 export const ArchCanvas: React.FC<ArchCanvasProps> = ({
@@ -49,6 +54,11 @@ export const ArchCanvas: React.FC<ArchCanvasProps> = ({
   view,
   className = '',
   resetKey,
+  searchKeyword,
+  wheelAutoExpand,
+  depthLevel = 0,
+  maxDepth = 0,
+  onDepthLevelChange,
 }) => {
   const [draggedNodeIds, setDraggedNodeIds] = useState<Set<string>>(new Set());
   const [rfInstance, setRfInstance] = useState<ReactFlowInstance<ArchCanvasNode, ArchCanvasEdge> | null>(null);
@@ -127,6 +137,40 @@ export const ArchCanvas: React.FC<ArchCanvasProps> = ({
     [onSelectEdge]
   );
 
+  // 滚轮缩放联动层级自动展开/收起
+  const handleMoveEnd = useCallback(
+    (_: unknown, viewport: { zoom: number }) => {
+      if (!wheelAutoExpand || !onDepthLevelChange) return;
+      if (viewport.zoom >= 1.25 && depthLevel < maxDepth) {
+        onDepthLevelChange(depthLevel + 1);
+      } else if (viewport.zoom <= 0.65 && depthLevel > 0) {
+        onDepthLevelChange(depthLevel - 1);
+      }
+    },
+    [wheelAutoExpand, onDepthLevelChange, depthLevel, maxDepth]
+  );
+
+  // 关键词检索高亮增强
+  const highlightedFlowNodes = useMemo(() => {
+    const kw = searchKeyword?.trim().toLowerCase();
+    if (!kw) return flowNodes;
+    return flowNodes.map((n) => {
+      const gn = (n.data as { graphNode?: GraphNode })?.graphNode;
+      const match =
+        gn &&
+        (gn.name.toLowerCase().includes(kw) ||
+          (gn.code && gn.code.toLowerCase().includes(kw)) ||
+          gn.id.toLowerCase().includes(kw));
+      if (match) {
+        return {
+          ...n,
+          className: `${n.className || ''} code-arch-node--search-match`.trim(),
+        };
+      }
+      return n;
+    });
+  }, [flowNodes, searchKeyword]);
+
   return (
     <div className={`code-arch-canvas ${className}`} data-testid="arch-canvas">
       {isLayouting && (
@@ -150,7 +194,7 @@ export const ArchCanvas: React.FC<ArchCanvasProps> = ({
 
       <ReactFlow<ArchCanvasNode, ArchCanvasEdge>
         onInit={setRfInstance}
-        nodes={flowNodes}
+        nodes={highlightedFlowNodes}
         edges={flowEdges}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
@@ -159,6 +203,7 @@ export const ArchCanvas: React.FC<ArchCanvasProps> = ({
         onNodeDrag={handleNodeDrag}
         onNodeClick={handleNodeClick}
         onEdgeClick={handleEdgeClick}
+        onMoveEnd={handleMoveEnd}
         fitView
         proOptions={{ hideAttribution: true }}
         minZoom={0.15}

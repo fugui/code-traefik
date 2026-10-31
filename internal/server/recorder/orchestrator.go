@@ -321,6 +321,9 @@ func (o *Orchestrator) StopSession(
 		_ = hub.ReleaseAgentLeases(ctx, o.db, agentIDs, models.AgentLeaseRecording, session.ID)
 	}
 
+	// 触发离线批量对账引擎结算报文来源与目标模块 (OfflineBatchAttribution)
+	_ = topology.OfflineBatchAttribution(ctx, o.db, session.ID)
+
 	// 5. 统计总帧数与丢包
 	var capturedCount int64
 	o.db.WithContext(ctx).Model(&models.TrafficRecord{}).Where("session_id = ?", session.ID).Count(&capturedCount)

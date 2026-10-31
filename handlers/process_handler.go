@@ -17,15 +17,15 @@ import (
 
 // ProcessReq 进程创建/修改请求体
 type ProcessReq struct {
-	AgentID          uint64   `json:"agent_id"`
-	GroupName        string   `json:"group_name"`
-	Name             string   `json:"name"`
-	ListenPort       int      `json:"listen_port"`
-	AdvertiseIP      string   `json:"advertise_ip"`
-	CmdPattern       string   `json:"cmd_pattern"`
-	ModuleIDs        []uint64 `json:"module_ids"`
-	ExtraDownstreams []string `json:"extra_downstreams"`
-	Description      string   `json:"description"`
+	AgentID          FlexUint64      `json:"agent_id"`
+	GroupName        string          `json:"group_name"`
+	Name             string          `json:"name"`
+	ListenPort       int             `json:"listen_port"`
+	AdvertiseIP      string          `json:"advertise_ip"`
+	CmdPattern       string          `json:"cmd_pattern"`
+	ModuleIDs        FlexUint64Slice `json:"module_ids"`
+	ExtraDownstreams []string        `json:"extra_downstreams"`
+	Description      string          `json:"description"`
 }
 
 // ListProcesses GET /api/processes
@@ -126,7 +126,8 @@ func CreateProcess(c *gin.Context) {
 
 	// 权限核验：检查目标 Agent 是否为本人 PRIVATE 或 SHARED(仅管理员可写)
 	var targetAgent models.Agent
-	if req.AgentID == 0 {
+	agentID := req.AgentID.Uint64()
+	if agentID == 0 {
 		if isAdmin {
 			if err := models.DB.Where("scope = ?", models.ScopeShared).First(&targetAgent).Error; err != nil {
 				_ = models.DB.First(&targetAgent)
@@ -137,10 +138,10 @@ func CreateProcess(c *gin.Context) {
 			}
 		}
 		if targetAgent.ID > 0 {
-			req.AgentID = targetAgent.ID
+			agentID = targetAgent.ID
 		}
 	}
-	if err := models.DB.First(&targetAgent, req.AgentID).Error; err != nil {
+	if err := models.DB.First(&targetAgent, agentID).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "所属 Agent 不存在，请先注册或选择有效 Agent"})
 		return
 	}
@@ -155,13 +156,13 @@ func CreateProcess(c *gin.Context) {
 	}
 
 	proc, err := topology.CreateProcess(models.DB, topology.ProcessInput{
-		AgentID:          req.AgentID,
+		AgentID:          agentID,
 		GroupName:        req.GroupName,
 		Name:             req.Name,
 		ListenPort:       req.ListenPort,
 		AdvertiseIP:      req.AdvertiseIP,
 		CmdPattern:       req.CmdPattern,
-		ModuleIDs:        req.ModuleIDs,
+		ModuleIDs:        []uint64(req.ModuleIDs),
 		ExtraDownstreams: req.ExtraDownstreams,
 		Description:      req.Description,
 		OperatorID:       uc.UserID,
@@ -232,7 +233,7 @@ func UpdateProcess(c *gin.Context) {
 		ListenPort:       req.ListenPort,
 		AdvertiseIP:      req.AdvertiseIP,
 		CmdPattern:       req.CmdPattern,
-		ModuleIDs:        req.ModuleIDs,
+		ModuleIDs:        []uint64(req.ModuleIDs),
 		ExtraDownstreams: req.ExtraDownstreams,
 		Description:      req.Description,
 		OperatorID:       uc.UserID,

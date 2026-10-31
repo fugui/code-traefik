@@ -394,3 +394,14 @@
   display: none !important;
 }
 
+/* ── 节点搜索高亮与脉冲动画 ── */
+.code-arch-canvas .code-arch-node--search-match,
+.code-arch-canvas .code-arch-container.code-arch-node--search-match,
+.code-arch-canvas .code-arch-module.code-arch-node--search-match,
+.code-arch-canvas .code-arch-external.code-arch-node--search-match {
+  box-shadow: 0 0 0 2.5px var(--color-primary), 0 0 16px rgba(59, 130, 246, 0.5) !important;
+  border-color: var(--color-primary) !important;
+  transition: box-shadow 0.25s ease, border-color 0.25s ease;
+}
+
+

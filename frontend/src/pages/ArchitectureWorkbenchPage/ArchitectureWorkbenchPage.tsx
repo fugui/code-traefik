@@ -350,10 +350,13 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
         setSelectedModule(res.module);
         setServices(res.services ?? []);
         setDependencies(res.dependencies ?? []);
+        if (res.module?.subsystem_id) {
+          const newSubId = String(res.module.subsystem_id);
+          setSelectedSubsystemId((prev) => (String(prev) === newSubId ? prev : newSubId));
+        }
         if (res.module?.group_id) {
-          setSelectedGroupId((prev) =>
-            String(prev) === String(res.module.group_id) ? prev : String(res.module.group_id)
-          );
+          const newGrpId = String(res.module.group_id);
+          setSelectedGroupId((prev) => (String(prev) === newGrpId ? prev : newGrpId));
         }
         return res;
       } catch (err) {
@@ -971,6 +974,19 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
                   process={selectedProcess}
                   allModules={subsystemModules.length > 0 ? subsystemModules : modules}
                   isAdmin={isAdmin}
+                  onEditProcess={(proc) => {
+                    setEditingProcess(proc);
+                    setProcessForm({
+                      group_name: proc.group_name || '默认进程组',
+                      name: proc.name,
+                      listen_port: String(proc.listen_port),
+                      agent_id: proc.agent_id || '',
+                      cmd_pattern: proc.cmd_pattern || '',
+                      description: proc.description || '',
+                    });
+                    setProcessDrawerOpen(true);
+                  }}
+                  onDeleteProcess={(id) => void handleDeleteProcess(id)}
                   onSelectModule={(modId) => {
                     setSelectedModuleId(modId);
                     setTreeViewMode('LOGICAL');
