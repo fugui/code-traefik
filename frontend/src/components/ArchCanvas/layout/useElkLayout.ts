@@ -85,8 +85,8 @@ function buildElkGraph(
     const elkNode: ElkNode = {
       id: gn.id,
       layoutOptions: {
-        'elk.padding': '[top=48,left=16,bottom=16,right=16]',
-        'elk.spacing.nodeNode': '36',
+        'elk.padding': '[top=52,left=16,bottom=16,right=16]',
+        'elk.spacing.nodeNode': '28',
       },
     };
 
@@ -193,6 +193,14 @@ export function useElkLayout({
     // 4. 构建 ELK 复合输入图
     const elkInputGraph = buildElkGraph(visibleGraphNodes, cycleRes.edges, expandState);
 
+    // 原始全量树的直接子节点计数（供展开与折叠态展示统计）
+    const fullChildrenCountMap: Record<string, number> = {};
+    for (const n of nodes) {
+      if (n.parent_id) {
+        fullChildrenCountMap[n.parent_id] = (fullChildrenCountMap[n.parent_id] || 0) + 1;
+      }
+    }
+
     const currentReqId = ++layoutReqIdRef.current;
 
     const applyLayoutResult = (layoutedTree: ElkNode) => {
@@ -205,7 +213,8 @@ export function useElkLayout({
         draggedNodeIds,
         expandState,
         rollupRes.badgeCounts,
-        onToggleExpand
+        onToggleExpand,
+        fullChildrenCountMap
       );
 
       setFlowNodes(processed.nodes);

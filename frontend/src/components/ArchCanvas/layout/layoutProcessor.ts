@@ -23,6 +23,7 @@ export interface CanvasNodeData {
   isExpanded: boolean;
   onToggleExpand?: (nodeId: string) => void;
   badgeCounts?: ContainerBadgeCounts;
+  childCount?: number;
   [key: string]: unknown;
 }
 
@@ -84,7 +85,8 @@ export function processLayoutCoordinates(
   draggedNodeIds: Set<string>,
   expandState: Record<string, boolean> = {},
   badgeCounts: Record<string, ContainerBadgeCounts> = {},
-  onToggleExpand?: (nodeId: string) => void
+  onToggleExpand?: (nodeId: string) => void,
+  childCounts: Record<string, number> = {}
 ): {
   nodes: ArchCanvasNode[];
   edges: ArchCanvasEdge[];
@@ -134,6 +136,7 @@ export function processLayoutCoordinates(
         isExpanded: Boolean(expandState[gn.id]),
         onToggleExpand,
         badgeCounts: badgeCounts[gn.id],
+        childCount: childCounts[gn.id] ?? 0,
       },
       style: {
         width: layout?.width,
