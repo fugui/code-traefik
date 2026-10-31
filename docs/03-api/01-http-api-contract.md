@@ -115,15 +115,19 @@
 
 ### 2.3 Protobuf 描述集 (`.pb`) 与方法映射域 (`F-03`, `SC-02`)
 
-> 校验与激活规则参见 [`04-control-plane-and-web-console.md` §2.1](../02-design/04-control-plane-and-web-console.md) 及 [`05-database-schema.md` §3.4](../02-design/05-database-schema.md)。
+> 校验与激活规则参见 [`04-control-plane-and-web-console.md` §2.1 & §2.3](../02-design/04-control-plane-and-web-console.md) 及 [`05-database-schema.md` §3.4](../02-design/05-database-schema.md)。
 
 | 方法 | 路由路径 | 守卫要求 | Query / Body 核心参数 | 响应 JSON 结构与状态码 | `AuditAction` (`module:action`) |
 | :---: | :--- | :---: | :--- | :--- | :--- |
-| `GET` | `/api/proto-schemas` | `JWT` | Query: `name?, active_only?, search?, page?, page_size?` | `200`: 标准分页 `items: []ProtoSchema`（不透出 `descriptor_bytes`） | - |
+| `GET` | `/api/proto-schemas` | `JWT` | Query: `name?, active_only?, search?, page?, page_size?` | `200`: 标准分页 `items: []ProtoSchema`（含 `proto_files`，不透出 `descriptor_bytes`） | - |
+| `GET` | `/api/proto-schemas/:id/download` | `JWT` | Path: `id` | `200`: `application/octet-stream` 二进制流（下载原始 `.pb` 文件，附带文件名 Content-Disposition）<br>`404`: 描述集不存在 | - |
+| `GET` | `/api/proto-schemas/:id/summary` | `JWT` | Path: `id` | `200`: `{schema: ProtoSchema, proto_files: string[], services_summary: []ServiceSummaryItem, claimed_ratio: number}`（含架构模块认领与孤儿契约血缘分析）<br>`404`: 描述集不存在 | - |
 | `POST` | `/api/proto-schemas` | `AdminOnly` | `multipart/form-data`: `file` (必填 `.pb` 二进制 `<=4MB`), `name`, `version_tag?`, `description?`, `auto_activate?` (`bool`) | `201`: `{schema: ProtoSchema, operations: []ProtoOperation}`<br>`400`: 文件 `>4MB`、`FileDescriptorSet` 损坏或 `protodesc.NewFiles` 失败；`403`: 非管理员；`409`: `auto_activate=true` 且与其他生效描述集存在 `(service_name, operation)` 冲突 | `traefik_schema:upload` |
 | `POST` | `/api/proto-schemas/:id/activate` | `AdminOnly` | Path: `id`（原子切换同名版本并重建内存 `CompiledRegistry`） | `200`: `{schema: ProtoSchema, activated_operations: int}`<br>`403/404`；`409`: 与其他生效描述集存在 `(service_name, operation)` 冲突（返回 `conflicts: [{service_name, operation, conflict_schema_name, conflict_version}]`） | `traefik_schema:activate` |
 | `DELETE` | `/api/proto-schemas/:id` | `AdminOnly` | Path: `id` | `200`: `{"message":"描述集版本已删除"}`<br>`403/404`；`409`: 当前处于 `is_active = true` 生效态禁止删除 | `traefik_schema:delete` |
-| `GET` | `/api/proto-operations` | `JWT` | Query: `schema_id?, active_only?, service_name?, operation?, search?, page?, page_size?` | `200`: 标准分页 `items: []ProtoOperation`（`service_name` 格式为 `{package}-{serviceName}`） | - |
+| `GET` | `/api/proto-operations` | `JWT` | Query: `schema_id?, active_only?, service_name?, operation?, search?, page?, page_size?` | `200`: 标准分页 `items: []ProtoOperation`（含 `diff_ignore_paths` 与架构认领状态） | - |
+| `GET` | `/api/proto-operations/:id/schema-tree` | `JWT` | Path: `id` | `200`: `OperationSchemaTreeDTO`（基于 `FileDescriptorSet` 反射的完整 `reqMessage` 与 `rspMessage` 字段字典树、类型、Tag 及注释）<br>`404`: 方法不存在或对应 Message 定义丢失 | - |
+| `PUT` | `/api/proto-operations/:id/ignore-paths` | `AdminOnly` | Path: `id`；Body: `{"diff_ignore_paths": string[]}` | `200`: `ProtoOperation`（更新方法级专属回归对比忽略字段清单）<br>`400`: 路径格式非法；`403`: 非管理员；`404`: 方法不存在 | `traefik_schema:update_op_ignores` |
 
 ---
 

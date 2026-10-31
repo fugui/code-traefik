@@ -148,6 +148,42 @@ flowchart LR
 - **无映射优雅降级**：若未注册对应 `.pb` 或二进制反序列化失败，保留完整 CROS RPC 头解析结果，将 `decode_status` 置为 `NO_SCHEMA_RAW_HEX` 或 `DECODE_ERR_RAW_HEX`，前端自动切换纯 Hex 视图，绝不中断采集链路。
 - **历史不可变与按需重解码**：落盘时快照记录当时使用的 `(schema_id, schema_version)`；后续切换 `.pb` 生效版本不会隐式篡改历史记录，用户可在流量详情抽屉显式点击「使用当前生效版本重新解码」。
 
+### 2.3 消息体参数定义字典树反射与源文件导出 (`F-03.2`, `F-03.4`)
+
+为彻底解决“请求/应答参数定义不可见”与“描述集黑盒无法导出”的痛点，控制面提供基于 `protodesc` 的动态字典树反射服务：
+
+1. **服务端动态字典树递归反射 (`ExtractMessageFieldTree`)**：
+   - 给定 `ProtoOperation` 的 `req_message_full_name` 或 `rsp_message_full_name`，由 `Registry` 从缓存的 `protoregistry.Files` 查找目标 `protoreflect.MessageDescriptor`；
+   - 递归遍历其包含的全部 `protoreflect.FieldDescriptor`，提取出结构化的 `ProtoFieldNodeDTO`：
+     - `name`: 字段名（Proto 原名，如 `server_time`、`order_id`）；
+     - `json_name`: JSON 序列化名（如 `serverTime`）；
+     - `tag_number`: 字段编号（如 `#1`、`#2`）；
+     - `kind`: 字段基本数据类型（`INT64`、`STRING`、`BOOL`、`MESSAGE`、`ENUM`、`BYTES` 等）；
+     - `cardinality`: 规则修饰（`OPTIONAL`、`REQUIRED`、`REPEATED`）；
+     - `is_map`: 是否为 Map 键值映射；
+     - `comments`: 源码注释（自动提取 `SourceCodeInfo` 中的 `leading_comments` 与 `trailing_comments`）；
+     - `children`: 针对子 Message 递归提取子字段集合（内置防循环引用深度截断，最大深度 12 层）；
+     - `field_path`: 预计算的标准点分路径（如 `header.server_time`、`items[*].create_time`）。
+2. **描述集源文件树透视与原文件导出**：
+   - 提取 `FileDescriptorSet` 内包含的全部 `.proto` 源文件名（如 `account.proto`、`common.proto`）及各自声明的 `Service` / `Message` 清单；
+   - 提供 `GET /api/proto-schemas/:id/download` 原始二进制流下载接口，附带 `Content-Disposition: attachment; filename="<schema_name>_v<ver>.pb"`，便于开发本地使用 `protoc` 或 `grpcurl` 排查。
+
+### 2.4 可视化 Diff 忽略字段规则与三级优先级继承模型 (`F-03.3`)
+
+在流量回归对比场景中，动态变化的时间戳、随机请求流水号与签名必须精准豁免比对，传统手工输入路径容易发生拼写与大小写错误：
+
+1. **点分路径与通配符生成规则**：
+   - 单层字段：`fieldName`（如 `server_time`）；
+   - 嵌套对象：`parent.child`（如 `header.timestamp`）；
+   - 数组/列表元素：`array[*].field`（如 `orders[*].trace_token`）；
+   - 忽略整个对象/子树：`data.debug_info`。
+2. **三级优先级合并继承模型**：
+   当回归 Diff 引擎比对单次 RPC 应答时，最终生效的忽略路径集合由三级合并计算：
+   $$\text{FinalIgnorePaths} = \text{ReplayTask.ExtraIgnorePaths} \cup \text{Operation.DiffIgnorePaths} \cup \text{ModuleService.DiffIgnorePaths}$$
+   - **L1 任务级临时忽略 (`ReplayTask.ExtraIgnorePaths`)**：发起单次重放任务时用户临时附加的针对性忽略项；
+   - **L2 方法级精准忽略 (`ProtoOperation.DiffIgnorePaths`)**：在契约工作台字段树上可视化勾选、并持久化至 `traefik_proto_operations` 的方法级专属规则；
+   - **L3 服务级全局默认 (`ModuleService.DiffIgnorePaths`)**：在架构中心供给服务上配置的服务级通用忽略规则（如公共网关头 `header.*`）。
+
 ---
 
 ## 3. 协议头级 + Protobuf 语义字段级双层回归 Diff 引擎 (`internal/server/diff`)
@@ -253,11 +289,14 @@ src/
 │   │   ├── AgentScopeTabs.tsx              # 切换「团队公共 Agent (SHARED)」与「我的私有 Agent (PRIVATE)」
 │   │   ├── AgentLeaseStatusBadge.tsx       # 实时展示空闲 / 录制占用(持锁人+剩余TTL) / 重放占用，管理员支持强制解锁
 │   │   └── ProcessModuleBinderModal.tsx    # 进程探查与挂载复用全局公共架构模块 (ModuleIDs) 配置弹窗
-│   ├── ProtoSchemaWorkbenchPage/           # 3. 接口文档与 IDL 描述集工作台
-│   │   ├── SchemaUploadModal.tsx           # .pb 上传弹窗（<=4MB 预检、版本备注）
-│   │   ├── SchemaVersionList.tsx           # 同名描述集多版本时间线与一键生效切换（409 冲突明细展示）
-│   │   ├── OperationMappingTable.tsx       # {package}.{serviceName} 映射检索表 + 接口默认忽略路径编辑器
-│   │   └── OperationDocDrawer.tsx          # 入参/出参 Message 字段树与模块关联抽屉（兼顾 P0 映射详情与 P1 F-18 演进槽位）
+│   ├── ProtoSchemaWorkbenchPage/           # 3. 接口文档与 IDL 描述集工作台 (M7 资产化与嵌套表架构)
+│   │   ├── SchemaUploadModal.tsx           # .pb 上传弹窗（<=4MB 预检、版本备注、自动激活开关）
+│   │   ├── SchemaVersionList.tsx           # 描述集资产制品列表（版本时间线、原文件下载导出、包含 Proto 文件透视、架构认领血缘概览）
+│   │   ├── OperationMappingTable.tsx       # 两级嵌套折叠表: 外层服务契约聚合行 (Service Row) ➔ 内层 RPC 方法子表 (Operation Table)
+│   │   ├── ServiceSummaryRow.tsx           # 外层服务行组件: 服务全名、源 Proto、认领模块、RPC 计数、一键全部折叠/展开
+│   │   ├── OperationDocDrawer.tsx          # 契约详情与消息体参数定义抽屉 (双栏/Tab 切换查看 Req/Rsp Message)
+│   │   ├── MessageSchemaInspectorTree.tsx  # 消息体参数定义字典树组件 (多层递归展开、Tag、类型高亮、注释透视)
+│   │   └── DiffIgnoreFieldToggle.tsx       # 字段级 Diff 忽略复选框与路径自动生成控制器
 │   ├── TrafficMonitorWorkbenchPage/        # 4. 协同录制与流量解剖工作台
 │   │   ├── RecordingSessionBar.tsx         # 批次控制栏：公私域进程选择器(含租约冲突置灰提示)、素材作用域(SHARED/PRIVATE)、A-01 重连横幅
 │   │   ├── LiveTrafficFilterForm.tsx       # 多维 URL 同步筛选器(含 payload_json GIN 关键字检索) + SSE 实时流暂停/继续开关
@@ -373,6 +412,72 @@ export interface PacketAnatomyDrawerDTO {
   reqSide?: FrameSideAnatomyDTO; // RSP_ORPHAN 时为空
   rspSide?: FrameSideAnatomyDTO; // ONEWAY 或 REQ_ONLY 时为空
 }
+
+### 4.4 消息体参数定义字典树与契约嵌套表 TypeScript DTO 契约 (`MessageSchemaTreeDTO`)
+
+#### (1) 参数字段字典树节点契约
+```typescript
+// frontend/src/types/schema.ts
+
+export type ProtoFieldKind =
+  | 'INT32' | 'INT64' | 'UINT32' | 'UINT64' | 'SINT32' | 'SINT64'
+  | 'BOOL' | 'ENUM' | 'STRING' | 'BYTES'
+  | 'FLOAT' | 'DOUBLE' | 'MESSAGE';
+
+export interface ProtoFieldNodeDTO {
+  name: string;                // Proto 原名字段，如 "server_time"
+  jsonName: string;            // JSON 序列化键，如 "serverTime"
+  tagNumber: number;           // 字段编号，如 1, 2
+  kind: ProtoFieldKind;        // 数据类型
+  typeName?: string;           // 嵌套 Message 或 Enum 的类型全名，如 "dophi.common.Head"
+  cardinality: 'OPTIONAL' | 'REQUIRED' | 'REPEATED';
+  isMap: boolean;              // 是否为 map<K, V> 映射
+  comments?: string;           // 提取自 SourceCodeInfo 的注释
+  fieldPath: string;           // 自动计算的规范点分/数组通配路径，如 "header.server_time", "items[*].id"
+  isIgnoredInDiff: boolean;    // 当前方法或服务级是否已配置忽略
+  children?: ProtoFieldNodeDTO[]; // 针对 MESSAGE 递归展开的子字段树 (最大递归深度 12)
+}
+
+export interface OperationSchemaTreeDTO {
+  operationId: string;
+  serviceName: string;         // "{package}-{serviceName}"
+  operation: string;           // "DeductBalance"
+  protoFile: string;           // "account.proto"
+  clientStreaming: boolean;
+  serverStreaming: boolean;
+  diffIgnorePaths: string[];   // 当前方法生效的忽略路径清单
+  inheritedIgnorePaths: string[]; // 继承自架构服务级的忽略清单
+  reqMessage: {
+    fullName: string;
+    fields: ProtoFieldNodeDTO[];
+  };
+  rspMessage: {
+    fullName: string;
+    fields: ProtoFieldNodeDTO[];
+  };
+}
+```
+
+#### (2) 两级嵌套折叠表聚合数据模型
+```typescript
+export interface ServiceContractGroupDTO {
+  serviceName: string;         // 聚合键: "{package}-{serviceName}"
+  protoPackage: string;
+  protoService: string;
+  protoFile: string;
+  claimedByModule?: {          // 架构血缘: 认领此服务的公共架构模块
+    id: string;
+    code: string;
+    name: string;
+    subsystemName: string;
+  };
+  totalOperations: number;
+  unaryCount: number;
+  streamCount: number;
+  isActive: boolean;
+  operations: ProtoOperation[]; // 展开后的子表数据
+}
+```
 ```
 
 ---

@@ -62,7 +62,6 @@ export interface ModuleContractDetailPaneProps {
 
 export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> = ({
   modules,
-  selectedModuleId: _selectedModuleId,
   onSelectModule,
   selectedModule,
   services,
