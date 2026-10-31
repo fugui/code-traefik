@@ -108,7 +108,8 @@
 | `POST` | `/api/arch/modules/:id/dependencies` | `AdminOnly` | Body: `{is_external: boolean, service_id?: uint64, external_system?: string, external_service?: string, description?: string}` | `201`: `ModuleDependency`<br>`400`: 自身循环依赖或必填项缺失；`403/404`；`409`: 重复依赖相同服务 | `traefik_arch:create` |
 | `DELETE` | `/api/arch/module-dependencies/:depId` | `AdminOnly` | Path: `depId` | `200`: `{"message":"服务依赖关系已解除"}`<br>`403/404` | `traefik_arch:delete` |
 | `GET` | `/api/arch/services/available` | `JWT` | - | `200`: `{"items": []}`（按子系统与 FM 分组列出全系统已声明的 PROVIDE Service，用于添加依赖弹窗下拉） | - |
-| `GET` | `/api/arch/topology/static` | `JWT` | Query: `view` (`LOGICAL` \| `PHYSICAL`，默认 `LOGICAL`), `subsystem_id?` | `200`: `{"view":string,"nodes":[],"edges":[]}`（含 `CROSS_PROCESS`、`INTRA_PROCESS`、`EXTERNAL_UNREGISTERED`，参见 [`03-architecture-elements-and-topology.md` §4](../02-design/03-architecture-elements-and-topology.md)）<br>`400`: `view` 参数非法 | - |
+| `GET` | `/api/arch/topology/graph` | `JWT` | Query: `view` (`LOGICAL` \| `PHYSICAL`，默认 `LOGICAL`)，支持请求头 `If-None-Match` | `200`: `TopologyGraphDTO`（全系统分层复合拓扑图，含 `nodes: []GraphNode`, `edges: []GraphEdge`, `model_version: time.Time`；物理视角严格按 `PROCESS_GROUP` -> `PROCESS` 组织并去 Agent 化，响应头携带 `ETag`）<br>`304`: 架构模型未发生变更<br>`400`: `view` 参数非法 | - |
+| `GET` | `/api/arch/topology/static` | `JWT` | *(已废弃/向后兼容)* Query: `view`, `subsystem_id?` | `200`: `{"view":string,"nodes":[],"edges":[]}`（旧版单子系统扁平拓扑，建议迁移至 `/api/arch/topology/graph`） | - |
 
 ---
 

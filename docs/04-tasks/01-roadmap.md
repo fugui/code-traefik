@@ -36,6 +36,8 @@ flowchart LR
     M2 ==> M4
     M3 ==> M4
     M4 ==> M5
+    M5 ==> M6
+    M6["M6: 分层复合拓扑与一致性画布<br/>(React Flow + ELK Worker + 边汇总 + 去 Agent 物理图)"]
 ```
 
 | 里程碑 | 状态 | 作战卡文档 | 核心职责与交付边界 | 准出质量门禁 (Exit Gate) |
@@ -45,6 +47,7 @@ flowchart LR
 | **M3** | ✅ 已交付 | [`04-m3-agent-dataplane-ebpf-and-replay.md`](./04-m3-agent-dataplane-ebpf-and-replay.md) | `cmd/agent` 受控 HTTP+WS 服务（IP 白名单、`ClaimCode`、64MB 有界缓冲、5m 失联自洁）、`pkg/ebpf`（入站 RingBuf 复制、出站 `connect4` 重定向、`agent_pid` 自环豁免、`/proc` PID 巡检与存量连接诊断）、`pkg/replay`（零 `.pb` `ScopedMockMatcher` 与表驱动头部自愈） | 普通单测 + `//go:build linux && ebpf` 特权测试通过 + `cmd/agent` 零 DB/零 `.pb` 依赖断言通过 |
 | **M4** | ✅ 已交付 | [`05-m4-recording-topology-and-diff-engine.md`](./05-m4-recording-topology-and-diff-engine.md) | 多进程协同录制编排、Track A (SSE) / Track B (`ExchangeAssembler` 往返配对双模落盘)、四段报文解剖组装、离线架构一致性六分类验证、跨 Agent 同构重放调度与双层（协议头 + `protoreflect`）回归 Diff 引擎 | `TEST_DB_DSN=... go test -race ./...` 全绿 |
 | **M5** | ✅ 已交付 | [`06-m5-microfrontend-and-e2e-delivery.md`](./06-m5-microfrontend-and-e2e-delivery.md) | 架构中心、Agent 看板、`.pb` 工作台、流量监控台（含四段解剖抽屉）、重放工作台（含双层 Diff 抽屉）、`--color-*` 语义主题、URL 5 页滑窗分页、`SC-01`~`SC-08` E2E 回归及双二进制打包交付 | `make test && make lint && make build && make clean` 100% 零警告通过 |
+| **M6** | 📋 待实施 | [`07-m6-hierarchical-topology-canvas.md`](./07-m6-hierarchical-topology-canvas.md) | 分层复合架构拓扑与一致性画布（`ArchCanvas`）：全系统单画布、React Flow + ELK Worker 异步正交布局、纯前端边汇总算法 (`Rollup`)、物理视图去 Agent 化（进程组 -> 进程 -> 承载模块）、一致性验证叠加层与 `GET /api/arch/topology/graph` 契约 | 纯算法单测覆盖率 `≥ 90%` + `TEST_DB_DSN=... go test` 通过 + `make lint` 零警告 |
 
 ---
 
@@ -57,7 +60,7 @@ flowchart LR
 | **F-01** | 三级架构元素建模 | M1, M2 | `models/models_test.go`<br>`handlers/arch_proto_agent_test.go` | `TestArchHierarchyCRUDAndMoveValidation`<br>`TestDeleteNonEmptyArchElementsConflict` |
 | **F-02** | 进程部署映射与模块服务契约依赖 | M1, M2 | `internal/server/topology/topology_test.go`<br>`handlers/arch_proto_agent_test.go` | `TestModuleServiceProvideGlobalUnique`<br>`TestModuleDependenciesAndExternalSystem`<br>`TestProcessModuleBindingPublicVsPrivate` |
 | **F-03** | Protobuf 描述集注册与接口映射 | M2 | `internal/server/decoder/decoder_test.go`<br>`handlers/arch_proto_agent_test.go` | `TestProtoSchemaUploadAndDashServiceName`<br>`TestProtoSchemaActivateConflictAndHistoryImmutability` |
-| **F-04** | 静态架构拓扑视图 | M2, M5 | `internal/server/topology/topology_test.go`<br>`frontend/src/__tests__/WorkbenchRBAC.test.tsx` | `TestBuildStaticTopologyLogicalAndPhysical` |
+| **F-04** | 静态架构拓扑视图 | M2, M5, M6 | `internal/server/topology/topology_test.go`<br>`frontend/src/__tests__/ArchCanvasRollup.test.ts`<br>`frontend/src/__tests__/WorkbenchRBAC.test.tsx` | `TestBuildTopologyGraphLogicalAndPhysical`<br>`testRollupAndCycleDetection` |
 | **F-05** | 实测调用拓扑还原与架构一致性验证 | M4 | `internal/server/topology/consistency_test.go` | `TestResolveSourceModuleThreeTierPriority`<br>`TestVerifySessionTopologySixCategories` |
 | **F-06** | Agent 公私域纳管与动态排他租约 | M2 | `internal/server/hub/hub_test.go`<br>`handlers/arch_proto_agent_test.go` | `TestAgentPublicPrivateScopeAndAntiIDOR`<br>`TestAcquireAgentLeasesMutexAndHeartbeatReconcile` |
 | **F-07** | 主控—Agent 受控信道（HTTP + WS） | M1, M3 | `pkg/agentproto/envelope_test.go`<br>`internal/agent/server/server_test.go` | `TestAgentIPAllowlistAndClaimCode`<br>`TestBoundedSessionBufferBackpressureAndGracePurge` |
