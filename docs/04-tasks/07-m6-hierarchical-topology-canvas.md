@@ -5,7 +5,7 @@
 - **更新日期**：2026-10-31
 - **归属阶段**：阶段三/四：M6 TDD 任务拆解与验收标准 (`04-tasks`)
 - **覆盖特性与场景**：`F-04` (分层复合拓扑视图)、`F-05` (架构一致性比对叠加层)、`SC-02` (架构拓扑推导与宏观一致性)
-- **设计参考基线**：[`05-hierarchical-topology-canvas-and-elk-layout.md`](../05-adr/05-hierarchical-topology-canvas-and-elk-layout.md) (ADR-05)、[`03-architecture-elements-and-topology.md` §4~§5](../02-design/03-architecture-elements-and-topology.md)、[`04-control-plane-and-web-console.md` §4](../02-design/04-control-plane-and-web-console.md)、[`01-http-api-contract.md` §2.2](../03-api/01-http-api-contract.md)
+- **设计参考基线**：[`05-hierarchical-topology-canvas-redesign.md`](../05-adr/05-hierarchical-topology-canvas-redesign.md) (ADR-05)、[`03-architecture-elements-and-topology.md` §4~§5](../02-design/03-architecture-elements-and-topology.md)、[`04-control-plane-and-web-console.md` §4](../02-design/04-control-plane-and-web-console.md)、[`01-http-api-contract.md` §2.2](../03-api/01-http-api-contract.md)
 
 ---
 

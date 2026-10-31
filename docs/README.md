@@ -29,12 +29,14 @@ docs/
 │   ├── 03-m2-arch-proto-and-agent-control.md      # 【M2 作战卡】三级架构元素、.pb 动态编解码与公私域 Agent 排他租约管控
 │   ├── 04-m3-agent-dataplane-ebpf-and-replay.md   # 【M3 作战卡】数据面 Agent 信道、cilium/ebpf 采集与零 .pb 二进制自愈重放
 │   ├── 05-m4-recording-topology-and-diff-engine.md# 【M4 作战卡】多进程协同录制、离线架构一致性验证与双层回归 Diff 引擎
-│   └── 06-m5-microfrontend-and-e2e-delivery.md    # 【M5 作战卡】微前端五大工作台、四段报文解剖抽屉与 SC-01~SC-08 端到端交付
+│   ├── 06-m5-microfrontend-and-e2e-delivery.md    # 【M5 作战卡】微前端五大工作台、四段报文解剖抽屉与 SC-01~SC-08 端到端交付
+│   └── 07-m6-hierarchical-topology-canvas.md      # 【M6 作战卡】分层复合架构拓扑与一致性画布（React Flow + ELK Worker）
 ├── 05-adr/          # 架构决策记录 (ADR)：重大技术选型与权衡记录 (Architecture Decision Records)
 │   ├── 01-microfrontend-and-table-prefix-isolation.md                  # ADR-01：微前端集成、共享库表前缀隔离与 TDD 测试策略
 │   ├── 02-ebpf-hook-and-dual-subsystem-adr.md                          # ADR-02：eBPF 入站旁路钩子、Cookie 原目的还原与无 Schema 数据面解耦
 │   ├── 03-control-plane-state-recovery-and-lease-reconciliation.md     # ADR-03：控制面状态自愈恢复、Agent 双向租约对账与孤儿探针防御
-│   └── 04-traffic-storage-partitioning-and-relational-normalization.md # ADR-04：海量流量物理分区归档与核心关系规范化解耦
+│   ├── 04-traffic-storage-partitioning-and-relational-normalization.md # ADR-04：海量流量物理分区归档与核心关系规范化解耦
+│   └── 05-hierarchical-topology-canvas-redesign.md                     # ADR-05：分层复合架构拓扑画布重设计、去 Agent 物理建模与一致性比对融合
 ├── 06-ops/          # 交付与验证：双模联调、物理隔离数据库测试与生产环境单二进制部署手册
 │   └── 01-verification-and-deployment-guide.md    # 联调验证、自动化回归测试与生产部署操作指南
 └── 07-references/   # 外部参考与上位契约基准：协议包规范、字节字典与领域标准文档
