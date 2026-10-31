@@ -467,7 +467,11 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
                     <span className="code-module-form-field__label">监听端口:</span>
                     <span className="code-module-form-field__val code-font-mono">
                       {selectedModule.process ? (
-                        <span className="code-badge code-badge--info">Port: {selectedModule.process.listen_port}</span>
+                        selectedModule.process.listen_port > 0 ? (
+                          <span className="code-badge code-badge--info">Port: {selectedModule.process.listen_port}</span>
+                        ) : (
+                          <span className="code-badge code-badge--muted">纯客户端 (无监听)</span>
+                        )
                       ) : (
                         '-'
                       )}
@@ -745,7 +749,7 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
                               title={onViewProcess ? '在物理架构树中定位此承载进程' : undefined}
                             >
                               <Server size={13} />
-                              {proc.name} (Port: {proc.listen_port})
+                              {proc.name} {proc.listen_port > 0 ? `(Port: ${proc.listen_port})` : '(纯客户端)'}
                             </span>
                           ) : (
                             <span className="code-color-muted code-text-xs">未装配进程</span>
@@ -1137,7 +1141,7 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
               <option value="">-- 未装配任何物理进程 (解除绑定) --</option>
               {allProcesses.map((p) => (
                 <option key={p.id} value={p.id}>
-                  {p.name} (Port: {p.listen_port}) [{p.group_name || '默认组'}] - 宿主: {p.agent?.name || `Agent #${p.agent_id}`}
+                  {p.name} {p.listen_port > 0 ? `(Port: ${p.listen_port})` : '(纯客户端)'} [{p.group_name || '默认组'}] - 宿主: {p.agent?.name || `Agent #${p.agent_id}`}
                 </option>
               ))}
             </select>
@@ -1157,7 +1161,11 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 600 }}>
                       <Server size={15} style={{ color: 'var(--color-primary)' }} />
                       <span>{targetProc.name}</span>
-                      <span className="code-badge code-badge--info">Port: {targetProc.listen_port}</span>
+                      {targetProc.listen_port > 0 ? (
+                        <span className="code-badge code-badge--info">Port: {targetProc.listen_port}</span>
+                      ) : (
+                        <span className="code-badge code-badge--muted">纯客户端</span>
+                      )}
                     </div>
                     <div className="code-color-muted">
                       所属 Agent: {targetProc.agent?.name || `Agent #${targetProc.agent_id}`} ({targetProc.agent?.endpoint || '192.168.56.18'})

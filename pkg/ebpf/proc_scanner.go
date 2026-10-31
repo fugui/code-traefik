@@ -130,8 +130,45 @@ func (s *ProcScanner) ScanListenProcesses() ([]agentproto.DiscoveredProcess, err
 	return results, nil
 }
 
-// FindPIDByPortAndCmd 按监听端口与命令行正则查找实时 PID
+// FindPIDByCmd 纯客户端进程无监听端口时，按命令行特征反查实时 PID
+func (s *ProcScanner) FindPIDByCmd(cmdPattern string) (uint32, error) {
+	cmdPattern = strings.TrimSpace(cmdPattern)
+	if cmdPattern == "" {
+		return 0, nil
+	}
+	entries, err := os.ReadDir(s.root)
+	if err != nil {
+		return 0, fmt.Errorf("读取 %s 目录失败: %w", s.root, err)
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		pid64, err := strconv.ParseUint(entry.Name(), 10, 32)
+		if err != nil {
+			continue
+		}
+		pid := uint32(pid64)
+		cmdlinePath := filepath.Join(s.root, entry.Name(), "cmdline")
+		cmdBytes, err := os.ReadFile(cmdlinePath)
+		if err != nil {
+			continue
+		}
+		cmdline := string(bytes.ReplaceAll(cmdBytes, []byte{0}, []byte{' '}))
+		exePath := filepath.Join(s.root, entry.Name(), "exe")
+		exeName, _ := os.Readlink(exePath)
+		if strings.Contains(cmdline, cmdPattern) || strings.Contains(exeName, cmdPattern) {
+			return pid, nil
+		}
+	}
+	return 0, nil
+}
+
+// FindPIDByPortAndCmd 按监听端口与命令行正则查找实时 PID (listenPort = 0 时按纯命令行特征查找客户端进程)
 func (s *ProcScanner) FindPIDByPortAndCmd(listenPort uint16, cmdPattern string) (uint32, error) {
+	if listenPort == 0 {
+		return s.FindPIDByCmd(cmdPattern)
+	}
 	procs, err := s.ScanListenProcesses()
 	if err != nil {
 		return 0, err

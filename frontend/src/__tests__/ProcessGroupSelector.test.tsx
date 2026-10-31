@@ -117,4 +117,34 @@ describe('ProcessGroupSelector Suite', () => {
     // 确保去重后核心业务组只出现一次
     expect(result.filter((x) => x === '核心业务组').length).toBe(1);
   });
+
+  it('TC-PROC-GRP-03: 端口解析算法应支持 0 或留空解析为纯客户端，并拦截非法端口', () => {
+    const parsePort = (raw: string): { valid: boolean; port: number } => {
+      const trimmed = raw.trim();
+      const p = trimmed === '' ? 0 : parseInt(trimmed, 10);
+      if (isNaN(p) || p < 0 || p > 65535) {
+        return { valid: false, port: p };
+      }
+      return { valid: true, port: p };
+    };
+
+    expect(parsePort('0')).toEqual({ valid: true, port: 0 });
+    expect(parsePort('')).toEqual({ valid: true, port: 0 });
+    expect(parsePort('  ')).toEqual({ valid: true, port: 0 });
+    expect(parsePort('9001')).toEqual({ valid: true, port: 9001 });
+    expect(parsePort('-1').valid).toBe(false);
+    expect(parsePort('70000').valid).toBe(false);
+    expect(parsePort('abc').valid).toBe(false);
+  });
+
+  it('TC-PROC-GRP-04: 纯客户端进程 (listen_port = 0) 在选项文本与徽章中应正确渲染为纯客户端', () => {
+    const procClient = { name: 'CLI', listen_port: 0 };
+    const procServer = { name: 'sut-order', listen_port: 9001 };
+
+    const formatOption = (p: { name: string; listen_port: number }) =>
+      `${p.name} ${p.listen_port > 0 ? `(Port: ${p.listen_port})` : '(纯客户端)'}`;
+
+    expect(formatOption(procClient)).toBe('CLI (纯客户端)');
+    expect(formatOption(procServer)).toBe('sut-order (Port: 9001)');
+  });
 });

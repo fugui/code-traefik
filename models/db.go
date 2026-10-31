@@ -63,10 +63,27 @@ func SetupWithDB(db *gorm.DB) error {
 		return fmt.Errorf("预建日常流量分区子表失败: %w", err)
 	}
 
-	// 3. 显式创建关键业务部分唯一索引
+	// 3. 显式创建关键业务部分唯一索引与端口检查约束
+	// 3.1 兼容纯客户端进程 (listen_port = 0 无监听端口)：升级检查约束与创建部分唯一索引 (WHERE listen_port > 0)
+	procConstraintSQL := `
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_traefik_proc_port') THEN
+        ALTER TABLE traefik_processes DROP CONSTRAINT chk_traefik_proc_port;
+    END IF;
+    ALTER TABLE traefik_processes ADD CONSTRAINT chk_traefik_proc_port CHECK (listen_port >= 0 AND listen_port <= 65535);
+
+    -- 移除旧的全量唯一索引（若存在且未带 WHERE listen_port > 0）
+    DROP INDEX IF EXISTS uk_traefik_proc_agent_port;
+END $$;`
+	if err := DB.Exec(procConstraintSQL).Error; err != nil {
+		return fmt.Errorf("更新进程端口检查约束失败: %w", err)
+	}
+
 	partialIndexes := []string{
 		`CREATE UNIQUE INDEX IF NOT EXISTS uk_traefik_proto_active_name ON traefik_proto_schemas (name) WHERE is_active = true;`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS uk_traefik_active_proto_op ON traefik_proto_operations (service_name, operation) WHERE is_active = true;`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uk_traefik_proc_agent_port ON traefik_processes (agent_id, listen_port) WHERE listen_port > 0;`,
 	}
 	for _, idxSQL := range partialIndexes {
 		if err := DB.Exec(idxSQL).Error; err != nil {

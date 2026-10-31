@@ -560,7 +560,12 @@ func buildPhysicalTopologyGraph(db *gorm.DB, dto *TopologyGraphDTO) error {
 			} else {
 				effectiveIP = "127.0.0.1"
 			}
-			effectiveEndpoint := fmt.Sprintf("%s:%d", effectiveIP, p.ListenPort)
+			var effectiveEndpoint string
+			if p.ListenPort > 0 {
+				effectiveEndpoint = fmt.Sprintf("%s:%d", effectiveIP, p.ListenPort)
+			} else {
+				effectiveEndpoint = fmt.Sprintf("%s (纯客户端)", effectiveIP)
+			}
 
 			// 绝对禁止透出 agent_id 字段
 			procMeta := map[string]any{

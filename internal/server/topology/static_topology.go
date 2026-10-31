@@ -40,7 +40,7 @@ var (
 	ErrServiceHasDependencies    = errors.New("该服务已被其他功能模块作为依赖引用，请先解除依赖关系")
 	ErrInvalidExternalDependency = errors.New("外部服务依赖必须填写外部系统名称或外部服务名称")
 	ErrInvalidTopologyView       = errors.New("静态拓扑视角参数非法，仅允许 LOGICAL 或 PHYSICAL")
-	ErrInvalidListenPort         = errors.New("进程监听端口必须在 1..65535 之间")
+	ErrInvalidListenPort         = errors.New("进程监听端口必须在 0..65535 之间 (0 表示纯客户端无监听端口)")
 	ErrInvalidProcessName        = errors.New("进程名称与命令行匹配模式不能为空")
 	ErrEmptyProcessModules       = errors.New("进程至少需挂载 1 个公共功能模块")
 	ErrInvalidExtraDownstream    = errors.New("补充外部下游端点格式必须为合法 IPv4:Port")
@@ -416,7 +416,7 @@ func validateIPv4Endpoint(ep string) error {
 
 // CreateProcess 创建进程并承载模块
 func CreateProcess(db *gorm.DB, in ProcessInput) (*models.Process, error) {
-	if in.ListenPort < 1 || in.ListenPort > 65535 {
+	if in.ListenPort < 0 || in.ListenPort > 65535 {
 		return nil, ErrInvalidListenPort
 	}
 	name := strings.TrimSpace(in.Name)
@@ -467,14 +467,17 @@ func CreateProcess(db *gorm.DB, in ProcessInput) (*models.Process, error) {
 		return nil, ErrAgentHasActiveLease
 	}
 
-	// 端口与名称互斥
-	var portCount, nameCount int64
-	if err := db.Model(&models.Process{}).Where("agent_id = ? AND listen_port = ?", in.AgentID, in.ListenPort).Count(&portCount).Error; err != nil {
-		return nil, err
+	// 端口与名称互斥 (仅当 listen_port > 0 时校验端口互斥，0 表示纯客户端无监听端口)
+	if in.ListenPort > 0 {
+		var portCount int64
+		if err := db.Model(&models.Process{}).Where("agent_id = ? AND listen_port = ?", in.AgentID, in.ListenPort).Count(&portCount).Error; err != nil {
+			return nil, err
+		}
+		if portCount > 0 {
+			return nil, ErrDuplicateProcessPort
+		}
 	}
-	if portCount > 0 {
-		return nil, ErrDuplicateProcessPort
-	}
+	var nameCount int64
 	if err := db.Model(&models.Process{}).Where("agent_id = ? AND name = ?", in.AgentID, name).Count(&nameCount).Error; err != nil {
 		return nil, err
 	}
@@ -576,7 +579,7 @@ func CreateProcess(db *gorm.DB, in ProcessInput) (*models.Process, error) {
 
 // UpdateProcess 更新进程
 func UpdateProcess(db *gorm.DB, procID uint64, in ProcessInput) (*models.Process, *models.Process, error) {
-	if in.ListenPort < 1 || in.ListenPort > 65535 {
+	if in.ListenPort < 0 || in.ListenPort > 65535 {
 		return nil, nil, ErrInvalidListenPort
 	}
 	name := strings.TrimSpace(in.Name)
@@ -605,8 +608,8 @@ func UpdateProcess(db *gorm.DB, procID uint64, in ProcessInput) (*models.Process
 		return nil, nil, ErrAgentHasActiveLease
 	}
 
-	// 端口与名称冲突检查
-	if in.ListenPort != before.ListenPort {
+	// 端口与名称冲突检查 (仅当 listen_port > 0 时校验端口互斥)
+	if in.ListenPort > 0 && in.ListenPort != before.ListenPort {
 		var portCount int64
 		if err := db.Model(&models.Process{}).Where("agent_id = ? AND listen_port = ? AND id != ?", before.AgentID, in.ListenPort, procID).Count(&portCount).Error; err != nil {
 			return nil, nil, err

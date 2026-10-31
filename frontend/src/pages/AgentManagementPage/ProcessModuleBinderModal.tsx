@@ -207,12 +207,13 @@ export const ProcessModuleBinderModal: React.FC<ProcessModuleBinderModalProps> =
               />
             </div>
             <div className="code-form-item">
-              <label className="code-form-label">监听 TCP 端口 (1024..65535):</label>
+              <label className="code-form-label">监听 TCP 端口 (0 表示纯客户端/无监听):</label>
               <input
                 type="number"
                 className="code-input"
                 value={form.listen_port}
                 onChange={(e) => setForm({ ...form, listen_port: Number(e.target.value) })}
+                placeholder="0 表示纯客户端"
               />
             </div>
           </div>

@@ -913,3 +913,87 @@ func TestListClaimableProtoServices(t *testing.T) {
 		t.Fatalf("期望找到 TradeService 和 UserService，实际 foundTrade=%v, foundUser=%v", foundTrade, foundUser)
 	}
 }
+
+func TestClientOnlyProcessWithZeroPort(t *testing.T) {
+	db := setupIsolatedTopologyDB(t)
+
+	agent := models.Agent{
+		Name:     "client-test-agent",
+		Endpoint: "192.168.56.200:9091",
+		Scope:    models.ScopeShared,
+		Status:   models.AgentStatusOnline,
+	}
+	if err := db.Create(&agent).Error; err != nil {
+		t.Fatalf("创建测试 Agent 失败: %v", err)
+	}
+
+	// 1. 创建纯客户端进程 (ListenPort = 0)
+	client1, err := CreateProcess(db, ProcessInput{
+		AgentID:    agent.ID,
+		Name:       "CLI_Worker_1",
+		GroupName:  "客户端工具",
+		ListenPort: 0,
+		CmdPattern: "./bin/cli_worker",
+	})
+	if err != nil {
+		t.Fatalf("创建纯客户端进程 client1 失败: %v", err)
+	}
+	if client1.ListenPort != 0 {
+		t.Fatalf("期望 ListenPort 为 0，实际为 %d", client1.ListenPort)
+	}
+
+	// 2. 在同一 Agent 下创建第二个纯客户端进程 (ListenPort = 0)，应正常成功，不能触发端口唯一性冲突
+	client2, err := CreateProcess(db, ProcessInput{
+		AgentID:    agent.ID,
+		Name:       "CLI_Worker_2",
+		GroupName:  "客户端工具",
+		ListenPort: 0,
+		CmdPattern: "./bin/cli_worker_batch",
+	})
+	if err != nil {
+		t.Fatalf("同一 Agent 下创建第二个纯客户端进程失败 (端口 0 产生冲突): %v", err)
+	}
+	if client2.ID == client1.ID {
+		t.Fatalf("进程 ID 冲突")
+	}
+
+	// 3. 校验 ListenPort < 0 仍会被拦截
+	_, err = CreateProcess(db, ProcessInput{
+		AgentID:    agent.ID,
+		Name:       "CLI_Worker_Invalid",
+		ListenPort: -1,
+		CmdPattern: "./bin/cli_worker_invalid",
+	})
+	if !errors.Is(err, ErrInvalidListenPort) {
+		t.Fatalf("负数端口期望返回 ErrInvalidListenPort，实际为: %v", err)
+	}
+
+	// 4. 更新纯客户端进程为服务端口，以及更新回 0
+	_, client1Updated, err := UpdateProcess(db, client1.ID, ProcessInput{
+		AgentID:    agent.ID,
+		Name:       "CLI_Worker_1",
+		GroupName:  "客户端工具",
+		ListenPort: 9801,
+		CmdPattern: "./bin/cli_worker",
+	})
+	if err != nil {
+		t.Fatalf("更新客户端进程为服务端口 9801 失败: %v", err)
+	}
+	if client1Updated.ListenPort != 9801 {
+		t.Fatalf("期望 ListenPort 为 9801，实际为 %d", client1Updated.ListenPort)
+	}
+
+	_, client1Reverted, err := UpdateProcess(db, client1.ID, ProcessInput{
+		AgentID:    agent.ID,
+		Name:       "CLI_Worker_1",
+		GroupName:  "客户端工具",
+		ListenPort: 0,
+		CmdPattern: "./bin/cli_worker",
+	})
+	if err != nil {
+		t.Fatalf("将服务进程重新更新为纯客户端 0 端口失败: %v", err)
+	}
+	if client1Reverted.ListenPort != 0 {
+		t.Fatalf("期望 ListenPort 为 0，实际为 %d", client1Reverted.ListenPort)
+	}
+}

@@ -46,11 +46,11 @@ func (Agent) TableName() string { return config.TablePrefix + "agents" }
 // 6. Process 业务宿主机目标进程部署映射表 (traefik_processes)
 type Process struct {
 	ID               uint64          `gorm:"primaryKey;autoIncrement" json:"id"`
-	AgentID          uint64          `gorm:"not null;uniqueIndex:uk_traefik_proc_agent_port,priority:1;uniqueIndex:uk_traefik_proc_agent_name,priority:1;index:idx_traefik_proc_agent" json:"agent_id"`
+	AgentID          uint64          `gorm:"not null;uniqueIndex:uk_traefik_proc_agent_name,priority:1;index:idx_traefik_proc_agent" json:"agent_id"`
 	Agent            *Agent          `gorm:"foreignKey:AgentID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"agent,omitempty"`
 	GroupName        string          `gorm:"size:64;not null;default:'默认进程组';index:idx_traefik_proc_group" json:"group_name"`
 	Name             string          `gorm:"size:128;not null;uniqueIndex:uk_traefik_proc_agent_name,priority:2" json:"name"`
-	ListenPort       int             `gorm:"not null;uniqueIndex:uk_traefik_proc_agent_port,priority:2;check:chk_traefik_proc_port,listen_port >= 1 AND listen_port <= 65535" json:"listen_port"` // 唯一监听端口
+	ListenPort       int             `gorm:"not null;default:0;check:chk_traefik_proc_port,listen_port >= 0 AND listen_port <= 65535" json:"listen_port"` // 监听端口 (0 表示纯客户端/无监听端口)
 	AdvertiseIP      string          `gorm:"size:64;not null;default:''" json:"advertise_ip"`
 	CmdPattern       string          `gorm:"size:512;not null" json:"cmd_pattern"`
 	ProcessModules   []ProcessModule `gorm:"foreignKey:ProcessID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"process_modules,omitempty"`

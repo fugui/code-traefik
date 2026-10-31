@@ -29,7 +29,7 @@ export const ProcessDetailPane: React.FC<ProcessDetailPaneProps> = ({
         <span className="code-module-breadcrumb__item">{process.group_name || '默认进程组'}</span>
         <ChevronRight size={13} className="code-module-breadcrumb__sep" />
         <span className="code-module-breadcrumb__item code-module-breadcrumb__item--current">
-          {process.name} (Port: {process.listen_port})
+          {process.name} {process.listen_port > 0 ? `(Port: ${process.listen_port})` : '(纯客户端)'}
         </span>
       </div>
 
@@ -41,9 +41,15 @@ export const ProcessDetailPane: React.FC<ProcessDetailPaneProps> = ({
             <div>
               <h3 className="code-module-title" style={{ margin: 0 }}>
                 {process.name}
-                <span className="code-badge code-badge--info" style={{ marginLeft: '0.6rem', fontSize: '0.75rem' }}>
-                  Port: {process.listen_port}
-                </span>
+                {process.listen_port > 0 ? (
+                  <span className="code-badge code-badge--info" style={{ marginLeft: '0.6rem', fontSize: '0.75rem' }}>
+                    Port: {process.listen_port}
+                  </span>
+                ) : (
+                  <span className="code-badge code-badge--muted" style={{ marginLeft: '0.6rem', fontSize: '0.75rem' }}>
+                    纯客户端 (无监听)
+                  </span>
+                )}
                 <span className="code-badge code-badge--secondary" style={{ marginLeft: '0.4rem', fontSize: '0.75rem' }}>
                   {process.group_name || '默认进程组'}
                 </span>
@@ -80,7 +86,9 @@ export const ProcessDetailPane: React.FC<ProcessDetailPaneProps> = ({
         <div className="code-meta-grid" style={{ marginTop: '0.875rem' }}>
           <div className="code-meta-item">
             <span className="code-meta-label">监听端口:</span>
-            <span className="code-meta-val code-font-mono code-color-primary">{process.listen_port}</span>
+            <span className="code-meta-val code-font-mono code-color-primary">
+              {process.listen_port > 0 ? process.listen_port : '无 (纯客户端)'}
+            </span>
           </div>
           <div className="code-meta-item">
             <span className="code-meta-label">所属 Agent 宿主:</span>

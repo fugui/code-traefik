@@ -611,9 +611,10 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
       toast.error('请输入进程名称');
       return;
     }
-    const port = parseInt(quickProcessForm.listen_port, 10);
-    if (isNaN(port) || port < 1 || port > 65535) {
-      toast.error('监听端口必须为 1~65535 之间的合法数字');
+    const portRaw = quickProcessForm.listen_port.trim();
+    const port = portRaw === '' ? 0 : parseInt(portRaw, 10);
+    if (isNaN(port) || port < 0 || port > 65535) {
+      toast.error('监听端口必须为 0~65535 之间的合法数字 (0 或留空表示纯客户端无监听端口)');
       return;
     }
     try {
@@ -699,9 +700,10 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
       toast.error('请输入进程名称');
       return;
     }
-    const port = parseInt(processForm.listen_port, 10);
-    if (isNaN(port) || port < 1 || port > 65535) {
-      toast.error('监听端口必须为 1~65535 之间的合法数字');
+    const portRaw = processForm.listen_port.trim();
+    const port = portRaw === '' ? 0 : parseInt(portRaw, 10);
+    if (isNaN(port) || port < 0 || port > 65535) {
+      toast.error('监听端口必须为 0~65535 之间的合法数字 (0 或留空表示纯客户端无监听端口)');
       return;
     }
     const groupName =
@@ -1455,13 +1457,13 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
             />
           </div>
           <div className="code-form-item">
-            <label className="code-form-label">监听端口 (Listen Port 1~65535):</label>
+            <label className="code-form-label">监听端口 (Listen Port, 0 或留空表示纯客户端):</label>
             <input
               type="number"
               className="code-input"
               value={processForm.listen_port}
               onChange={(e) => setProcessForm({ ...processForm, listen_port: e.target.value })}
-              placeholder="如 9003"
+              placeholder="如 9003 (纯客户端请填 0 或留空)"
             />
           </div>
           {agents.length > 1 && (
@@ -1573,7 +1575,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
                 <optgroup key={groupName} label={`【${groupName}】`}>
                   {procs.map((p) => (
                     <option key={p.id} value={p.id}>
-                      {p.name} (Port: {p.listen_port})
+                      {p.name} {p.listen_port > 0 ? `(Port: ${p.listen_port})` : '(纯客户端)'}
                     </option>
                   ))}
                 </optgroup>
@@ -1640,7 +1642,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
                   <input
                     type="number"
                     className="code-input code-input--sm"
-                    placeholder="端口 (如: 9004)"
+                    placeholder="端口 (0=纯客户端)"
                     value={quickProcessForm.listen_port}
                     onChange={(e) => setQuickProcessForm({ ...quickProcessForm, listen_port: e.target.value })}
                   />

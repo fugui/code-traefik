@@ -275,7 +275,11 @@ func (m *Manager) SyncMonitors(sessionID uint64, specs []agentproto.ProcessMonit
 
 		if err != nil || pid == 0 {
 			status = "NOT_FOUND"
-			msg = fmt.Sprintf("未在端口 %d 检测到符合特征的业务进程", spec.ListenPort)
+			if spec.ListenPort == 0 {
+				msg = fmt.Sprintf("未在特征 [%s] 下检测到运行中的客户端进程", spec.CmdPattern)
+			} else {
+				msg = fmt.Sprintf("未在端口 %d 检测到符合特征的业务进程", spec.ListenPort)
+			}
 		} else {
 			estConns, needRec, _ = m.scanner.DiagnoseEstablishedConns(pid, spec.Downstreams)
 			if needRec {

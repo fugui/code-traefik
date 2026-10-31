@@ -760,9 +760,13 @@ export const SubsystemGroupTreePanel: React.FC<SubsystemGroupTreePanelProps> = (
                   >
                     <div className="code-tree-node__left">
                       <Server size={15} style={{ color: 'var(--color-info, #0284c7)', flexShrink: 0 }} />
-                      <span className="code-tree-node__name" title={`${proc.name} (Port: ${proc.listen_port})`}>
+                      <span className="code-tree-node__name" title={`${proc.name} ${proc.listen_port > 0 ? `(Port: ${proc.listen_port})` : '(纯客户端)'}`}>
                         {proc.name}
-                        <span className="code-tree-node__code">: {proc.listen_port}</span>
+                        {proc.listen_port > 0 ? (
+                          <span className="code-tree-node__code">: {proc.listen_port}</span>
+                        ) : (
+                          <span className="code-tree-node__code" style={{ opacity: 0.65 }}> (Client)</span>
+                        )}
                       </span>
                       {boundMods.length > 0 && (
                         <span className="code-tree-node__badge" title={`承载 ${boundMods.length} 个功能模块`}>
