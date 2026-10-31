@@ -688,6 +688,18 @@ body {
   gap: 0.35rem;
 }
 
+.code-form-row--inline {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.code-form-row--inline > .code-select,
+.code-form-row--inline > .code-input {
+  flex: 1;
+  min-width: 0;
+}
+
 .code-form-label {
   font-size: 0.825rem;
   font-weight: 600;

@@ -114,6 +114,8 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
 
   const [processDrawerOpen, setProcessDrawerOpen] = useState(false);
   const [editingProcess, setEditingProcess] = useState<Process | null>(null);
+  const [isCustomProcessGroup, setIsCustomProcessGroup] = useState(false);
+  const [customProcessGroupName, setCustomProcessGroupName] = useState('');
   const [processForm, setProcessForm] = useState({
     group_name: '',
     name: '',
@@ -133,7 +135,32 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
     group_id: '',
   });
   const [quickProcessOpen, setQuickProcessOpen] = useState(false);
+  const [isQuickCustomGroup, setIsQuickCustomGroup] = useState(false);
   const [quickProcessForm, setQuickProcessForm] = useState({ group_name: '', name: '', listen_port: '' });
+
+  // 聚合所有物理进程分组选项（去重，供下拉选择框使用）
+  const allProcessGroupOptions = useMemo(() => {
+    const set = new Set<string>();
+    // 1. 保底常用分组
+    set.add('默认进程组');
+    set.add('核心业务组');
+    set.add('支撑服务组');
+    // 2. 自定义保存的分组
+    for (const g of customProcessGroups) {
+      const trimmed = (g || '').trim();
+      if (trimmed) set.add(trimmed);
+    }
+    // 3. 所有物理进程中实际出现的组
+    for (const p of processes) {
+      const grp = (p.group_name || '').trim();
+      if (grp) set.add(grp);
+    }
+    // 4. 当前表单或编辑中使用的组（确保其在选项中完整可见）
+    if (processForm.group_name && processForm.group_name.trim()) {
+      set.add(processForm.group_name.trim());
+    }
+    return Array.from(set);
+  }, [customProcessGroups, processes, processForm.group_name]);
 
   // 更新 URL Search Params 辅助函数（严格比对键值防引用抖动与死循环）
   const updateParams = useCallback(
@@ -607,6 +634,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
       if (!customProcessGroups.includes(groupName) && groupName !== '默认进程组') {
         saveCustomProcessGroups([...customProcessGroups, groupName]);
       }
+      setIsQuickCustomGroup(false);
       setModuleForm((prev) => ({ ...prev, process_id: newProc.id }));
       setQuickProcessOpen(false);
       setQuickProcessForm({ group_name: '', name: '', listen_port: '' });
@@ -676,7 +704,8 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
       toast.error('监听端口必须为 1~65535 之间的合法数字');
       return;
     }
-    const groupName = processForm.group_name.trim() || '默认进程组';
+    const groupName =
+      (isCustomProcessGroup ? customProcessGroupName.trim() : processForm.group_name.trim()) || '默认进程组';
     try {
       if (editingProcess) {
         await agentApi.updateProcess(editingProcess.id, {
@@ -704,6 +733,8 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
       if (!customProcessGroups.includes(groupName) && groupName !== '默认进程组') {
         saveCustomProcessGroups([...customProcessGroups, groupName]);
       }
+      setIsCustomProcessGroup(false);
+      setCustomProcessGroupName('');
       setProcessDrawerOpen(false);
       void loadProcesses();
     } catch (err) {
@@ -935,6 +966,8 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
               onDeleteProcessGroup={handleDeleteProcessGroup}
               onCreateProcess={(targetGroupName) => {
                 setEditingProcess(null);
+                setIsCustomProcessGroup(false);
+                setCustomProcessGroupName('');
                 setProcessForm({
                   group_name: targetGroupName || '默认进程组',
                   name: '',
@@ -947,6 +980,8 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
               }}
               onEditProcess={(proc) => {
                 setEditingProcess(proc);
+                setIsCustomProcessGroup(false);
+                setCustomProcessGroupName('');
                 setProcessForm({
                   group_name: proc.group_name || '默认进程组',
                   name: proc.name,
@@ -1006,6 +1041,8 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
                   isAdmin={isAdmin}
                   onEditProcess={(proc) => {
                     setEditingProcess(proc);
+                    setIsCustomProcessGroup(false);
+                    setCustomProcessGroupName('');
                     setProcessForm({
                       group_name: proc.group_name || '默认进程组',
                       name: proc.name,
@@ -1316,7 +1353,11 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
       {/* 5. 物理进程侧边栏 (Drawer) */}
       <Drawer
         open={processDrawerOpen}
-        onClose={() => setProcessDrawerOpen(false)}
+        onClose={() => {
+          setProcessDrawerOpen(false);
+          setIsCustomProcessGroup(false);
+          setCustomProcessGroupName('');
+        }}
         title={editingProcess ? `编辑业务进程 [${editingProcess.name}]` : '新建业务进程'}
         subtitle="配置运行在宿主机操作系统上的物理进程容器"
         width="md"
@@ -1325,7 +1366,11 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
             <button
               type="button"
               className="code-btn code-btn--secondary"
-              onClick={() => setProcessDrawerOpen(false)}
+              onClick={() => {
+                setProcessDrawerOpen(false);
+                setIsCustomProcessGroup(false);
+                setCustomProcessGroupName('');
+              }}
             >
               取消
             </button>
@@ -1342,13 +1387,62 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
         <div className="code-form">
           <div className="code-form-item">
             <label className="code-form-label">所属进程组 (两级目录聚合):</label>
-            <input
-              type="text"
-              className="code-input"
-              value={processForm.group_name}
-              onChange={(e) => setProcessForm({ ...processForm, group_name: e.target.value })}
-              placeholder="如 核心交易组、基础支撑组、默认进程组"
-            />
+            {isCustomProcessGroup ? (
+              <div className="code-form-row--inline">
+                <input
+                  type="text"
+                  className="code-input"
+                  value={customProcessGroupName}
+                  onChange={(e) => setCustomProcessGroupName(e.target.value)}
+                  placeholder="输入新进程组名称 (如 核心交易组、基础支撑组)"
+                  autoFocus
+                />
+                <button
+                  type="button"
+                  className="code-btn code-btn--secondary"
+                  onClick={() => {
+                    setIsCustomProcessGroup(false);
+                    setCustomProcessGroupName('');
+                  }}
+                  title="返回下拉选择已有分组"
+                >
+                  选择已有
+                </button>
+              </div>
+            ) : (
+              <div className="code-form-row--inline">
+                <select
+                  className="code-select"
+                  value={processForm.group_name || '默认进程组'}
+                  onChange={(e) => {
+                    if (e.target.value === '__NEW_GROUP__') {
+                      setIsCustomProcessGroup(true);
+                      setCustomProcessGroupName('');
+                    } else {
+                      setProcessForm({ ...processForm, group_name: e.target.value });
+                    }
+                  }}
+                >
+                  {allProcessGroupOptions.map((grp) => (
+                    <option key={grp} value={grp}>
+                      {grp}
+                    </option>
+                  ))}
+                  <option value="__NEW_GROUP__">+ 自定义新分组...</option>
+                </select>
+                <button
+                  type="button"
+                  className="code-btn code-btn--secondary"
+                  onClick={() => {
+                    setIsCustomProcessGroup(true);
+                    setCustomProcessGroupName('');
+                  }}
+                  title="新建进程分组"
+                >
+                  + 新分组
+                </button>
+              </div>
+            )}
           </div>
           <div className="code-form-item">
             <label className="code-form-label">进程名称 (系统进程标识):</label>
@@ -1493,13 +1587,49 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
                   <span className="code-color-muted code-text-xs">支持按进程组归类</span>
                 </div>
                 <div className="code-quick-process-grid">
-                  <input
-                    type="text"
-                    className="code-input code-input--sm"
-                    placeholder="进程组 (如: 核心组)"
-                    value={quickProcessForm.group_name}
-                    onChange={(e) => setQuickProcessForm({ ...quickProcessForm, group_name: e.target.value })}
-                  />
+                  {isQuickCustomGroup ? (
+                    <div className="code-form-row--inline">
+                      <input
+                        type="text"
+                        className="code-input code-input--sm"
+                        placeholder="新组名"
+                        value={quickProcessForm.group_name}
+                        onChange={(e) => setQuickProcessForm({ ...quickProcessForm, group_name: e.target.value })}
+                        autoFocus
+                      />
+                      <button
+                        type="button"
+                        className="code-btn code-btn--secondary code-btn--sm"
+                        onClick={() => {
+                          setIsQuickCustomGroup(false);
+                          setQuickProcessForm({ ...quickProcessForm, group_name: allProcessGroupOptions[0] || '默认进程组' });
+                        }}
+                        title="返回选择已有组"
+                      >
+                        选择
+                      </button>
+                    </div>
+                  ) : (
+                    <select
+                      className="code-select code-select--sm"
+                      value={quickProcessForm.group_name || '默认进程组'}
+                      onChange={(e) => {
+                        if (e.target.value === '__NEW_GROUP__') {
+                          setIsQuickCustomGroup(true);
+                          setQuickProcessForm({ ...quickProcessForm, group_name: '' });
+                        } else {
+                          setQuickProcessForm({ ...quickProcessForm, group_name: e.target.value });
+                        }
+                      }}
+                    >
+                      {allProcessGroupOptions.map((g) => (
+                        <option key={g} value={g}>
+                          {g}
+                        </option>
+                      ))}
+                      <option value="__NEW_GROUP__">+ 新建分组...</option>
+                    </select>
+                  )}
                   <input
                     type="text"
                     className="code-input code-input--sm"
