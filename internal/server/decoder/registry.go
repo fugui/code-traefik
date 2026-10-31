@@ -230,10 +230,10 @@ func extractOperationsFromDescriptor(rawBytes []byte) (*descriptorpb.FileDescrip
 		fileName := file.GetName()
 		for _, svc := range file.Service {
 			svcName := svc.GetName()
-			// 服务名规范：若包名非空采用 {package}-{serviceName}，否则采用 {serviceName}
+			// 服务名规范：若包名非空采用 {package}.{serviceName}，否则采用 {serviceName}
 			fullServiceName := svcName
 			if pkg != "" {
-				fullServiceName = pkg + "-" + svcName
+				fullServiceName = pkg + "." + svcName
 			}
 
 			for _, method := range svc.Method {

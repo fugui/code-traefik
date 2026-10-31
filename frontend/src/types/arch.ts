@@ -153,3 +153,21 @@ export interface StaticTopologyDTO {
   nodes: StaticTopologyNode[];
   edges: StaticTopologyEdge[];
 }
+
+export interface ClaimedByModuleInfo {
+  id: string;
+  code: string;
+  name: string;
+}
+
+export interface ClaimableProtoServiceItem {
+  service_name: string;
+  proto_package: string;
+  proto_service: string;
+  schema_id: number;
+  schema_name: string;
+  operation_count: number;
+  operations: string[];
+  is_claimed: boolean;
+  claimed_by_module?: ClaimedByModuleInfo | null;
+}

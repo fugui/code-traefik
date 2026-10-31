@@ -34,7 +34,7 @@ type ProtoOperation struct {
 	ProtoFile          string       `gorm:"size:255;not null" json:"proto_file"`
 	ProtoPackage       string       `gorm:"size:128;not null" json:"proto_package"`                                                                                               // 原样点分结构，如 "dophi.order.v1"
 	ProtoService       string       `gorm:"size:128;not null" json:"proto_service"`                                                                                               // Service 简称，如 "TradeService"
-	ServiceName        string       `gorm:"size:128;not null;uniqueIndex:uk_traefik_proto_op_schema,priority:2;index:idx_traefik_proto_op_lookup,priority:1" json:"service_name"` // "{package}-{serviceName}"
+	ServiceName        string       `gorm:"size:128;not null;uniqueIndex:uk_traefik_proto_op_schema,priority:2;index:idx_traefik_proto_op_lookup,priority:1" json:"service_name"` // "{package}.{serviceName}"
 	Operation          string       `gorm:"size:128;not null;uniqueIndex:uk_traefik_proto_op_schema,priority:3;index:idx_traefik_proto_op_lookup,priority:2" json:"operation"`    // Method 名
 	ReqMessageFullName string       `gorm:"size:255;not null" json:"req_message_full_name"`
 	RspMessageFullName string       `gorm:"size:255;not null" json:"rsp_message_full_name"`

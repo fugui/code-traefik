@@ -7,6 +7,7 @@ import type {
   ModuleService,
   ModuleDependency,
   AvailableServiceItem,
+  ClaimableProtoServiceItem,
   StaticTopologyDTO,
   PaginatedResponse,
 } from '../types';
@@ -213,6 +214,10 @@ export async function listAvailableServices(excludeModuleId?: string) {
   if (excludeModuleId) query.set('exclude_module_id', excludeModuleId);
   const qs = query.toString();
   return apiRequest<{ items: AvailableServiceItem[] }>(`/arch/services/available${qs ? `?${qs}` : ''}`);
+}
+
+export async function listClaimableProtoServices() {
+  return apiRequest<{ items: ClaimableProtoServiceItem[] }>('/arch/proto-services/claimable');
 }
 
 export async function getStaticTopology(params?: { view?: 'LOGICAL' | 'PHYSICAL'; subsystem_id?: string }) {

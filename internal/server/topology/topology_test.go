@@ -218,7 +218,7 @@ func TestDeleteNonEmptyArchElementsConflict(t *testing.T) {
 	// 模块声明供给服务 + 挂载进程
 	svc, err := CreateModuleService(db, ModuleServiceInput{
 		ModuleID:    mod.ID,
-		ServiceName: "dophi.del.v1-DelService",
+		ServiceName: "dophi.del.v1.DelService",
 	})
 	if err != nil {
 		t.Fatalf("CreateModuleService 失败: %v", err)
@@ -311,18 +311,18 @@ func TestModuleServiceProvideGlobalUnique(t *testing.T) {
 		t.Fatalf("CreateModule C 失败: %v", err)
 	}
 
-	// 校验非法服务名（缺少中划线连接 package 与 service）拦截为 400
+	// 校验非法服务名（含空格或非法特殊字符）拦截为 400 ErrInvalidServiceNameFormat
 	if _, err := CreateModuleService(db, ModuleServiceInput{
 		ModuleID:    modA.ID,
-		ServiceName: "dophi.order.v1.TradeService",
+		ServiceName: "invalid service with spaces!",
 	}); !errors.Is(err, ErrInvalidServiceNameFormat) {
-		t.Fatalf("缺少中划线的服务名期望返回 ErrInvalidServiceNameFormat，实际为: %v", err)
+		t.Fatalf("非法字符的服务名期望返回 ErrInvalidServiceNameFormat，实际为: %v", err)
 	}
 
-	// 1. 模块 A 声明 PROVIDE dophi.order.v1-TradeService
+	// 1. 模块 A 声明 PROVIDE dophi.order.v1.TradeService
 	svcA, err := CreateModuleService(db, ModuleServiceInput{
 		ModuleID:    modA.ID,
-		ServiceName: "dophi.order.v1-TradeService",
+		ServiceName: "dophi.order.v1.TradeService",
 	})
 	if err != nil {
 		t.Fatalf("模块 A 声明 PROVIDE 失败: %v", err)
@@ -345,7 +345,7 @@ func TestModuleServiceProvideGlobalUnique(t *testing.T) {
 	// 3. 模块 B 尝试声明相同 PROVIDE -> 409 Conflict 并指出已被模块 A 占用
 	_, err = CreateModuleService(db, ModuleServiceInput{
 		ModuleID:    modB.ID,
-		ServiceName: "dophi.order.v1-TradeService",
+		ServiceName: "dophi.order.v1.TradeService",
 	})
 	if !errors.Is(err, ErrDuplicateModuleService) {
 		t.Fatalf("重复 PROVIDE 期望返回 ErrDuplicateModuleService，实际为: %v", err)
@@ -381,7 +381,7 @@ func TestModuleDependenciesAndExternalSystem(t *testing.T) {
 
 	svc1, err := CreateModuleService(db, ModuleServiceInput{
 		ModuleID:    mod1.ID,
-		ServiceName: "dophi.pay.v1-PayService",
+		ServiceName: "dophi.pay.v1.PayService",
 	})
 	if err != nil {
 		t.Fatalf("CreateModuleService 1 失败: %v", err)
@@ -609,18 +609,18 @@ func TestBuildStaticTopologyLogicalAndPhysical(t *testing.T) {
 	}
 
 	// 接口契约：
-	// Mod_2 PROVIDE dophi.risk-RiskSvc
-	// Mod_3 PROVIDE dophi.stock-StockSvc
+	// Mod_2 PROVIDE dophi.risk.RiskSvc
+	// Mod_3 PROVIDE dophi.stock.StockSvc
 	// Mod_1 DEPEND Mod_2 (同进程 INTRA_PROCESS) 与 Mod_3 (跨进程 CROSS_PROCESS)
 	// Mod_3 DEPEND 外部三方服务 (EXTERNAL_UNREGISTERED)
 	svc2, err := CreateModuleService(db, ModuleServiceInput{
-		ModuleID: mod2.ID, ServiceName: "dophi.risk-RiskSvc",
+		ModuleID: mod2.ID, ServiceName: "dophi.risk.RiskSvc",
 	})
 	if err != nil {
 		t.Fatalf("Mod_2 PROVIDE 失败: %v", err)
 	}
 	svc3, err := CreateModuleService(db, ModuleServiceInput{
-		ModuleID: mod3.ID, ServiceName: "dophi.stock-StockSvc",
+		ModuleID: mod3.ID, ServiceName: "dophi.stock.StockSvc",
 	})
 	if err != nil {
 		t.Fatalf("Mod_3 PROVIDE 失败: %v", err)
@@ -758,5 +758,158 @@ func TestBuildStaticTopologyLogicalAndPhysical(t *testing.T) {
 	}
 	if dsMap["192.168.56.31:9201"] || dsMap["127.0.0.1:9201"] {
 		t.Fatalf("CompileProcessDownstreams 不应包含进程自身监听端口: %+v", downstreams)
+	}
+}
+
+func TestListClaimableProtoServices(t *testing.T) {
+	db := setupIsolatedTopologyDB(t)
+
+	// 1. 无已激活 Schema 时，返回空切片
+	emptyItems, err := ListClaimableProtoServices(db)
+	if err != nil {
+		t.Fatalf("ListClaimableProtoServices 失败: %v", err)
+	}
+	if len(emptyItems) != 0 {
+		t.Fatalf("期望返回 0 条，实际为 %d", len(emptyItems))
+	}
+
+	// 2. 插入测试数据：1 个已激活 Schema + 1 个未激活 Schema
+	activeSchema := models.ProtoSchema{
+		Name:            "order_trade",
+		Version:         1,
+		FileName:        "order.pb",
+		FileSHA256:      "sha256_active",
+		FileSize:        1024,
+		DescriptorBytes: []byte{0x08, 0x01},
+		IsActive:        true,
+	}
+	if err := db.Create(&activeSchema).Error; err != nil {
+		t.Fatalf("创建 activeSchema 失败: %v", err)
+	}
+
+	inactiveSchema := models.ProtoSchema{
+		Name:            "legacy_service",
+		Version:         1,
+		FileName:        "legacy.pb",
+		FileSHA256:      "sha256_inactive",
+		FileSize:        1024,
+		DescriptorBytes: []byte{0x08, 0x02},
+		IsActive:        false,
+	}
+	if err := db.Create(&inactiveSchema).Error; err != nil {
+		t.Fatalf("创建 inactiveSchema 失败: %v", err)
+	}
+
+	// 为 activeSchema 添加 3 个操作（包含 2 个服务）
+	ops := []models.ProtoOperation{
+		{
+			SchemaID:           activeSchema.ID,
+			ProtoFile:          "order.proto",
+			ProtoPackage:       "dophi.order.v1",
+			ProtoService:       "TradeService",
+			ServiceName:        "dophi.order.v1.TradeService",
+			Operation:          "CreateOrder",
+			ReqMessageFullName: "dophi.order.v1.CreateOrderReq",
+			RspMessageFullName: "dophi.order.v1.CreateOrderRsp",
+			IsActive:           true,
+		},
+		{
+			SchemaID:           activeSchema.ID,
+			ProtoFile:          "order.proto",
+			ProtoPackage:       "dophi.order.v1",
+			ProtoService:       "TradeService",
+			ServiceName:        "dophi.order.v1.TradeService",
+			Operation:          "CancelOrder",
+			ReqMessageFullName: "dophi.order.v1.CancelOrderReq",
+			RspMessageFullName: "dophi.order.v1.CancelOrderRsp",
+			IsActive:           true,
+		},
+		{
+			SchemaID:           activeSchema.ID,
+			ProtoFile:          "user.proto",
+			ProtoPackage:       "dophi.user.v1",
+			ProtoService:       "UserService",
+			ServiceName:        "dophi.user.v1.UserService",
+			Operation:          "GetUser",
+			ReqMessageFullName: "dophi.user.v1.GetUserReq",
+			RspMessageFullName: "dophi.user.v1.GetUserRsp",
+			IsActive:           true,
+		},
+		// 未激活操作（不应被聚合出来）
+		{
+			SchemaID:           inactiveSchema.ID,
+			ProtoFile:          "legacy.proto",
+			ProtoPackage:       "dophi.legacy.v1",
+			ProtoService:       "LegacyService",
+			ServiceName:        "dophi.legacy.v1.LegacyService",
+			Operation:          "OldMethod",
+			ReqMessageFullName: "dophi.legacy.v1.OldMethodReq",
+			RspMessageFullName: "dophi.legacy.v1.OldMethodRsp",
+			IsActive:           false,
+		},
+	}
+	if err := db.Create(&ops).Error; err != nil {
+		t.Fatalf("创建 ProtoOperation 失败: %v", err)
+	}
+
+	// 3. 查询可认领服务列表（此时均未被认领）
+	items, err := ListClaimableProtoServices(db)
+	if err != nil {
+		t.Fatalf("ListClaimableProtoServices 失败: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("期望聚合出 2 个可认领服务，实际为 %d", len(items))
+	}
+
+	tradeSvc := items[0]
+	if tradeSvc.ServiceName != "dophi.order.v1.TradeService" {
+		tradeSvc = items[1]
+	}
+	if tradeSvc.ServiceName != "dophi.order.v1.TradeService" || tradeSvc.OperationCount != 2 || len(tradeSvc.Operations) != 2 {
+		t.Fatalf("TradeService 聚合信息不正确: %+v", tradeSvc)
+	}
+	if tradeSvc.IsClaimed || tradeSvc.ClaimedByModule != nil {
+		t.Fatalf("未被认领的服务 IsClaimed 应为 false 且 ClaimedByModule 为 nil")
+	}
+
+	// 4. 创建子系统、功能组与模块，认领 dophi.order.v1.TradeService
+	sub, _ := CreateSubsystem(db, SubsystemInput{Code: "SUB_ORDER", Name: "订单子系统"})
+	grp, _ := CreateFunctionalGroup(db, FunctionalGroupInput{SubsystemID: sub.ID, Code: "GRP_CORE", Name: "核心组"})
+	mod, _ := CreateModule(db, ModuleInput{GroupID: grp.ID, Code: "MOD_ORDER_CORE", Name: "订单核心模块"})
+
+	_, err = CreateModuleService(db, ModuleServiceInput{
+		ModuleID:    mod.ID,
+		ServiceName: "dophi.order.v1.TradeService",
+	})
+	if err != nil {
+		t.Fatalf("CreateModuleService 认领失败: %v", err)
+	}
+
+	// 5. 再次查询，验证 dophi.order.v1.TradeService 已被认领
+	itemsAfter, err := ListClaimableProtoServices(db)
+	if err != nil {
+		t.Fatalf("ListClaimableProtoServices 再次查询失败: %v", err)
+	}
+
+	var foundTrade, foundUser bool
+	for _, item := range itemsAfter {
+		if item.ServiceName == "dophi.order.v1.TradeService" {
+			foundTrade = true
+			if !item.IsClaimed || item.ClaimedByModule == nil {
+				t.Fatalf("TradeService 期望已被认领，实际为: %+v", item)
+			}
+			if item.ClaimedByModule.Code != "MOD_ORDER_CORE" || item.ClaimedByModule.Name != "订单核心模块" {
+				t.Fatalf("认领模块元数据不匹配: %+v", item.ClaimedByModule)
+			}
+		}
+		if item.ServiceName == "dophi.user.v1.UserService" {
+			foundUser = true
+			if item.IsClaimed || item.ClaimedByModule != nil {
+				t.Fatalf("UserService 期望未被认领，实际为: %+v", item)
+			}
+		}
+	}
+	if !foundTrade || !foundUser {
+		t.Fatalf("期望找到 TradeService 和 UserService，实际 foundTrade=%v, foundUser=%v", foundTrade, foundUser)
 	}
 }

@@ -33,7 +33,7 @@ var (
 	ErrModuleDependencyNotFound  = errors.New("模块服务依赖关系不存在")
 	ErrAgentNotFound             = errors.New("目标 Agent 不存在")
 	ErrProcessNotFound           = errors.New("目标进程映射不存在")
-	ErrInvalidServiceNameFormat  = errors.New("服务名必须符合 {package}-{serviceName} 格式且长度为 1..63 位可见 ASCII")
+	ErrInvalidServiceNameFormat  = errors.New("服务名必须符合 {package}.{serviceName} 或 {serviceName} 格式且长度为 1..63 位可见字符")
 	ErrDuplicateModuleService    = errors.New("该服务已被其他功能模块声明提供 (A-05)")
 	ErrDuplicateDependency       = errors.New("当前功能模块已存在相同的下游服务依赖")
 	ErrSelfDependency            = errors.New("功能模块不能依赖自身提供的服务")
@@ -51,8 +51,8 @@ var (
 	ErrProcessReferencedByReplay = errors.New("进程仍被历史重放任务引用，禁止删除")
 )
 
-// serviceNameRegex: {package}-{serviceName} 或 {serviceName} (1..63 位)
-var serviceNameRegex = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)*-[A-Za-z_][A-Za-z0-9_]*$`)
+// serviceNameRegex: 连续点分服务名规范 {package}.{serviceName} 或 {serviceName} (1..63 位)
+var serviceNameRegex = regexp.MustCompile(`^[A-Za-z0-9._]{1,63}$`)
 
 // ProvideConflictError 全局唯一供给冲突详情错误 (A-05)
 type ProvideConflictError struct {

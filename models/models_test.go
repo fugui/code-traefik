@@ -253,7 +253,7 @@ func TestPartialUniqueIndexesAndFKConstraints(t *testing.T) {
 		ProtoFile:          "order.proto",
 		ProtoPackage:       "order.v1",
 		ProtoService:       "OrderService",
-		ServiceName:        "order.v1-OrderService",
+		ServiceName:        "order.v1.OrderService",
 		Operation:          "SubmitOrder",
 		ReqMessageFullName: "order.v1.SubmitReq",
 		RspMessageFullName: "order.v1.SubmitRsp",
@@ -281,7 +281,7 @@ func TestPartialUniqueIndexesAndFKConstraints(t *testing.T) {
 		ProtoFile:          "order2.proto",
 		ProtoPackage:       "order.v2",
 		ProtoService:       "OrderService",
-		ServiceName:        "order.v1-OrderService", // 相同 ServiceName
+		ServiceName:        "order.v1.OrderService", // 相同 ServiceName
 		Operation:          "SubmitOrder",           // 相同 Operation
 		ReqMessageFullName: "order.v2.SubmitReq",
 		RspMessageFullName: "order.v2.SubmitRsp",

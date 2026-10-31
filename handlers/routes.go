@@ -92,6 +92,7 @@ func RegisterAPIRoutes(r *gin.Engine) {
 		protected.DELETE("/arch/module-dependencies/:depId", requireAdmin, DeleteModuleDependency)
 
 		protected.GET("/arch/services/available", ListAvailableServices)
+		protected.GET("/arch/proto-services/claimable", ListClaimableProtoServices)
 
 		protected.GET("/arch/topology/static", GetStaticTopology)
 

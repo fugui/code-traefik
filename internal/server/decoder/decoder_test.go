@@ -163,8 +163,8 @@ func TestProtoSchemaUploadAndDashServiceName(t *testing.T) {
 	if len(ops) != 1 {
 		t.Fatalf("期望提取 1 条操作映射，实际为 %d", len(ops))
 	}
-	if ops[0].ServiceName != "dophi.order.v1-TradeService" || ops[0].Operation != "CreateOrder" {
-		t.Fatalf("A-07 服务名映射错误: service_name=%q operation=%q, 期望 dophi.order.v1-TradeService / CreateOrder",
+	if ops[0].ServiceName != "dophi.order.v1.TradeService" || ops[0].Operation != "CreateOrder" {
+		t.Fatalf("A-07 服务名映射错误: service_name=%q operation=%q, 期望 dophi.order.v1.TradeService / CreateOrder",
 			ops[0].ServiceName, ops[0].Operation)
 	}
 
@@ -227,7 +227,7 @@ func TestProtoSchemaActivateConflictAndHistoryImmutability(t *testing.T) {
 		DstAddr:         "127.0.0.1:9001",
 		ReqCapturedAtNs: now.UnixNano(),
 		SNO:             models.U64Numeric(10001),
-		ServiceName:     "dophi.order.v1-TradeService",
+		ServiceName:     "dophi.order.v1.TradeService",
 		Operation:       "CreateOrder",
 		HeadersJSON:     datatypes.JSON([]byte(`{}`)),
 		SchemaID:        &orderV1.ID,
@@ -257,7 +257,7 @@ func TestProtoSchemaActivateConflictAndHistoryImmutability(t *testing.T) {
 	if !errors.As(err, &conflictErr) || len(conflictErr.Conflicts) != 1 {
 		t.Fatalf("期望返回 1 条冲突明细，实际为: %+v", err)
 	}
-	if conflictErr.Conflicts[0].ConflictSchemaName != "order.pb" || conflictErr.Conflicts[0].ServiceName != "dophi.order.v1-TradeService" {
+	if conflictErr.Conflicts[0].ConflictSchemaName != "order.pb" || conflictErr.Conflicts[0].ServiceName != "dophi.order.v1.TradeService" {
 		t.Fatalf("冲突明细内容不准确: %+v", conflictErr.Conflicts[0])
 	}
 
@@ -336,7 +336,7 @@ func TestDynamicPBDecodeAndFallbackHex(t *testing.T) {
 	}
 
 	// 1. 输入匹配生效 .pb 且含 uint64 大整数的 CROS RPC 请求帧 (SC-04)
-	matchedFrame := buildTestCrosReqFrame(0x000000010009A2B3, "dophi.order.v1-TradeService", "CreateOrder", payloadBytes)
+	matchedFrame := buildTestCrosReqFrame(0x000000010009A2B3, "dophi.order.v1.TradeService", "CreateOrder", payloadBytes)
 	decoded, err := reg.DecodeCrosFrame(matchedFrame, false)
 	if err != nil {
 		t.Fatalf("DecodeCrosFrame 失败: %v", err)
@@ -358,7 +358,7 @@ func TestDynamicPBDecodeAndFallbackHex(t *testing.T) {
 	}
 
 	// 2. 输入未注册接口的 CROS RPC 帧 -> NO_SCHEMA_RAW_HEX，保留完整协议头且不报错
-	unregisteredFrame := buildTestCrosReqFrame(998877, "dophi.unknown.v1-GhostSvc", "Ping", []byte{0xde, 0xad, 0xbe, 0xef})
+	unregisteredFrame := buildTestCrosReqFrame(998877, "dophi.unknown.v1.GhostSvc", "Ping", []byte{0xde, 0xad, 0xbe, 0xef})
 	fallback, err := reg.DecodeCrosFrame(unregisteredFrame, false)
 	if err != nil {
 		t.Fatalf("未注册接口降级解码不应报错，实际报错: %v", err)
@@ -366,7 +366,7 @@ func TestDynamicPBDecodeAndFallbackHex(t *testing.T) {
 	if fallback.Decode.DecodeStatus != DecodeStatusNoSchemaRawHex {
 		t.Fatalf("期望降级状态为 %q，实际为 %q", DecodeStatusNoSchemaRawHex, fallback.Decode.DecodeStatus)
 	}
-	if fallback.CommHead.SNO != 998877 || fallback.ServiceName != "dophi.unknown.v1-GhostSvc" || fallback.Operation != "Ping" {
+	if fallback.CommHead.SNO != 998877 || fallback.ServiceName != "dophi.unknown.v1.GhostSvc" || fallback.Operation != "Ping" {
 		t.Fatalf("降级后协议头丢失: sno=%d svc=%q op=%q", fallback.CommHead.SNO, fallback.ServiceName, fallback.Operation)
 	}
 	if fallback.Decode.RawHex != "deadbeef" {

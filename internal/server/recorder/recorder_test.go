@@ -486,8 +486,8 @@ func TestPacketAnatomyBuilderAndRedecode(t *testing.T) {
 
 	// 2. 构造含 DOTR 扩展头的双模往返流量记录
 	sno := uint64(9999)
-	reqRaw := buildCrosReqFrameWithDOTR(sno, "dophi.order.v1-OrderService", "CreateOrder", 10001, 20002, 30003, []byte{0x08, 0x7b}) // order_id=123
-	rspRaw := buildCrosRspFrame(sno, crosrpc.MsgTypeRsp, 1, 0, "dophi.order.v1-OrderService", "CreateOrder", []byte{0x08, 0x00})    // status_code=0
+	reqRaw := buildCrosReqFrameWithDOTR(sno, "dophi.order.v1.OrderService", "CreateOrder", 10001, 20002, 30003, []byte{0x08, 0x7b}) // order_id=123
+	rspRaw := buildCrosRspFrame(sno, crosrpc.MsgTypeRsp, 1, 0, "dophi.order.v1.OrderService", "CreateOrder", []byte{0x08, 0x00})    // status_code=0
 
 	rec := models.TrafficRecord{
 		CreatedAt:     time.Now(),
@@ -496,7 +496,7 @@ func TestPacketAnatomyBuilderAndRedecode(t *testing.T) {
 		ProcessID:     1,
 		Direction:     models.TrafficDirIngress,
 		ExchangeType:  models.ExchangeUnary,
-		ServiceName:   "dophi.order.v1-OrderService",
+		ServiceName:   "dophi.order.v1.OrderService",
 		Operation:     "CreateOrder",
 		SNO:           models.U64Numeric(sno),
 		RawReqPacket:  reqRaw,
@@ -526,7 +526,7 @@ func TestPacketAnatomyBuilderAndRedecode(t *testing.T) {
 		t.Errorf("预期 CommHead 包含 6 个色块切片，实际: %d", len(drawerDTO.ReqSide.CommHead.Segments))
 	}
 	// ② 会话头版本与耗时
-	if drawerDTO.ReqSide.SessionHead.ServiceName != "dophi.order.v1-OrderService" {
+	if drawerDTO.ReqSide.SessionHead.ServiceName != "dophi.order.v1.OrderService" {
 		t.Errorf("SessionHead ServiceName 不匹配: %s", drawerDTO.ReqSide.SessionHead.ServiceName)
 	}
 	// ③ DOTR Trace 扩展头

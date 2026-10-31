@@ -336,7 +336,7 @@ func TestAllScenarios_SC01_To_SC08(t *testing.T) {
 		moduleID = uint64(mod.ID)
 
 		// 3. 声明 PROVIDE 服务契约
-		ifaceBody := `{"service_name":"dophi.order.v1-OrderService","diff_ignore_paths":["header.server_time"]}`
+		ifaceBody := `{"service_name":"dophi.order.v1.OrderService","diff_ignore_paths":["header.server_time"]}`
 		req = httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/arch/modules/%d/services", moduleID), bytes.NewBufferString(ifaceBody))
 		req.Header.Set("Authorization", "Bearer "+adminToken)
 		req.Header.Set("Content-Type", "application/json")
@@ -415,7 +415,7 @@ func TestAllScenarios_SC01_To_SC08(t *testing.T) {
 	// SC-04: CROS RPC 分帧与解码
 	// -------------------------------------------------------------------------
 	t.Run("SC-04: CrosRPC Framing and Decoder Fallback", func(t *testing.T) {
-		validReqPacket := buildE2EReqPacket(1001, crosrpc.ReqTypeSync, "dophi.order.v1-OrderService", "CreateOrder", []byte("order_data"))
+		validReqPacket := buildE2EReqPacket(1001, crosrpc.ReqTypeSync, "dophi.order.v1.OrderService", "CreateOrder", []byte("order_data"))
 
 		// 混入脏字节后验证 Framer 能够恢复同步
 		dirtyStream := append([]byte("junk_garbage_bytes"), validReqPacket...)
@@ -459,8 +459,8 @@ func TestAllScenarios_SC01_To_SC08(t *testing.T) {
 
 		// 3. 向 ExchangeAssembler 投递往返配对流量
 		glbAssembler := handlers.GetGlobalOrchestrator().Assembler()
-		reqPacket := buildE2EReqPacket(1001, crosrpc.ReqTypeSync, "dophi.order.v1-OrderService", "CreateOrder", []byte("req_payload"))
-		rspPacket := buildE2ERspPacket(1001, crosrpc.MsgTypeRsp, 1, 0, "dophi.order.v1-OrderService", "CreateOrder", []byte("rsp_payload"))
+		reqPacket := buildE2EReqPacket(1001, crosrpc.ReqTypeSync, "dophi.order.v1.OrderService", "CreateOrder", []byte("req_payload"))
+		rspPacket := buildE2ERspPacket(1001, crosrpc.MsgTypeRsp, 1, 0, "dophi.order.v1.OrderService", "CreateOrder", []byte("rsp_payload"))
 
 		makeEnv := func(dir uint8, payloadLen int) agentproto.EnvelopeHeader {
 			return agentproto.EnvelopeHeader{
@@ -538,8 +538,8 @@ func TestAllScenarios_SC01_To_SC08(t *testing.T) {
 	// SC-07: 跨 Agent 同构进程零 .pb 重放与头部自愈
 	// -------------------------------------------------------------------------
 	t.Run("SC-07: Cross-Agent Isomorphic Replay and Header Healing PASS", func(t *testing.T) {
-		baselineRsp := buildE2ERspPacket(1001, crosrpc.MsgTypeRsp, 1, 0, "dophi.order.v1-OrderService", "CreateOrder", []byte("identical_body"))
-		actualRsp := buildE2ERspPacket(9999, crosrpc.MsgTypeRsp, 1, 0, "dophi.order.v1-OrderService", "CreateOrder", []byte("identical_body"))
+		baselineRsp := buildE2ERspPacket(1001, crosrpc.MsgTypeRsp, 1, 0, "dophi.order.v1.OrderService", "CreateOrder", []byte("identical_body"))
+		actualRsp := buildE2ERspPacket(9999, crosrpc.MsgTypeRsp, 1, 0, "dophi.order.v1.OrderService", "CreateOrder", []byte("identical_body"))
 
 		diffResult, payloadIdentical, err := diff.DiffLayer1Header(baselineRsp, actualRsp)
 		if err != nil || diffResult.Status != models.ReplayResultPass || !payloadIdentical {
@@ -552,8 +552,8 @@ func TestAllScenarios_SC01_To_SC08(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("SC-08: Mutation Diff and MockMiss Detection", func(t *testing.T) {
 		// 1. 业务状态码突变 (0 -> 500)
-		baselineRsp := buildE2ERspPacket(1001, crosrpc.MsgTypeRsp, 1, 0, "dophi.order.v1-OrderService", "CreateOrder", []byte("body"))
-		mutatedRsp := buildE2ERspPacket(1001, crosrpc.MsgTypeRsp, 1, 500, "dophi.order.v1-OrderService", "CreateOrder", []byte("body"))
+		baselineRsp := buildE2ERspPacket(1001, crosrpc.MsgTypeRsp, 1, 0, "dophi.order.v1.OrderService", "CreateOrder", []byte("body"))
+		mutatedRsp := buildE2ERspPacket(1001, crosrpc.MsgTypeRsp, 1, 500, "dophi.order.v1.OrderService", "CreateOrder", []byte("body"))
 
 		diffResult, _, _ := diff.DiffLayer1Header(baselineRsp, mutatedRsp)
 		if diffResult.Status != models.ReplayResultFailed || !diffResult.StatusCodeDiff {

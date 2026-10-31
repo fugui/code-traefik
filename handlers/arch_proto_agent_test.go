@@ -196,6 +196,7 @@ func RegisterRoutesForTest(r *gin.Engine) {
 		protected.POST("/arch/modules/:id/dependencies", requireAdmin, handlers.CreateModuleDependency)
 		protected.DELETE("/arch/module-dependencies/:depId", requireAdmin, handlers.DeleteModuleDependency)
 		protected.GET("/arch/services/available", handlers.ListAvailableServices)
+		protected.GET("/arch/proto-services/claimable", handlers.ListClaimableProtoServices)
 
 		protected.GET("/arch/topology/static", handlers.GetStaticTopology)
 
@@ -617,9 +618,9 @@ func TestSC02_ArchProtoAndTopologyFlows(t *testing.T) {
 	var mod2 models.Module
 	_ = json.Unmarshal(w.Body.Bytes(), &mod2)
 
-	// 4. 为 MOD_RISK 声明对外供给服务 PROVIDE dophi.risk.v1-RiskService
+	// 4. 为 MOD_RISK 声明对外供给服务 PROVIDE dophi.risk.v1.RiskService
 	svcBody, _ := json.Marshal(map[string]interface{}{
-		"service_name": "dophi.risk.v1-RiskService",
+		"service_name": "dophi.risk.v1.RiskService",
 	})
 	req = httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/arch/modules/%d/services", mod2.ID), bytes.NewReader(svcBody))
 	req.Header.Set("Authorization", "Bearer "+adminToken)
@@ -684,6 +685,45 @@ func TestSC02_ArchProtoAndTopologyFlows(t *testing.T) {
 	r.ServeHTTP(w, upReq)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("上传并激活描述集失败: %d (body: %s)", w.Code, w.Body.String())
+	}
+
+	// 6.1 验证 GET /api/arch/proto-services/claimable 能够查到已激活且已被认领的 dophi.risk.v1.RiskService
+	reqClaim := httptest.NewRequest(http.MethodGet, "/api/arch/proto-services/claimable", nil)
+	reqClaim.Header.Set("Authorization", "Bearer "+adminToken)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, reqClaim)
+	if w.Code != http.StatusOK {
+		t.Fatalf("查询可认领 Proto 服务失败: %d (body: %s)", w.Code, w.Body.String())
+	}
+	var claimResp struct {
+		Items []struct {
+			ServiceName     string `json:"service_name"`
+			ProtoPackage    string `json:"proto_package"`
+			ProtoService    string `json:"proto_service"`
+			SchemaName      string `json:"schema_name"`
+			OperationCount  int    `json:"operation_count"`
+			IsClaimed       bool   `json:"is_claimed"`
+			ClaimedByModule *struct {
+				ID   string `json:"id"`
+				Code string `json:"code"`
+				Name string `json:"name"`
+			} `json:"claimed_by_module"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &claimResp); err != nil {
+		t.Fatalf("解析可认领服务列表失败: %v", err)
+	}
+	var foundRiskClaim bool
+	for _, item := range claimResp.Items {
+		if item.ServiceName == "dophi.risk.v1.RiskService" {
+			foundRiskClaim = true
+			if !item.IsClaimed || item.ClaimedByModule == nil || item.ClaimedByModule.Code != "MOD_RISK_CHECK" {
+				t.Fatalf("RiskService 认领状态校验失败: %+v (claimed_by: %+v)", item, item.ClaimedByModule)
+			}
+		}
+	}
+	if !foundRiskClaim {
+		t.Fatalf("未在可认领列表中找到 dophi.risk.v1.RiskService: %+v", claimResp.Items)
 	}
 
 	// 7. 查询静态拓扑

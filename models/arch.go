@@ -71,7 +71,7 @@ type ModuleService struct {
 	ID                uint64         `gorm:"primaryKey;autoIncrement" json:"id"`
 	ModuleID          uint64         `gorm:"not null;index:idx_traefik_mod_svc_mod" json:"module_id"`
 	Module            *Module        `gorm:"foreignKey:ModuleID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"module,omitempty"`
-	ServiceName       string         `gorm:"size:128;not null;uniqueIndex:uk_traefik_mod_svc_name" json:"service_name"` // 格式 {package}-{serviceName}，全系统唯一提供 (A-05)
+	ServiceName       string         `gorm:"size:128;not null;uniqueIndex:uk_traefik_mod_svc_name" json:"service_name"` // 格式 {package}.{serviceName}，全系统唯一提供 (A-05)
 	DiffIgnorePaths   datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"diff_ignore_paths"`                 // 服务级默认回归 Diff 忽略字段路径 []string (F-14)
 	Description       string         `gorm:"type:text" json:"description"`
 	DownstreamCount   int            `gorm:"-" json:"downstream_count"`             // 被下游模块依赖数量

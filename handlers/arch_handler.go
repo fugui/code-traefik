@@ -940,3 +940,13 @@ func GetStaticTopology(c *gin.Context) {
 
 	c.JSON(http.StatusOK, res)
 }
+
+// ListClaimableProtoServices GET /api/arch/proto-services/claimable
+func ListClaimableProtoServices(c *gin.Context) {
+	items, err := topology.ListClaimableProtoServices(models.DB)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询可认领 Proto 服务列表失败: " + err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"items": items})
+}

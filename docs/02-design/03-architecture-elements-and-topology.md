@@ -127,16 +127,16 @@ func MoveFunctionalGroup(tx *gorm.DB, groupID uint64, newParentID *uint64) error
 
 依据 DOPHI CROS RPC 框架运行时规范，线上报文 `RPC_REQ_HEAD_S` 中的 `ascServiceName` 与 `ascOperation` 严格满足以下映射公式：
 
-$$\text{ascServiceName} = \text{package} + \text{"-"} + \text{serviceName}, \quad \text{ascOperation} = \text{methodName}$$
+$$\text{ascServiceName} = \text{package} + \text{"."} + \text{serviceName}, \quad \text{ascOperation} = \text{methodName}$$
 
 | Protobuf 定义示例 | `package` 声明 | `service` 名称 | `rpc` 方法名 | 规范化 `service_name` (`ascServiceName`) | 规范化 `operation` (`ascOperation`) |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| `dophi/order/v1/trade.proto` | `dophi.order.v1` | `TradeService` | `CreateOrder` | `dophi.order.v1-TradeService` | `CreateOrder` |
-| `cros/auth/session.proto` | `cros.auth` | `SessionMgr` | `VerifyTicket` | `cros.auth-SessionMgr` | `VerifyTicket` |
+| `dophi/order/v1/trade.proto` | `dophi.order.v1` | `TradeService` | `CreateOrder` | `dophi.order.v1.TradeService` | `CreateOrder` |
+| `cros/auth/session.proto` | `cros.auth` | `SessionMgr` | `VerifyTicket` | `cros.auth.SessionMgr` | `VerifyTicket` |
 
 * **强校验规则**：
-  1. `package` 内部**原样保留点分结构**（`.`），仅在 `package` 与 `serviceName` 交界处使用单个半角中划线 `-` 连接；
-  2. 受限于 CROS RPC 协议头 `CHAR[64]`（含末尾 `\0` 终止符），`service_name` 与 `operation` 字节长度均强制校验为 **`1..63` 位可见 ASCII 字符**（正则：`^[A-Za-z0-9._-]{1,63}$` 与 `^[A-Za-z0-9_]{1,63}$`）。
+  1. `package` 与 `serviceName` **统一遵循点分连接规范**（`.`，若未声明 package 则直接采用 `serviceName`）；
+  2. 受限于 CROS RPC 协议头 `CHAR[64]`（含末尾 `\0` 终止符），`service_name` 与 `operation` 字节长度均强制校验为 **`1..63` 位可见 ASCII 字符**（正则：`^[A-Za-z0-9._]{1,63}$` 与 `^[A-Za-z0-9_]{1,63}$`）。
   3. **唯一性红线**：
      - 同一模块内 `(module_id, relation_type, service_name, operation)` 唯一；
      - **全局唯一供给 (A-05)**：任意时刻同一 `(service_name, operation)` 在全库至多只能被 **1 个**功能模块声明为 `PROVIDE`；第二个模块尝试声明相同 `PROVIDE` 时立即拦截返回 `409 Conflict` 并附带已占用模块编码与名称。
