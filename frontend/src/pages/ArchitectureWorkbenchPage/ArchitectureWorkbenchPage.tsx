@@ -18,8 +18,7 @@ import type {
 import { SubsystemGroupTreePanel, TreeViewMode } from './SubsystemGroupTreePanel';
 import { ModuleContractDetailPane } from './ModuleContractDetailPane';
 import { ProcessDetailPane } from './ProcessDetailPane';
-
-const ArchTopologyTabPane = React.lazy(() => import('./ArchTopologyTabPane'));
+import { ArchTopologyTabPane } from './ArchTopologyTabPane';
 
 function findGroupInTree(
   nodes: FunctionalGroupTreeNode[],
@@ -1043,26 +1042,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
           </div>
         )}
 
-        {activeTab === 'topology' && (
-          <React.Suspense
-            fallback={
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  height: '100%',
-                  color: 'var(--color-text-secondary)',
-                  fontSize: 13,
-                }}
-              >
-                加载分层复合架构拓扑与一致性画布...
-              </div>
-            }
-          >
-            <ArchTopologyTabPane />
-          </React.Suspense>
-        )}
+        {activeTab === 'topology' && <ArchTopologyTabPane />}
       </div>
 
       {/* 1. 子系统侧边栏 (Drawer) */}

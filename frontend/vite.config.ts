@@ -1,3 +1,4 @@
+import path from 'path';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import federation from '@originjs/vite-plugin-federation';
@@ -19,6 +20,17 @@ export default defineConfig({
       shared: ['react', 'react-dom', 'react-router-dom'],
     }),
   ],
+  resolve: {
+    alias: {
+      'use-sync-external-store/shim/with-selector.js': path.resolve(__dirname, 'src/shims/useSyncExternalStoreShim.ts'),
+      'use-sync-external-store/shim/with-selector': path.resolve(__dirname, 'src/shims/useSyncExternalStoreShim.ts'),
+      'use-sync-external-store/shim/index.js': path.resolve(__dirname, 'src/shims/useSyncExternalStoreShim.ts'),
+      'use-sync-external-store/shim': path.resolve(__dirname, 'src/shims/useSyncExternalStoreShim.ts'),
+      'use-sync-external-store/with-selector.js': path.resolve(__dirname, 'src/shims/useSyncExternalStoreShim.ts'),
+      'use-sync-external-store/with-selector': path.resolve(__dirname, 'src/shims/useSyncExternalStoreShim.ts'),
+      'use-sync-external-store': path.resolve(__dirname, 'src/shims/useSyncExternalStoreShim.ts'),
+    },
+  },
   base: process.env.VITE_BASE_PATH || '/traefik/',
   build: {
     target: 'esnext',
