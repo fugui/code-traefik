@@ -1,3 +1,4 @@
+import { describe, it } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 
@@ -101,4 +102,8 @@ export function TestPaginationWindowAndThemeTokens(): void {
 }
 
 // 自动执行断言函数以保证自检通过
-TestPaginationWindowAndThemeTokens();
+describe('ThemeAndPagination', () => {
+  it('calculates 5-page window and enforces security tokens', () => {
+    TestPaginationWindowAndThemeTokens();
+  });
+});

@@ -1,5 +1,6 @@
+import { describe, it } from 'vitest';
 import { renderToString } from 'react-dom/server';
-import { PacketAnatomyContent } from '../pages/TrafficMonitorWorkbenchPage/PacketAnatomyDrawer';
+import { PacketAnatomyContent } from '../components/PacketAnatomyDrawer';
 import type { PacketAnatomyDrawerDTO } from '../types';
 
 const evilScript = '<script>' + 'al' + 'ert(1)</' + 'script>';
@@ -179,4 +180,8 @@ export function TestPacketAnatomyDrawerFourSections(): void {
 }
 
 // 自动执行断言函数以保证自检通过
-TestPacketAnatomyDrawerFourSections();
+describe('PacketAnatomyDrawer', () => {
+  it('renders all four sections and escapes HTML', () => {
+    TestPacketAnatomyDrawerFourSections();
+  });
+});

@@ -29,3 +29,5 @@ config.yaml
 *.swo
 tmp/
 coverage.out
+coverage/
+frontend/coverage/

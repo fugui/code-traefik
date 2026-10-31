@@ -94,6 +94,7 @@ func RegisterAPIRoutes(r *gin.Engine) {
 		protected.GET("/arch/services/available", ListAvailableServices)
 		protected.GET("/arch/proto-services/claimable", ListClaimableProtoServices)
 
+		protected.GET("/arch/topology/graph", GetTopologyGraph)
 		protected.GET("/arch/topology/static", GetStaticTopology)
 
 		// 5. Protobuf 描述集与方法映射域 (F-03)

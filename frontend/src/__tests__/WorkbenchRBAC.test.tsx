@@ -1,3 +1,4 @@
+import { describe, it } from 'vitest';
 import { renderToString } from 'react-dom/server';
 import { AgentLeaseStatusBadge } from '../pages/AgentManagementPage/AgentLeaseStatusBadge';
 import { SubsystemGroupTreePanel } from '../pages/ArchitectureWorkbenchPage/SubsystemGroupTreePanel';
@@ -95,4 +96,8 @@ export function TestPublicPrivateScopeAndAdminGuards(): void {
 }
 
 // 自动执行断言函数以保证自检通过
-TestPublicPrivateScopeAndAdminGuards();
+describe('WorkbenchRBAC', () => {
+  it('enforces public/private scope and admin guards', () => {
+    TestPublicPrivateScopeAndAdminGuards();
+  });
+});

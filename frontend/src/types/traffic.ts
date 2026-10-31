@@ -142,10 +142,14 @@ export interface RecordingSession {
 }
 
 export interface ConsistencyEdge {
-  source_module_id?: string;
+  source_module_id?: string | number;
+  src_module_id?: string | number;
   source_module_name?: string;
   src_module_name?: string;
-  target_module_id?: string;
+  src_process_id?: string | number;
+  candidate_module_ids?: Array<string | number>;
+  target_module_id?: string | number;
+  dst_module_id?: string | number;
   target_module_name?: string;
   dst_module_name?: string;
   service_name: string;
@@ -154,6 +158,8 @@ export interface ConsistencyEdge {
   status?: 'VERIFIED' | 'VIOLATION' | 'UNCOVERED' | 'NOT_MONITORED' | 'NOT_OBSERVABLE' | 'UNATTRIBUTED';
   call_count: number;
   observed_call_count?: number;
+  sample_traffic_record_id?: string | number;
+  attribution_mode?: string;
   detail?: string;
 }
 

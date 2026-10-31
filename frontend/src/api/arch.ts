@@ -1,4 +1,6 @@
 import { apiRequest } from './client';
+import { AUTH_TOKEN_KEY } from '@code/common';
+import { MODULE_BASE_PATH } from '../constants';
 import type {
   Subsystem,
   FunctionalGroupTreeNode,
@@ -11,6 +13,7 @@ import type {
   StaticTopologyDTO,
   PaginatedResponse,
 } from '../types';
+import type { TopologyGraphDTO } from '../types/topology_graph';
 
 export async function listSubsystems(params?: { search?: string; page?: number; page_size?: number }) {
   const query = new URLSearchParams();
@@ -226,4 +229,55 @@ export async function getStaticTopology(params?: { view?: 'LOGICAL' | 'PHYSICAL'
   if (params?.subsystem_id) query.set('subsystem_id', params.subsystem_id);
   const qs = query.toString();
   return apiRequest<StaticTopologyDTO>(`/arch/topology/static${qs ? `?${qs}` : ''}`);
+}
+
+interface CachedGraph {
+  etag: string;
+  data: TopologyGraphDTO;
+}
+
+const topologyGraphCache = new Map<'LOGICAL' | 'PHYSICAL', CachedGraph>();
+
+/**
+ * 获取全系统分层复合架构拓扑图
+ * 内置 (view -> { etag, data }) 协商缓存并显式处理 304 Not Modified
+ */
+export async function getTopologyGraph(
+  view: 'LOGICAL' | 'PHYSICAL' = 'LOGICAL'
+): Promise<TopologyGraphDTO> {
+  const cached = topologyGraphCache.get(view);
+  const token = typeof window !== 'undefined' ? localStorage.getItem(AUTH_TOKEN_KEY) : null;
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+  if (cached?.etag) {
+    headers['If-None-Match'] = cached.etag;
+  }
+
+  const baseUrl = typeof window !== 'undefined' && Boolean(window.__POWERED_BY_PORTAL__)
+    ? `${MODULE_BASE_PATH}/api`
+    : '/api';
+
+  const res = await fetch(`${baseUrl}/arch/topology/graph?view=${encodeURIComponent(view)}`, {
+    method: 'GET',
+    headers,
+  });
+
+  if (res.status === 304 && cached) {
+    return cached.data;
+  }
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new Error(`获取架构拓扑图失败 (${res.status}): ${errText}`);
+  }
+
+  const data = (await res.json()) as TopologyGraphDTO;
+  const etag = res.headers.get('ETag') || data.model_version;
+  if (etag) {
+    topologyGraphCache.set(view, { etag, data });
+  }
+
+  return data;
 }

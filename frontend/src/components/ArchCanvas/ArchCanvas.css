@@ -1,0 +1,396 @@
+/* ==============================================================================
+   ArchCanvas 复合拓扑画布样式 (100% 遵循 --color-* Design Tokens 与亮/暗双模规范)
+   ============================================================================== */
+
+.code-arch-canvas {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 580px;
+  background-color: var(--color-bg-surface);
+  border-radius: var(--radius-md, 8px);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── 容器节点 (Subsystem / FunctionalGroup / ProcessGroup / Process) ── */
+.code-arch-container {
+  background-color: var(--color-bg-surface);
+  border: 1.5px solid var(--color-border-primary);
+  border-radius: 8px;
+  box-shadow: var(--shadow-sm);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  overflow: hidden;
+}
+
+.code-arch-container:hover {
+  border-color: var(--color-border-hover);
+  box-shadow: var(--shadow-md);
+}
+
+.code-arch-container--collapsed {
+  min-width: 240px;
+  min-height: 64px;
+}
+
+.code-arch-container--expanded {
+  background-color: var(--color-bg-surface);
+  border-style: dashed;
+}
+
+.code-arch-container--subsystem {
+  border-color: var(--color-primary);
+}
+
+.code-arch-container--process_group,
+.code-arch-container--process {
+  border-color: var(--color-border-primary);
+}
+
+.code-arch-container--undeployed_container {
+  border-color: var(--color-warning);
+  border-style: dashed;
+}
+
+.code-arch-container--external_container {
+  border-color: var(--color-border-hover);
+  border-style: dashed;
+}
+
+.code-arch-container__header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  background-color: var(--color-bg-muted);
+  border-bottom: 1px solid var(--color-border-primary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.code-arch-container__toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.code-arch-container__toggle:hover {
+  background-color: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.code-arch-container__icon {
+  color: var(--color-primary);
+  flex-shrink: 0;
+}
+
+.code-arch-container__title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+
+.code-arch-container__code {
+  font-size: 11px;
+  font-family: monospace;
+  color: var(--color-text-muted);
+}
+
+.code-arch-container__name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.code-arch-container__endpoint {
+  font-size: 10px;
+  font-family: monospace;
+  padding: 1px 4px;
+  background-color: var(--color-bg-surface);
+  border: 1px solid var(--color-border-primary);
+  border-radius: 3px;
+  color: var(--color-text-secondary);
+}
+
+.code-arch-container__badges {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+
+/* ── 模块叶子卡片 (Module Card) ── */
+.code-arch-module {
+  background-color: var(--color-bg-surface);
+  border: 1px solid var(--color-border-primary);
+  border-radius: 6px;
+  padding: 8px 10px;
+  width: 210px;
+  box-shadow: var(--shadow-sm);
+  transition: transform 0.15s ease, border-color 0.15s ease;
+}
+
+.code-arch-module:hover {
+  border-color: var(--color-primary);
+  box-shadow: var(--shadow-md);
+}
+
+.code-arch-module--undeployed {
+  border-color: var(--color-warning);
+  border-style: dashed;
+}
+
+.code-arch-module__header {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 4px;
+}
+
+.code-arch-module__icon {
+  color: var(--color-primary);
+}
+
+.code-arch-module__code {
+  font-size: 11px;
+  font-family: monospace;
+  color: var(--color-text-muted);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.code-arch-module__warn-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 10px;
+  color: var(--color-warning);
+  margin-left: auto;
+}
+
+.code-arch-module__body {
+  margin-bottom: 4px;
+}
+
+.code-arch-module__name {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-text-primary);
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.code-arch-module__footer {
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* ── 外部系统 / 外部端点卡片 ── */
+.code-arch-external {
+  background-color: var(--color-bg-surface);
+  border: 1px dashed var(--color-warning);
+  border-radius: 6px;
+  padding: 8px 10px;
+  width: 180px;
+  box-shadow: var(--shadow-sm);
+}
+
+.code-arch-external__header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 4px;
+  color: var(--color-warning);
+}
+
+.code-arch-external__type-label {
+  font-size: 10px;
+  color: var(--color-text-muted);
+}
+
+.code-arch-external__name {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--color-text-primary);
+  word-break: break-all;
+}
+
+/* ── 动态未登记接口告警节点 ── */
+.code-arch-unregistered {
+  background-color: var(--color-bg-surface);
+  border: 1.5px solid var(--color-danger);
+  border-radius: 6px;
+  padding: 8px 10px;
+  width: 180px;
+  box-shadow: 0 0 10px rgba(239, 68, 68, 0.2);
+}
+
+.code-arch-unregistered__header {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--color-danger);
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.code-arch-unregistered__sub {
+  font-size: 10px;
+  color: var(--color-danger);
+  margin-top: 2px;
+}
+
+/* ── 通用微型徽章 ── */
+.code-arch-badge {
+  display: inline-block;
+  padding: 1px 5px;
+  font-size: 10px;
+  font-weight: 500;
+  border-radius: 10px;
+  line-height: 1.2;
+}
+
+.code-arch-badge--provide {
+  background-color: var(--color-bg-muted);
+  color: var(--color-primary);
+  border: 1px solid var(--color-border-primary);
+}
+
+.code-arch-badge--internal {
+  background-color: var(--color-bg-muted);
+  color: var(--color-text-secondary);
+  border: 1px solid var(--color-border-primary);
+}
+
+.code-arch-badge--intra {
+  background-color: var(--color-bg-muted);
+  color: var(--color-info);
+  border: 1px solid var(--color-info);
+}
+
+.code-arch-badge--warning {
+  background-color: var(--color-bg-muted);
+  color: var(--color-warning);
+  border: 1px solid var(--color-warning);
+}
+
+/* ── 连线与边上标签 (Edge & Badges) ── */
+.code-arch-edge {
+  transition: stroke 0.15s ease, stroke-width 0.15s ease;
+}
+
+.code-arch-edge--violation {
+  animation: code-arch-pulse 1.6s infinite;
+}
+
+@keyframes code-arch-pulse {
+  0% {
+    stroke-opacity: 1;
+  }
+  50% {
+    stroke-opacity: 0.35;
+  }
+  100% {
+    stroke-opacity: 1;
+  }
+}
+
+.code-arch-edge-badge {
+  display: inline-block;
+  padding: 2px 6px;
+  font-size: 10px;
+  font-weight: 600;
+  border-radius: 4px;
+  background-color: var(--color-bg-surface);
+  border: 1px solid var(--color-border-primary);
+  color: var(--color-text-secondary);
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.code-arch-edge-badge:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.code-arch-edge-badge.code-arch-edge--violation {
+  border-color: var(--color-danger);
+  color: var(--color-danger);
+  background-color: var(--color-bg-surface);
+}
+
+.code-arch-edge-badge.code-arch-edge--unattributed {
+  border-color: var(--color-warning);
+  color: var(--color-warning);
+}
+
+.code-arch-edge-badge.code-arch-edge--verified {
+  border-color: var(--color-success);
+  color: var(--color-success);
+}
+
+/* ── 连接点 Handle 覆写 ── */
+.code-arch-canvas .code-arch-handle {
+  width: 6px;
+  height: 6px;
+  background: var(--color-primary);
+  border: 1px solid var(--color-bg-surface);
+  border-radius: 50%;
+}
+
+/* ── React Flow 内置控件 Design Tokens 样式隔离覆写 ── */
+.code-arch-canvas .react-flow__controls {
+  background-color: var(--color-bg-surface);
+  border: 1px solid var(--color-border-primary);
+  border-radius: 6px;
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
+}
+
+.code-arch-canvas .react-flow__controls-button {
+  background-color: var(--color-bg-surface);
+  border-bottom: 1px solid var(--color-border-primary);
+  color: var(--color-text-primary);
+  fill: var(--color-text-primary);
+}
+
+.code-arch-canvas .react-flow__controls-button:hover {
+  background-color: var(--color-bg-hover);
+}
+
+.code-arch-canvas .react-flow__controls-button svg {
+  fill: var(--color-text-primary);
+}
+
+.code-arch-canvas .react-flow__minimap {
+  background-color: var(--color-bg-surface);
+  border: 1px solid var(--color-border-primary);
+  border-radius: 6px;
+  box-shadow: var(--shadow-sm);
+}
+
+.code-arch-canvas .react-flow__attribution {
+  display: none !important;
+}
+

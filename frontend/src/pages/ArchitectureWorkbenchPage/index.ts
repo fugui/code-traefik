@@ -1,6 +1,5 @@
 export * from './SubsystemGroupTreePanel';
 export * from './ModuleContractDetailPane';
-export * from './StaticTopologyCanvas';
-export * from './ConsistencyVerifyOverlay';
+export * from './ArchTopologyTabPane';
 export * from './ArchitectureWorkbenchPage';
 export { default } from './ArchitectureWorkbenchPage';

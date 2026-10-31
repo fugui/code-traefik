@@ -19,6 +19,7 @@ import (
 	"code-traefik/handlers"
 	"code-traefik/internal/server/decoder"
 	"code-traefik/internal/server/hub"
+	"code-traefik/internal/server/topology"
 	"code-traefik/models"
 	"code-traefik/pkg/agentproto"
 
@@ -198,6 +199,7 @@ func RegisterRoutesForTest(r *gin.Engine) {
 		protected.GET("/arch/services/available", handlers.ListAvailableServices)
 		protected.GET("/arch/proto-services/claimable", handlers.ListClaimableProtoServices)
 
+		protected.GET("/arch/topology/graph", handlers.GetTopologyGraph)
 		protected.GET("/arch/topology/static", handlers.GetStaticTopology)
 
 		// 描述集
@@ -845,5 +847,120 @@ func TestSC03_ProcessBindingAndLeaseGuards(t *testing.T) {
 	r.ServeHTTP(w, reqDelProc)
 	if w.Code != http.StatusConflict {
 		t.Fatalf("期望租约占用中删除进程返回 409，实际: %d", w.Code)
+	}
+}
+
+func TestGetTopologyGraph_ETag304AndHardDeleteInvalidation(t *testing.T) {
+	r, db := setupRouterAndDB(t)
+
+	admin := createTestUserInDB(t, db, "topo_admin", config.AdminRole)
+	adminToken := generateTestJWT(t, admin)
+
+	// 1. 构造基础架构: 1 个子系统，1 个功能组，2 个模块，1 条依赖
+	sub, err := topology.CreateSubsystem(db, topology.SubsystemInput{Code: "SUB_ETAG", Name: "ETag测试子系统"})
+	if err != nil {
+		t.Fatalf("创建子系统失败: %v", err)
+	}
+	grp, err := topology.CreateFunctionalGroup(db, topology.FunctionalGroupInput{
+		SubsystemID: sub.ID,
+		Code:        "GRP_ETAG",
+		Name:        "ETag功能组",
+	})
+	if err != nil {
+		t.Fatalf("创建功能组失败: %v", err)
+	}
+	m1, err := topology.CreateModule(db, topology.ModuleInput{
+		GroupID: grp.ID,
+		Code:    "MOD_SRC",
+		Name:    "源模块",
+	})
+	if err != nil {
+		t.Fatalf("创建 m1 失败: %v", err)
+	}
+	m2, err := topology.CreateModule(db, topology.ModuleInput{
+		GroupID: grp.ID,
+		Code:    "MOD_DST",
+		Name:    "目标模块",
+	})
+	if err != nil {
+		t.Fatalf("创建 m2 失败: %v", err)
+	}
+	svc, err := topology.CreateModuleService(db, topology.ModuleServiceInput{
+		ModuleID:    m2.ID,
+		ServiceName: "etag.v1.Service",
+	})
+	if err != nil {
+		t.Fatalf("创建服务契约失败: %v", err)
+	}
+	dep, err := topology.CreateModuleDependency(db, topology.ModuleDependencyInput{
+		ConsumerModuleID: m1.ID,
+		ServiceID:        &svc.ID,
+	})
+	if err != nil {
+		t.Fatalf("创建依赖失败: %v", err)
+	}
+
+	// 2. 首次请求 GET /api/arch/topology/graph
+	req1 := httptest.NewRequest(http.MethodGet, "/api/arch/topology/graph?view=LOGICAL", nil)
+	req1.Header.Set("Authorization", "Bearer "+adminToken)
+	w1 := httptest.NewRecorder()
+	r.ServeHTTP(w1, req1)
+
+	if w1.Code != http.StatusOK {
+		t.Fatalf("首次请求拓扑图失败: %d, body: %s", w1.Code, w1.Body.String())
+	}
+	etag1 := w1.Header().Get("ETag")
+	if etag1 == "" {
+		t.Fatalf("首次请求期望返回非空 ETag")
+	}
+
+	var dto1 topology.TopologyGraphDTO
+	if err := json.Unmarshal(w1.Body.Bytes(), &dto1); err != nil {
+		t.Fatalf("反序列化 DTO1 失败: %v", err)
+	}
+	if len(dto1.Edges) != 1 {
+		t.Fatalf("首次请求期望 1 条依赖边，实际为 %d", len(dto1.Edges))
+	}
+
+	// 3. 携带 If-None-Match 二次请求 (未变更) -> 304 Not Modified
+	req2 := httptest.NewRequest(http.MethodGet, "/api/arch/topology/graph?view=LOGICAL", nil)
+	req2.Header.Set("Authorization", "Bearer "+adminToken)
+	req2.Header.Set("If-None-Match", etag1)
+	w2 := httptest.NewRecorder()
+	r.ServeHTTP(w2, req2)
+
+	if w2.Code != http.StatusNotModified {
+		t.Fatalf("未变更时期望返回 304 Not Modified，实际返回: %d", w2.Code)
+	}
+	if w2.Body.Len() > 0 {
+		t.Fatalf("304 响应包体必须为空，实际长度为 %d", w2.Body.Len())
+	}
+
+	// 4. 物理硬删除依赖边: db.Unscoped().Delete(&models.ModuleDependency{}, dep.ID)
+	if err := db.Unscoped().Delete(&models.ModuleDependency{}, dep.ID).Error; err != nil {
+		t.Fatalf("物理硬删除依赖边失败: %v", err)
+	}
+
+	// 5. 携带旧 ETag 再次请求 -> 必须返回 200 OK 与新 ETag (严禁误判为 304)，边数减 1
+	req3 := httptest.NewRequest(http.MethodGet, "/api/arch/topology/graph?view=LOGICAL", nil)
+	req3.Header.Set("Authorization", "Bearer "+adminToken)
+	req3.Header.Set("If-None-Match", etag1)
+	w3 := httptest.NewRecorder()
+	r.ServeHTTP(w3, req3)
+
+	if w3.Code != http.StatusOK {
+		t.Fatalf("硬删除后期望返回 200 OK，实际返回: %d", w3.Code)
+	}
+	etag3 := w3.Header().Get("ETag")
+	if etag3 == "" || etag3 == etag1 {
+		t.Fatalf("硬删除后 ETag 必须刷新！旧: %s, 新: %s", etag1, etag3)
+	}
+
+	var dto3 topology.TopologyGraphDTO
+	if err := json.Unmarshal(w3.Body.Bytes(), &dto3); err != nil {
+		t.Fatalf("反序列化 DTO3 失败: %v", err)
+	}
+	if len(dto3.Edges) != 0 {
+		t.Fatalf("硬删除后边数必须为 0，实际为 %d", len(dto3.Edges))
 	}
 }

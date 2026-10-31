@@ -16,7 +16,7 @@ import type {
 import { RecordingSessionBar } from './RecordingSessionBar';
 import { LiveTrafficFilterForm, type TrafficFilterValues } from './LiveTrafficFilterForm';
 import { TrafficRecordTable } from './TrafficRecordTable';
-import { PacketAnatomyDrawer } from './PacketAnatomyDrawer';
+import { PacketAnatomyDrawer } from '../../components/PacketAnatomyDrawer';
 
 export const TrafficMonitorWorkbenchPage: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();

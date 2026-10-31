@@ -6,24 +6,20 @@ import { useToast } from '../../utils/toast';
 import { useModuleUser } from '../../context/ModuleUserContext';
 import * as archApi from '../../api/arch';
 import * as agentApi from '../../api/agent';
-import * as trafficApi from '../../api/traffic';
 import type {
   Subsystem,
   FunctionalGroupTreeNode,
   Module,
   ModuleService,
   ModuleDependency,
-  StaticTopologyDTO,
-  ConsistencyReportDTO,
-  RecordingSession,
   Process,
   Agent,
 } from '../../types';
 import { SubsystemGroupTreePanel, TreeViewMode } from './SubsystemGroupTreePanel';
 import { ModuleContractDetailPane } from './ModuleContractDetailPane';
 import { ProcessDetailPane } from './ProcessDetailPane';
-import { StaticTopologyCanvas } from './StaticTopologyCanvas';
-import { ConsistencyVerifyOverlay } from './ConsistencyVerifyOverlay';
+
+const ArchTopologyTabPane = React.lazy(() => import('./ArchTopologyTabPane'));
 
 function findGroupInTree(
   nodes: FunctionalGroupTreeNode[],
@@ -46,17 +42,20 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
   const toast = useToast();
   const isAdmin = Boolean(user?.is_module_admin || user?.is_super_admin);
 
-  // URL 状态读取
-  const urlTab = (searchParams.get('tab') as 'logical' | 'physical' | 'verify') || 'logical';
+  // URL 状态读取与平滑兼容
+  const rawUrlTab = searchParams.get('tab');
+  const urlTab: 'modeling' | 'topology' =
+    rawUrlTab === 'physical' || rawUrlTab === 'verify' || rawUrlTab === 'topology'
+      ? 'topology'
+      : 'modeling';
   const urlViewMode = (searchParams.get('view_mode') as TreeViewMode) || 'LOGICAL';
   const urlSubsystemId = searchParams.get('subsystem_id') || '';
   const urlGroupId = searchParams.get('group_id') || '';
   const urlModuleId = searchParams.get('module_id') || '';
   const urlProcessId = searchParams.get('process_id') || '';
-  const urlSessionId = searchParams.get('session_id') || '';
 
   // 顶层 Tab 与左侧视角 Tab
-  const [activeTab, setActiveTab] = useState<'logical' | 'physical' | 'verify'>(urlTab);
+  const [activeTab, setActiveTab] = useState<'modeling' | 'topology'>(urlTab);
   const [treeViewMode, setTreeViewMode] = useState<TreeViewMode>(urlViewMode);
 
   // 基础数据状态
@@ -71,15 +70,6 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
   const [selectedModule, setSelectedModule] = useState<Module | null>(null);
   const [services, setServices] = useState<ModuleService[]>([]);
   const [dependencies, setDependencies] = useState<ModuleDependency[]>([]);
-
-  // 拓扑与一致性数据
-  const [topology, setTopology] = useState<StaticTopologyDTO | null>(null);
-  const [topologyView, setTopologyView] = useState<'LOGICAL' | 'PHYSICAL'>('PHYSICAL');
-  const [loadingTopo, setLoadingTopo] = useState(false);
-  const [sessions, setSessions] = useState<RecordingSession[]>([]);
-  const [selectedSessionId, setSelectedSessionId] = useState<string>(urlSessionId);
-  const [consistencyReport, setConsistencyReport] = useState<ConsistencyReportDTO | null>(null);
-  const [loadingReport, setLoadingReport] = useState(false);
 
   // 物理进程数据状态与分组
   const [processes, setProcesses] = useState<Process[]>([]);
@@ -161,24 +151,36 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
     [setSearchParams]
   );
 
-  // 监听浏览器 URL 变化（支持前进/后退/外链深度直达）
+  // 监听浏览器 URL 变化（支持前进/后退/外链深度直达与旧参数平滑兼容）
   useEffect(() => {
-    const tab = (searchParams.get('tab') as 'logical' | 'physical' | 'verify') || 'logical';
+    const rawTab = searchParams.get('tab');
+    if (rawTab === 'physical') {
+      updateParams({ tab: 'topology', view: 'PHYSICAL' });
+      setActiveTab('topology');
+    } else if (rawTab === 'verify') {
+      updateParams({ tab: 'topology' });
+      setActiveTab('topology');
+    } else if (rawTab === 'logical') {
+      updateParams({ tab: 'modeling' });
+      setActiveTab('modeling');
+    } else if (rawTab === 'topology') {
+      setActiveTab('topology');
+    } else {
+      setActiveTab('modeling');
+    }
+
     const vm = (searchParams.get('view_mode') as TreeViewMode) || 'LOGICAL';
     const subId = searchParams.get('subsystem_id') || '';
     const grpId = searchParams.get('group_id') || '';
     const modId = searchParams.get('module_id') || '';
     const procId = searchParams.get('process_id') || '';
-    const sessId = searchParams.get('session_id') || '';
 
-    setActiveTab(tab);
     setTreeViewMode(vm);
     if (subId) setSelectedSubsystemId((prev) => (String(prev) === String(subId) ? prev : String(subId)));
     if (grpId) setSelectedGroupId((prev) => (String(prev) === String(grpId) ? prev : String(grpId)));
     if (modId) setSelectedModuleId((prev) => (String(prev) === String(modId) ? prev : String(modId)));
     if (procId) setSelectedProcessId((prev) => (String(prev) === String(procId) ? prev : String(procId)));
-    if (sessId) setSelectedSessionId((prev) => (String(prev) === String(sessId) ? prev : String(sessId)));
-  }, [searchParams]);
+  }, [searchParams, updateParams]);
 
   // 加载子系统列表
   const loadSubsystems = useCallback(async () => {
@@ -387,66 +389,6 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
     if (!selectedModuleId) return;
     void refreshCurrentModule(selectedModuleId);
   }, [selectedModuleId, refreshCurrentModule]);
-
-  // 拓扑加载
-  const loadTopology = useCallback(
-    async (viewMode: 'LOGICAL' | 'PHYSICAL') => {
-      if (!selectedSubsystemId) return;
-      setLoadingTopo(true);
-      try {
-        const res = await archApi.getStaticTopology({
-          view: viewMode,
-          subsystem_id: selectedSubsystemId,
-        });
-        setTopology(res);
-      } catch (err) {
-        toast.error(err instanceof Error ? err.message : '加载静态拓扑失败');
-      } finally {
-        setLoadingTopo(false);
-      }
-    },
-    [selectedSubsystemId, toast]
-  );
-
-  useEffect(() => {
-    if (activeTab === 'physical') void loadTopology(topologyView);
-  }, [activeTab, topologyView, loadTopology]);
-
-  // 一致性报告加载
-  useEffect(() => {
-    if (activeTab !== 'verify') return;
-    void (async () => {
-      try {
-        const res = await trafficApi.listRecordingSessions({ page_size: 50 });
-        const items = res.items ?? [];
-        setSessions(items);
-        if (items.length > 0) {
-          setSelectedSessionId((prev) => prev || items[0].id);
-        }
-      } catch (err) {
-        toast.error(err instanceof Error ? err.message : '加载录制批次失败');
-      }
-    })();
-  }, [activeTab, toast]);
-
-  const loadConsistency = useCallback(async () => {
-    if (!selectedSessionId) return;
-    setLoadingReport(true);
-    try {
-      const res = await trafficApi.getConsistencyReport(selectedSessionId);
-      setConsistencyReport(res);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : '比对一致性报告失败');
-    } finally {
-      setLoadingReport(false);
-    }
-  }, [selectedSessionId, toast]);
-
-  useEffect(() => {
-    if (activeTab === 'verify' && selectedSessionId) {
-      void loadConsistency();
-    }
-  }, [activeTab, selectedSessionId, loadConsistency]);
 
   // 子系统 CRUD
   const handleSaveSubsystem = async () => {
@@ -861,40 +803,30 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
         <div className="code-tab-pills">
           <button
             type="button"
-            className={`code-pill-btn ${activeTab === 'logical' ? 'code-pill-btn--active' : ''}`}
+            className={`code-pill-btn ${activeTab === 'modeling' ? 'code-pill-btn--active' : ''}`}
             onClick={() => {
-              setActiveTab('logical');
-              updateParams({ tab: 'logical' });
+              setActiveTab('modeling');
+              updateParams({ tab: 'modeling' });
             }}
           >
             架构建模与模块契约
           </button>
           <button
             type="button"
-            className={`code-pill-btn ${activeTab === 'physical' ? 'code-pill-btn--active' : ''}`}
+            className={`code-pill-btn ${activeTab === 'topology' ? 'code-pill-btn--active' : ''}`}
             onClick={() => {
-              setActiveTab('physical');
-              updateParams({ tab: 'physical' });
+              setActiveTab('topology');
+              updateParams({ tab: 'topology' });
             }}
           >
-            静态拓扑视图
-          </button>
-          <button
-            type="button"
-            className={`code-pill-btn ${activeTab === 'verify' ? 'code-pill-btn--active' : ''}`}
-            onClick={() => {
-              setActiveTab('verify');
-              updateParams({ tab: 'verify' });
-            }}
-          >
-            架构一致性比对
+            静态拓扑与一致性画布
           </button>
         </div>
       </div>
 
       {/* 视图主体 */}
       <div className="code-workbench-body">
-        {activeTab === 'logical' && (
+        {activeTab === 'modeling' && (
           <div className="code-arch-split-layout">
             <SubsystemGroupTreePanel
               viewMode={treeViewMode}
@@ -1111,43 +1043,25 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
           </div>
         )}
 
-        {activeTab === 'physical' && (
-          <StaticTopologyCanvas
-            topology={topology}
-            loading={loadingTopo}
-            view={topologyView}
-            onViewChange={(v) => {
-              setTopologyView(v);
-              void loadTopology(v);
-            }}
-          />
-        )}
-
-        {activeTab === 'verify' && (
-          <div className="code-verify-container">
-            <div className="code-verify-toolbar">
-              <label className="code-field-label">关联录制批次:</label>
-              <select
-                className="code-select"
-                value={selectedSessionId}
-                onChange={(e) => {
-                  setSelectedSessionId(e.target.value);
-                  updateParams({ session_id: e.target.value });
+        {activeTab === 'topology' && (
+          <React.Suspense
+            fallback={
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  height: '100%',
+                  color: 'var(--color-text-secondary)',
+                  fontSize: 13,
                 }}
               >
-                {sessions?.map((sess) => (
-                  <option key={sess.id} value={sess.id}>
-                    {sess.name} ({sess.session_no} - {sess.status})
-                  </option>
-                ))}
-              </select>
-            </div>
-            <ConsistencyVerifyOverlay
-              report={consistencyReport}
-              loading={loadingReport}
-              onRefresh={() => void loadConsistency()}
-            />
-          </div>
+                加载分层复合架构拓扑与一致性画布...
+              </div>
+            }
+          >
+            <ArchTopologyTabPane />
+          </React.Suspense>
         )}
       </div>
 

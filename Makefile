@@ -53,7 +53,7 @@ $(AGENT_BINARY): $(BACKEND_SRCS)
 
 # 清理构建产物
 clean:
-	rm -rf $(DIST_DIR) $(BINARY) $(AGENT_BINARY)
+	rm -rf $(DIST_DIR) $(BINARY) $(AGENT_BINARY) $(FRONTEND_DIR)/coverage coverage.out
 
 # 运行 Go 单元测试（支持在未构建 frontend/dist 前独立执行，自动过滤 node_modules 下的无关文件）
 test:
@@ -66,6 +66,7 @@ test:
 	trap cleanup EXIT; \
 	pkgs=$$(go list ./... | grep -v '/$(FRONTEND_DIR)/'); \
 	go fmt $$pkgs && go vet $$pkgs && go test -v $$pkgs
+	cd $(FRONTEND_DIR) && npm test
 
 # 快捷启动命令
 run: build

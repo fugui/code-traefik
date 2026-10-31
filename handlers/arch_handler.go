@@ -904,6 +904,40 @@ func ListAvailableServices(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"items": items})
 }
 
+// GetTopologyGraph GET /api/arch/topology/graph
+func GetTopologyGraph(c *gin.Context) {
+	view := strings.ToUpper(strings.TrimSpace(c.DefaultQuery("view", topology.TopologyViewLogical)))
+	if view != topology.TopologyViewLogical && view != topology.TopologyViewPhysical {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "静态拓扑视角参数非法，仅允许 LOGICAL 或 PHYSICAL"})
+		return
+	}
+
+	res, err := topology.BuildTopologyGraph(models.DB, view)
+	if err != nil {
+		if errors.Is(err, topology.ErrInvalidTopologyView) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "构建架构拓扑图失败: " + err.Error()})
+		return
+	}
+
+	etag := fmt.Sprintf("\"%s\"", res.ModelVersion)
+	c.Header("ETag", etag)
+	c.Header("Cache-Control", "private, no-cache")
+
+	ifNoneMatch := c.GetHeader("If-None-Match")
+	if ifNoneMatch != "" {
+		cleaned := strings.Trim(strings.TrimPrefix(ifNoneMatch, "W/"), "\"")
+		if cleaned == res.ModelVersion {
+			c.Status(http.StatusNotModified)
+			return
+		}
+	}
+
+	c.JSON(http.StatusOK, res)
+}
+
 // GetStaticTopology GET /api/arch/topology/static
 func GetStaticTopology(c *gin.Context) {
 	view := strings.ToUpper(strings.TrimSpace(c.DefaultQuery("view", topology.TopologyViewLogical)))

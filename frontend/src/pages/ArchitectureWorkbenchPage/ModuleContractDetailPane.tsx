@@ -248,9 +248,7 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
   // 解除进程装载快捷处理
   const handleUnbindProcessDirect = async () => {
     if (!selectedModule) return;
-    if (window.confirm(`确认解除功能模块 [${selectedModule.name}] 与物理进程的装载关联？`)) {
-      await onBindProcess(selectedModule.id, null);
-    }
+    await onBindProcess(selectedModule.id, null);
   };
 
   return (
@@ -623,14 +621,11 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
                           <button
                             type="button"
                             className="code-btn code-btn--danger code-btn--xs"
+                            disabled={(svc.downstream_count || 0) > 0}
+                            title={(svc.downstream_count || 0) > 0 ? `正被 ${svc.downstream_count} 个下游模块依赖，请先在下游解除依赖` : undefined}
                             onClick={() => {
-                              if ((svc.downstream_count || 0) > 0) {
-                                alert(`无法删除：该服务正被 ${svc.downstream_count} 个下游模块依赖，请先在下游模块中解除依赖！`);
-                                return;
-                              }
-                              if (window.confirm(`确认删除对外服务契约 [${svc.service_name}]？`)) {
-                                void onDeleteService(svc.id);
-                              }
+                              if ((svc.downstream_count || 0) > 0) return;
+                              void onDeleteService(svc.id);
                             }}
                           >
                             删除
@@ -763,9 +758,7 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
                               type="button"
                               className="code-btn code-btn--danger code-btn--xs"
                               onClick={() => {
-                                if (window.confirm(`确认解除对服务 [${svcName}] 的依赖？`)) {
-                                  void onDeleteDependency(dep.id);
-                                }
+                                void onDeleteDependency(dep.id);
                               }}
                             >
                               解除
