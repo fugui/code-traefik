@@ -1462,13 +1462,20 @@ body {
   overflow-y: auto;
 }
 
+.code-module-breadcrumb-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  min-height: 28px;
+}
+
 .code-module-breadcrumb {
   display: flex;
   align-items: center;
   gap: 0.4rem;
   font-size: 0.8rem;
   color: var(--color-text-muted);
-  padding-bottom: 0.25rem;
 }
 
 .code-module-breadcrumb__item {

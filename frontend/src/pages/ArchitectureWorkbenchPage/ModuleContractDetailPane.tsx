@@ -28,8 +28,8 @@ import type {
 } from '../../types';
 
 export interface ModuleContractDetailPaneProps {
-  modules: Module[];
-  selectedModuleId: string;
+  modules?: Module[];
+  selectedModuleId?: string;
   onSelectModule: (id: string) => void;
   selectedModule: Module | null;
   services: ModuleService[];
@@ -62,7 +62,7 @@ export interface ModuleContractDetailPaneProps {
 
 export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> = ({
   modules,
-  selectedModuleId,
+  selectedModuleId: _selectedModuleId,
   onSelectModule,
   selectedModule,
   services,
@@ -253,58 +253,50 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
 
   return (
     <div className="code-module-pane" data-testid="module-contract-detail-pane">
-      {/* 顶部面包屑路径 */}
-      <div className="code-module-breadcrumb">
-        <span className="code-module-breadcrumb__item">架构根节点</span>
-        {(currentSubsystem || selectedModule?.subsystem) && (
-          <>
-            <ChevronRight size={13} className="code-module-breadcrumb__sep" />
-            <span className="code-module-breadcrumb__item">
-              {currentSubsystem?.name || selectedModule?.subsystem?.name}
-            </span>
-          </>
-        )}
-        {(currentGroup || selectedModule?.group) && (
-          <>
-            <ChevronRight size={13} className="code-module-breadcrumb__sep" />
-            <span className="code-module-breadcrumb__item code-module-breadcrumb__item--current">
-              {currentGroup?.name || selectedModule?.group?.name}
-            </span>
-          </>
-        )}
-      </div>
-
-      {/* 模块选择与概览卡片 */}
-      <div className="code-module-pane__header">
-        <div className="code-module-pane__title-row">
-          <span className="code-module-pane__title">功能模块契约与进程绑定</span>
-          {isAdmin && (
-            <button
-              type="button"
-              className="code-btn code-btn--primary code-btn--xs"
-              onClick={onCreateModule}
-            >
-              <Plus size={13} /> 新建模块
-            </button>
+      {/* 顶部面包屑与快捷操作栏 */}
+      <div className="code-module-breadcrumb-bar">
+        <div className="code-module-breadcrumb">
+          <span className="code-module-breadcrumb__item">架构根节点</span>
+          {(currentSubsystem || selectedModule?.subsystem) && (
+            <>
+              <ChevronRight size={13} className="code-module-breadcrumb__sep" />
+              <span className="code-module-breadcrumb__item">
+                {currentSubsystem?.name || selectedModule?.subsystem?.name}
+              </span>
+            </>
+          )}
+          {(currentGroup || selectedModule?.group) && (
+            <>
+              <ChevronRight size={13} className="code-module-breadcrumb__sep" />
+              <span
+                className={`code-module-breadcrumb__item ${
+                  !selectedModule ? 'code-module-breadcrumb__item--current' : ''
+                }`}
+              >
+                {currentGroup?.name || selectedModule?.group?.name}
+              </span>
+            </>
+          )}
+          {selectedModule && (
+            <>
+              <ChevronRight size={13} className="code-module-breadcrumb__sep" />
+              <span className="code-module-breadcrumb__item code-module-breadcrumb__item--current">
+                {selectedModule.name}
+              </span>
+            </>
           )}
         </div>
 
-        <div className="code-module-selector-tabs">
-          {(modules ?? []).map((m) => (
-            <button
-              key={m.id}
-              type="button"
-              className={`code-module-tab-chip ${selectedModuleId === m.id ? 'code-module-tab-chip--active' : ''}`}
-              onClick={() => onSelectModule(m.id)}
-            >
-              <span className="code-module-chip__code">{m.code}</span>
-              <span className="code-module-chip__name">{m.name}</span>
-            </button>
-          ))}
-          {(modules ?? []).length === 0 && (
-            <div className="code-empty-pane code-p-sm">当前功能组下暂无功能模块</div>
-          )}
-        </div>
+        {isAdmin && (
+          <button
+            type="button"
+            className="code-btn code-btn--primary code-btn--xs"
+            onClick={onCreateModule}
+            title="新建功能模块"
+          >
+            <Plus size={13} /> 新建模块
+          </button>
+        )}
       </div>
 
       {/* 模块主体内容 */}
@@ -785,7 +777,60 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
           </div>
         </div>
       ) : (
-        <div className="code-empty-pane code-p-lg">请先在左侧选择或新建一个功能模块</div>
+        <div
+          className="code-empty-pane code-p-lg"
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            minHeight: '320px',
+            gap: '0.75rem',
+            textAlign: 'center',
+          }}
+        >
+          {currentGroup ? (
+            <>
+              <Layers size={36} style={{ color: 'var(--color-primary)', opacity: 0.8 }} />
+              <h3 style={{ fontSize: '1.125rem', fontWeight: 600, color: 'var(--color-text-primary)', margin: 0 }}>
+                {currentGroup.name}
+              </h3>
+              <p
+                style={{
+                  color: 'var(--color-text-secondary)',
+                  fontSize: '0.875rem',
+                  maxWidth: '420px',
+                  margin: 0,
+                  lineHeight: 1.5,
+                }}
+              >
+                {modules && modules.length > 0
+                  ? '请在左侧架构元素树中选择具体功能模块以查看或编辑其服务契约与进程绑定。'
+                  : '当前功能组下暂无功能模块，您可以点击下方按钮为此功能组创建第一个功能模块。'}
+              </p>
+              {isAdmin && (!modules || modules.length === 0) && (
+                <button
+                  type="button"
+                  className="code-btn code-btn--primary code-btn--sm"
+                  style={{ marginTop: '0.5rem' }}
+                  onClick={onCreateModule}
+                >
+                  <Plus size={14} /> 新建功能模块
+                </button>
+              )}
+            </>
+          ) : (
+            <>
+              <Cpu size={36} style={{ color: 'var(--color-text-muted)', opacity: 0.6 }} />
+              <h4 style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--color-text-primary)', margin: 0 }}>
+                未选择功能模块
+              </h4>
+              <p style={{ color: 'var(--color-text-secondary)', fontSize: '0.875rem', margin: 0 }}>
+                请在左侧架构元素树中选择子系统、功能组或功能模块
+              </p>
+            </>
+          )}
+        </div>
       )}
 
       {/* ─────────────────────────────────────────────────────────────
