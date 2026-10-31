@@ -135,16 +135,25 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
   const [quickProcessOpen, setQuickProcessOpen] = useState(false);
   const [quickProcessForm, setQuickProcessForm] = useState({ group_name: '', name: '', listen_port: '' });
 
-  // 更新 URL Search Params 辅助函数
+  // 更新 URL Search Params 辅助函数（严格比对键值防引用抖动与死循环）
   const updateParams = useCallback(
     (updates: Record<string, string | null | undefined>) => {
       setSearchParams((prev) => {
         const next = new URLSearchParams(prev);
+        let changed = false;
         Object.entries(updates).forEach(([k, v]) => {
-          if (v) next.set(k, v);
-          else next.delete(k);
+          const oldV = next.get(k);
+          if (v !== undefined && v !== null && v !== '') {
+            if (oldV !== String(v)) {
+              next.set(k, String(v));
+              changed = true;
+            }
+          } else if (oldV !== null) {
+            next.delete(k);
+            changed = true;
+          }
         });
-        return next;
+        return changed ? next : prev;
       });
     },
     [setSearchParams]
@@ -189,17 +198,14 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
       setSubsystems(items);
       if (items.length > 0) {
         setSelectedSubsystemId((prev) => {
-          if (!prev) {
-            updateParams({ subsystem_id: items[0].id });
-            return items[0].id;
-          }
+          if (!prev) return items[0].id;
           return prev;
         });
       }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '加载子系统失败');
     }
-  }, [updateParams, toast]);
+  }, [toast]);
 
   useEffect(() => {
     void loadSubsystems();
@@ -222,9 +228,9 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if (!selectedSubsystemId) return;
+    if (activeTab !== 'modeling' || !selectedSubsystemId) return;
     void loadSubsystemModules(selectedSubsystemId);
-  }, [selectedSubsystemId, loadSubsystemModules]);
+  }, [activeTab, selectedSubsystemId, loadSubsystemModules]);
 
   // 加载物理进程列表
   const loadProcesses = useCallback(async () => {
@@ -254,9 +260,10 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
   }, []);
 
   useEffect(() => {
+    if (activeTab !== 'modeling') return;
     void loadProcesses();
     void loadAgents();
-  }, [loadProcesses, loadAgents]);
+  }, [activeTab, loadProcesses, loadAgents]);
 
   // 进程按 group_name 分组映射
   const processGroupsMap = useMemo(() => {
@@ -289,9 +296,9 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
     [toast]
   );
 
-  // 当子系统切换时，加载功能组树
+  // 当子系统切换时，加载功能组树（仅在建模 Tab 下按需加载）
   useEffect(() => {
-    if (!selectedSubsystemId) return;
+    if (activeTab !== 'modeling' || !selectedSubsystemId) return;
     void (async () => {
       try {
         const res = await archApi.getFunctionalGroupTree(selectedSubsystemId);
@@ -301,10 +308,13 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
         if (safeTree.length > 0) {
           setSelectedGroupId((prev) => {
             if (prev && findGroupInTree(safeTree, prev)) return String(prev);
-            return String(safeTree[0].id);
+            const firstId = String(safeTree[0].id);
+            updateParams({ group_id: firstId });
+            return firstId;
           });
         } else {
           setSelectedGroupId('');
+          updateParams({ group_id: null, module_id: null });
           setModules([]);
           setSelectedModule(null);
         }
@@ -312,11 +322,11 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
         toast.error(err instanceof Error ? err.message : '加载功能组失败');
       }
     })();
-  }, [selectedSubsystemId, toast]);
+  }, [activeTab, selectedSubsystemId, toast, updateParams]);
 
-  // 当功能组切换时，加载该组下的模块列表
+  // 当功能组切换时，加载该组下的模块列表（仅在建模 Tab 下按需加载）
   useEffect(() => {
-    if (!selectedGroupId) return;
+    if (activeTab !== 'modeling' || !selectedGroupId) return;
     void (async () => {
       try {
         const res = await archApi.listModules({ group_id: selectedGroupId, page_size: 100 });
@@ -339,7 +349,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
         toast.error(err instanceof Error ? err.message : '加载模块失败');
       }
     })();
-  }, [selectedGroupId, toast]);
+  }, [activeTab, selectedGroupId, toast]);
 
   // 加载与刷新模块详情、对外供给服务与下游服务依赖
   const refreshCurrentModule = useCallback(
@@ -386,11 +396,11 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
     [updateParams]
   );
 
-  // 当模块切换时，加载模块详情与服务契约
+  // 当模块切换时，加载模块详情与服务契约（仅在建模 Tab 下按需加载）
   useEffect(() => {
-    if (!selectedModuleId) return;
+    if (activeTab !== 'modeling' || !selectedModuleId) return;
     void refreshCurrentModule(selectedModuleId);
-  }, [selectedModuleId, refreshCurrentModule]);
+  }, [activeTab, selectedModuleId, refreshCurrentModule]);
 
   // 子系统 CRUD
   const handleSaveSubsystem = async () => {

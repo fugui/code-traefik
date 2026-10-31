@@ -308,7 +308,19 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
   }, [consistencyReport]);
 
   return (
-    <div className="code-arch-topology-tab-pane" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+    <div
+      className="code-arch-topology-tab-pane"
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        height: 'calc(100vh - 130px)',
+        minHeight: 640,
+        backgroundColor: 'var(--color-bg-surface)',
+        border: '1px solid var(--color-border-primary)',
+        borderRadius: 'var(--radius-lg, 12px)',
+        overflow: 'hidden',
+      }}
+    >
       {/* 顶部工具栏 */}
       <ArchCanvasToolbar
         view={view}
@@ -341,7 +353,7 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
       )}
 
       {/* 画布主体 */}
-      <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
+      <div style={{ flex: 1, minHeight: 520, position: 'relative', overflow: 'hidden' }}>
         {loadingGraph && (
           <div
             style={{

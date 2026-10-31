@@ -193,6 +193,7 @@ export const ArchCanvas: React.FC<ArchCanvasProps> = ({
       )}
 
       <ReactFlow<ArchCanvasNode, ArchCanvasEdge>
+        style={{ width: '100%', height: '100%', flex: 1 }}
         onInit={setRfInstance}
         nodes={highlightedFlowNodes}
         edges={flowEdges}
