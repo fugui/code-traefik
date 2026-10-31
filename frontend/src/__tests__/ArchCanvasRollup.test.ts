@@ -526,4 +526,57 @@ describe('ArchCanvasRollup Model Suite', () => {
     const edgeDragged = resultDragged.edges[0];
     expect(edgeDragged.data?.isDraggedDegraded).toBe(true);
   });
+
+  it('TC-ROLLUP-09: ELK 复合容器展开排版兼容性测试（防 width/height=undefined 引发 .oe() 异常）', async () => {
+    // 动态导入 ELK 验证复合容器展开排版无异常
+    const { default: ELK } = await import('elkjs/lib/elk.bundled.js');
+    const elk = new ELK();
+
+    // 复合容器展开场景：父容器包含子节点，自身不应带有 width: undefined 或 height: undefined 键
+    const elkGraph = {
+      id: 'root',
+      layoutOptions: {
+        'elk.algorithm': 'layered',
+        'elk.direction': 'RIGHT',
+        'elk.hierarchyHandling': 'INCLUDE_CHILDREN',
+      },
+      children: [
+        {
+          id: 'sub_1',
+          layoutOptions: { 'elk.padding': '[top=48,left=16,bottom=16,right=16]' },
+          children: [
+            {
+              id: 'grp_1',
+              layoutOptions: { 'elk.padding': '[top=48,left=16,bottom=16,right=16]' },
+              children: [
+                { id: 'mod_1', width: 220, height: 74 },
+                { id: 'mod_2', width: 220, height: 74 },
+              ],
+            },
+          ],
+        },
+        {
+          id: 'ext_container',
+          width: 260,
+          height: 80,
+        },
+      ],
+      edges: [
+        {
+          id: 'edge_1',
+          sources: ['mod_1'],
+          targets: ['mod_2'],
+        },
+      ],
+    };
+
+    const layouted = await elk.layout(elkGraph);
+    expect(layouted).toBeDefined();
+    expect(layouted.children).toHaveLength(2);
+    // 验证父容器坐标与自动推导宽高均正常计算
+    const sub1 = layouted.children?.find((c: ElkNode) => c.id === 'sub_1');
+    expect(sub1).toBeDefined();
+    expect(sub1?.width).toBeGreaterThan(0);
+    expect(sub1?.height).toBeGreaterThan(0);
+  });
 });

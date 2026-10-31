@@ -84,13 +84,16 @@ function buildElkGraph(
 
     const elkNode: ElkNode = {
       id: gn.id,
-      width: isLeaf ? width : undefined,
-      height: isLeaf ? height : undefined,
       layoutOptions: {
         'elk.padding': '[top=48,left=16,bottom=16,right=16]',
         'elk.spacing.nodeNode': '36',
       },
     };
+
+    if (isLeaf) {
+      elkNode.width = width;
+      elkNode.height = height;
+    }
 
     if (children.length > 0) {
       elkNode.children = children.map(convertNode);
@@ -100,6 +103,8 @@ function buildElkGraph(
   }
 
   const rootNodes = visibleNodes.filter((n) => !n.parent_id || !nodeMap.has(n.parent_id));
+  const visibleIdSet = new Set(visibleNodes.map((n) => n.id));
+  const validEdges = edges.filter((e) => visibleIdSet.has(e.source) && visibleIdSet.has(e.target));
 
   return {
     id: 'root',
@@ -113,7 +118,7 @@ function buildElkGraph(
       'elk.padding': '[top=20,left=20,bottom=20,right=20]',
     },
     children: rootNodes.map(convertNode),
-    edges: edges.map((e) => ({
+    edges: validEdges.map((e) => ({
       id: e.id,
       sources: [e.source],
       targets: [e.target],
