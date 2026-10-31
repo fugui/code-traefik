@@ -31,7 +31,7 @@ export interface SubsystemGroupTreePanelProps {
   groupTreeMap?: Record<string, FunctionalGroupTreeNode[]>;
   onLoadSubsystemTree?: (subsystemId: string) => Promise<FunctionalGroupTreeNode[]>;
   selectedGroupId: string;
-  onSelectGroup: (id: string) => void;
+  onSelectGroup: (groupId: string, subsystemId?: string) => void;
 
   // 逻辑树功能模块扩展（支持直接展开至 FM）
   modules?: Module[];
@@ -268,15 +268,15 @@ export const SubsystemGroupTreePanel: React.FC<SubsystemGroupTreePanelProps> = (
   const toggleSubsystemExpand = (id: string | number, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
     const strId = String(id);
+    if (onLoadSubsystemTree && !groupTreeMap[strId] && strId !== String(selectedSubsystemId)) {
+      void onLoadSubsystemTree(strId);
+    }
     setExpandedSubsystemIds((prev) => {
       const next = new Set(prev);
       if (next.has(strId)) {
         next.delete(strId);
       } else {
         next.add(strId);
-        if (onLoadSubsystemTree && !groupTreeMap[strId] && strId !== String(selectedSubsystemId)) {
-          void onLoadSubsystemTree(strId);
-        }
       }
       return next;
     });
@@ -455,8 +455,7 @@ export const SubsystemGroupTreePanel: React.FC<SubsystemGroupTreePanelProps> = (
           className={`code-tree-node code-tree-node--group ${isSelected ? 'code-tree-node--selected' : ''}`}
           style={{ paddingLeft: `${depth * 16 + 8}px` }}
           onClick={() => {
-            onSelectSubsystem(subsystemId);
-            onSelectGroup(node.id);
+            onSelectGroup(node.id, subsystemId);
           }}
         >
           <div className="code-tree-node__left">
@@ -552,8 +551,7 @@ export const SubsystemGroupTreePanel: React.FC<SubsystemGroupTreePanelProps> = (
                     if (onSelectModuleLeaf) {
                       onSelectModuleLeaf(subsystemId, node.id, mod.id);
                     } else {
-                      onSelectSubsystem(subsystemId);
-                      onSelectGroup(node.id);
+                      onSelectGroup(node.id, subsystemId);
                       if (onSelectModule) onSelectModule(mod.id);
                     }
                   }}

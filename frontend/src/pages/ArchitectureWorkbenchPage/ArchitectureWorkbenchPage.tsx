@@ -211,14 +211,10 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
     void loadSubsystems();
   }, [loadSubsystems]);
 
-  // 加载当前子系统的所有功能模块（用于逻辑树直接展开至 FM）
-  const loadSubsystemModules = useCallback(async (subsystemId: string) => {
-    if (!subsystemId) {
-      setSubsystemModules([]);
-      return [];
-    }
+  // 加载全系统功能模块列表（供架构元素树直接展开与节点定位）
+  const loadSubsystemModules = useCallback(async () => {
     try {
-      const res = await archApi.listModules({ subsystem_id: subsystemId, page_size: 1000 });
+      const res = await archApi.listModules({ page_size: 1000 });
       const items = res.items ?? [];
       setSubsystemModules(items);
       return items;
@@ -228,9 +224,9 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if (activeTab !== 'modeling' || !selectedSubsystemId) return;
-    void loadSubsystemModules(selectedSubsystemId);
-  }, [activeTab, selectedSubsystemId, loadSubsystemModules]);
+    if (activeTab !== 'modeling') return;
+    void loadSubsystemModules();
+  }, [activeTab, loadSubsystemModules]);
 
   // 加载物理进程列表
   const loadProcesses = useCallback(async () => {
@@ -299,37 +295,43 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
   // 当子系统切换时，加载功能组树（仅在建模 Tab 下按需加载）
   useEffect(() => {
     if (activeTab !== 'modeling' || !selectedSubsystemId) return;
+    let cancelled = false;
     void (async () => {
       try {
         const res = await archApi.getFunctionalGroupTree(selectedSubsystemId);
+        if (cancelled) return;
         const safeTree = res.tree ?? [];
         setGroupTree(safeTree);
         setGroupTreeMap((prev) => ({ ...prev, [selectedSubsystemId]: safeTree }));
         if (safeTree.length > 0) {
           setSelectedGroupId((prev) => {
             if (prev && findGroupInTree(safeTree, prev)) return String(prev);
-            const firstId = String(safeTree[0].id);
-            updateParams({ group_id: firstId });
-            return firstId;
+            return String(safeTree[0].id);
           });
         } else {
           setSelectedGroupId('');
-          updateParams({ group_id: null, module_id: null });
           setModules([]);
           setSelectedModule(null);
         }
       } catch (err) {
-        toast.error(err instanceof Error ? err.message : '加载功能组失败');
+        if (!cancelled) {
+          toast.error(err instanceof Error ? err.message : '加载功能组失败');
+        }
       }
     })();
-  }, [activeTab, selectedSubsystemId, toast, updateParams]);
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, selectedSubsystemId, toast]);
 
   // 当功能组切换时，加载该组下的模块列表（仅在建模 Tab 下按需加载）
   useEffect(() => {
     if (activeTab !== 'modeling' || !selectedGroupId) return;
+    let cancelled = false;
     void (async () => {
       try {
         const res = await archApi.listModules({ group_id: selectedGroupId, page_size: 100 });
+        if (cancelled) return;
         const items = res.items ?? [];
         setModules(items);
         if (items.length > 0) {
@@ -346,9 +348,14 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
           setDependencies([]);
         }
       } catch (err) {
-        toast.error(err instanceof Error ? err.message : '加载模块失败');
+        if (!cancelled) {
+          toast.error(err instanceof Error ? err.message : '加载模块失败');
+        }
       }
     })();
+    return () => {
+      cancelled = true;
+    };
   }, [activeTab, selectedGroupId, toast]);
 
   // 加载与刷新模块详情、对外供给服务与下游服务依赖
@@ -360,14 +367,6 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
         setSelectedModule(res.module);
         setServices(res.services ?? []);
         setDependencies(res.dependencies ?? []);
-        if (res.module?.subsystem_id) {
-          const newSubId = String(res.module.subsystem_id);
-          setSelectedSubsystemId((prev) => (String(prev) === newSubId ? prev : newSubId));
-        }
-        if (res.module?.group_id) {
-          const newGrpId = String(res.module.group_id);
-          setSelectedGroupId((prev) => (String(prev) === newGrpId ? prev : newGrpId));
-        }
         return res;
       } catch (err) {
         toast.error(err instanceof Error ? err.message : '加载模块契约失败');
@@ -399,8 +398,24 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
   // 当模块切换时，加载模块详情与服务契约（仅在建模 Tab 下按需加载）
   useEffect(() => {
     if (activeTab !== 'modeling' || !selectedModuleId) return;
-    void refreshCurrentModule(selectedModuleId);
-  }, [activeTab, selectedModuleId, refreshCurrentModule]);
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await archApi.getModule(selectedModuleId);
+        if (cancelled) return;
+        setSelectedModule(res.module);
+        setServices(res.services ?? []);
+        setDependencies(res.dependencies ?? []);
+      } catch (err) {
+        if (!cancelled) {
+          toast.error(err instanceof Error ? err.message : '加载模块契约失败');
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, selectedModuleId, toast]);
 
   // 子系统 CRUD
   const handleSaveSubsystem = async () => {
@@ -532,9 +547,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
       // 重新加载组内模块与子系统全量模块
       const res = await archApi.listModules({ group_id: targetGroupId, page_size: 100 });
       setModules(res.items);
-      if (selectedSubsystemId) {
-        void loadSubsystemModules(selectedSubsystemId);
-      }
+      void loadSubsystemModules();
       if (selectedModuleId) {
         const modRes = await archApi.getModule(selectedModuleId);
         setSelectedModule(modRes.module);
@@ -553,9 +566,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
         const res = await archApi.listModules({ group_id: selectedGroupId, page_size: 100 });
         setModules(res.items);
       }
-      if (selectedSubsystemId) {
-        void loadSubsystemModules(selectedSubsystemId);
-      }
+      void loadSubsystemModules();
       if (selectedModuleId === id) {
         setSelectedModuleId('');
         setSelectedModule(null);
@@ -849,25 +860,34 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
               subsystems={subsystems}
               selectedSubsystemId={selectedSubsystemId}
               onSelectSubsystem={(id) => {
-                setSelectedSubsystemId(id);
+                const subId = String(id);
+                setSelectedSubsystemId(subId);
                 setSelectedGroupId('');
                 setSelectedModuleId('');
-                updateParams({ subsystem_id: id, group_id: null, module_id: null });
+                updateParams({ subsystem_id: subId, group_id: null, module_id: null });
               }}
               groupTree={groupTree}
               groupTreeMap={groupTreeMap}
               onLoadSubsystemTree={loadSubsystemTree}
               selectedGroupId={selectedGroupId}
-              onSelectGroup={(id) => {
-                setSelectedGroupId(id);
+              onSelectGroup={(groupId, targetSubsystemId) => {
+                const subId = targetSubsystemId ? String(targetSubsystemId) : selectedSubsystemId;
+                const grpId = String(groupId);
+                setSelectedSubsystemId(subId);
+                setSelectedGroupId(grpId);
                 setSelectedModuleId('');
-                updateParams({ group_id: id, module_id: null });
+                updateParams({ subsystem_id: subId, group_id: grpId, module_id: null });
               }}
               modules={subsystemModules}
               selectedModuleId={selectedModuleId}
               onSelectModule={(modId) => {
-                setSelectedModuleId(modId);
-                updateParams({ module_id: modId, view_mode: 'LOGICAL' });
+                const targetMod = subsystemModules.find((m) => String(m.id) === String(modId));
+                if (targetMod && targetMod.subsystem_id && targetMod.group_id) {
+                  handleSelectModuleLeaf(targetMod.subsystem_id, targetMod.group_id, modId);
+                } else {
+                  setSelectedModuleId(modId);
+                  updateParams({ module_id: modId, view_mode: 'LOGICAL' });
+                }
               }}
               onSelectModuleLeaf={handleSelectModuleLeaf}
               onCreateModule={(groupId) => {
@@ -998,9 +1018,14 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
                   }}
                   onDeleteProcess={(id) => void handleDeleteProcess(id)}
                   onSelectModule={(modId) => {
-                    setSelectedModuleId(modId);
-                    setTreeViewMode('LOGICAL');
-                    updateParams({ module_id: modId, view_mode: 'LOGICAL' });
+                    const targetMod = subsystemModules.find((m) => String(m.id) === String(modId));
+                    if (targetMod && targetMod.subsystem_id && targetMod.group_id) {
+                      handleSelectModuleLeaf(targetMod.subsystem_id, targetMod.group_id, modId);
+                    } else {
+                      setSelectedModuleId(modId);
+                      setTreeViewMode('LOGICAL');
+                      updateParams({ module_id: modId, view_mode: 'LOGICAL' });
+                    }
                   }}
                 />
               ) : (
@@ -1017,8 +1042,13 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
                 modules={modules}
                 selectedModuleId={selectedModuleId}
                 onSelectModule={(id) => {
-                  setSelectedModuleId(id);
-                  updateParams({ module_id: id });
+                  const targetMod = subsystemModules.find((m) => String(m.id) === String(id));
+                  if (targetMod && targetMod.subsystem_id && targetMod.group_id) {
+                    handleSelectModuleLeaf(targetMod.subsystem_id, targetMod.group_id, id);
+                  } else {
+                    setSelectedModuleId(id);
+                    updateParams({ module_id: id });
+                  }
                 }}
                 selectedModule={selectedModule}
                 services={services}
