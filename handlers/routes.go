@@ -99,10 +99,14 @@ func RegisterAPIRoutes(r *gin.Engine) {
 
 		// 5. Protobuf 描述集与方法映射域 (F-03)
 		protected.GET("/proto-schemas", ListProtoSchemas)
+		protected.GET("/proto-schemas/:id/download", DownloadProtoSchema)
+		protected.GET("/proto-schemas/:id/summary", GetProtoSchemaSummary)
 		protected.POST("/proto-schemas", requireAdmin, UploadProtoSchema)
 		protected.POST("/proto-schemas/:id/activate", requireAdmin, ActivateProtoSchema)
 		protected.DELETE("/proto-schemas/:id", requireAdmin, DeleteProtoSchema)
 		protected.GET("/proto-operations", ListProtoOperations)
+		protected.GET("/proto-operations/:id/schema-tree", GetOperationSchemaTree)
+		protected.PUT("/proto-operations/:id/ignore-paths", requireAdmin, UpdateOperationIgnorePaths)
 
 		// 6. 公私域 Agent 纳管与排他租约管控域 (F-06, F-08)
 		protected.GET("/agents", ListAgents)

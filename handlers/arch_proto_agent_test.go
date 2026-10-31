@@ -3,11 +3,14 @@ package handlers_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -204,10 +207,14 @@ func RegisterRoutesForTest(r *gin.Engine) {
 
 		// 描述集
 		protected.GET("/proto-schemas", handlers.ListProtoSchemas)
+		protected.GET("/proto-schemas/:id/download", handlers.DownloadProtoSchema)
+		protected.GET("/proto-schemas/:id/summary", handlers.GetProtoSchemaSummary)
 		protected.POST("/proto-schemas", requireAdmin, handlers.UploadProtoSchema)
 		protected.POST("/proto-schemas/:id/activate", requireAdmin, handlers.ActivateProtoSchema)
 		protected.DELETE("/proto-schemas/:id", requireAdmin, handlers.DeleteProtoSchema)
 		protected.GET("/proto-operations", handlers.ListProtoOperations)
+		protected.GET("/proto-operations/:id/schema-tree", handlers.GetOperationSchemaTree)
+		protected.PUT("/proto-operations/:id/ignore-paths", requireAdmin, handlers.UpdateOperationIgnorePaths)
 
 		// Agent
 		protected.GET("/agents", handlers.ListAgents)
@@ -962,5 +969,351 @@ func TestGetTopologyGraph_ETag304AndHardDeleteInvalidation(t *testing.T) {
 	}
 	if len(dto3.Edges) != 0 {
 		t.Fatalf("硬删除后边数必须为 0，实际为 %d", len(dto3.Edges))
+	}
+}
+
+func TestDownloadProtoSchemaBinary_Integrity(t *testing.T) {
+	r, db := setupRouterAndDB(t)
+	adminUser := createTestUserInDB(t, db, "admin_download", config.AdminRole)
+	adminToken := generateTestJWT(t, adminUser)
+
+	rawBytes := []byte{0x0a, 0x05, 0x74, 0x65, 0x73, 0x74, 0x2e, 0x70, 0x62, 0x12, 0x34}
+	shaBytes := sha256.Sum256(rawBytes)
+	fileSHA := hex.EncodeToString(shaBytes[:])
+
+	schema := models.ProtoSchema{
+		Name:            "demo_download_schema",
+		Version:         1,
+		FileName:        "demo_download.pb",
+		FileSHA256:      fileSHA,
+		FileSize:        len(rawBytes),
+		DescriptorBytes: rawBytes,
+		IsActive:        false,
+		ProtoFiles:      datatypes.JSON("[\"demo.proto\"]"),
+	}
+	if err := db.Create(&schema).Error; err != nil {
+		t.Fatalf("创建测试描述集失败: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/proto-schemas/%d/download", schema.ID), nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("下载描述集期望状态码 200，实际返回: %d (body: %s)", w.Code, w.Body.String())
+	}
+
+	if w.Header().Get("Content-Type") != "application/octet-stream" {
+		t.Errorf("Content-Type 期望 application/octet-stream，实际: %s", w.Header().Get("Content-Type"))
+	}
+
+	disp := w.Header().Get("Content-Disposition")
+	if !strings.Contains(disp, "demo_download.pb") {
+		t.Errorf("Content-Disposition 期望包含 demo_download.pb，实际: %s", disp)
+	}
+
+	rspBytes := w.Body.Bytes()
+	rspSHA := hex.EncodeToString(func() []byte { s := sha256.Sum256(rspBytes); return s[:] }())
+	if rspSHA != fileSHA {
+		t.Errorf("响应二进制 SHA256 (%s) 与预期 (%s) 不一致", rspSHA, fileSHA)
+	}
+}
+
+func TestUpdateOperationIgnorePaths_ValidationAndAudit(t *testing.T) {
+	r, db := setupRouterAndDB(t)
+	adminUser := createTestUserInDB(t, db, "admin_ignore", config.AdminRole)
+	adminToken := generateTestJWT(t, adminUser)
+
+	normalUser := createTestUserInDB(t, db, "user_ignore", "developer")
+	normalToken := generateTestJWT(t, normalUser)
+
+	schema := models.ProtoSchema{
+		Name:            "test_ignore_schema",
+		Version:         1,
+		FileName:        "test.pb",
+		FileSHA256:      "aabbcc",
+		FileSize:        100,
+		DescriptorBytes: []byte{0x08, 0x01},
+	}
+	if err := db.Create(&schema).Error; err != nil {
+		t.Fatalf("创建 Schema 失败: %v", err)
+	}
+
+	op := models.ProtoOperation{
+		SchemaID:        schema.ID,
+		ProtoFile:       "order.proto",
+		ProtoPackage:    "dophi.order",
+		ProtoService:    "OrderService",
+		ServiceName:     "dophi.order-OrderService",
+		Operation:       "CreateOrder",
+		DiffIgnorePaths: datatypes.JSON("[]"),
+	}
+	if err := db.Create(&op).Error; err != nil {
+		t.Fatalf("创建 Operation 失败: %v", err)
+	}
+
+	// 1. 普通用户越权修改 -> 403 Forbidden
+	reqBodyNorm, _ := json.Marshal(gin.H{
+		"diff_ignore_paths": []string{"server_time"},
+	})
+	reqNorm := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/api/proto-operations/%d/ignore-paths", op.ID), bytes.NewReader(reqBodyNorm))
+	reqNorm.Header.Set("Authorization", "Bearer "+normalToken)
+	reqNorm.Header.Set("Content-Type", "application/json")
+	wNorm := httptest.NewRecorder()
+	r.ServeHTTP(wNorm, reqNorm)
+	if wNorm.Code != http.StatusForbidden {
+		t.Errorf("普通用户期望 403，实际: %d", wNorm.Code)
+	}
+
+	// 2. 非法路径校验：含空字符串 -> 400 Bad Request
+	reqBodyEmpty, _ := json.Marshal(gin.H{
+		"diff_ignore_paths": []string{"valid_path", ""},
+	})
+	reqEmpty := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/api/proto-operations/%d/ignore-paths", op.ID), bytes.NewReader(reqBodyEmpty))
+	reqEmpty.Header.Set("Authorization", "Bearer "+adminToken)
+	reqEmpty.Header.Set("Content-Type", "application/json")
+	wEmpty := httptest.NewRecorder()
+	r.ServeHTTP(wEmpty, reqEmpty)
+	if wEmpty.Code != http.StatusBadRequest {
+		t.Errorf("空路径期望 400，实际: %d", wEmpty.Code)
+	}
+
+	// 3. 非法路径校验：含控制字符 \n -> 400 Bad Request
+	reqBodyControl, _ := json.Marshal(gin.H{
+		"diff_ignore_paths": []string{"valid_path\ninjection"},
+	})
+	reqControl := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/api/proto-operations/%d/ignore-paths", op.ID), bytes.NewReader(reqBodyControl))
+	reqControl.Header.Set("Authorization", "Bearer "+adminToken)
+	reqControl.Header.Set("Content-Type", "application/json")
+	wControl := httptest.NewRecorder()
+	r.ServeHTTP(wControl, reqControl)
+	if wControl.Code != http.StatusBadRequest {
+		t.Errorf("包含控制字符期望 400，实际: %d", wControl.Code)
+	}
+
+	// 4. 合法更新 diff_ignore_paths: ["server_time", "items[*].token"] -> 200 OK
+	targetPaths := []string{"server_time", "items[*].token"}
+	reqBodyValid, _ := json.Marshal(gin.H{
+		"diff_ignore_paths": targetPaths,
+	})
+	reqValid := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/api/proto-operations/%d/ignore-paths", op.ID), bytes.NewReader(reqBodyValid))
+	reqValid.Header.Set("Authorization", "Bearer "+adminToken)
+	reqValid.Header.Set("Content-Type", "application/json")
+	wValid := httptest.NewRecorder()
+	r.ServeHTTP(wValid, reqValid)
+	if wValid.Code != http.StatusOK {
+		t.Fatalf("合法更新期望 200，实际: %d (body: %s)", wValid.Code, wValid.Body.String())
+	}
+
+	// 验证 DB 持久化
+	var updatedOp models.ProtoOperation
+	if err := db.First(&updatedOp, op.ID).Error; err != nil {
+		t.Fatalf("查询已更新 Operation 失败: %v", err)
+	}
+	var savedPaths []string
+	_ = json.Unmarshal(updatedOp.DiffIgnorePaths, &savedPaths)
+	if len(savedPaths) != 2 || savedPaths[0] != "server_time" || savedPaths[1] != "items[*].token" {
+		t.Errorf("持久化忽略路径不符合预期: %v", savedPaths)
+	}
+
+	// 验证审计日志产生
+	_ = commonAudit.Close(context.Background())
+	var auditLogs []commonModels.SysAuditLog
+	_ = db.Where("module = ? AND action = ?", config.ModuleKey, "update_op_ignores").Find(&auditLogs).Error
+	if len(auditLogs) == 0 {
+		t.Fatalf("期望产生 update_op_ignores 审计日志，但未检索到")
+	}
+}
+
+func TestGetOperationSchemaTree_SuccessAndNotFound(t *testing.T) {
+	r, db := setupRouterAndDB(t)
+	adminUser := createTestUserInDB(t, db, "admin_tree", config.AdminRole)
+	adminToken := generateTestJWT(t, adminUser)
+
+	// 构造包含简单描述的 FileDescriptorSet
+	fileProto := &descriptorpb.FileDescriptorProto{
+		Syntax:  proto.String("proto3"),
+		Name:    proto.String("demo/order.proto"),
+		Package: proto.String("demo.order"),
+		MessageType: []*descriptorpb.DescriptorProto{
+			{
+				Name: proto.String("SimpleReq"),
+				Field: []*descriptorpb.FieldDescriptorProto{
+					{
+						Name:     proto.String("order_id"),
+						Number:   proto.Int32(1),
+						Label:    descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
+						Type:     descriptorpb.FieldDescriptorProto_TYPE_INT64.Enum(),
+						JsonName: proto.String("orderId"),
+					},
+				},
+			},
+			{
+				Name: proto.String("SimpleRsp"),
+				Field: []*descriptorpb.FieldDescriptorProto{
+					{
+						Name:     proto.String("status_code"),
+						Number:   proto.Int32(1),
+						Label:    descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
+						Type:     descriptorpb.FieldDescriptorProto_TYPE_INT32.Enum(),
+						JsonName: proto.String("statusCode"),
+					},
+				},
+			},
+		},
+	}
+	fds := &descriptorpb.FileDescriptorSet{File: []*descriptorpb.FileDescriptorProto{fileProto}}
+	rawBytes, _ := proto.Marshal(fds)
+
+	schema := models.ProtoSchema{
+		Name:            "demo_tree_schema",
+		Version:         1,
+		FileName:        "demo_tree.pb",
+		FileSHA256:      "112233",
+		FileSize:        len(rawBytes),
+		DescriptorBytes: rawBytes,
+		ProtoFiles:      datatypes.JSON("[\"demo/order.proto\"]"),
+	}
+	if err := db.Create(&schema).Error; err != nil {
+		t.Fatalf("创建测试 Schema 失败: %v", err)
+	}
+
+	op := models.ProtoOperation{
+		SchemaID:           schema.ID,
+		ProtoFile:          "demo/order.proto",
+		ProtoPackage:       "demo.order",
+		ProtoService:       "OrderService",
+		ServiceName:        "demo.order-OrderService",
+		Operation:          "GetOrder",
+		ReqMessageFullName: "demo.order.SimpleReq",
+		RspMessageFullName: "demo.order.SimpleRsp",
+		DiffIgnorePaths:    datatypes.JSON("[\"order_id\"]"),
+	}
+	if err := db.Create(&op).Error; err != nil {
+		t.Fatalf("创建测试 Operation 失败: %v", err)
+	}
+
+	// 1. 获取存在的 Operation 字典树 -> 200 OK
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/proto-operations/%d/schema-tree", op.ID), nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("获取字典树期望 200，实际: %d (body: %s)", w.Code, w.Body.String())
+	}
+
+	var dto decoder.OperationSchemaTreeDTO
+	if err := json.Unmarshal(w.Body.Bytes(), &dto); err != nil {
+		t.Fatalf("反序列化 OperationSchemaTreeDTO 失败: %v", err)
+	}
+	if dto.Operation != "GetOrder" || dto.ServiceName != "demo.order-OrderService" {
+		t.Errorf("DTO 元信息不符合预期: %+v", dto)
+	}
+	if dto.ReqMessage == nil || len(dto.ReqMessage.Fields) != 1 {
+		t.Fatalf("ReqMessage 期望 1 个字段，实际: %+v", dto.ReqMessage)
+	}
+	if dto.ReqMessage.Fields[0].Name != "order_id" || !dto.ReqMessage.Fields[0].IsIgnoredInDiff {
+		t.Errorf("order_id 期望被标记为 is_ignored_in_diff=true，实际: %+v", dto.ReqMessage.Fields[0])
+	}
+
+	// 2. 获取不存在的 Operation 字典树 -> 404 Not Found
+	req404 := httptest.NewRequest(http.MethodGet, "/api/proto-operations/999999/schema-tree", nil)
+	req404.Header.Set("Authorization", "Bearer "+adminToken)
+	w404 := httptest.NewRecorder()
+	r.ServeHTTP(w404, req404)
+	if w404.Code != http.StatusNotFound {
+		t.Errorf("不存在的方法期望 404，实际: %d", w404.Code)
+	}
+}
+
+func TestProtoSchemaSummary_BloodlineAndOrphanServices(t *testing.T) {
+	r, db := setupRouterAndDB(t)
+	adminUser := createTestUserInDB(t, db, "admin_summary", config.AdminRole)
+	adminToken := generateTestJWT(t, adminUser)
+
+	schema := models.ProtoSchema{
+		Name:            "summary_schema",
+		Version:         1,
+		FileName:        "summary.pb",
+		FileSHA256:      "aabbccdd",
+		FileSize:        200,
+		DescriptorBytes: []byte{0x08, 0x01},
+		ProtoFiles:      datatypes.JSON("[\"s1.proto\", \"s2.proto\"]"),
+	}
+	if err := db.Create(&schema).Error; err != nil {
+		t.Fatalf("创建 Schema 失败: %v", err)
+	}
+
+	// 创建 2 个不同服务的 Operation
+	op1 := models.ProtoOperation{
+		SchemaID:     schema.ID,
+		ProtoFile:    "s1.proto",
+		ProtoPackage: "demo",
+		ProtoService: "ClaimedService",
+		ServiceName:  "demo.ClaimedService",
+		Operation:    "Method1",
+	}
+	op2 := models.ProtoOperation{
+		SchemaID:     schema.ID,
+		ProtoFile:    "s2.proto",
+		ProtoPackage: "demo",
+		ProtoService: "OrphanService",
+		ServiceName:  "demo.OrphanService",
+		Operation:    "Method2",
+	}
+	_ = db.Create(&op1).Error
+	_ = db.Create(&op2).Error
+
+	// 建立一个 Subsystem + Module + ModuleService 认领 demo.ClaimedService
+	sub := models.Subsystem{Code: "SUM_SUB", Name: "SummarySub"}
+	_ = db.Create(&sub).Error
+	grp := models.FunctionalGroup{SubsystemID: sub.ID, Code: "SUM_GRP", Name: "SummaryGrp"}
+	_ = db.Create(&grp).Error
+	mod := models.Module{SubsystemID: sub.ID, GroupID: grp.ID, Code: "SUM_MOD", Name: "SummaryModule"}
+	_ = db.Create(&mod).Error
+	ms := models.ModuleService{ModuleID: mod.ID, ServiceName: "demo.ClaimedService"}
+	_ = db.Create(&ms).Error
+
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/proto-schemas/%d/summary", schema.ID), nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("获取描述集摘要期望 200，实际: %d (body: %s)", w.Code, w.Body.String())
+	}
+
+	var res struct {
+		ProtoFiles      []string                      `json:"proto_files"`
+		ServicesSummary []handlers.ServiceSummaryItem `json:"services_summary"`
+		ClaimedRatio    float64                       `json:"claimed_ratio"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil {
+		t.Fatalf("反序列化摘要响应失败: %v", err)
+	}
+
+	if len(res.ProtoFiles) != 2 {
+		t.Errorf("ProtoFiles 数量期望 2，实际: %d", len(res.ProtoFiles))
+	}
+	if len(res.ServicesSummary) != 2 {
+		t.Fatalf("ServicesSummary 期望 2 个服务，实际: %d", len(res.ServicesSummary))
+	}
+
+	// 认领率期望 50% (1 个认领，1 个未认领孤儿)
+	if res.ClaimedRatio < 0.49 || res.ClaimedRatio > 0.51 {
+		t.Errorf("认领率期望 0.5，实际: %f", res.ClaimedRatio)
+	}
+
+	for _, s := range res.ServicesSummary {
+		if s.ServiceName == "demo.ClaimedService" {
+			if !s.IsClaimed || s.ClaimedModuleName != "SummaryModule" {
+				t.Errorf("demo.ClaimedService 期望已认领且模块名为 SummaryModule，实际: %+v", s)
+			}
+		} else if s.ServiceName == "demo.OrphanService" {
+			if s.IsClaimed {
+				t.Errorf("demo.OrphanService 期望为未认领孤儿契约，实际: %+v", s)
+			}
+		}
 	}
 }

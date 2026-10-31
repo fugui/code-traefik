@@ -258,9 +258,32 @@ func DiffLayer2ProtoSemantic(
 		})
 	}
 
-	// 2. 合并忽略规则
-	combinedIgnore := append([]string{}, op.DiffIgnorePaths...)
-	combinedIgnore = append(combinedIgnore, ignorePaths...)
+	// 2. 三级合并忽略规则: ReplayTask.ExtraIgnorePaths ∪ Operation.DiffIgnorePaths ∪ ModuleService.DiffIgnorePaths
+	ignoreSet := make(map[string]struct{})
+	for _, p := range ignorePaths {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			ignoreSet[p] = struct{}{}
+		}
+	}
+	if op != nil {
+		for _, p := range op.DiffIgnorePaths {
+			p = strings.TrimSpace(p)
+			if p != "" {
+				ignoreSet[p] = struct{}{}
+			}
+		}
+		for _, p := range op.ServiceIgnorePaths {
+			p = strings.TrimSpace(p)
+			if p != "" {
+				ignoreSet[p] = struct{}{}
+			}
+		}
+	}
+	combinedIgnore := make([]string, 0, len(ignoreSet))
+	for p := range ignoreSet {
+		combinedIgnore = append(combinedIgnore, p)
+	}
 
 	// 3. 递归语义树比对
 	semanticDiffs := diffMessageReflect(msgExp.ProtoReflect(), msgAct.ProtoReflect(), "", combinedIgnore)
@@ -561,9 +584,20 @@ func isPathIgnored(path string, ignorePaths []string) bool {
 		if pattern == path {
 			return true
 		}
-		// 通配符支持: 如 "orders[*].sku" 匹配 "orders[0].sku"
+		// 1. 前缀子树匹配: 如 "header" 匹配 "header.timestamp" 或 "header[0]"
+		if strings.HasPrefix(path, pattern+".") || strings.HasPrefix(path, pattern+"[") {
+			return true
+		}
+		// 2. 前缀通配匹配: 如 "header.*" 匹配 "header.timestamp"
+		if strings.HasSuffix(pattern, ".*") {
+			prefix := strings.TrimSuffix(pattern, ".*")
+			if path == prefix || strings.HasPrefix(path, prefix+".") {
+				return true
+			}
+		}
+		// 3. 通配符支持: 如 "orders[*].sku" 匹配 "orders[0].sku" 或 "orders[*].sku"
 		if strings.Contains(pattern, "[*]") {
-			regexPattern := "^" + strings.ReplaceAll(regexp.QuoteMeta(pattern), `\[\*\]`, `\[\d+\]`) + "$"
+			regexPattern := "^" + strings.ReplaceAll(regexp.QuoteMeta(pattern), `\[\*\]`, `(\[\d+\]|\[\*\])`) + "$"
 			if matched, _ := regexp.MatchString(regexPattern, path); matched {
 				return true
 			}

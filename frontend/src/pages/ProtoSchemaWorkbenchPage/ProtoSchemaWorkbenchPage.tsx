@@ -4,7 +4,7 @@ import { Modal, Pagination, usePaginationState } from '@code/common';
 import { useToast } from '../../utils/toast';
 import { useModuleUser } from '../../context/ModuleUserContext';
 import * as schemaApi from '../../api/schema';
-import type { ProtoSchema, ProtoOperation, SchemaConflict } from '../../types';
+import type { ProtoSchema, ProtoOperation, SchemaConflict, ProtoSchemaSummaryDTO } from '../../types';
 import { SchemaUploadModal } from './SchemaUploadModal';
 import { SchemaVersionList } from './SchemaVersionList';
 import { OperationMappingTable } from './OperationMappingTable';
@@ -25,6 +25,7 @@ export const ProtoSchemaWorkbenchPage: React.FC = () => {
 
   const [schemas, setSchemas] = useState<ProtoSchema[]>([]);
   const [selectedSchemaId, setSelectedSchemaId] = useState<string>('');
+  const [selectedSummary, setSelectedSummary] = useState<ProtoSchemaSummaryDTO | null>(null);
   const [operations, setOperations] = useState<ProtoOperation[]>([]);
   const [totalOperations, setTotalOperations] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -77,6 +78,34 @@ export const ProtoSchemaWorkbenchPage: React.FC = () => {
   useEffect(() => {
     void loadOperations();
   }, [loadOperations]);
+
+  useEffect(() => {
+    if (!selectedSchemaId) {
+      setSelectedSummary(null);
+      return;
+    }
+    let cancelled = false;
+    schemaApi
+      .getProtoSchemaSummary(selectedSchemaId)
+      .then((res) => {
+        if (!cancelled) setSelectedSummary(res);
+      })
+      .catch(() => {
+        if (!cancelled) setSelectedSummary(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedSchemaId]);
+
+  const handleOperationUpdated = (updated: ProtoOperation) => {
+    setOperations((prev) =>
+      prev.map((op) => (op.id === updated.id ? { ...op, ...updated } : op))
+    );
+    if (selectedOp && selectedOp.id === updated.id) {
+      setSelectedOp((prev) => (prev ? { ...prev, ...updated } : null));
+    }
+  };
 
   const handleActivate = async (schemaId: string) => {
     try {
@@ -157,6 +186,7 @@ export const ProtoSchemaWorkbenchPage: React.FC = () => {
           <SchemaVersionList
             schemas={schemas}
             selectedSchemaId={selectedSchemaId}
+            selectedSummary={selectedSummary}
             onSelectSchema={(id) => {
               setSelectedSchemaId(id);
               setPage(1);
@@ -194,6 +224,7 @@ export const ProtoSchemaWorkbenchPage: React.FC = () => {
           ) : (
             <OperationMappingTable
               operations={operations}
+              searchKeyword={searchKeyword}
               onSelectOperation={(op) => {
                 setSelectedOp(op);
                 setDocDrawerOpen(true);
@@ -228,6 +259,7 @@ export const ProtoSchemaWorkbenchPage: React.FC = () => {
         open={docDrawerOpen}
         onClose={() => setDocDrawerOpen(false)}
         operation={selectedOp}
+        onOperationUpdated={handleOperationUpdated}
       />
 
       {/* 409 契约冲突提示弹窗 */}

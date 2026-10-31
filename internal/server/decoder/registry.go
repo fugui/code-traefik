@@ -3,6 +3,7 @@ package decoder
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -20,6 +21,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/descriptorpb"
 	"google.golang.org/protobuf/types/dynamicpb"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
 
@@ -74,14 +76,15 @@ func (e *SchemaConflictError) Unwrap() error {
 
 // CompiledOperation 编译后的单接口动态编解码元数据
 type CompiledOperation struct {
-	SchemaID        uint64
-	SchemaName      string
-	SchemaVersion   int
-	ServiceName     string
-	Operation       string
-	ReqDesc         protoreflect.MessageDescriptor
-	RspDesc         protoreflect.MessageDescriptor
-	DiffIgnorePaths []string
+	SchemaID           uint64
+	SchemaName         string
+	SchemaVersion      int
+	ServiceName        string
+	Operation          string
+	ReqDesc            protoreflect.MessageDescriptor
+	RspDesc            protoreflect.MessageDescriptor
+	DiffIgnorePaths    []string // 方法级忽略规则 (Operation.DiffIgnorePaths)
+	ServiceIgnorePaths []string // 服务级默认忽略规则 (ModuleService.DiffIgnorePaths)
 }
 
 // CompiledRegistry 不可变无锁内存注册表快照
@@ -148,6 +151,19 @@ func (r *Registry) Reload() error {
 
 	opsMap := make(map[string]*CompiledOperation)
 
+	var moduleServices []models.ModuleService
+	svcIgnoresMap := make(map[string][]string)
+	if err := r.db.Find(&moduleServices).Error; err == nil {
+		for _, ms := range moduleServices {
+			if len(ms.DiffIgnorePaths) > 0 {
+				var paths []string
+				if err := json.Unmarshal(ms.DiffIgnorePaths, &paths); err == nil && len(paths) > 0 {
+					svcIgnoresMap[ms.ServiceName] = paths
+				}
+			}
+		}
+	}
+
 	for _, s := range activeSchemas {
 		if len(s.DescriptorBytes) == 0 {
 			continue
@@ -185,14 +201,21 @@ func (r *Registry) Reload() error {
 				}
 			}
 
+			var ignorePaths []string
+			if len(op.DiffIgnorePaths) > 0 {
+				_ = json.Unmarshal(op.DiffIgnorePaths, &ignorePaths)
+			}
+
 			opsMap[key] = &CompiledOperation{
-				SchemaID:      s.ID,
-				SchemaName:    s.Name,
-				SchemaVersion: s.Version,
-				ServiceName:   op.ServiceName,
-				Operation:     op.Operation,
-				ReqDesc:       reqDesc,
-				RspDesc:       rspDesc,
+				SchemaID:           s.ID,
+				SchemaName:         s.Name,
+				SchemaVersion:      s.Version,
+				ServiceName:        op.ServiceName,
+				Operation:          op.Operation,
+				ReqDesc:            reqDesc,
+				RspDesc:            rspDesc,
+				DiffIgnorePaths:    ignorePaths,
+				ServiceIgnorePaths: svcIgnoresMap[op.ServiceName],
 			}
 		}
 	}
@@ -201,33 +224,35 @@ func (r *Registry) Reload() error {
 	return nil
 }
 
-// extractOperationsFromDescriptor 解析 FileDescriptorSet 提取全部服务与方法映射
-func extractOperationsFromDescriptor(rawBytes []byte) (*descriptorpb.FileDescriptorSet, *protoregistry.Files, []models.ProtoOperation, error) {
+// extractOperationsFromDescriptor 解析 FileDescriptorSet 提取全部服务与方法映射及包含的源文件清单
+func extractOperationsFromDescriptor(rawBytes []byte) (*descriptorpb.FileDescriptorSet, *protoregistry.Files, []models.ProtoOperation, []string, error) {
 	if len(rawBytes) == 0 {
-		return nil, nil, nil, ErrDescriptorEmpty
+		return nil, nil, nil, nil, ErrDescriptorEmpty
 	}
 	if len(rawBytes) > MaxDescriptorFileSize {
-		return nil, nil, nil, ErrDescriptorTooLarge
+		return nil, nil, nil, nil, ErrDescriptorTooLarge
 	}
 
 	var fds descriptorpb.FileDescriptorSet
 	if err := proto.Unmarshal(rawBytes, &fds); err != nil {
-		return nil, nil, nil, ErrInvalidDescriptorProto
+		return nil, nil, nil, nil, ErrInvalidDescriptorProto
 	}
 	// 校验反序列化完整度：必须含有文件，且不能有未识别字段
 	if len(fds.File) == 0 || len(fds.ProtoReflect().GetUnknown()) > 0 {
-		return nil, nil, nil, ErrInvalidDescriptorProto
+		return nil, nil, nil, nil, ErrInvalidDescriptorProto
 	}
 
 	files, err := protodesc.NewFiles(&fds)
 	if err != nil {
-		return nil, nil, nil, ErrInvalidDescriptorProto
+		return nil, nil, nil, nil, ErrInvalidDescriptorProto
 	}
 
+	protoFiles := make([]string, 0, len(fds.File))
 	var ops []models.ProtoOperation
 	for _, file := range fds.File {
 		pkg := file.GetPackage()
 		fileName := file.GetName()
+		protoFiles = append(protoFiles, fileName)
 		for _, svc := range file.Service {
 			svcName := svc.GetName()
 			// 服务名规范：若包名非空采用 {package}.{serviceName}，否则采用 {serviceName}
@@ -249,6 +274,7 @@ func extractOperationsFromDescriptor(rawBytes []byte) (*descriptorpb.FileDescrip
 					Operation:          opName,
 					ReqMessageFullName: reqType,
 					RspMessageFullName: rspType,
+					DiffIgnorePaths:    datatypes.JSON("[]"),
 					ClientStreaming:    method.GetClientStreaming(),
 					ServerStreaming:    method.GetServerStreaming(),
 					IsActive:           false,
@@ -257,7 +283,7 @@ func extractOperationsFromDescriptor(rawBytes []byte) (*descriptorpb.FileDescrip
 		}
 	}
 
-	return &fds, files, ops, nil
+	return &fds, files, ops, protoFiles, nil
 }
 
 // UploadSchema 上传并持久化 .pb 描述集
@@ -268,7 +294,7 @@ func (r *Registry) UploadSchema(in UploadSchemaInput) (*models.ProtoSchema, []mo
 		return nil, nil, ErrInvalidSchemaName
 	}
 
-	_, _, ops, err := extractOperationsFromDescriptor(in.RawBytes)
+	_, _, ops, protoFiles, err := extractOperationsFromDescriptor(in.RawBytes)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -283,6 +309,11 @@ func (r *Registry) UploadSchema(in UploadSchemaInput) (*models.ProtoSchema, []mo
 
 	var schema models.ProtoSchema
 	var insertedOps []models.ProtoOperation
+
+	protoFilesBytes, err := json.Marshal(protoFiles)
+	if err != nil {
+		protoFilesBytes = []byte("[]")
+	}
 
 	err = r.db.Transaction(func(tx *gorm.DB) error {
 		// 计算同名自增版本号
@@ -300,6 +331,7 @@ func (r *Registry) UploadSchema(in UploadSchemaInput) (*models.ProtoSchema, []mo
 			DescriptorBytes: in.RawBytes,
 			IsActive:        false,
 			OperationCount:  len(ops),
+			ProtoFiles:      datatypes.JSON(protoFilesBytes),
 			Description:     in.Description,
 			CreatedBy:       in.OperatorID,
 		}
@@ -613,4 +645,143 @@ func (r *Registry) DecodeCrosFrame(rawFrame []byte, isTruncated bool) (*DecodedF
 
 	res.Decode = r.DecodePayloadToJSON(res.ServiceName, res.Operation, parsed.Comm.MsgType, res.Payload)
 	return res, nil
+}
+
+// GetOperationSchemaTree 根据方法 ID 反射提取请求与应答字段字典树
+func (r *Registry) GetOperationSchemaTree(opID uint64) (*OperationSchemaTreeDTO, error) {
+	var op models.ProtoOperation
+	if err := r.db.First(&op, opID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("方法不存在")
+		}
+		return nil, err
+	}
+
+	var schema models.ProtoSchema
+	if err := r.db.First(&schema, op.SchemaID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrSchemaNotFound
+		}
+		return nil, err
+	}
+
+	if len(schema.DescriptorBytes) == 0 {
+		return nil, errors.New("描述集二进制为空")
+	}
+
+	var fds descriptorpb.FileDescriptorSet
+	if err := proto.Unmarshal(schema.DescriptorBytes, &fds); err != nil {
+		return nil, fmt.Errorf("解析描述集失败: %w", err)
+	}
+
+	files, err := protodesc.NewFiles(&fds)
+	if err != nil {
+		return nil, fmt.Errorf("构建反射类型库失败: %w", err)
+	}
+
+	var opIgnores []string
+	if len(op.DiffIgnorePaths) > 0 {
+		_ = json.Unmarshal(op.DiffIgnorePaths, &opIgnores)
+	}
+	if opIgnores == nil {
+		opIgnores = []string{}
+	}
+
+	var inheritedIgnores []string
+	var svc models.ModuleService
+	if err := r.db.Where("service_name = ?", op.ServiceName).First(&svc).Error; err == nil {
+		if len(svc.DiffIgnorePaths) > 0 {
+			_ = json.Unmarshal(svc.DiffIgnorePaths, &inheritedIgnores)
+		}
+	}
+	if inheritedIgnores == nil {
+		inheritedIgnores = []string{}
+	}
+
+	allIgnores := append(append([]string{}, opIgnores...), inheritedIgnores...)
+
+	dto := &OperationSchemaTreeDTO{
+		OperationID:          fmt.Sprintf("%d", op.ID),
+		OperationIDSnake:     fmt.Sprintf("%d", op.ID),
+		ServiceName:          op.ServiceName,
+		ServiceNameSnake:     op.ServiceName,
+		Operation:            op.Operation,
+		ProtoFile:            op.ProtoFile,
+		ProtoFileSnake:       op.ProtoFile,
+		ClientStreaming:      op.ClientStreaming,
+		ServerStreaming:      op.ServerStreaming,
+		DiffIgnorePaths:      opIgnores,
+		DiffIgnoreSnake:      opIgnores,
+		InheritedIgnorePaths: inheritedIgnores,
+		InheritedIgnoreSnake: inheritedIgnores,
+	}
+
+	if op.ReqMessageFullName != "" {
+		if d, err := files.FindDescriptorByName(protoreflect.FullName(op.ReqMessageFullName)); err == nil {
+			if md, ok := d.(protoreflect.MessageDescriptor); ok {
+				fields := ExtractMessageFieldTreeWithIgnores(md, allIgnores)
+				subTree := &MessageSubTreeDTO{
+					FullName: op.ReqMessageFullName,
+					Fields:   fields,
+				}
+				dto.ReqMessage = subTree
+				dto.ReqMessageSnake = subTree
+			}
+		}
+	}
+
+	if op.RspMessageFullName != "" {
+		if d, err := files.FindDescriptorByName(protoreflect.FullName(op.RspMessageFullName)); err == nil {
+			if md, ok := d.(protoreflect.MessageDescriptor); ok {
+				fields := ExtractMessageFieldTreeWithIgnores(md, allIgnores)
+				subTree := &MessageSubTreeDTO{
+					FullName: op.RspMessageFullName,
+					Fields:   fields,
+				}
+				dto.RspMessage = subTree
+				dto.RspMessageSnake = subTree
+			}
+		}
+	}
+
+	return dto, nil
+}
+
+// UpdateOperationIgnorePaths 更新单接口方法级专属回归对比忽略字段清单
+func (r *Registry) UpdateOperationIgnorePaths(opID uint64, paths []string) (*models.ProtoOperation, *models.ProtoOperation, error) {
+	for _, p := range paths {
+		trimmed := strings.TrimSpace(p)
+		if trimmed == "" {
+			return nil, nil, errors.New("忽略路径不能包含空字符串")
+		}
+		// 校验非法字符 (防注入与格式规范)
+		if strings.ContainsAny(trimmed, "\n\r\t\x00") {
+			return nil, nil, errors.New("忽略路径包含非法控制字符")
+		}
+	}
+
+	var op models.ProtoOperation
+	if err := r.db.First(&op, opID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil, errors.New("方法不存在")
+		}
+		return nil, nil, err
+	}
+
+	beforeOp := op
+
+	pathsJSON, err := json.Marshal(paths)
+	if err != nil {
+		return nil, nil, fmt.Errorf("序列化忽略路径失败: %w", err)
+	}
+
+	if err := r.db.Model(&models.ProtoOperation{}).Where("id = ?", opID).
+		Update("diff_ignore_paths", datatypes.JSON(pathsJSON)).Error; err != nil {
+		return nil, nil, err
+	}
+
+	op.DiffIgnorePaths = datatypes.JSON(pathsJSON)
+	_ = r.Reload()
+
+	return &beforeOp, &op, nil
 }

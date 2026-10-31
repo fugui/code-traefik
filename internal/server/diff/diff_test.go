@@ -473,3 +473,80 @@ func TestLayer2ProtoSemanticDiffMapRepeatedAndIgnore(t *testing.T) {
 		t.Errorf("预期检出 <unknown_fields> 差异，实际未检出: %+v", diffs5)
 	}
 }
+
+// TestTripleLayerDiffIgnoreInheritance 验证三级忽略规则继承与通配合并生效 (M7-P4, F-03.3)
+// 继承公式: Final = ReplayTask.ExtraIgnorePaths ∪ Operation.DiffIgnorePaths ∪ ModuleService.DiffIgnorePaths
+func TestTripleLayerDiffIgnoreInheritance(t *testing.T) {
+	op, desc := buildSemanticDiffProtoSchema(t)
+
+	// 构造差异数据:
+	// 1. header.nonce 差异 (Service 级 header.* 覆盖)
+	// 2. pricing.discount_cents 差异 (Operation 级 pricing.discount_cents 覆盖)
+	// 3. items 差异 (Task 级 items[*] 覆盖)
+	// 4. tags 差异 (未被忽略，应被检出)
+
+	msgExp := dynamicpb.NewMessage(desc)
+	hdrFd := desc.Fields().ByName("header")
+	hdrExp := dynamicpb.NewMessage(hdrFd.Message())
+	hdrExp.Set(hdrFd.Message().Fields().ByName("nonce"), protoreflect.ValueOfString("nonce_111"))
+	msgExp.Set(hdrFd, protoreflect.ValueOfMessage(hdrExp))
+
+	pricingFd := desc.Fields().ByName("pricing")
+	pricingExp := dynamicpb.NewMessage(pricingFd.Message())
+	pricingExp.Set(pricingFd.Message().Fields().ByName("discount_cents"), protoreflect.ValueOfInt64(1000))
+	msgExp.Set(pricingFd, protoreflect.ValueOfMessage(pricingExp))
+
+	itemsFd := desc.Fields().ByName("items")
+	listExp := msgExp.Mutable(itemsFd).List()
+	listExp.Append(protoreflect.ValueOfString("item_A"))
+
+	tagsFd := desc.Fields().ByName("tags")
+	mapExp := msgExp.Mutable(tagsFd).Map()
+	mapExp.Set(protoreflect.ValueOfString("env").MapKey(), protoreflect.ValueOfInt32(1))
+
+	// Actual 消息
+	msgAct := dynamicpb.NewMessage(desc)
+	hdrAct := dynamicpb.NewMessage(hdrFd.Message())
+	hdrAct.Set(hdrFd.Message().Fields().ByName("nonce"), protoreflect.ValueOfString("nonce_222"))
+	msgAct.Set(hdrFd, protoreflect.ValueOfMessage(hdrAct))
+
+	pricingAct := dynamicpb.NewMessage(pricingFd.Message())
+	pricingAct.Set(pricingFd.Message().Fields().ByName("discount_cents"), protoreflect.ValueOfInt64(2000))
+	msgAct.Set(pricingFd, protoreflect.ValueOfMessage(pricingAct))
+
+	listAct := msgAct.Mutable(itemsFd).List()
+	listAct.Append(protoreflect.ValueOfString("item_B"))
+
+	mapAct := msgAct.Mutable(tagsFd).Map()
+	mapAct.Set(protoreflect.ValueOfString("env").MapKey(), protoreflect.ValueOfInt32(2)) // 未忽略差异
+
+	bExp, _ := proto.Marshal(msgExp)
+	bAct, _ := proto.Marshal(msgAct)
+
+	// 配置三级忽略:
+	// Level 3: ServiceIgnorePaths (header.*)
+	// Level 2: DiffIgnorePaths (pricing.discount_cents)
+	// Level 1: extraIgnorePaths (items[*])
+	op.ServiceIgnorePaths = []string{"header.*"}
+	op.DiffIgnorePaths = []string{"pricing.discount_cents"}
+	extraIgnores := []string{"items[*]"}
+
+	diffs, err := DiffLayer2ProtoSemantic(bExp, bAct, op, extraIgnores)
+	if err != nil {
+		t.Fatalf("DiffLayer2ProtoSemantic 失败: %v", err)
+	}
+
+	// 预期: 仅 tags 产生 1 处差异，其余 3 处差异分别被三级忽略规则过滤
+	if len(diffs) != 1 {
+		t.Fatalf("预期三级继承过滤后仅保留 1 处差异 (tags[env])，实际得到 %d: %+v", len(diffs), diffs)
+	}
+	if diffs[0].FieldPath != "tags[env]" {
+		t.Errorf("差异路径预期为 tags[env]，实际为: %s", diffs[0].FieldPath)
+	}
+
+	// 若 Task 级未配置 items[*]，则 items 也将作为差异被检出
+	diffsWithoutExtra, _ := DiffLayer2ProtoSemantic(bExp, bAct, op, nil)
+	if len(diffsWithoutExtra) != 2 {
+		t.Fatalf("预期缺少 Task 级忽略时得到 2 处差异，实际得到 %d: %+v", len(diffsWithoutExtra), diffsWithoutExtra)
+	}
+}

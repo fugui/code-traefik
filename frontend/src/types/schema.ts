@@ -3,11 +3,14 @@ export interface ProtoSchema {
   name: string;
   version: number;
   version_tag?: string;
+  file_name?: string;
   file_sha256?: string;
+  file_size?: number;
   is_active: boolean;
   description?: string;
   operations_count?: number;
   operation_count?: number;
+  proto_files?: string[];
   created_at?: string;
   updated_at?: string;
 }

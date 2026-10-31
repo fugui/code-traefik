@@ -50,7 +50,7 @@ flowchart LR
 | **M4** | ✅ 已交付 | [`05-m4-recording-topology-and-diff-engine.md`](./05-m4-recording-topology-and-diff-engine.md) | 多进程协同录制编排、Track A (SSE) / Track B (`ExchangeAssembler` 往返配对双模落盘)、四段报文解剖组装、离线架构一致性六分类验证、跨 Agent 同构重放调度与双层（协议头 + `protoreflect`）回归 Diff 引擎 | `TEST_DB_DSN=... go test -race ./...` 全绿 |
 | **M5** | ✅ 已交付 | [`06-m5-microfrontend-and-e2e-delivery.md`](./06-m5-microfrontend-and-e2e-delivery.md) | 架构中心、Agent 看板、`.pb` 工作台、流量监控台（含四段解剖抽屉）、重放工作台（含双层 Diff 抽屉）、`--color-*` 语义主题、URL 5 页滑窗分页、`SC-01`~`SC-08` E2E 回归及双二进制打包交付 | `make test && make lint && make build && make clean` 100% 零警告通过 |
 | **M6** | ✅ 已交付 | [`07-m6-hierarchical-topology-canvas.md`](./07-m6-hierarchical-topology-canvas.md) | 分层复合架构拓扑与一致性画布（`ArchCanvas`）：全系统单画布、React Flow v12 + ELK Inline Worker 异步正交布局（含跨层拐点全局换算与拖拽退化）、纯前端边汇总与动态 `VIOLATION`/`UNATTRIBUTED` 叠加、物理视图去 Agent 化与 `SHA-256` 强 `ETag` `GET /api/arch/topology/graph` 契约 | Vitest 纯算法单测覆盖率 `≥ 90%` + `TEST_DB_DSN=... go test -race` 通过 + `make lint && make build` 零警告 |
-| **M7** | 📋 待实施 | [`08-m7-proto-schema-deepening-and-nested-contract-workbench.md`](./08-m7-proto-schema-deepening-and-nested-contract-workbench.md) | Protobuf 契约资产化治理：两级嵌套折叠服务表（服务主行 ➔ 方法子表）、消息体参数字典树反射（Req/Rsp 字段树、Tag、类型高亮与注释透视）、可视化 Diff 忽略字段勾选与多级继承、原始 `.pb` 二进制下载导出及架构认领血缘分析 | `TEST_DB_DSN=... go test -race ./...` 全绿 + `make lint && make build` 零警告 |
+| **M7** | ✅ 已交付 | [`08-m7-proto-schema-deepening-and-nested-contract-workbench.md`](./08-m7-proto-schema-deepening-and-nested-contract-workbench.md) | Protobuf 契约资产化治理：两级嵌套折叠服务表（服务主行 ➔ 方法子表）、消息体参数字典树反射（Req/Rsp 字段树、Tag、类型高亮与注释透视）、可视化 Diff 忽略字段勾选与多级继承、原始 `.pb` 二进制下载导出及架构认领血缘分析 | `TEST_DB_DSN=... go test -race ./...` 全绿 + `make lint && make build` 零警告 |
 
 ---
 

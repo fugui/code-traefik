@@ -3,7 +3,7 @@
 - **文档编号**：`08-m7-proto-schema-deepening-and-nested-contract-workbench.md`
 - **文档版本**：v1.0.0
 - **更新日期**：2026-10-31
-- **状态**：📋 待实施 (Backlog - 待按指令启动)
+- **状态**：✅ 已交付 (Delivered)
 - **归属阶段**：阶段三/四：M7 TDD 任务拆解与验收标准 (`04-tasks`)
 - **覆盖特性与场景**：`F-03` (Protobuf 描述集注册与接口映射深化)、`F-03.1` (两级嵌套折叠契约表)、`F-03.2` (消息体参数定义字典树)、`F-03.3` (可视化 Diff 忽略规则与继承)、`F-03.4` (描述集资产库与架构认领血缘)
 - **设计参考基线**：[`06-proto-schema-repository-and-field-inspection-adr.md`](../05-adr/06-proto-schema-repository-and-field-inspection-adr.md) (ADR-06)、[`04-control-plane-and-web-console.md` §2.3~§2.4 & §4.4](../02-design/04-control-plane-and-web-console.md)、[`05-database-schema.md` §3.4](../02-design/05-database-schema.md)、[`01-http-api-contract.md` §2.3](../03-api/01-http-api-contract.md)
