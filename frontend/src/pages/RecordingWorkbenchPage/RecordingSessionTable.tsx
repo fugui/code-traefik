@@ -269,3 +269,4 @@ export const RecordingSessionTable: React.FC<RecordingSessionTableProps> = ({
 };
 
 export default RecordingSessionTable;
+

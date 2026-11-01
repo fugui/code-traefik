@@ -1,0 +1,356 @@
+/* ==========================================================================
+   Recording Start Drawer Styles
+   Strictly complies with theme.css Design Tokens & Flat BEM conventions
+   ========================================================================== */
+
+.code-recording-start-drawer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  color: var(--color-text-primary);
+  font-family: var(--font-family-sans);
+}
+
+/* 章节标题 */
+.code-recording-drawer-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.code-recording-drawer-section-title {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  margin-bottom: var(--space-xs);
+}
+
+/* 作用域卡片单选网格 (Scope Radio Cards) */
+.code-scope-cards-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-sm);
+}
+
+.code-scope-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: var(--space-sm) var(--space-md);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border-primary);
+  background-color: var(--color-bg-surface);
+  cursor: pointer;
+  transition: var(--transition-fast);
+  user-select: none;
+}
+
+.code-scope-card:hover {
+  border-color: var(--color-border-hover);
+  background-color: var(--color-bg-hover);
+}
+
+.code-scope-card--active {
+  border-color: var(--color-primary);
+  background-color: var(--color-primary-subtle);
+  box-shadow: 0 0 0 1px var(--color-primary);
+}
+
+.code-scope-card-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+}
+
+.code-scope-card-header input[type="radio"] {
+  margin: 0;
+  accent-color: var(--color-primary);
+  cursor: pointer;
+}
+
+.code-scope-card-title {
+  font-weight: 600;
+  font-size: 0.9375rem;
+  color: var(--color-text-primary);
+}
+
+.code-scope-card-desc {
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: var(--color-text-muted);
+}
+
+.code-scope-card--active .code-scope-card-desc {
+  color: var(--color-text-secondary);
+}
+
+/* Agent 运行环境选择与状态提示 */
+.code-agent-selector-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+.code-agent-select-field {
+  width: 100%;
+}
+
+.code-agent-alert {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: 0.4rem 0.75rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.8125rem;
+  background-color: var(--color-danger-subtle);
+  border: 1px solid var(--color-danger-border);
+  color: var(--color-danger);
+}
+
+.code-agent-alert--warning {
+  background-color: var(--color-warning-subtle);
+  border-color: var(--color-warning-border);
+  color: var(--color-warning);
+}
+
+/* 进程树容器 */
+.code-process-tree-box {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--color-border-primary);
+  border-radius: var(--radius-md);
+  background-color: var(--color-bg-surface);
+  overflow: hidden;
+}
+
+.code-process-tree-box--disabled {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+/* 树顶部工具栏 */
+.code-process-tree-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  padding: var(--space-xs) var(--space-sm);
+  background-color: var(--color-bg-muted);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.code-process-tree-search {
+  flex: 1;
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.code-process-tree-search-input {
+  width: 100%;
+  padding: 0.3rem 0.6rem 0.3rem 1.8rem;
+  font-size: 0.8125rem;
+  background-color: var(--color-bg-input);
+  border: 1px solid var(--color-border-primary);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-primary);
+}
+
+.code-process-tree-search-input:focus {
+  border-color: var(--color-border-focus);
+  outline: none;
+}
+
+.code-process-tree-search-icon {
+  position: absolute;
+  left: 0.5rem;
+  color: var(--color-text-muted);
+  pointer-events: none;
+}
+
+.code-process-tree-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+}
+
+.code-process-tree-btn {
+  padding: 0.25rem 0.5rem;
+  font-size: 0.75rem;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background-color: var(--color-bg-surface);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: var(--transition-fast);
+}
+
+.code-process-tree-btn:hover {
+  color: var(--color-text-primary);
+  border-color: var(--color-border-hover);
+  background-color: var(--color-bg-hover);
+}
+
+/* 树身主体 */
+.code-process-tree-body {
+  max-height: 280px;
+  overflow-y: auto;
+  padding: var(--space-xs) 0;
+}
+
+/* 进程分组行 (L1 Group) */
+.code-process-group-item {
+  display: flex;
+  flex-direction: column;
+}
+
+.code-process-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.35rem var(--space-sm);
+  background-color: var(--color-bg-muted);
+  cursor: pointer;
+  transition: var(--transition-fast);
+}
+
+.code-process-group-header:hover {
+  background-color: var(--color-bg-hover);
+}
+
+.code-process-group-left {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+}
+
+.code-process-group-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1rem;
+  height: 1rem;
+  color: var(--color-text-muted);
+  transition: transform var(--transition-fast);
+}
+
+.code-process-group-name {
+  font-weight: 600;
+  font-size: 0.875rem;
+  color: var(--color-text-primary);
+}
+
+.code-process-group-count {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  font-family: var(--font-family-mono);
+}
+
+/* 进程叶子行 (L2 Process) */
+.code-process-leaf-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.code-process-leaf-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.4rem var(--space-sm) 0.4rem 2rem;
+  transition: var(--transition-fast);
+  cursor: pointer;
+}
+
+.code-process-leaf-item:hover {
+  background-color: var(--color-bg-hover);
+}
+
+.code-process-leaf-left {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  min-width: 0;
+}
+
+.code-process-leaf-name {
+  font-weight: 600;
+  font-size: 0.875rem;
+  color: var(--color-text-primary);
+  white-space: nowrap;
+}
+
+.code-process-port-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.1rem 0.4rem;
+  border-radius: var(--radius-xs);
+  font-size: 0.75rem;
+  font-family: var(--font-family-mono);
+  background-color: var(--color-primary-subtle);
+  color: var(--color-primary);
+  border: 1px solid var(--color-primary-border);
+  white-space: nowrap;
+}
+
+.code-process-port-badge--client {
+  background-color: var(--color-bg-muted);
+  color: var(--color-text-muted);
+  border-color: var(--color-border-subtle);
+}
+
+.code-process-leaf-right {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  flex-shrink: 0;
+}
+
+.code-process-module-tag {
+  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+  background-color: var(--color-bg-elevated);
+  padding: 0.1rem 0.35rem;
+  border-radius: var(--radius-xs);
+}
+
+/* 空状态 */
+.code-process-tree-empty {
+  padding: var(--space-lg) var(--space-md);
+  text-align: center;
+  color: var(--color-text-muted);
+  font-size: 0.8125rem;
+}
+
+/* 抽屉吸底 Footer */
+.code-recording-drawer-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+}
+
+.code-drawer-footer-summary {
+  font-size: 0.875rem;
+  color: var(--color-text-secondary);
+}
+
+.code-drawer-footer-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+/* 批次快速命名辅助按钮 */
+.code-input-with-action {
+  display: flex;
+  gap: var(--space-xs);
+}
+
+.code-input-with-action input {
+  flex: 1;
+}

@@ -32,7 +32,8 @@ docs/
 │   ├── 06-m5-microfrontend-and-e2e-delivery.md    # 【M5 作战卡】微前端五大工作台、四段报文解剖抽屉与 SC-01~SC-08 端到端交付
 │   ├── 07-m6-hierarchical-topology-canvas.md      # 【M6 作战卡】分层复合架构拓扑与一致性画布（React Flow + ELK Worker）
 │   ├── 08-m7-proto-schema-deepening-and-nested-contract-workbench.md # 【M7 作战卡】Protobuf 契约资产化治理、嵌套服务表与消息体字段树
-│   └── 09-m8-console-ia-restructuring-and-debug-workflow.md          # 【M8 作战卡】控制台三层信息架构重组、录制-调试-重放闭环与物理进程单点收口
+│   ├── 09-m8-console-ia-restructuring-and-debug-workflow.md          # 【M8 作战卡】控制台三层信息架构重组、录制-调试-重放闭环与物理进程单点收口
+│   └── 10-m9-recording-drawer-and-process-tree-selection.md          # 【M9 作战卡】协同录制抽屉重构、作用域卡片解挤、Agent 状态防呆与业务进程树
 ├── 05-adr/          # 架构决策记录 (ADR)：重大技术选型与权衡记录 (Architecture Decision Records)
 │   ├── 01-microfrontend-and-table-prefix-isolation.md                  # ADR-01：微前端集成、共享库表前缀隔离与 TDD 测试策略
 │   ├── 02-ebpf-hook-and-dual-subsystem-adr.md                          # ADR-02：eBPF 入站旁路钩子、Cookie 原目的还原与无 Schema 数据面解耦
@@ -40,7 +41,8 @@ docs/
 │   ├── 04-traffic-storage-partitioning-and-relational-normalization.md # ADR-04：海量流量物理分区归档与核心关系规范化解耦
 │   ├── 05-hierarchical-topology-canvas-redesign.md                     # ADR-05：分层复合架构拓扑画布重设计、去 Agent 物理建模与一致性比对融合
 │   ├── 06-proto-schema-repository-and-field-inspection-adr.md          # ADR-06：Protobuf 契约资产化治理、嵌套服务表重构与消息体字段树 Diff 忽略设计
-│   └── 07-console-ia-restructuring-and-workflow-workbench-adr.md       # ADR-07：微前端控制台信息架构重组、“录制-调试-重放”高频工作流闭环与物理进程收口
+│   ├── 07-console-ia-restructuring-and-workflow-workbench-adr.md       # ADR-07：微前端控制台信息架构重组、“录制-调试-重放”高频工作流闭环与物理进程收口
+│   └── 08-recording-drawer-and-process-tree-selection-adr.md          # ADR-08：协同录制抽屉重构与进程树选择器设计（Drawer 侧边栏、Agent 选择防呆与业务分组树）
 ├── 06-ops/          # 交付与验证：双模联调、物理隔离数据库测试与生产环境单二进制部署手册
 │   └── 01-verification-and-deployment-guide.md    # 联调验证、自动化回归测试与生产部署操作指南
 └── 07-references/   # 外部参考与上位契约基准：协议包规范、字节字典与领域标准文档

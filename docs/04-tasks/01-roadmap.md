@@ -39,9 +39,11 @@ flowchart LR
     M5 ==> M6
     M6 ==> M7
     M7 ==> M8
+    M8 ==> M9
     M6["M6: 分层复合拓扑与一致性画布<br/>(React Flow + ELK Worker + 边汇总 + 去 Agent 物理图)"]
     M7["M7: 契约资产化治理、嵌套服务表与消息体字段树<br/>(两级折叠表 + 字段字典树 + 可视化 Diff 忽略 + 原文件导出)"]
     M8["M8: 控制台信息架构重组与调试工作流闭环<br/>(3组8项菜单 + 录制台账/单包调试重放 + 架构解耦与进程收口)"]
+    M9["M9: 协同录制抽屉重构与进程树选择器<br/>(Drawer 侧边栏 + 卡片解挤 + 目标 Agent 选择防呆 + 业务进程树)"]
 ```
 
 | 里程碑 | 状态 | 作战卡文档 | 核心职责与交付边界 | 准出质量门禁 (Exit Gate) |
@@ -54,6 +56,7 @@ flowchart LR
 | **M6** | ✅ 已交付 | [`07-m6-hierarchical-topology-canvas.md`](./07-m6-hierarchical-topology-canvas.md) | 分层复合架构拓扑与一致性画布（`ArchCanvas`）：全系统单画布、React Flow v12 + ELK Inline Worker 异步正交布局（含跨层拐点全局换算与拖拽退化）、纯前端边汇总与动态 `VIOLATION`/`UNATTRIBUTED` 叠加、物理视图去 Agent 化与 `SHA-256` 强 `ETag` `GET /api/arch/topology/graph` 契约 | Vitest 纯算法单测覆盖率 `≥ 90%` + `TEST_DB_DSN=... go test -race` 通过 + `make lint && make build` 零警告 |
 | **M7** | ✅ 已交付 | [`08-m7-proto-schema-deepening-and-nested-contract-workbench.md`](./08-m7-proto-schema-deepening-and-nested-contract-workbench.md) | Protobuf 契约资产化治理：两级嵌套折叠服务表（服务主行 ➔ 方法子表）、消息体参数字典树反射（Req/Rsp 字段树、Tag、类型高亮与注释透视）、可视化 Diff 忽略字段勾选与多级继承、原始 `.pb` 二进制下载导出及架构认领血缘分析 | `TEST_DB_DSN=... go test -race ./...` 全绿 + `make lint && make build` 零警告 |
 | **M8** | ✅ 已交付 | [`09-m8-console-ia-restructuring-and-debug-workflow.md`](./09-m8-console-ia-restructuring-and-debug-workflow.md) | 微前端控制台信息架构重组与调试工作流闭环：3 组 8 项频次金字塔菜单（默认落地 `/record`）与旧深链无损重定向、独立 `流量录制` 素材台账与 `流量调试`（`has_error` 异常过滤 + `SinglePacketReplayDrawer` 单包快速重放原地 Diff）、全屏 `架构拓扑` 与纯逻辑 `架构元素` 解耦、物理进程单点收口至 `Agent 与进程` | `TEST_DB_DSN=... make test` 全绿 + `MenuAndLegacyRoutes` / `RecordingWorkbench` / `SinglePacketReplay` / `TopologyAndArchDecoupling` 单测全绿 + `make lint && make build && make clean` 零警告 |
+| **M9** | ✅ 已交付 | [`10-m9-recording-drawer-and-process-tree-selection.md`](./10-m9-recording-drawer-and-process-tree-selection.md) | 协同录制抽屉重构与进程树选择器：全面弃用居中 Modal 迁移至 680px `Drawer`（Sticky 吸底 Footer）、素材归属卡片式单选解挤、宿主 Agent 下拉选择与在线/租约防呆门禁、业务进程树形分层选择（组级全选/半选/折叠与搜索过滤） | `RecordingStartDrawer` 单测全绿 + `make test && make lint && make build` 零警告 |
 
 ---
 
@@ -85,6 +88,7 @@ flowchart LR
 | **F-15.1** | 录制素材资产台账与跨工作台流转 | M8 | `frontend/src/__tests__/RecordingWorkbench.test.tsx` | `testSessionLedger_ActionsAndCrossWorkbenchLinks` |
 | **F-15.2** | 独立流量调试工作台与单包快速重放调试 | M8 | `handlers/recording_replay_test.go`<br>`frontend/src/__tests__/SinglePacketReplay.test.tsx` | `TestListTrafficRecords_HasErrorFilter`<br>`testSinglePacketReplay_IsomorphicFilterAndInlineDiff` |
 | **F-15.3** | 架构静态基线解耦与物理进程单点收口 | M8 | `frontend/src/__tests__/TopologyAndArchDecoupling.test.tsx`<br>`frontend/src/__tests__/WorkbenchRBAC.test.tsx` | `testArchWorkbench_PureLogicalAndBloodlineLinks`<br>`testAgentProcessConsolidation_GroupNameAndRBAC` |
+| **F-15.4** | 协同录制抽屉重构与进程树选择器 | M9 | `frontend/src/__tests__/RecordingStartDrawer.test.tsx` | `testRecordingDrawer_AgentSelectionAndProcessTree` |
 | **F-16** | RBAC 权限、公私域隔离与操作审计 | M2, M4, M5 | `handlers/arch_proto_agent_test.go`<br>`handlers/recording_replay_test.go` | `TestRBACAndPrivateResourceAntiIDOR`<br>`TestAuditLogFieldDiffAndActionEvents` |
 
 ### 3.2 端到端业务验收场景 (`SC-01` ~ `SC-08`) 追踪矩阵

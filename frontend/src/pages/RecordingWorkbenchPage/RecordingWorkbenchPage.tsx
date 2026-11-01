@@ -7,7 +7,7 @@ import * as trafficApi from '../../api/traffic';
 import * as agentApi from '../../api/agent';
 import type { RecordingSession, Process, Agent } from '../../types';
 import { ActiveRecordingBanner } from './ActiveRecordingBanner';
-import { RecordingStartModal } from './RecordingStartModal';
+import { RecordingStartDrawer } from './RecordingStartDrawer';
 import { RecordingSessionTable } from './RecordingSessionTable';
 
 export const RecordingWorkbenchPage: React.FC = () => {
@@ -191,8 +191,8 @@ export const RecordingWorkbenchPage: React.FC = () => {
         />
       </div>
 
-      {/* 发起录制模态框 */}
-      <RecordingStartModal
+      {/* 发起多进程协同录制抽屉 */}
+      <RecordingStartDrawer
         open={startModalOpen}
         onClose={() => setStartModalOpen(false)}
         onSuccess={() => void loadSessions()}

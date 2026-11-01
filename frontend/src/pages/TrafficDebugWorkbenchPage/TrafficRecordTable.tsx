@@ -128,3 +128,4 @@ export const TrafficRecordTable: React.FC<TrafficRecordTableProps> = ({
 };
 
 export default TrafficRecordTable;
+
