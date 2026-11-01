@@ -36,6 +36,12 @@ export const ReplayWorkbenchPage: React.FC = () => {
   const [reportDrawerOpen, setReportDrawerOpen] = useState(false);
   const [selectedTask, setSelectedTask] = useState<ReplayTask | null>(null);
 
+  useEffect(() => {
+    if (searchParams.get('auto_create') === '1') {
+      setCreatorModalOpen(true);
+    }
+  }, [searchParams]);
+
   const loadTasks = useCallback(async () => {
     setLoading(true);
     try {
@@ -168,6 +174,7 @@ export const ReplayWorkbenchPage: React.FC = () => {
         sessions={sessions}
         processes={processes}
         onSuccess={() => void loadTasks()}
+        defaultSessionId={urlSessionId}
       />
 
       {/* 双层 Diff 回归报告抽屉 */}

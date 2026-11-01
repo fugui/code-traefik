@@ -22,6 +22,7 @@ import (
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/descriptorpb"
+	"gorm.io/datatypes"
 )
 
 // buildTestCrosReqFrame 构造请求帧
@@ -683,4 +684,157 @@ func TestSC05_SC07_SC08_EndToEndRecordingAndReplayPipeline(t *testing.T) {
 		}
 	}
 	t.Logf("审计日志验证通过，共记录 %d 条审计事件", len(auditLogs))
+}
+
+func TestListTrafficRecords_HasErrorFilter(t *testing.T) {
+	r, db := setupRouterAndDB(t)
+
+	admin := createTestUserInDB(t, db, "admin_m8_p1", "traefik_admin")
+	adminToken := generateTestJWT(t, admin)
+
+	session := models.RecordingSession{
+		SessionNo:        fmt.Sprintf("REC-%d", time.Now().UnixNano()),
+		Name:             "M8-P1-Filter-Session",
+		Scope:            models.ScopeShared,
+		OwnerID:          admin.ID,
+		Status:           models.SessionStatusCompleted,
+		TargetProcessIDs: datatypes.JSON([]byte("[]")),
+	}
+	if err := db.Create(&session).Error; err != nil {
+		t.Fatalf("创建测试会话失败: %v", err)
+	}
+
+	now := time.Now()
+	// ① UNARY + status_code=0
+	rec1 := models.TrafficRecord{
+		SessionID:       session.ID,
+		SeqNo:           1,
+		CreatedAt:       now,
+		AgentID:         1,
+		ProcessID:       1,
+		CapturedPID:     1001,
+		ConnKey:         "127.0.0.1:1001->127.0.0.1:2001",
+		Direction:       models.TrafficDirIngress,
+		ExchangeType:    models.ExchangeUnary,
+		SrcAddr:         "127.0.0.1:1001",
+		DstAddr:         "127.0.0.1:2001",
+		ReqCapturedAtNs: now.UnixNano(),
+		ServiceName:     "order.OrderService",
+		Operation:       "CreateOrder",
+		StatusCode:      models.U64Numeric(0),
+		SNO:             models.U64Numeric(101),
+	}
+	// ② UNARY + status_code=5001
+	rec2 := models.TrafficRecord{
+		SessionID:       session.ID,
+		SeqNo:           2,
+		CreatedAt:       now,
+		AgentID:         1,
+		ProcessID:       1,
+		CapturedPID:     1001,
+		ConnKey:         "127.0.0.1:1002->127.0.0.1:2002",
+		Direction:       models.TrafficDirIngress,
+		ExchangeType:    models.ExchangeUnary,
+		SrcAddr:         "127.0.0.1:1002",
+		DstAddr:         "127.0.0.1:2002",
+		ReqCapturedAtNs: now.UnixNano(),
+		ServiceName:     "order.OrderService",
+		Operation:       "CreateOrder",
+		StatusCode:      models.U64Numeric(5001),
+		SNO:             models.U64Numeric(102),
+	}
+	// ③ REQ_ONLY + status_code=0
+	rec3 := models.TrafficRecord{
+		SessionID:       session.ID,
+		SeqNo:           3,
+		CreatedAt:       now,
+		AgentID:         1,
+		ProcessID:       1,
+		CapturedPID:     1001,
+		ConnKey:         "127.0.0.1:1003->127.0.0.1:2003",
+		Direction:       models.TrafficDirIngress,
+		ExchangeType:    models.ExchangeReqOnly,
+		SrcAddr:         "127.0.0.1:1003",
+		DstAddr:         "127.0.0.1:2003",
+		ReqCapturedAtNs: now.UnixNano(),
+		ServiceName:     "order.OrderService",
+		Operation:       "CreateOrder",
+		StatusCode:      models.U64Numeric(0),
+		SNO:             models.U64Numeric(103),
+	}
+
+	if err := db.Create(&rec1).Error; err != nil {
+		t.Fatalf("插入 rec1 失败: %v", err)
+	}
+	if err := db.Create(&rec2).Error; err != nil {
+		t.Fatalf("插入 rec2 失败: %v", err)
+	}
+	if err := db.Create(&rec3).Error; err != nil {
+		t.Fatalf("插入 rec3 失败: %v", err)
+	}
+
+	type listResp struct {
+		Items []models.TrafficRecord `json:"items"`
+		Total int64                  `json:"total"`
+	}
+
+	// 1. 请求 ?session_id=S&has_error=true 精确返回记录 ② 与 ③（共 2 条）
+	{
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest(http.MethodGet, fmt.Sprintf("/api/traffic-records?session_id=%d&has_error=true", session.ID), nil)
+		req.Header.Set("Authorization", "Bearer "+adminToken)
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("has_error=true 请求期望 200 OK，实际返回 %d: %s", w.Code, w.Body.String())
+		}
+		var resp listResp
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("解析响应失败: %v", err)
+		}
+		if resp.Total != 2 || len(resp.Items) != 2 {
+			t.Fatalf("has_error=true 期望返回 2 条记录，实际 total=%d, len=%d", resp.Total, len(resp.Items))
+		}
+		snoSet := map[uint64]bool{
+			uint64(resp.Items[0].SNO): true,
+			uint64(resp.Items[1].SNO): true,
+		}
+		if !snoSet[102] || !snoSet[103] {
+			t.Fatalf("has_error=true 期望返回 SNO 102 与 103，实际返回: %+v", resp.Items)
+		}
+	}
+
+	// 2. 请求 ?session_id=S&has_error=false 仅返回记录 ①（1 条）
+	{
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest(http.MethodGet, fmt.Sprintf("/api/traffic-records?session_id=%d&has_error=false", session.ID), nil)
+		req.Header.Set("Authorization", "Bearer "+adminToken)
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("has_error=false 请求期望 200 OK，实际返回 %d: %s", w.Code, w.Body.String())
+		}
+		var resp listResp
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("解析响应失败: %v", err)
+		}
+		if resp.Total != 1 || len(resp.Items) != 1 {
+			t.Fatalf("has_error=false 期望返回 1 条记录，实际 total=%d, len=%d", resp.Total, len(resp.Items))
+		}
+		if uint64(resp.Items[0].SNO) != 101 {
+			t.Fatalf("has_error=false 期望返回 SNO 101，实际返回: %+v", resp.Items[0])
+		}
+	}
+
+	// 3. 非法参数 ?has_error=abc 返回 400 Bad Request 且不泄露 SQL 细节
+	{
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest(http.MethodGet, fmt.Sprintf("/api/traffic-records?session_id=%d&has_error=abc", session.ID), nil)
+		req.Header.Set("Authorization", "Bearer "+adminToken)
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("has_error=abc 请求期望 400 Bad Request，实际返回 %d: %s", w.Code, w.Body.String())
+		}
+		if bytes.Contains(bytes.ToLower(w.Body.Bytes()), []byte("sql")) || bytes.Contains(bytes.ToLower(w.Body.Bytes()), []byte("select")) {
+			t.Fatalf("400 响应中不应泄露 SQL 细节: %s", w.Body.String())
+		}
+	}
 }

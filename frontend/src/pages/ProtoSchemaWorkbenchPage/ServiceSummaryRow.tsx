@@ -1,4 +1,5 @@
 import React from 'react';
+import { Link } from 'react-router-dom';
 import type { ServiceContractGroupDTO } from '../../types/schema_tree';
 
 export interface ServiceSummaryRowProps {
@@ -49,9 +50,16 @@ export const ServiceSummaryRow: React.FC<ServiceSummaryRowProps> = ({
 
       <td>
         {group.claimedByModule ? (
-          <span className="code-badge code-badge--info" title={group.claimedByModule.subsystemName}>
-            {group.claimedByModule.code || group.claimedByModule.name}
-          </span>
+          <Link
+            to={`/architecture?subsystem_id=${group.claimedByModule.subsystemId ?? group.claimedByModule.subsystem_id ?? ''}&group_id=${group.claimedByModule.groupId ?? group.claimedByModule.group_id ?? ''}&module_id=${group.claimedByModule.id}`}
+            className="code-badge-link"
+            data-testid={`link-claimed-module-${group.claimedByModule.id}`}
+            title={`前往逻辑架构中心定位认领模块: ${group.claimedByModule.name}`}
+          >
+            <span className="code-badge code-badge--info" title={group.claimedByModule.subsystemName}>
+              {group.claimedByModule.code || group.claimedByModule.name}
+            </span>
+          </Link>
         ) : (
           <span className="code-badge code-badge--warning">未认领孤儿契约</span>
         )}

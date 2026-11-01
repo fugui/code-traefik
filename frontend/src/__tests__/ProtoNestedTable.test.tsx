@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { renderToString } from 'react-dom/server';
+import { MemoryRouter } from 'react-router-dom';
 import type { ProtoOperation } from '../types';
 import { rollupServices, OperationMappingTable } from '../pages/ProtoSchemaWorkbenchPage/OperationMappingTable';
 
@@ -221,11 +222,13 @@ describe('ProtoNestedTable Suite (M7-P2)', () => {
 
     // 5. 渲染组件默认处于折叠态 (不包含子方法详细行)
     const html = renderToString(
-      <OperationMappingTable
-        operations={ops}
-        onSelectOperation={() => {}}
-        claimMap={claimMap}
-      />
+      <MemoryRouter>
+        <OperationMappingTable
+          operations={ops}
+          onSelectOperation={() => {}}
+          claimMap={claimMap}
+        />
+      </MemoryRouter>
     );
 
     // 包含 3 个服务名
@@ -243,11 +246,13 @@ describe('ProtoNestedTable Suite (M7-P2)', () => {
 
     // 1. 搜索 DeductBalance (属于 dophi.account-AccountService)
     const htmlWithSearch = renderToString(
-      <OperationMappingTable
-        operations={ops}
-        onSelectOperation={noop}
-        searchKeyword="DeductBalance"
-      />
+      <MemoryRouter>
+        <OperationMappingTable
+          operations={ops}
+          onSelectOperation={noop}
+          searchKeyword="DeductBalance"
+        />
+      </MemoryRouter>
     );
 
     // 包含高亮标记

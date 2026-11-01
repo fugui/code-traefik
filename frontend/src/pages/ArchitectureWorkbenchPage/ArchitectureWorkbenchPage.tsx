@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Plus, Server } from 'lucide-react';
+import { Layers } from 'lucide-react';
 import { Drawer } from '@code/common';
 import { useToast } from '../../utils/toast';
 import { useModuleUser } from '../../context/ModuleUserContext';
@@ -13,12 +13,9 @@ import type {
   ModuleService,
   ModuleDependency,
   Process,
-  Agent,
 } from '../../types';
-import { SubsystemGroupTreePanel, TreeViewMode } from './SubsystemGroupTreePanel';
+import { SubsystemGroupTreePanel } from './SubsystemGroupTreePanel';
 import { ModuleContractDetailPane } from './ModuleContractDetailPane';
-import { ProcessDetailPane } from './ProcessDetailPane';
-import { ArchTopologyTabPane } from './ArchTopologyTabPane';
 
 function findGroupInTree(
   nodes: FunctionalGroupTreeNode[],
@@ -41,21 +38,10 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
   const toast = useToast();
   const isAdmin = Boolean(user?.is_module_admin || user?.is_super_admin);
 
-  // URL 状态读取与平滑兼容
-  const rawUrlTab = searchParams.get('tab');
-  const urlTab: 'modeling' | 'topology' =
-    rawUrlTab === 'physical' || rawUrlTab === 'verify' || rawUrlTab === 'topology'
-      ? 'topology'
-      : 'modeling';
-  const urlViewMode = (searchParams.get('view_mode') as TreeViewMode) || 'LOGICAL';
+  // URL 状态读取
   const urlSubsystemId = searchParams.get('subsystem_id') || '';
   const urlGroupId = searchParams.get('group_id') || '';
   const urlModuleId = searchParams.get('module_id') || '';
-  const urlProcessId = searchParams.get('process_id') || '';
-
-  // 顶层 Tab 与左侧视角 Tab
-  const [activeTab, setActiveTab] = useState<'modeling' | 'topology'>(urlTab);
-  const [treeViewMode, setTreeViewMode] = useState<TreeViewMode>(urlViewMode);
 
   // 基础数据状态
   const [subsystems, setSubsystems] = useState<Subsystem[]>([]);
@@ -70,29 +56,8 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
   const [services, setServices] = useState<ModuleService[]>([]);
   const [dependencies, setDependencies] = useState<ModuleDependency[]>([]);
 
-  // 物理进程数据状态与分组
+  // 物理进程只读列表（供模块装配/绑定使用）
   const [processes, setProcesses] = useState<Process[]>([]);
-  const [selectedProcessId, setSelectedProcessId] = useState<string>(urlProcessId);
-  const [selectedProcessGroupName, setSelectedProcessGroupName] = useState<string>('');
-  const [agents, setAgents] = useState<Agent[]>([]);
-  const [customProcessGroups, setCustomProcessGroups] = useState<string[]>(() => {
-    try {
-      const saved = localStorage.getItem('traefik_custom_proc_groups');
-      if (saved) return JSON.parse(saved);
-    } catch {
-      // ignore
-    }
-    return ['核心业务组', '支撑服务组'];
-  });
-
-  const saveCustomProcessGroups = (groups: string[]) => {
-    setCustomProcessGroups(groups);
-    try {
-      localStorage.setItem('traefik_custom_proc_groups', JSON.stringify(groups));
-    } catch {
-      // ignore
-    }
-  };
 
   // 抽屉（Drawer）与表单状态
   const [subsystemDrawerOpen, setSubsystemDrawerOpen] = useState(false);
@@ -108,23 +73,6 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
   const [movingGroup, setMovingGroup] = useState<FunctionalGroupTreeNode | null>(null);
   const [newParentId, setNewParentId] = useState<string>('');
 
-  const [processGroupDrawerOpen, setProcessGroupDrawerOpen] = useState(false);
-  const [editingProcessGroupName, setEditingProcessGroupName] = useState<string | null>(null);
-  const [processGroupForm, setProcessGroupForm] = useState({ name: '' });
-
-  const [processDrawerOpen, setProcessDrawerOpen] = useState(false);
-  const [editingProcess, setEditingProcess] = useState<Process | null>(null);
-  const [isCustomProcessGroup, setIsCustomProcessGroup] = useState(false);
-  const [customProcessGroupName, setCustomProcessGroupName] = useState('');
-  const [processForm, setProcessForm] = useState({
-    group_name: '',
-    name: '',
-    listen_port: '',
-    agent_id: '',
-    cmd_pattern: '',
-    description: '',
-  });
-
   const [moduleDrawerOpen, setModuleDrawerOpen] = useState(false);
   const [editingMod, setEditingMod] = useState<Module | null>(null);
   const [moduleForm, setModuleForm] = useState({
@@ -134,35 +82,8 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
     process_id: '',
     group_id: '',
   });
-  const [quickProcessOpen, setQuickProcessOpen] = useState(false);
-  const [isQuickCustomGroup, setIsQuickCustomGroup] = useState(false);
-  const [quickProcessForm, setQuickProcessForm] = useState({ group_name: '', name: '', listen_port: '' });
 
-  // 聚合所有物理进程分组选项（去重，供下拉选择框使用）
-  const allProcessGroupOptions = useMemo(() => {
-    const set = new Set<string>();
-    // 1. 保底常用分组
-    set.add('默认进程组');
-    set.add('核心业务组');
-    set.add('支撑服务组');
-    // 2. 自定义保存的分组
-    for (const g of customProcessGroups) {
-      const trimmed = (g || '').trim();
-      if (trimmed) set.add(trimmed);
-    }
-    // 3. 所有物理进程中实际出现的组
-    for (const p of processes) {
-      const grp = (p.group_name || '').trim();
-      if (grp) set.add(grp);
-    }
-    // 4. 当前表单或编辑中使用的组（确保其在选项中完整可见）
-    if (processForm.group_name && processForm.group_name.trim()) {
-      set.add(processForm.group_name.trim());
-    }
-    return Array.from(set);
-  }, [customProcessGroups, processes, processForm.group_name]);
-
-  // 更新 URL Search Params 辅助函数（严格比对键值防引用抖动与死循环）
+  // 更新 URL Search Params 辅助函数
   const updateParams = useCallback(
     (updates: Record<string, string | null | undefined>) => {
       setSearchParams((prev) => {
@@ -186,36 +107,16 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
     [setSearchParams]
   );
 
-  // 监听浏览器 URL 变化（支持前进/后退/外链深度直达与旧参数平滑兼容）
+  // 监听浏览器 URL 变化
   useEffect(() => {
-    const rawTab = searchParams.get('tab');
-    if (rawTab === 'physical') {
-      updateParams({ tab: 'topology', view: 'PHYSICAL' });
-      setActiveTab('topology');
-    } else if (rawTab === 'verify') {
-      updateParams({ tab: 'topology' });
-      setActiveTab('topology');
-    } else if (rawTab === 'logical') {
-      updateParams({ tab: 'modeling' });
-      setActiveTab('modeling');
-    } else if (rawTab === 'topology') {
-      setActiveTab('topology');
-    } else {
-      setActiveTab('modeling');
-    }
-
-    const vm = (searchParams.get('view_mode') as TreeViewMode) || 'LOGICAL';
     const subId = searchParams.get('subsystem_id') || '';
     const grpId = searchParams.get('group_id') || '';
     const modId = searchParams.get('module_id') || '';
-    const procId = searchParams.get('process_id') || '';
 
-    setTreeViewMode(vm);
     if (subId) setSelectedSubsystemId((prev) => (String(prev) === String(subId) ? prev : String(subId)));
     if (grpId) setSelectedGroupId((prev) => (String(prev) === String(grpId) ? prev : String(grpId)));
     if (modId) setSelectedModuleId((prev) => (String(prev) === String(modId) ? prev : String(modId)));
-    if (procId) setSelectedProcessId((prev) => (String(prev) === String(procId) ? prev : String(procId)));
-  }, [searchParams, updateParams]);
+  }, [searchParams]);
 
   // 加载子系统列表
   const loadSubsystems = useCallback(async () => {
@@ -238,7 +139,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
     void loadSubsystems();
   }, [loadSubsystems]);
 
-  // 加载全系统功能模块列表（供架构元素树直接展开与节点定位）
+  // 加载全系统功能模块列表
   const loadSubsystemModules = useCallback(async () => {
     try {
       const res = await archApi.listModules({ page_size: 1000 });
@@ -251,58 +152,22 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if (activeTab !== 'modeling') return;
     void loadSubsystemModules();
-  }, [activeTab, loadSubsystemModules]);
+  }, [loadSubsystemModules]);
 
-  // 加载物理进程列表
+  // 加载物理进程列表（仅供模块装配绑定下拉框选用）
   const loadProcesses = useCallback(async () => {
     try {
       const res = await agentApi.listProcesses({ page_size: 1000 });
-      const items = res.items ?? [];
-      setProcesses(items);
-      if (items.length > 0) {
-        setSelectedProcessId((prev) => {
-          if (prev && items.some((p) => p.id === prev)) return prev;
-          return items[0].id;
-        });
-      }
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : '加载进程失败');
-    }
-  }, [toast]);
-
-  // 加载可用 Agent 宿主列表
-  const loadAgents = useCallback(async () => {
-    try {
-      const res = await agentApi.listAgents({ page_size: 100 });
-      setAgents(res.items ?? []);
+      setProcesses(res.items ?? []);
     } catch {
       // 容错处理
     }
   }, []);
 
   useEffect(() => {
-    if (activeTab !== 'modeling') return;
     void loadProcesses();
-    void loadAgents();
-  }, [activeTab, loadProcesses, loadAgents]);
-
-  // 进程按 group_name 分组映射
-  const processGroupsMap = useMemo(() => {
-    const map: Record<string, Process[]> = {};
-    for (const p of processes) {
-      const grp = (p.group_name || '默认进程组').trim();
-      if (!map[grp]) map[grp] = [];
-      map[grp].push(p);
-    }
-    return map;
-  }, [processes]);
-
-  // 当前选中的物理进程对象
-  const selectedProcess = useMemo(() => {
-    return processes.find((p) => p.id === selectedProcessId) || null;
-  }, [processes, selectedProcessId]);
+  }, [loadProcesses]);
 
   const loadSubsystemTree = useCallback(
     async (subsystemId: string) => {
@@ -319,9 +184,9 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
     [toast]
   );
 
-  // 当子系统切换时，加载功能组树（仅在建模 Tab 下按需加载）
+  // 当子系统切换时，加载功能组树
   useEffect(() => {
-    if (activeTab !== 'modeling' || !selectedSubsystemId) return;
+    if (!selectedSubsystemId) return;
     let cancelled = false;
     void (async () => {
       try {
@@ -349,11 +214,11 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [activeTab, selectedSubsystemId, toast]);
+  }, [selectedSubsystemId, toast]);
 
-  // 当功能组切换时，加载该组下的模块列表（仅在建模 Tab 下按需加载）
+  // 当功能组切换时，加载该组下的模块列表
   useEffect(() => {
-    if (activeTab !== 'modeling' || !selectedGroupId) return;
+    if (!selectedGroupId) return;
     let cancelled = false;
     void (async () => {
       try {
@@ -383,7 +248,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [activeTab, selectedGroupId, toast]);
+  }, [selectedGroupId, toast]);
 
   // 加载与刷新模块详情、对外供给服务与下游服务依赖
   const refreshCurrentModule = useCallback(
@@ -403,7 +268,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
     [toast]
   );
 
-  // 原子化选择功能模块叶子节点（避免中间状态置空引发视图抖动与闪烁）
+  // 原子化选择功能模块叶子节点
   const handleSelectModuleLeaf = useCallback(
     (subsystemId: string | number, groupId: string | number, moduleId: string | number) => {
       const subId = String(subsystemId);
@@ -416,15 +281,14 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
         subsystem_id: subId,
         group_id: grpId,
         module_id: modId,
-        view_mode: 'LOGICAL',
       });
     },
     [updateParams]
   );
 
-  // 当模块切换时，加载模块详情与服务契约（仅在建模 Tab 下按需加载）
+  // 当模块切换时，加载模块详情与服务契约
   useEffect(() => {
-    if (activeTab !== 'modeling' || !selectedModuleId) return;
+    if (!selectedModuleId) return;
     let cancelled = false;
     void (async () => {
       try {
@@ -442,7 +306,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [activeTab, selectedModuleId, toast]);
+  }, [selectedModuleId, toast]);
 
   // 子系统 CRUD
   const handleSaveSubsystem = async () => {
@@ -568,10 +432,9 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
         });
         toast.success('模块创建成功');
         setSelectedModuleId(created.id);
-        updateParams({ module_id: created.id, group_id: targetGroupId, view_mode: 'LOGICAL' });
+        updateParams({ module_id: created.id, group_id: targetGroupId });
       }
       setModuleDrawerOpen(false);
-      // 重新加载组内模块与子系统全量模块
       const res = await archApi.listModules({ group_id: targetGroupId, page_size: 100 });
       setModules(res.items);
       void loadSubsystemModules();
@@ -602,163 +465,6 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
       void loadProcesses();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '删除模块失败');
-    }
-  };
-
-  // 在创建/编辑 FM 模块时快速新建物理进程并直接绑定
-  const handleQuickCreateProcess = async () => {
-    if (!quickProcessForm.name.trim()) {
-      toast.error('请输入进程名称');
-      return;
-    }
-    const portRaw = quickProcessForm.listen_port.trim();
-    const port = portRaw === '' ? 0 : parseInt(portRaw, 10);
-    if (isNaN(port) || port < 0 || port > 65535) {
-      toast.error('监听端口必须为 0~65535 之间的合法数字 (0 或留空表示纯客户端无监听端口)');
-      return;
-    }
-    try {
-      const defaultAgentId = agents.length > 0 ? agents[0].id : '';
-      const groupName = quickProcessForm.group_name.trim() || '默认进程组';
-      const newProc = await agentApi.createProcess({
-        agent_id: defaultAgentId,
-        group_name: groupName,
-        name: quickProcessForm.name.trim(),
-        listen_port: port,
-        cmd_pattern: `./bin/${quickProcessForm.name.trim()}`,
-      });
-      toast.success(`进程 [${newProc.name}] 创建成功并已自动关联`);
-      const res = await agentApi.listProcesses({ page_size: 1000 });
-      const items = res.items ?? [];
-      setProcesses(items);
-      // 若是全新进程组，加入自定义组列表
-      if (!customProcessGroups.includes(groupName) && groupName !== '默认进程组') {
-        saveCustomProcessGroups([...customProcessGroups, groupName]);
-      }
-      setIsQuickCustomGroup(false);
-      setModuleForm((prev) => ({ ...prev, process_id: newProc.id }));
-      setQuickProcessOpen(false);
-      setQuickProcessForm({ group_name: '', name: '', listen_port: '' });
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : '快速创建进程失败');
-    }
-  };
-
-  // 物理进程组 CRUD
-  const handleSaveProcessGroup = async () => {
-    const newName = processGroupForm.name.trim();
-    if (!newName) {
-      toast.error('请输入进程组名称');
-      return;
-    }
-    if (editingProcessGroupName) {
-      try {
-        const procsInGroup = processes.filter((p) => (p.group_name || '默认进程组') === editingProcessGroupName);
-        for (const p of procsInGroup) {
-          await agentApi.updateProcess(p.id, {
-            name: p.name,
-            group_name: newName,
-            listen_port: p.listen_port,
-            advertise_ip: p.advertise_ip,
-            cmd_pattern: p.cmd_pattern,
-            description: p.description,
-          });
-        }
-        const updated = customProcessGroups.map((g) => (g === editingProcessGroupName ? newName : g));
-        saveCustomProcessGroups(updated);
-        toast.success(`进程组已重命名为 [${newName}]`);
-        setProcessGroupDrawerOpen(false);
-        void loadProcesses();
-      } catch (err) {
-        toast.error(err instanceof Error ? err.message : '重命名进程组失败');
-      }
-    } else {
-      if (customProcessGroups.includes(newName) || newName === '默认进程组') {
-        toast.error('该进程组已存在');
-        return;
-      }
-      saveCustomProcessGroups([...customProcessGroups, newName]);
-      toast.success(`进程组 [${newName}] 创建成功`);
-      setProcessGroupDrawerOpen(false);
-    }
-  };
-
-  const handleDeleteProcessGroup = (groupName: string) => {
-    const procsInGroup = processes.filter((p) => (p.group_name || '默认进程组') === groupName);
-    if (procsInGroup.length > 0) {
-      toast.error(`进程组 [${groupName}] 下仍有 ${procsInGroup.length} 个业务进程，请先迁移或清空组内进程`);
-      return;
-    }
-    const updated = customProcessGroups.filter((g) => g !== groupName);
-    saveCustomProcessGroups(updated);
-    toast.success(`进程组 [${groupName}] 已移除`);
-  };
-
-  // 物理进程 CRUD
-  const handleSaveProcess = async () => {
-    if (!processForm.name.trim()) {
-      toast.error('请输入进程名称');
-      return;
-    }
-    const portRaw = processForm.listen_port.trim();
-    const port = portRaw === '' ? 0 : parseInt(portRaw, 10);
-    if (isNaN(port) || port < 0 || port > 65535) {
-      toast.error('监听端口必须为 0~65535 之间的合法数字 (0 或留空表示纯客户端无监听端口)');
-      return;
-    }
-    const groupName =
-      (isCustomProcessGroup ? customProcessGroupName.trim() : processForm.group_name.trim()) || '默认进程组';
-    try {
-      if (editingProcess) {
-        await agentApi.updateProcess(editingProcess.id, {
-          name: processForm.name.trim(),
-          group_name: groupName,
-          listen_port: port,
-          cmd_pattern: processForm.cmd_pattern.trim() || `./bin/${processForm.name.trim()}`,
-          description: processForm.description.trim(),
-        });
-        toast.success('进程更新成功');
-      } else {
-        const defaultAgentId = processForm.agent_id || (agents.length > 0 ? agents[0].id : '');
-        const newProc = await agentApi.createProcess({
-          agent_id: defaultAgentId,
-          group_name: groupName,
-          name: processForm.name.trim(),
-          listen_port: port,
-          cmd_pattern: processForm.cmd_pattern.trim() || `./bin/${processForm.name.trim()}`,
-          description: processForm.description.trim(),
-        });
-        toast.success('进程创建成功');
-        setSelectedProcessId(newProc.id);
-        updateParams({ process_id: newProc.id, view_mode: 'PHYSICAL' });
-      }
-      if (!customProcessGroups.includes(groupName) && groupName !== '默认进程组') {
-        saveCustomProcessGroups([...customProcessGroups, groupName]);
-      }
-      setIsCustomProcessGroup(false);
-      setCustomProcessGroupName('');
-      setProcessDrawerOpen(false);
-      void loadProcesses();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : '保存进程失败');
-    }
-  };
-
-  const handleDeleteProcess = async (id: string) => {
-    try {
-      await agentApi.deleteProcess(id);
-      toast.success('物理进程已删除');
-      if (selectedProcessId === id) {
-        setSelectedProcessId('');
-        updateParams({ process_id: null });
-      }
-      void loadProcesses();
-      if (selectedModuleId) {
-        const modRes = await archApi.getModule(selectedModuleId);
-        setSelectedModule(modRes.module);
-      }
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : '删除物理进程失败');
     }
   };
 
@@ -845,88 +551,152 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
     }
   };
 
+  // 物理进程按 group_name 分组供模块编辑抽屉下拉选用
+  const processGroupsMap = useMemo(() => {
+    const map: Record<string, Process[]> = {};
+    for (const p of processes) {
+      const grp = (p.group_name || '默认进程组').trim();
+      if (!map[grp]) map[grp] = [];
+      map[grp].push(p);
+    }
+    return map;
+  }, [processes]);
+
   return (
     <div className="code-workbench-page code-arch-workbench" data-testid="architecture-workbench">
-      {/* 顶部标签页切换 */}
+      {/* 头部标题 */}
       <div className="code-workbench-header">
         <div className="code-workbench-title-group">
-          <h2 className="code-workbench-title">三级架构模型与拓扑中心</h2>
+          <h2 className="code-workbench-title">三级逻辑架构台账</h2>
           <span className="code-workbench-subtitle">
-            维护子系统、8 级功能组与模块接口契约 (PROVIDE/DEPEND)，推导静态拓扑并执行六分类一致性回归
+            维护子系统、8 级功能组与模块契约 (PROVIDE / DEPEND)
           </span>
-        </div>
-
-        <div className="code-tab-pills">
-          <button
-            type="button"
-            className={`code-pill-btn ${activeTab === 'modeling' ? 'code-pill-btn--active' : ''}`}
-            onClick={() => {
-              setActiveTab('modeling');
-              updateParams({ tab: 'modeling' });
-            }}
-          >
-            架构建模与模块契约
-          </button>
-          <button
-            type="button"
-            className={`code-pill-btn ${activeTab === 'topology' ? 'code-pill-btn--active' : ''}`}
-            onClick={() => {
-              setActiveTab('topology');
-              updateParams({ tab: 'topology' });
-            }}
-          >
-            静态拓扑与一致性画布
-          </button>
         </div>
       </div>
 
-      {/* 视图主体 */}
+      {/* 视图主体：纯双栏布局（左树 + 右模块契约详情） */}
       <div className="code-workbench-body">
-        {activeTab === 'modeling' && (
-          <div className="code-arch-split-layout">
-            <SubsystemGroupTreePanel
-              viewMode={treeViewMode}
-              onViewModeChange={(mode) => {
-                setTreeViewMode(mode);
-                updateParams({ view_mode: mode });
-              }}
-              subsystems={subsystems}
-              selectedSubsystemId={selectedSubsystemId}
-              onSelectSubsystem={(id) => {
-                const subId = String(id);
-                setSelectedSubsystemId(subId);
-                setSelectedGroupId('');
-                setSelectedModuleId('');
-                updateParams({ subsystem_id: subId, group_id: null, module_id: null });
-              }}
-              groupTree={groupTree}
-              groupTreeMap={groupTreeMap}
-              onLoadSubsystemTree={loadSubsystemTree}
-              selectedGroupId={selectedGroupId}
-              onSelectGroup={(groupId, targetSubsystemId) => {
-                const subId = targetSubsystemId ? String(targetSubsystemId) : selectedSubsystemId;
-                const grpId = String(groupId);
-                setSelectedSubsystemId(subId);
-                setSelectedGroupId(grpId);
-                setSelectedModuleId('');
-                updateParams({ subsystem_id: subId, group_id: grpId, module_id: null });
-              }}
-              modules={subsystemModules}
+        <div className="code-arch-split-layout">
+          <SubsystemGroupTreePanel
+            subsystems={subsystems}
+            selectedSubsystemId={selectedSubsystemId}
+            onSelectSubsystem={(id) => {
+              const subId = String(id);
+              setSelectedSubsystemId(subId);
+              setSelectedGroupId('');
+              setSelectedModuleId('');
+              updateParams({ subsystem_id: subId, group_id: null, module_id: null });
+            }}
+            groupTree={groupTree}
+            groupTreeMap={groupTreeMap}
+            onLoadSubsystemTree={loadSubsystemTree}
+            selectedGroupId={selectedGroupId}
+            onSelectGroup={(groupId, targetSubsystemId) => {
+              const subId = targetSubsystemId ? String(targetSubsystemId) : selectedSubsystemId;
+              const grpId = String(groupId);
+              setSelectedSubsystemId(subId);
+              setSelectedGroupId(grpId);
+              setSelectedModuleId('');
+              updateParams({ subsystem_id: subId, group_id: grpId, module_id: null });
+            }}
+            modules={subsystemModules}
+            selectedModuleId={selectedModuleId}
+            onSelectModule={(modId) => {
+              const targetMod = subsystemModules.find((m) => String(m.id) === String(modId));
+              if (targetMod && targetMod.subsystem_id && targetMod.group_id) {
+                handleSelectModuleLeaf(targetMod.subsystem_id, targetMod.group_id, modId);
+              } else {
+                setSelectedModuleId(modId);
+                updateParams({ module_id: modId });
+              }
+            }}
+            onSelectModuleLeaf={handleSelectModuleLeaf}
+            onCreateModule={(groupId) => {
+              setEditingMod(null);
+              setModuleForm({ code: '', name: '', description: '', process_id: '', group_id: groupId });
+              setModuleDrawerOpen(true);
+            }}
+            onEditModule={(mod) => {
+              setEditingMod(mod);
+              setModuleForm({
+                code: mod.code,
+                name: mod.name,
+                description: mod.description || '',
+                process_id: mod.process_id || (mod.process?.id ?? ''),
+                group_id: mod.group_id,
+              });
+              setModuleDrawerOpen(true);
+            }}
+            onDeleteModule={(id) => void handleDeleteModule(id)}
+            isAdmin={isAdmin}
+            onCreateSubsystem={() => {
+              setEditingSubsystem(null);
+              setSubsystemForm({ code: '', name: '', description: '' });
+              setSubsystemDrawerOpen(true);
+            }}
+            onEditSubsystem={(sub) => {
+              setEditingSubsystem(sub);
+              setSubsystemForm({ code: sub.code, name: sub.name, description: sub.description || '' });
+              setSubsystemDrawerOpen(true);
+            }}
+            onDeleteSubsystem={(id) => void handleDeleteSubsystem(id)}
+            onCreateGroup={(parentId, targetSubsystemId) => {
+              if (targetSubsystemId && targetSubsystemId !== selectedSubsystemId) {
+                setSelectedSubsystemId(targetSubsystemId);
+                updateParams({ subsystem_id: targetSubsystemId });
+              }
+              setEditingGroup(null);
+              setGroupParentId(parentId ?? null);
+              setGroupForm({ code: '', name: '', description: '', sort_order: 1 });
+              setGroupDrawerOpen(true);
+            }}
+            onEditGroup={(grp) => {
+              setEditingGroup(grp);
+              setGroupForm({
+                code: grp.code,
+                name: grp.name,
+                description: grp.description || '',
+                sort_order: grp.sort_order || 1,
+              });
+              setGroupDrawerOpen(true);
+            }}
+            onMoveGroup={(grp) => {
+              setMovingGroup(grp);
+              setNewParentId('');
+              setMoveGroupDrawerOpen(true);
+            }}
+            onDeleteGroup={(id) => void handleDeleteGroup(id)}
+          />
+
+          {selectedModule ? (
+            <ModuleContractDetailPane
+              modules={modules}
               selectedModuleId={selectedModuleId}
-              onSelectModule={(modId) => {
-                const targetMod = subsystemModules.find((m) => String(m.id) === String(modId));
+              onSelectModule={(id) => {
+                const targetMod = subsystemModules.find((m) => String(m.id) === String(id));
                 if (targetMod && targetMod.subsystem_id && targetMod.group_id) {
-                  handleSelectModuleLeaf(targetMod.subsystem_id, targetMod.group_id, modId);
+                  handleSelectModuleLeaf(targetMod.subsystem_id, targetMod.group_id, id);
                 } else {
-                  setSelectedModuleId(modId);
-                  updateParams({ module_id: modId, view_mode: 'LOGICAL' });
+                  setSelectedModuleId(id);
+                  updateParams({ module_id: id });
                 }
               }}
-              onSelectModuleLeaf={handleSelectModuleLeaf}
-              onCreateModule={(groupId) => {
+              selectedModule={selectedModule}
+              services={services}
+              dependencies={dependencies}
+              allProcesses={processes}
+              isAdmin={isAdmin}
+              currentSubsystem={subsystems.find((s) => s.id === selectedSubsystemId) || null}
+              currentGroup={selectedGroupId ? findGroupInTree(groupTree, selectedGroupId) : null}
+              onCreateModule={() => {
                 setEditingMod(null);
-                setModuleForm({ code: '', name: '', description: '', process_id: '', group_id: groupId });
-                setQuickProcessOpen(false);
+                setModuleForm({
+                  code: '',
+                  name: '',
+                  description: '',
+                  process_id: '',
+                  group_id: selectedGroupId,
+                });
                 setModuleDrawerOpen(true);
               }}
               onEditModule={(mod) => {
@@ -938,206 +708,43 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
                   process_id: mod.process_id || (mod.process?.id ?? ''),
                   group_id: mod.group_id,
                 });
-                setQuickProcessOpen(false);
                 setModuleDrawerOpen(true);
               }}
               onDeleteModule={(id) => void handleDeleteModule(id)}
-              processes={processes}
-              selectedProcessId={selectedProcessId}
-              onSelectProcess={(id) => {
-                setSelectedProcessId(id);
-                setSelectedProcessGroupName('');
-                updateParams({ process_id: id, view_mode: 'PHYSICAL' });
-              }}
-              customProcessGroups={customProcessGroups}
-              selectedProcessGroupName={selectedProcessGroupName}
-              onSelectProcessGroup={(groupName) => {
-                setSelectedProcessGroupName(groupName);
-                setSelectedProcessId('');
-              }}
-              onCreateProcessGroup={() => {
-                setEditingProcessGroupName(null);
-                setProcessGroupForm({ name: '' });
-                setProcessGroupDrawerOpen(true);
-              }}
-              onEditProcessGroup={(groupName) => {
-                setEditingProcessGroupName(groupName);
-                setProcessGroupForm({ name: groupName });
-                setProcessGroupDrawerOpen(true);
-              }}
-              onDeleteProcessGroup={handleDeleteProcessGroup}
-              onCreateProcess={(targetGroupName) => {
-                setEditingProcess(null);
-                setIsCustomProcessGroup(false);
-                setCustomProcessGroupName('');
-                setProcessForm({
-                  group_name: targetGroupName || '默认进程组',
-                  name: '',
-                  listen_port: '',
-                  agent_id: agents.length > 0 ? agents[0].id : '',
-                  cmd_pattern: '',
-                  description: '',
-                });
-                setProcessDrawerOpen(true);
-              }}
-              onEditProcess={(proc) => {
-                setEditingProcess(proc);
-                setIsCustomProcessGroup(false);
-                setCustomProcessGroupName('');
-                setProcessForm({
-                  group_name: proc.group_name || '默认进程组',
-                  name: proc.name,
-                  listen_port: String(proc.listen_port),
-                  agent_id: proc.agent_id || '',
-                  cmd_pattern: proc.cmd_pattern || '',
-                  description: proc.description || '',
-                });
-                setProcessDrawerOpen(true);
-              }}
-              onDeleteProcess={(id) => void handleDeleteProcess(id)}
-              isAdmin={isAdmin}
-              onCreateSubsystem={() => {
-                setEditingSubsystem(null);
-                setSubsystemForm({ code: '', name: '', description: '' });
-                setSubsystemDrawerOpen(true);
-              }}
-              onEditSubsystem={(sub) => {
-                setEditingSubsystem(sub);
-                setSubsystemForm({ code: sub.code, name: sub.name, description: sub.description || '' });
-                setSubsystemDrawerOpen(true);
-              }}
-              onDeleteSubsystem={(id) => void handleDeleteSubsystem(id)}
-              onCreateGroup={(parentId, targetSubsystemId) => {
-                if (targetSubsystemId && targetSubsystemId !== selectedSubsystemId) {
-                  setSelectedSubsystemId(targetSubsystemId);
-                  updateParams({ subsystem_id: targetSubsystemId });
-                }
-                setEditingGroup(null);
-                setGroupParentId(parentId ?? null);
-                setGroupForm({ code: '', name: '', description: '', sort_order: 1 });
-                setGroupDrawerOpen(true);
-              }}
-              onEditGroup={(grp) => {
-                setEditingGroup(grp);
-                setGroupForm({
-                  code: grp.code,
-                  name: grp.name,
-                  description: grp.description || '',
-                  sort_order: grp.sort_order || 1,
-                });
-                setGroupDrawerOpen(true);
-              }}
-              onMoveGroup={(grp) => {
-                setMovingGroup(grp);
-                setNewParentId('');
-                setMoveGroupDrawerOpen(true);
-              }}
-              onDeleteGroup={(id) => void handleDeleteGroup(id)}
+              onCreateService={handleCreateService}
+              onUpdateServiceIgnorePaths={handleUpdateServiceIgnorePaths}
+              onDeleteService={handleDeleteService}
+              onCreateDependency={handleCreateDependency}
+              onDeleteDependency={handleDeleteDependency}
+              onBindProcess={handleBindModuleProcess}
             />
-
-            {treeViewMode === 'PHYSICAL' ? (
-              selectedProcess ? (
-                <ProcessDetailPane
-                  process={selectedProcess}
-                  allModules={subsystemModules.length > 0 ? subsystemModules : modules}
-                  isAdmin={isAdmin}
-                  onEditProcess={(proc) => {
-                    setEditingProcess(proc);
-                    setIsCustomProcessGroup(false);
-                    setCustomProcessGroupName('');
-                    setProcessForm({
-                      group_name: proc.group_name || '默认进程组',
-                      name: proc.name,
-                      listen_port: String(proc.listen_port),
-                      agent_id: proc.agent_id || '',
-                      cmd_pattern: proc.cmd_pattern || '',
-                      description: proc.description || '',
-                    });
-                    setProcessDrawerOpen(true);
-                  }}
-                  onDeleteProcess={(id) => void handleDeleteProcess(id)}
-                  onSelectModule={(modId) => {
-                    const targetMod = subsystemModules.find((m) => String(m.id) === String(modId));
-                    if (targetMod && targetMod.subsystem_id && targetMod.group_id) {
-                      handleSelectModuleLeaf(targetMod.subsystem_id, targetMod.group_id, modId);
-                    } else {
-                      setSelectedModuleId(modId);
-                      setTreeViewMode('LOGICAL');
-                      updateParams({ module_id: modId, view_mode: 'LOGICAL' });
-                    }
-                  }}
-                />
-              ) : (
-                <div className="code-module-pane code-empty-pane" style={{ padding: '3.5rem 1.5rem', textAlign: 'center' }}>
-                  <Server size={40} style={{ color: 'var(--color-text-muted)', marginBottom: '1rem' }} />
-                  <h4 style={{ color: 'var(--color-text-primary)', marginBottom: '0.5rem' }}>未选择物理进程</h4>
-                  <p style={{ color: 'var(--color-text-secondary)', fontSize: '0.875rem' }}>
-                    请在左侧物理架构树中选择一个进程，或点击上方「+ 进程」新建物理进程
-                  </p>
-                </div>
-              )
-            ) : (
-              <ModuleContractDetailPane
-                modules={modules}
-                selectedModuleId={selectedModuleId}
-                onSelectModule={(id) => {
-                  const targetMod = subsystemModules.find((m) => String(m.id) === String(id));
-                  if (targetMod && targetMod.subsystem_id && targetMod.group_id) {
-                    handleSelectModuleLeaf(targetMod.subsystem_id, targetMod.group_id, id);
-                  } else {
-                    setSelectedModuleId(id);
-                    updateParams({ module_id: id });
-                  }
-                }}
-                selectedModule={selectedModule}
-                services={services}
-                dependencies={dependencies}
-                allProcesses={processes}
-                isAdmin={isAdmin}
-                currentSubsystem={subsystems.find((s) => s.id === selectedSubsystemId) || null}
-                currentGroup={selectedGroupId ? findGroupInTree(groupTree, selectedGroupId) : null}
-                onViewProcess={(procId) => {
-                  setTreeViewMode('PHYSICAL');
-                  setSelectedProcessId(procId);
-                  updateParams({ process_id: procId, view_mode: 'PHYSICAL' });
-                }}
-                onCreateModule={() => {
-                  setEditingMod(null);
-                  setModuleForm({
-                    code: '',
-                    name: '',
-                    description: '',
-                    process_id: '',
-                    group_id: selectedGroupId,
-                  });
-                  setQuickProcessOpen(false);
-                  setModuleDrawerOpen(true);
-                }}
-                onEditModule={(mod) => {
-                  setEditingMod(mod);
-                  setModuleForm({
-                    code: mod.code,
-                    name: mod.name,
-                    description: mod.description || '',
-                    process_id: mod.process_id || (mod.process?.id ?? ''),
-                    group_id: mod.group_id,
-                  });
-                  setQuickProcessOpen(false);
-                  setModuleDrawerOpen(true);
-                }}
-                onDeleteModule={(id) => void handleDeleteModule(id)}
-                onCreateService={handleCreateService}
-                onUpdateServiceIgnorePaths={handleUpdateServiceIgnorePaths}
-                onDeleteService={handleDeleteService}
-                onCreateDependency={handleCreateDependency}
-                onDeleteDependency={handleDeleteDependency}
-                onBindProcess={handleBindModuleProcess}
-              />
-            )}
-          </div>
-        )}
-
-        {activeTab === 'topology' && <ArchTopologyTabPane />}
+          ) : (
+            <div
+              className="code-module-pane code-empty-pane"
+              style={{
+                flex: 1,
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: '4rem 2rem',
+                textAlign: 'center',
+                background: 'var(--color-bg-surface)',
+                borderRadius: 'var(--radius-lg)',
+                border: '1px solid var(--color-border-primary)',
+              }}
+              data-testid="arch-empty-state"
+            >
+              <Layers size={48} style={{ color: 'var(--color-text-muted)', marginBottom: '1rem' }} />
+              <h4 style={{ color: 'var(--color-text-primary)', marginBottom: '0.5rem', fontSize: '1.125rem' }}>
+                请选择左侧功能模块
+              </h4>
+              <p style={{ color: 'var(--color-text-secondary)', fontSize: '0.875rem', maxWidth: '420px', lineHeight: 1.6 }}>
+                在左侧架构树中展开子系统与功能组，选择一个模块以查阅其服务提供 (PROVIDE)、依赖消费 (DEPEND) 与装载进程
+              </p>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* 1. 子系统侧边栏 (Drawer) */}
@@ -1301,210 +908,20 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
               value={newParentId}
               onChange={(e) => setNewParentId(e.target.value)}
             >
-              <option value="">移为一级根功能组 (None)</option>
-              {(groupTree ?? []).map((g) => (
-                <option key={g.id} value={g.id} disabled={g.id === movingGroup?.id}>
-                  {g.name} ({g.code}) - Level {g.level}
-                </option>
-              ))}
+              <option value="">-- 作为顶级功能组 (无父节点) --</option>
+              {groupTree
+                .filter((g) => g.id !== movingGroup?.id)
+                .map((g) => (
+                  <option key={g.id} value={g.id}>
+                    {g.name} ({g.code})
+                  </option>
+                ))}
             </select>
           </div>
         </div>
       </Drawer>
 
-      {/* 4. 进程组管理侧边栏 (Drawer) */}
-      <Drawer
-        open={processGroupDrawerOpen}
-        onClose={() => setProcessGroupDrawerOpen(false)}
-        title={editingProcessGroupName ? `重命名进程组 [${editingProcessGroupName}]` : '新建进程分组'}
-        subtitle="物理架构二级聚合，按业务单元归集业务进程"
-        width="md"
-        footer={
-          <div className="code-drawer-footer">
-            <button
-              type="button"
-              className="code-btn code-btn--secondary"
-              onClick={() => setProcessGroupDrawerOpen(false)}
-            >
-              取消
-            </button>
-            <button
-              type="button"
-              className="code-btn code-btn--primary"
-              onClick={() => void handleSaveProcessGroup()}
-            >
-              保存
-            </button>
-          </div>
-        }
-      >
-        <div className="code-form">
-          <div className="code-form-item">
-            <label className="code-form-label">进程组名称 (建议简洁明了):</label>
-            <input
-              type="text"
-              className="code-input"
-              value={processGroupForm.name}
-              onChange={(e) => setProcessGroupForm({ name: e.target.value })}
-              placeholder="如 核心交易组、网关路由组、基础存储组"
-            />
-          </div>
-        </div>
-      </Drawer>
-
-      {/* 5. 物理进程侧边栏 (Drawer) */}
-      <Drawer
-        open={processDrawerOpen}
-        onClose={() => {
-          setProcessDrawerOpen(false);
-          setIsCustomProcessGroup(false);
-          setCustomProcessGroupName('');
-        }}
-        title={editingProcess ? `编辑业务进程 [${editingProcess.name}]` : '新建业务进程'}
-        subtitle="配置运行在宿主机操作系统上的物理进程容器"
-        width="md"
-        footer={
-          <div className="code-drawer-footer">
-            <button
-              type="button"
-              className="code-btn code-btn--secondary"
-              onClick={() => {
-                setProcessDrawerOpen(false);
-                setIsCustomProcessGroup(false);
-                setCustomProcessGroupName('');
-              }}
-            >
-              取消
-            </button>
-            <button
-              type="button"
-              className="code-btn code-btn--primary"
-              onClick={() => void handleSaveProcess()}
-            >
-              保存
-            </button>
-          </div>
-        }
-      >
-        <div className="code-form">
-          <div className="code-form-item">
-            <label className="code-form-label">所属进程组 (两级目录聚合):</label>
-            {isCustomProcessGroup ? (
-              <div className="code-form-row--inline">
-                <input
-                  type="text"
-                  className="code-input"
-                  value={customProcessGroupName}
-                  onChange={(e) => setCustomProcessGroupName(e.target.value)}
-                  placeholder="输入新进程组名称 (如 核心交易组、基础支撑组)"
-                  autoFocus
-                />
-                <button
-                  type="button"
-                  className="code-btn code-btn--secondary"
-                  onClick={() => {
-                    setIsCustomProcessGroup(false);
-                    setCustomProcessGroupName('');
-                  }}
-                  title="返回下拉选择已有分组"
-                >
-                  选择已有
-                </button>
-              </div>
-            ) : (
-              <div className="code-form-row--inline">
-                <select
-                  className="code-select"
-                  value={processForm.group_name || '默认进程组'}
-                  onChange={(e) => {
-                    if (e.target.value === '__NEW_GROUP__') {
-                      setIsCustomProcessGroup(true);
-                      setCustomProcessGroupName('');
-                    } else {
-                      setProcessForm({ ...processForm, group_name: e.target.value });
-                    }
-                  }}
-                >
-                  {allProcessGroupOptions.map((grp) => (
-                    <option key={grp} value={grp}>
-                      {grp}
-                    </option>
-                  ))}
-                  <option value="__NEW_GROUP__">+ 自定义新分组...</option>
-                </select>
-                <button
-                  type="button"
-                  className="code-btn code-btn--secondary"
-                  onClick={() => {
-                    setIsCustomProcessGroup(true);
-                    setCustomProcessGroupName('');
-                  }}
-                  title="新建进程分组"
-                >
-                  + 新分组
-                </button>
-              </div>
-            )}
-          </div>
-          <div className="code-form-item">
-            <label className="code-form-label">进程名称 (系统进程标识):</label>
-            <input
-              type="text"
-              className="code-input"
-              value={processForm.name}
-              onChange={(e) => setProcessForm({ ...processForm, name: e.target.value })}
-              placeholder="如 backend-inventory, sut-order"
-            />
-          </div>
-          <div className="code-form-item">
-            <label className="code-form-label">监听端口 (Listen Port, 0 或留空表示纯客户端):</label>
-            <input
-              type="number"
-              className="code-input"
-              value={processForm.listen_port}
-              onChange={(e) => setProcessForm({ ...processForm, listen_port: e.target.value })}
-              placeholder="如 9003 (纯客户端请填 0 或留空)"
-            />
-          </div>
-          {agents.length > 1 && (
-            <div className="code-form-item">
-              <label className="code-form-label">宿主 Agent:</label>
-              <select
-                className="code-select"
-                value={processForm.agent_id}
-                onChange={(e) => setProcessForm({ ...processForm, agent_id: e.target.value })}
-              >
-                {agents.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.name} ({a.endpoint} - {a.scope})
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
-          <div className="code-form-item">
-            <label className="code-form-label">命令行特征 (cmd_pattern):</label>
-            <input
-              type="text"
-              className="code-input"
-              value={processForm.cmd_pattern}
-              onChange={(e) => setProcessForm({ ...processForm, cmd_pattern: e.target.value })}
-              placeholder="如 ./bin/backend-inventory (留空将自动生成)"
-            />
-          </div>
-          <div className="code-form-item">
-            <label className="code-form-label">描述说明:</label>
-            <textarea
-              className="code-textarea"
-              value={processForm.description}
-              onChange={(e) => setProcessForm({ ...processForm, description: e.target.value })}
-              placeholder="说明物理进程的部署与职责"
-            />
-          </div>
-        </div>
-      </Drawer>
-
-      {/* 6. 功能模块侧边栏 (Drawer) */}
+      {/* 4. 功能模块侧边栏 (Drawer) */}
       <Drawer
         open={moduleDrawerOpen}
         onClose={() => setModuleDrawerOpen(false)}
@@ -1553,24 +970,13 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
             />
           </div>
           <div className="code-form-item">
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <label className="code-form-label" style={{ marginBottom: 0 }}>宿主业务进程 (Process):</label>
-              <button
-                type="button"
-                className="code-btn code-btn--secondary code-btn--xs"
-                onClick={() => setQuickProcessOpen(!quickProcessOpen)}
-                style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}
-              >
-                <Plus size={12} /> {quickProcessOpen ? '收起快捷新建' : '快速创建进程'}
-              </button>
-            </div>
+            <label className="code-form-label">宿主业务进程 (Process):</label>
             <select
               className="code-select"
-              style={{ marginTop: '0.4rem' }}
               value={moduleForm.process_id}
               onChange={(e) => setModuleForm({ ...moduleForm, process_id: e.target.value })}
             >
-              <option value="">-- 暂不绑定宿主进程 (稍后绑定) --</option>
+              <option value="">-- 暂不绑定宿主进程 (稍后在 Agent 中心绑定) --</option>
               {Object.entries(processGroupsMap).map(([groupName, procs]) => (
                 <optgroup key={groupName} label={`【${groupName}】`}>
                   {procs.map((p) => (
@@ -1581,81 +987,6 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
                 </optgroup>
               ))}
             </select>
-
-            {quickProcessOpen && (
-              <div className="code-quick-process-panel">
-                <div className="code-quick-process-title">
-                  <span>快速新建进程并装配绑定</span>
-                  <span className="code-color-muted code-text-xs">支持按进程组归类</span>
-                </div>
-                <div className="code-quick-process-grid">
-                  {isQuickCustomGroup ? (
-                    <div className="code-form-row--inline">
-                      <input
-                        type="text"
-                        className="code-input code-input--sm"
-                        placeholder="新组名"
-                        value={quickProcessForm.group_name}
-                        onChange={(e) => setQuickProcessForm({ ...quickProcessForm, group_name: e.target.value })}
-                        autoFocus
-                      />
-                      <button
-                        type="button"
-                        className="code-btn code-btn--secondary code-btn--sm"
-                        onClick={() => {
-                          setIsQuickCustomGroup(false);
-                          setQuickProcessForm({ ...quickProcessForm, group_name: allProcessGroupOptions[0] || '默认进程组' });
-                        }}
-                        title="返回选择已有组"
-                      >
-                        选择
-                      </button>
-                    </div>
-                  ) : (
-                    <select
-                      className="code-select code-select--sm"
-                      value={quickProcessForm.group_name || '默认进程组'}
-                      onChange={(e) => {
-                        if (e.target.value === '__NEW_GROUP__') {
-                          setIsQuickCustomGroup(true);
-                          setQuickProcessForm({ ...quickProcessForm, group_name: '' });
-                        } else {
-                          setQuickProcessForm({ ...quickProcessForm, group_name: e.target.value });
-                        }
-                      }}
-                    >
-                      {allProcessGroupOptions.map((g) => (
-                        <option key={g} value={g}>
-                          {g}
-                        </option>
-                      ))}
-                      <option value="__NEW_GROUP__">+ 新建分组...</option>
-                    </select>
-                  )}
-                  <input
-                    type="text"
-                    className="code-input code-input--sm"
-                    placeholder="进程名 (如: backend-order)"
-                    value={quickProcessForm.name}
-                    onChange={(e) => setQuickProcessForm({ ...quickProcessForm, name: e.target.value })}
-                  />
-                  <input
-                    type="number"
-                    className="code-input code-input--sm"
-                    placeholder="端口 (0=纯客户端)"
-                    value={quickProcessForm.listen_port}
-                    onChange={(e) => setQuickProcessForm({ ...quickProcessForm, listen_port: e.target.value })}
-                  />
-                  <button
-                    type="button"
-                    className="code-btn code-btn--primary code-btn--sm"
-                    onClick={() => void handleQuickCreateProcess()}
-                  >
-                    创建并绑定
-                  </button>
-                </div>
-              </div>
-            )}
           </div>
           <div className="code-form-item">
             <label className="code-form-label">描述说明:</label>
@@ -1667,7 +998,6 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
           </div>
         </div>
       </Drawer>
-
     </div>
   );
 };

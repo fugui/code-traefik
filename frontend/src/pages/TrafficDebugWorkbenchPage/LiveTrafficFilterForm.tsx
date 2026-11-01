@@ -9,25 +9,22 @@ export interface TrafficFilterValues {
   trace_id?: string;
   keyword?: string;
   is_replayable?: boolean;
+  has_error?: boolean;
 }
 
 export interface LiveTrafficFilterFormProps {
   filters: TrafficFilterValues;
   onChange: (updates: Partial<TrafficFilterValues>) => void;
   onReset: () => void;
-  isSsePaused: boolean;
-  onToggleSsePause: () => void;
 }
 
 export const LiveTrafficFilterForm: React.FC<LiveTrafficFilterFormProps> = ({
   filters,
   onChange,
   onReset,
-  isSsePaused,
-  onToggleSsePause,
 }) => {
   return (
-    <div className="code-traffic-filter-bar">
+    <div className="code-traffic-filter-bar" data-testid="live-traffic-filter-form">
       <div className="code-filter-inputs">
         <select
           className="code-select code-select--compact"
@@ -48,8 +45,8 @@ export const LiveTrafficFilterForm: React.FC<LiveTrafficFilterFormProps> = ({
           value={filters.exchange_type || ''}
           onChange={(e) => onChange({ exchange_type: e.target.value || undefined })}
         >
-          <option value="">全部交换模式</option>
-          <option value="UNARY">UNARY (标准请求应答)</option>
+          <option value="">全部模式 (Exchange)</option>
+          <option value="UNARY">UNARY (标准往返)</option>
           <option value="STREAM_RSP">STREAM_RSP (多分片流式)</option>
           <option value="ONEWAY">ONEWAY (单向请求)</option>
           <option value="REQ_ONLY">REQ_ONLY (孤立请求)</option>
@@ -59,7 +56,7 @@ export const LiveTrafficFilterForm: React.FC<LiveTrafficFilterFormProps> = ({
         <input
           type="text"
           className="code-input code-input--sm"
-          placeholder="服务名 (service_name)..."
+          placeholder="服务契约 (service_name)..."
           value={filters.service_name || ''}
           onChange={(e) => onChange({ service_name: e.target.value || undefined })}
         />
@@ -67,7 +64,7 @@ export const LiveTrafficFilterForm: React.FC<LiveTrafficFilterFormProps> = ({
         <input
           type="text"
           className="code-input code-input--sm"
-          placeholder="方法 (operation)..."
+          placeholder="调用方法 (operation)..."
           value={filters.operation || ''}
           onChange={(e) => onChange({ operation: e.target.value || undefined })}
         />
@@ -83,7 +80,7 @@ export const LiveTrafficFilterForm: React.FC<LiveTrafficFilterFormProps> = ({
         <input
           type="text"
           className="code-input code-input--sm"
-          placeholder="TraceID (DOTR)..."
+          placeholder="TraceID 串联..."
           value={filters.trace_id || ''}
           onChange={(e) => onChange({ trace_id: e.target.value || undefined })}
         />
@@ -91,10 +88,20 @@ export const LiveTrafficFilterForm: React.FC<LiveTrafficFilterFormProps> = ({
         <input
           type="text"
           className="code-input code-input--sm"
-          placeholder="载荷关键字 (GIN)..."
+          placeholder="载荷关键字检索..."
           value={filters.keyword || ''}
           onChange={(e) => onChange({ keyword: e.target.value || undefined })}
         />
+
+        {/* has_error 仅看异常报文开关 */}
+        <label className="code-checkbox-chip code-checkbox-chip--compact" data-testid="filter-has-error">
+          <input
+            type="checkbox"
+            checked={Boolean(filters.has_error)}
+            onChange={(e) => onChange({ has_error: e.target.checked ? true : undefined })}
+          />
+          <span className="code-color-danger">仅看异常报文</span>
+        </label>
 
         <label className="code-checkbox-chip code-checkbox-chip--compact">
           <input
@@ -105,21 +112,16 @@ export const LiveTrafficFilterForm: React.FC<LiveTrafficFilterFormProps> = ({
           <span>仅可重放</span>
         </label>
 
-        <button type="button" className="code-btn code-btn--secondary code-btn--xs" onClick={onReset}>
-          重置
-        </button>
-      </div>
-
-      <div className="code-filter-sse-action">
         <button
           type="button"
-          className={`code-btn code-btn--xs ${isSsePaused ? 'code-btn--warning' : 'code-btn--secondary'}`}
-          onClick={onToggleSsePause}
-          title={isSsePaused ? '恢复 Track A 快轨 SSE 实时流推送' : '暂停实时推送以固定屏幕排查'}
+          className="code-btn code-btn--secondary code-btn--xs"
+          onClick={onReset}
         >
-          {isSsePaused ? '▶ 恢复实时流' : '⏸ 暂停实时流'}
+          重置
         </button>
       </div>
     </div>
   );
 };
+
+export default LiveTrafficFilterForm;

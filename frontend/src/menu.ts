@@ -1,44 +1,68 @@
 import type { SubMenuItem, MenuGroup, ModuleMenuConfig } from '@code/common';
-import { MODULE_KEY, MODULE_TITLE } from './constants';
+import { MODULE_KEY, MODULE_TITLE, MODULE_BASE_PATH } from './constants';
 
 export type { SubMenuItem, MenuGroup, ModuleMenuConfig };
 
+export interface TraefikMenuConfig extends ModuleMenuConfig {
+  defaultPath?: string;
+}
+
+export const DEFAULT_ENTRY_PATH = `${MODULE_BASE_PATH}/record`;
+export const DEFAULT_STANDALONE_PATH = '/record';
+
 // 标准侧边栏菜单契约（由 CodeBench 宿主在运行时通过 remoteEntry.js -> ./menu 动态拉取）
-export const traefikMenuConfig: ModuleMenuConfig = {
+// 按照 ADR-07 重构为「流量作业 ➔ 架构与契约 ➔ 环境与治理」3 组 8 项高频到低频金字塔
+export const traefikMenuConfig: TraefikMenuConfig = {
   moduleKey: MODULE_KEY,
   moduleName: MODULE_TITLE,
+  defaultPath: DEFAULT_ENTRY_PATH,
   groups: [
     {
-      title: '流量与架构',
+      title: '流量作业',
       items: [
         {
-          path: '/architecture',
-          label: '架构中心与拓扑',
-          icon: 'M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10',
+          path: '/record',
+          label: '流量录制',
+          icon: 'M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z',
         },
         {
-          path: '/traffic',
-          label: '协同录制与流量解剖',
+          path: '/debug',
+          label: '流量调试',
           icon: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z',
         },
         {
           path: '/replay',
-          label: '跨Agent重放与回归',
+          label: '流量重放',
           icon: 'M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15',
+        },
+      ],
+    },
+    {
+      title: '架构与契约',
+      items: [
+        {
+          path: '/topology',
+          label: '架构拓扑',
+          icon: 'M13 10V3L4 14h7v7l9-11h-7z',
+        },
+        {
+          path: '/architecture',
+          label: '架构元素',
+          icon: 'M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10',
         },
         {
           path: '/schemas',
-          label: 'Proto描述集工作台',
+          label: 'Proto 契约',
           icon: 'M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4',
         },
       ],
     },
     {
-      title: '资源与治理',
+      title: '环境与治理',
       items: [
         {
           path: '/agents',
-          label: 'Agent纳管与租约',
+          label: 'Agent 与进程',
           icon: 'M5 12h14M12 5l7 7-7 7',
         },
         {

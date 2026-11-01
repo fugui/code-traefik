@@ -76,6 +76,10 @@ export interface ServiceContractGroupDTO {
     name: string;
     subsystemName?: string;
     subsystem_name?: string;
+    subsystemId?: string | number;
+    subsystem_id?: string | number;
+    groupId?: string | number;
+    group_id?: string | number;
   };
   totalOperations: number;
   unaryCount: number;

@@ -1,9 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { BrowserRouter, Link, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import {
-  Network,
-  Activity,
+  Radio,
+  Bug,
   RotateCcw,
+  Network,
+  Layers,
   FileCode,
   Server,
   Settings,
@@ -29,9 +31,12 @@ import {
   MODULE_TITLE,
 } from './constants';
 import { ModuleUserProvider, useModuleUser } from './context/ModuleUserContext';
-import ArchitectureWorkbenchPage from './pages/ArchitectureWorkbenchPage';
-import TrafficMonitorWorkbenchPage from './pages/TrafficMonitorWorkbenchPage';
+import { traefikMenuConfig } from './menu';
+import RecordingWorkbenchPage from './pages/RecordingWorkbenchPage';
+import TrafficDebugWorkbenchPage from './pages/TrafficDebugWorkbenchPage';
 import ReplayWorkbenchPage from './pages/ReplayWorkbenchPage';
+import TopologyWorkbenchPage from './pages/TopologyWorkbenchPage';
+import ArchitectureWorkbenchPage from './pages/ArchitectureWorkbenchPage';
 import ProtoSchemaWorkbenchPage from './pages/ProtoSchemaWorkbenchPage';
 import AgentManagementPage from './pages/AgentManagementPage';
 import AdminSettingsPage from './pages/AdminSettingsPage';
@@ -39,7 +44,9 @@ import type { CurrentUserProfile } from './types';
 import './index.css';
 
 // 安装全局 fetch 拦截器：在微前端嵌入模式下自动将 /api/* 重写为 /<MODULE_KEY>/api/* 并注入 Bearer Token
-setupFetchInterceptor({ appPrefix: MODULE_BASE_PATH });
+if (typeof window !== 'undefined') {
+  setupFetchInterceptor({ appPrefix: MODULE_BASE_PATH });
+}
 
 export interface AppProps {
   /** CodeBench 宿主动态挂载时会自动注入 isEmbedded={true} */
@@ -47,27 +54,109 @@ export interface AppProps {
 }
 
 /**
+ * 历史路由无损重定向组件：完整保留所有 Query 参数，平滑跳转至新路由
+ */
+export const LegacyRouteRedirect: React.FC<{ to: string }> = ({ to }) => {
+  const location = useLocation();
+  const search = location.search || '';
+  const target = `${to}${search}`;
+  return (
+    <>
+      <div data-testid="legacy-redirect" data-target={target} style={{ display: 'none' }} />
+      <Navigate to={target} replace />
+    </>
+  );
+};
+
+/**
+ * /architecture 路由包装器：
+ * 当携带 ?tab=topology|physical|verify 时无损重定向至 /topology，
+ * 其中 tab=physical 自动映射为 view=PHYSICAL，tab=topology 映射为 view=LOGICAL；
+ * 若未携带上述 tab 参数，则渲染瘦身后的纯逻辑架构元素工作台。
+ */
+export const ArchitectureRouteWrapper: React.FC<{ isEmbedded?: boolean }> = ({ isEmbedded }) => {
+  const location = useLocation();
+  const searchParams = new URLSearchParams(location.search);
+  const tab = searchParams.get('tab');
+  if (tab === 'topology' || tab === 'physical' || tab === 'verify') {
+    const nextParams = new URLSearchParams(location.search);
+    nextParams.delete('tab');
+    if (tab === 'physical') {
+      nextParams.set('view', 'PHYSICAL');
+    } else if (tab === 'topology') {
+      nextParams.set('view', 'LOGICAL');
+    }
+    const basePath = isEmbedded ? MODULE_BASE_PATH : '';
+    const qs = nextParams.toString();
+    const target = `${basePath}/topology${qs ? `?${qs}` : ''}`;
+    return (
+      <>
+        <div data-testid="legacy-redirect" data-target={target} style={{ display: 'none' }} />
+        <Navigate to={target} replace />
+      </>
+    );
+  }
+  return <ArchitectureWorkbenchPage />;
+};
+
+const renderNavIcon = (path: string) => {
+  switch (path) {
+    case '/record':
+      return <Radio size={16} />;
+    case '/debug':
+      return <Bug size={16} />;
+    case '/replay':
+      return <RotateCcw size={16} />;
+    case '/topology':
+      return <Network size={16} />;
+    case '/architecture':
+      return <Layers size={16} />;
+    case '/schemas':
+      return <FileCode size={16} />;
+    case '/agents':
+      return <Server size={16} />;
+    case '/admin/settings':
+      return <Settings size={16} />;
+    default:
+      return <Radio size={16} />;
+  }
+};
+
+/**
  * 嵌入模式路由视图：无独立侧边栏与顶栏，同时兼容相对子路径与带模块前缀的完整路径
  */
-const EmbeddedRoutes: React.FC = () => {
-  const defaultTarget = `${MODULE_BASE_PATH}/architecture`;
+export const EmbeddedRoutes: React.FC = () => {
+  const defaultTarget = `${MODULE_BASE_PATH}/record`;
   return (
     <Routes>
-      <Route path="/" element={<Navigate to={defaultTarget} replace />} />
-      <Route path={MODULE_BASE_PATH} element={<Navigate to={defaultTarget} replace />} />
-      <Route path={`${MODULE_BASE_PATH}/`} element={<Navigate to={defaultTarget} replace />} />
-      <Route path="/architecture" element={<ArchitectureWorkbenchPage />} />
-      <Route path={`${MODULE_BASE_PATH}/architecture`} element={<ArchitectureWorkbenchPage />} />
-      <Route path="/traffic" element={<TrafficMonitorWorkbenchPage />} />
-      <Route path={`${MODULE_BASE_PATH}/traffic`} element={<TrafficMonitorWorkbenchPage />} />
+      <Route path="/" element={<LegacyRouteRedirect to={defaultTarget} />} />
+      <Route path={MODULE_BASE_PATH} element={<LegacyRouteRedirect to={defaultTarget} />} />
+      <Route path={`${MODULE_BASE_PATH}/`} element={<LegacyRouteRedirect to={defaultTarget} />} />
+
+      {/* 历史旧路由无损兼容重定向 */}
+      <Route path="/sessions" element={<LegacyRouteRedirect to={`${MODULE_BASE_PATH}/record`} />} />
+      <Route path={`${MODULE_BASE_PATH}/sessions`} element={<LegacyRouteRedirect to={`${MODULE_BASE_PATH}/record`} />} />
+      <Route path="/traffic" element={<LegacyRouteRedirect to={`${MODULE_BASE_PATH}/debug`} />} />
+      <Route path={`${MODULE_BASE_PATH}/traffic`} element={<LegacyRouteRedirect to={`${MODULE_BASE_PATH}/debug`} />} />
+
+      {/* 3 组 8 项标准路由 */}
+      <Route path="/record" element={<RecordingWorkbenchPage />} />
+      <Route path={`${MODULE_BASE_PATH}/record`} element={<RecordingWorkbenchPage />} />
+      <Route path="/debug" element={<TrafficDebugWorkbenchPage />} />
+      <Route path={`${MODULE_BASE_PATH}/debug`} element={<TrafficDebugWorkbenchPage />} />
       <Route path="/replay" element={<ReplayWorkbenchPage />} />
       <Route path={`${MODULE_BASE_PATH}/replay`} element={<ReplayWorkbenchPage />} />
+      <Route path="/topology" element={<TopologyWorkbenchPage />} />
+      <Route path={`${MODULE_BASE_PATH}/topology`} element={<TopologyWorkbenchPage />} />
+      <Route path="/architecture" element={<ArchitectureRouteWrapper isEmbedded />} />
+      <Route path={`${MODULE_BASE_PATH}/architecture`} element={<ArchitectureRouteWrapper isEmbedded />} />
       <Route path="/schemas" element={<ProtoSchemaWorkbenchPage />} />
       <Route path={`${MODULE_BASE_PATH}/schemas`} element={<ProtoSchemaWorkbenchPage />} />
       <Route path="/agents" element={<AgentManagementPage />} />
       <Route path={`${MODULE_BASE_PATH}/agents`} element={<AgentManagementPage />} />
       <Route path="/admin/settings" element={<AdminSettingsPage />} />
       <Route path={`${MODULE_BASE_PATH}/admin/settings`} element={<AdminSettingsPage />} />
+
       <Route path="*" element={<Navigate to={defaultTarget} replace />} />
     </Routes>
   );
@@ -75,8 +164,9 @@ const EmbeddedRoutes: React.FC = () => {
 
 /**
  * 独立调试模式布局外壳：自带简易导航、主题明暗切换器与本地登录守卫
+ * 直接消费 traefikMenuConfig 数据驱动渲染，消除双处硬编码漂移
  */
-const StandaloneShell: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
+export const StandaloneShell: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
   const location = useLocation();
   const { theme, toggleTheme } = useTheme('light');
   const { user, loadingUser, reloadUser } = useModuleUser();
@@ -99,13 +189,11 @@ const StandaloneShell: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
   }
 
   const pathname = location.pathname;
-  const isArch = pathname === '/' || pathname.startsWith('/architecture');
-  const isTraffic = pathname.startsWith('/traffic');
-  const isReplay = pathname.startsWith('/replay');
-  const isSchemas = pathname.startsWith('/schemas');
-  const isAgents = pathname.startsWith('/agents');
-  const isSettings = pathname.startsWith('/admin/settings');
   const isAdmin = Boolean(user.is_module_admin || user.is_super_admin);
+
+  const currentMenuItem = traefikMenuConfig.groups
+    .flatMap((g) => g.items)
+    .find((item) => pathname === item.path || (item.path !== '/' && pathname.startsWith(item.path)));
 
   return (
     <div className="code-tpl-standalone-shell">
@@ -119,57 +207,32 @@ const StandaloneShell: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
         </div>
 
         <nav className="code-tpl-nav">
-          <div className="code-tpl-nav-group">
-            <div className="code-tpl-nav-group-title">流量与架构</div>
-            <Link
-              to="/architecture"
-              className={`code-tpl-nav-link ${isArch ? 'code-tpl-nav-link--active' : ''}`}
-            >
-              <Network size={16} />
-              <span>架构中心与拓扑</span>
-            </Link>
-            <Link
-              to="/traffic"
-              className={`code-tpl-nav-link ${isTraffic ? 'code-tpl-nav-link--active' : ''}`}
-            >
-              <Activity size={16} />
-              <span>协同录制与流量解剖</span>
-            </Link>
-            <Link
-              to="/replay"
-              className={`code-tpl-nav-link ${isReplay ? 'code-tpl-nav-link--active' : ''}`}
-            >
-              <RotateCcw size={16} />
-              <span>跨Agent重放与回归</span>
-            </Link>
-            <Link
-              to="/schemas"
-              className={`code-tpl-nav-link ${isSchemas ? 'code-tpl-nav-link--active' : ''}`}
-            >
-              <FileCode size={16} />
-              <span>Proto描述集工作台</span>
-            </Link>
-          </div>
+          {traefikMenuConfig.groups.map((group) => {
+            if (group.adminOnly && !isAdmin) return null;
+            const visibleItems = group.items.filter((item) => !item.adminOnly || isAdmin);
+            if (visibleItems.length === 0) return null;
 
-          <div className="code-tpl-nav-group">
-            <div className="code-tpl-nav-group-title">资源与治理</div>
-            <Link
-              to="/agents"
-              className={`code-tpl-nav-link ${isAgents ? 'code-tpl-nav-link--active' : ''}`}
-            >
-              <Server size={16} />
-              <span>Agent纳管与租约</span>
-            </Link>
-            {isAdmin && (
-              <Link
-                to="/admin/settings"
-                className={`code-tpl-nav-link ${isSettings ? 'code-tpl-nav-link--active' : ''}`}
-              >
-                <Settings size={16} />
-                <span>模块参数配置</span>
-              </Link>
-            )}
-          </div>
+            return (
+              <div key={group.title} className="code-tpl-nav-group">
+                <div className="code-tpl-nav-group-title">{group.title}</div>
+                {visibleItems.map((item) => {
+                  const isActive =
+                    pathname === item.path ||
+                    (item.path !== '/' && pathname.startsWith(item.path));
+                  return (
+                    <Link
+                      key={item.path}
+                      to={item.path}
+                      className={`code-tpl-nav-link ${isActive ? 'code-tpl-nav-link--active' : ''}`}
+                    >
+                      {renderNavIcon(item.path)}
+                      <span>{item.label}</span>
+                    </Link>
+                  );
+                })}
+              </div>
+            );
+          })}
         </nav>
 
         <div className="code-tpl-sidebar-footer">
@@ -206,26 +269,25 @@ const StandaloneShell: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
             <span className="code-tpl-breadcrumb-parent">{MODULE_TITLE}</span>
             <span className="code-tpl-breadcrumb-sep">/</span>
             <span className="code-tpl-breadcrumb-current">
-              {isArch && '架构中心与拓扑'}
-              {isTraffic && '协同录制与流量解剖'}
-              {isReplay && '跨Agent重放与回归'}
-              {isSchemas && 'Proto描述集工作台'}
-              {isAgents && 'Agent纳管与租约'}
-              {isSettings && '模块参数配置'}
+              {currentMenuItem?.label || '流量录制'}
             </span>
           </div>
         </header>
 
         <div className="code-tpl-content-scroll">
           <Routes>
-            <Route path="/" element={<Navigate to="/architecture" replace />} />
-            <Route path="/architecture" element={<ArchitectureWorkbenchPage />} />
-            <Route path="/traffic" element={<TrafficMonitorWorkbenchPage />} />
+            <Route path="/" element={<LegacyRouteRedirect to="/record" />} />
+            <Route path="/sessions" element={<LegacyRouteRedirect to="/record" />} />
+            <Route path="/record" element={<RecordingWorkbenchPage />} />
+            <Route path="/traffic" element={<LegacyRouteRedirect to="/debug" />} />
+            <Route path="/debug" element={<TrafficDebugWorkbenchPage />} />
             <Route path="/replay" element={<ReplayWorkbenchPage />} />
+            <Route path="/topology" element={<TopologyWorkbenchPage />} />
+            <Route path="/architecture" element={<ArchitectureRouteWrapper />} />
             <Route path="/schemas" element={<ProtoSchemaWorkbenchPage />} />
             <Route path="/agents" element={<AgentManagementPage />} />
             <Route path="/admin/settings" element={<AdminSettingsPage />} />
-            <Route path="*" element={<Navigate to="/architecture" replace />} />
+            <Route path="*" element={<Navigate to="/record" replace />} />
           </Routes>
         </div>
       </main>

@@ -29,6 +29,7 @@ type TrafficRecordListQuery struct {
 	TraceID      string `form:"trace_id"`
 	Keyword      string `form:"keyword"`
 	IsReplayable *bool  `form:"is_replayable"`
+	HasError     *bool  `form:"has_error"`
 	Page         int    `form:"page"`
 	PageSize     int    `form:"page_size"`
 }
@@ -115,6 +116,13 @@ func ListTrafficRecords(c *gin.Context) {
 	if query.Keyword != "" {
 		kw := "%" + query.Keyword + "%"
 		tx = tx.Where("(service_name ILIKE ? OR operation ILIKE ? OR trace_id ILIKE ?)", kw, kw, kw)
+	}
+	if query.HasError != nil {
+		if *query.HasError {
+			tx = tx.Where("(status_code <> 0 OR exchange_type = ?)", models.ExchangeReqOnly)
+		} else {
+			tx = tx.Where("(status_code = 0 AND exchange_type <> ?)", models.ExchangeReqOnly)
+		}
 	}
 
 	var total int64

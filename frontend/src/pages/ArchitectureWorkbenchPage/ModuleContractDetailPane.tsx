@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import {
   ChevronRight,
   Server,
@@ -437,18 +438,15 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
                     <span className="code-module-form-field__label">承载进程:</span>
                     <span className="code-module-form-field__val">
                       {selectedModule.process ? (
-                        <span
-                          className="code-process-link"
-                          onClick={() => {
-                            if (onViewProcess && selectedModule.process?.id) {
-                              onViewProcess(selectedModule.process.id);
-                            }
-                          }}
-                          title={onViewProcess ? '点击在物理架构树中定位此进程' : undefined}
+                        <Link
+                          to={`/agents?scope=${selectedModule.process.agent?.scope || 'PRIVATE'}&agent_id=${selectedModule.process.agent_id || selectedModule.process.agent?.id || ''}&process_id=${selectedModule.process.id}`}
+                          className="code-process-link code-badge-link"
+                          data-testid="link-process-bloodline"
+                          title="前往 Agent 与进程中心查阅并管理该业务进程"
                         >
                           <Server size={14} />
                           {selectedModule.process.name}
-                        </span>
+                        </Link>
                       ) : (
                         <span className="code-color-muted">未装载进物理进程</span>
                       )}
@@ -553,9 +551,15 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
                   {services.map((svc) => (
                     <tr key={svc.id}>
                       <td>
-                        <span className="code-font-mono code-color-primary" style={{ fontWeight: 600 }}>
+                        <Link
+                          to={`/schemas?active_only=true&search=${encodeURIComponent(svc.service_name)}`}
+                          className="code-font-mono code-color-primary code-service-contract-link"
+                          style={{ fontWeight: 600 }}
+                          data-testid={`link-service-${svc.id}`}
+                          title="前往 Proto 契约工作台查阅并配置字段树"
+                        >
                           {svc.service_name}
-                        </span>
+                        </Link>
                       </td>
                       <td>
                         {editingServiceId === svc.id ? (

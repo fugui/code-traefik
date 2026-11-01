@@ -13,6 +13,7 @@ export interface PacketAnatomyDrawerProps {
   loading?: boolean;
   onRedecode?: (recordId: string) => Promise<void>;
   onFilterTrace?: (traceId: string) => void;
+  extraActions?: React.ReactNode;
 }
 
 /**
@@ -22,7 +23,8 @@ export const PacketAnatomyContent: React.FC<{
   data: PacketAnatomyDrawerDTO;
   onRedecode?: (recordId: string) => Promise<void>;
   onFilterTrace?: (traceId: string) => void;
-}> = ({ data, onRedecode, onFilterTrace }) => {
+  extraActions?: React.ReactNode;
+}> = ({ data, onRedecode, onFilterTrace, extraActions }) => {
   const [activeSide, setActiveSide] = useState<'REQ' | 'RSP'>('REQ');
   const [redecoding, setRedecoding] = useState(false);
 
@@ -74,6 +76,7 @@ export const PacketAnatomyContent: React.FC<{
         </div>
 
         <div className="code-anatomy-actions">
+          {extraActions}
           {onRedecode && (
             <button
               type="button"
@@ -131,6 +134,7 @@ export const PacketAnatomyDrawer: React.FC<PacketAnatomyDrawerProps> = ({
   loading = false,
   onRedecode,
   onFilterTrace,
+  extraActions,
 }) => {
   return (
     <Drawer
@@ -143,7 +147,12 @@ export const PacketAnatomyDrawer: React.FC<PacketAnatomyDrawerProps> = ({
       {loading ? (
         <div className="code-tpl-loading-screen">正在加载四段深度报文解剖数据...</div>
       ) : data ? (
-        <PacketAnatomyContent data={data} onRedecode={onRedecode} onFilterTrace={onFilterTrace} />
+        <PacketAnatomyContent
+          data={data}
+          onRedecode={onRedecode}
+          onFilterTrace={onFilterTrace}
+          extraActions={extraActions}
+        />
       ) : (
         <div className="code-empty-pane">未获取到报文解剖详情</div>
       )}

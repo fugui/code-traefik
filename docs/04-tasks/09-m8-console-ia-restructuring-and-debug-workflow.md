@@ -3,7 +3,7 @@
 - **文档编号**：`09-m8-console-ia-restructuring-and-debug-workflow.md`
 - **文档版本**：v1.0.0
 - **更新日期**：2026-11-01
-- **状态**：⏳ 待实施 (Planned)
+- **状态**：✅ 已完成 (Completed)
 - **归属阶段**：阶段三/四：M8 TDD 任务拆解与验收标准 (`04-tasks`)
 - **覆盖特性与场景**：`F-15` (一体化微前端控制台三层频次信息架构)、`F-15.1` (录制素材资产台账与跨工作台流转)、`F-15.2` (独立流量调试工作台与单包快速重放调试)、`F-15.3` (静态架构基线解耦与物理进程单点收口)、`F-02` (进程部署映射收口至 Agent 与进程)、`F-11` / `F-12` (协同录制与单包/批量同构重放联动)
 - **设计参考基线**：[`07-console-ia-restructuring-and-workflow-workbench-adr.md`](../05-adr/07-console-ia-restructuring-and-workflow-workbench-adr.md) (ADR-07)、[`04-control-plane-and-web-console.md` §4.1~§4.2 & §4.5](../02-design/04-control-plane-and-web-console.md)、[`01-http-api-contract.md` §2.4~§2.6](../03-api/01-http-api-contract.md)

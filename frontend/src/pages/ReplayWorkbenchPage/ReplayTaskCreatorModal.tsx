@@ -11,6 +11,7 @@ export interface ReplayTaskCreatorModalProps {
   sessions: RecordingSession[];
   processes: Process[];
   onSuccess: () => void;
+  defaultSessionId?: string;
 }
 
 export const ReplayTaskCreatorModal: React.FC<ReplayTaskCreatorModalProps> = ({
@@ -19,6 +20,7 @@ export const ReplayTaskCreatorModal: React.FC<ReplayTaskCreatorModalProps> = ({
   sessions,
   processes,
   onSuccess,
+  defaultSessionId,
 }) => {
   const toast = useToast();
   const [name, setName] = useState('');
@@ -33,13 +35,15 @@ export const ReplayTaskCreatorModal: React.FC<ReplayTaskCreatorModalProps> = ({
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    if (sessions.length > 0) {
+    if (defaultSessionId) {
+      setSelectedSessionId(defaultSessionId);
+    } else if (sessions.length > 0) {
       setSelectedSessionId((prev) => prev || sessions[0].id);
     }
     if (processes.length > 0) {
       setSelectedProcessId((prev) => prev || processes[0].id);
     }
-  }, [sessions, processes]);
+  }, [sessions, processes, defaultSessionId]);
 
   // 当录制批次变更时，加载其 INGRESS 且可重放的流量记录
   useEffect(() => {

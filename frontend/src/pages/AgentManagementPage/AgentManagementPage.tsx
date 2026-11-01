@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Modal, Pagination, usePaginationState } from '@code/common';
 import { useToast } from '../../utils/toast';
@@ -16,6 +16,9 @@ export const AgentManagementPage: React.FC = () => {
   const isAdmin = Boolean(user?.is_module_admin || user?.is_super_admin);
 
   const scopeParam = (searchParams.get('scope') as 'SHARED' | 'PRIVATE') || 'SHARED';
+  const urlAgentId = searchParams.get('agent_id') || '';
+  const urlProcessId = searchParams.get('process_id') || '';
+
   const { page, pageSize, setPage, setPageSize } = usePaginationState({
     defaultPageSize: 25,
   });
@@ -45,6 +48,15 @@ export const AgentManagementPage: React.FC = () => {
   const [unlockAgentId, setUnlockAgentId] = useState<string>('');
   const [unlockReason, setUnlockReason] = useState<string>('');
 
+  // 判断当前用户对当前选中的 Agent 是否具备写权限 (RBAC)
+  const canWriteSelectedAgent = useMemo(() => {
+    if (isAdmin) return true;
+    if (!selectedAgent) return false;
+    if (selectedAgent.scope === 'SHARED') return false;
+    if (!selectedAgent.owner_id) return true;
+    return String(selectedAgent.owner_id) === String(user?.id);
+  }, [isAdmin, selectedAgent, user]);
+
   const loadAgents = useCallback(async () => {
     setLoading(true);
     try {
@@ -57,14 +69,23 @@ export const AgentManagementPage: React.FC = () => {
       setAgents(items);
       setTotalAgents(res.total ?? 0);
       if (items.length > 0) {
-        setSelectedAgent((prev) => prev || items[0]);
+        setSelectedAgent((prev) => {
+          if (urlAgentId) {
+            const matched = items.find((a) => String(a.id) === String(urlAgentId));
+            if (matched) return matched;
+          }
+          if (prev && items.some((a) => String(a.id) === String(prev.id))) {
+            return prev;
+          }
+          return items[0];
+        });
       }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '加载 Agent 列表失败');
     } finally {
       setLoading(false);
     }
-  }, [scopeParam, page, pageSize, toast]);
+  }, [scopeParam, page, pageSize, urlAgentId, toast]);
 
   useEffect(() => {
     void loadAgents();
@@ -85,11 +106,23 @@ export const AgentManagementPage: React.FC = () => {
     })();
   }, [selectedAgentId, toast]);
 
+  // 提取现有进程组名称列表
+  const existingGroups = useMemo(() => {
+    const set = new Set<string>();
+    for (const p of processes) {
+      const grp = (p.group_name || '').trim();
+      if (grp) set.add(grp);
+    }
+    return Array.from(set);
+  }, [processes]);
+
   const handleScopeChange = (newScope: 'SHARED' | 'PRIVATE') => {
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
       next.set('scope', newScope);
       next.set('page', '1');
+      next.delete('agent_id');
+      next.delete('process_id');
       return next;
     });
     setSelectedAgent(null);
@@ -175,6 +208,7 @@ export const AgentManagementPage: React.FC = () => {
             <button
               type="button"
               className="code-btn code-btn--primary"
+              data-testid="register-agent-btn"
               onClick={() => {
                 setRegisterForm({
                   name: '',
@@ -186,7 +220,7 @@ export const AgentManagementPage: React.FC = () => {
                 setRegisterModalOpen(true);
               }}
             >
-              + 登记 {scopeParam === 'SHARED' ? '公共 Agent' : '我的私有 Agent'}
+              {`+ 登记 ${scopeParam === 'SHARED' ? '公共 Agent' : '我的私有 Agent'}`}
             </button>
           )}
         </div>
@@ -213,11 +247,20 @@ export const AgentManagementPage: React.FC = () => {
             <div className="code-agent-cards-grid">
               {(agents ?? []).map((ag) => {
                 const isSelected = selectedAgent?.id === ag.id;
+                const canDeleteAgent = isAdmin || (ag.scope === 'PRIVATE' && (!ag.owner_id || String(ag.owner_id) === String(user?.id)));
                 return (
                   <div
                     key={ag.id}
                     className={`code-agent-card ${isSelected ? 'code-agent-card--selected' : ''}`}
-                    onClick={() => setSelectedAgent(ag)}
+                    data-testid={`agent-card-${ag.id}`}
+                    onClick={() => {
+                      setSelectedAgent(ag);
+                      setSearchParams((prev) => {
+                        const next = new URLSearchParams(prev);
+                        next.set('agent_id', ag.id);
+                        return next;
+                      });
+                    }}
                   >
                     <div className="code-agent-card__header">
                       <div>
@@ -260,10 +303,11 @@ export const AgentManagementPage: React.FC = () => {
                       >
                         探活
                       </button>
-                      {(isAdmin || ag.scope === 'PRIVATE') && (
+                      {canDeleteAgent && (
                         <button
                           type="button"
                           className="code-btn code-btn--danger code-btn--xs"
+                          data-testid={`delete-agent-${ag.id}`}
                           onClick={() => void handleDeleteAgent(ag.id)}
                         >
                           注销
@@ -300,10 +344,11 @@ export const AgentManagementPage: React.FC = () => {
                     所属端点: {selectedAgent.endpoint} | 租约状态: {selectedAgent.lease_type || '空闲'}
                   </span>
                 </div>
-                {(isAdmin || selectedAgent.scope === 'PRIVATE') && (
+                {canWriteSelectedAgent && (
                   <button
                     type="button"
                     className="code-btn code-btn--primary code-btn--xs"
+                    data-testid="add-process-btn"
                     onClick={() => {
                       setEditingProcess(null);
                       setBinderModalOpen(true);
@@ -318,6 +363,7 @@ export const AgentManagementPage: React.FC = () => {
                 <table className="code-table">
                   <thead>
                     <tr>
+                      <th>进程分组</th>
                       <th>进程名称</th>
                       <th>监听端口</th>
                       <th>命令行特征</th>
@@ -327,54 +373,79 @@ export const AgentManagementPage: React.FC = () => {
                     </tr>
                   </thead>
                   <tbody>
-                    {(processes ?? []).map((proc) => (
-                      <tr key={proc.id}>
-                        <td className="code-font-mono code-color-primary">{proc.name}</td>
-                        <td className="code-font-mono">{proc.listen_port}</td>
-                        <td className="code-font-mono code-text-xs code-color-muted">{proc.cmd_pattern || '-'}</td>
-                        <td>
-                          <div className="code-tag-group">
-                            {(proc.process_modules ?? []).map((pm) => (
-                              <span key={pm.module_id} className="code-tag code-tag--info">
-                                {pm.module?.name || pm.module_id}
-                              </span>
-                            ))}
-                            {(!proc.process_modules || proc.process_modules.length === 0) && (
-                              <span className="code-color-muted code-text-xs">未绑定模块</span>
-                            )}
-                          </div>
-                        </td>
-                        <td>{proc.description || '-'}</td>
-                        <td>
-                          <div className="code-table-actions">
-                            {(isAdmin || selectedAgent.scope === 'PRIVATE') && (
-                              <>
-                                <button
-                                  type="button"
-                                  className="code-btn code-btn--secondary code-btn--xs"
-                                  onClick={() => {
-                                    setEditingProcess(proc);
-                                    setBinderModalOpen(true);
-                                  }}
-                                >
-                                  修改
-                                </button>
-                                <button
-                                  type="button"
-                                  className="code-btn code-btn--danger code-btn--xs"
-                                  onClick={() => void handleDeleteProcess(proc.id)}
-                                >
-                                  删除
-                                </button>
-                              </>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
+                    {(processes ?? []).map((proc) => {
+                      const isHighlighted = urlProcessId === proc.id;
+                      return (
+                        <tr
+                          key={proc.id}
+                          className={isHighlighted ? 'code-table-row--highlighted' : ''}
+                          data-testid={`process-row-${proc.id}`}
+                          style={
+                            isHighlighted
+                              ? { backgroundColor: 'var(--color-bg-hover)', outline: '1px solid var(--color-primary)' }
+                              : undefined
+                          }
+                        >
+                          <td>
+                            <span className="code-badge code-badge--secondary" data-testid={`proc-group-${proc.id}`}>
+                              {proc.group_name || '默认进程组'}
+                            </span>
+                          </td>
+                          <td className="code-font-mono code-color-primary">{proc.name}</td>
+                          <td className="code-font-mono">
+                            {proc.listen_port > 0 ? proc.listen_port : '0 (纯客户端)'}
+                          </td>
+                          <td className="code-font-mono code-text-xs code-color-muted">{proc.cmd_pattern || '-'}</td>
+                          <td>
+                            <div className="code-tag-group">
+                              {(proc.process_modules ?? []).map((pm) => (
+                                <span key={pm.module_id} className="code-tag code-tag--info">
+                                  {pm.module?.name || pm.module_id}
+                                </span>
+                              ))}
+                              {(!proc.process_modules || proc.process_modules.length === 0) && (
+                                <span className="code-color-muted code-text-xs">未绑定模块</span>
+                              )}
+                            </div>
+                          </td>
+                          <td>{proc.description || '-'}</td>
+                          <td>
+                            <div className="code-table-actions">
+                              {canWriteSelectedAgent ? (
+                                <>
+                                  <button
+                                    type="button"
+                                    className="code-btn code-btn--secondary code-btn--xs"
+                                    data-testid={`edit-process-${proc.id}`}
+                                    onClick={() => {
+                                      setEditingProcess(proc);
+                                      setBinderModalOpen(true);
+                                    }}
+                                  >
+                                    修改
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="code-btn code-btn--danger code-btn--xs"
+                                    data-testid={`delete-process-${proc.id}`}
+                                    onClick={() => void handleDeleteProcess(proc.id)}
+                                  >
+                                    删除
+                                  </button>
+                                </>
+                              ) : (
+                                <span className="code-color-muted code-text-xs" data-testid={`read-only-${proc.id}`}>
+                                  只读
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
                     {processes.length === 0 && (
                       <tr>
-                        <td colSpan={6} className="code-table-empty">
+                        <td colSpan={7} className="code-table-empty">
                           当前 Agent 尚未挂载任何业务进程
                         </td>
                       </tr>
@@ -457,6 +528,7 @@ export const AgentManagementPage: React.FC = () => {
           onClose={() => setBinderModalOpen(false)}
           agent={selectedAgent}
           editingProcess={editingProcess}
+          existingGroups={existingGroups}
           onSuccess={() => {
             void (async () => {
               const res = await agentApi.getAgent(selectedAgent.id);

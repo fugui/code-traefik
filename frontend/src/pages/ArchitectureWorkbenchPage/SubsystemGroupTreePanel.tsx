@@ -7,22 +7,13 @@ import {
   Trash2,
   Folder,
   FolderOpen,
-  Cpu,
   Search,
-  ArrowRightLeft,
-  Server,
   Layers,
   FileCode,
 } from 'lucide-react';
-import type { Subsystem, FunctionalGroupTreeNode, Process, Module } from '../../types';
-
-export type TreeViewMode = 'LOGICAL' | 'PHYSICAL';
+import type { Subsystem, FunctionalGroupTreeNode, Module } from '../../types';
 
 export interface SubsystemGroupTreePanelProps {
-  // 视角模式
-  viewMode?: TreeViewMode;
-  onViewModeChange?: (mode: TreeViewMode) => void;
-
   // 逻辑架构树相关
   subsystems: Subsystem[];
   selectedSubsystemId: string;
@@ -42,20 +33,6 @@ export interface SubsystemGroupTreePanelProps {
   onEditModule?: (mod: Module) => void;
   onDeleteModule?: (moduleId: string) => void;
 
-  // 物理架构树相关
-  processes?: Process[];
-  selectedProcessId?: string;
-  onSelectProcess?: (processId: string) => void;
-  customProcessGroups?: string[];
-  selectedProcessGroupName?: string;
-  onSelectProcessGroup?: (groupName: string) => void;
-  onCreateProcessGroup?: () => void;
-  onEditProcessGroup?: (groupName: string) => void;
-  onDeleteProcessGroup?: (groupName: string) => void;
-  onCreateProcess?: (targetGroupName?: string) => void;
-  onEditProcess?: (proc: Process) => void;
-  onDeleteProcess?: (procId: string) => void;
-
   // 权限与逻辑架构管理操作
   isAdmin: boolean;
   onCreateSubsystem: () => void;
@@ -68,67 +45,38 @@ export interface SubsystemGroupTreePanelProps {
 }
 
 function isTextMatch(text?: string, query?: string): boolean {
-  if (!text || !query?.trim()) return false;
-  return text.toLowerCase().includes(query.trim().toLowerCase());
-}
-
-function isModuleMatch(mod: Module, query: string): boolean {
-  if (!query?.trim()) return false;
-  return (
-    isTextMatch(mod.name, query) ||
-    isTextMatch(mod.code, query) ||
-    isTextMatch(mod.description, query) ||
-    isTextMatch(mod.process?.name, query)
-  );
+  if (!text || !query) return false;
+  return text.toLowerCase().includes(query.toLowerCase());
 }
 
 function checkGroupTreeMatch(
   nodes: FunctionalGroupTreeNode[],
-  modulesByGroup: Record<string, Module[]>,
+  modulesByGroupId: Map<string, Module[]>,
   query: string,
   toExpand: Set<string>
 ): boolean {
-  let hasMatch = false;
+  let matched = false;
   for (const node of nodes) {
-    const nodeMatched = isTextMatch(node.name, query) || isTextMatch(node.code, query);
-    const moduleMatched = (modulesByGroup[node.id] ?? []).some((m) => isModuleMatch(m, query));
+    const nameMatch = isTextMatch(node.name, query) || isTextMatch(node.code, query);
+    const nodeMods = modulesByGroupId.get(String(node.id)) || [];
+    const modMatch = nodeMods.some((m) => isTextMatch(m.name, query) || isTextMatch(m.code, query));
+
     let childMatched = false;
     if (node.children && node.children.length > 0) {
-      childMatched = checkGroupTreeMatch(node.children, modulesByGroup, query, toExpand);
+      if (checkGroupTreeMatch(node.children, modulesByGroupId, query, toExpand)) {
+        childMatched = true;
+      }
     }
-    if (nodeMatched || moduleMatched || childMatched) {
-      toExpand.add(node.id);
-      hasMatch = true;
+
+    if (nameMatch || modMatch || childMatched) {
+      toExpand.add(String(node.id));
+      matched = true;
     }
   }
-  return hasMatch;
-}
-
-function filterGroupNodes(
-  nodes: FunctionalGroupTreeNode[],
-  modulesByGroup: Record<string, Module[]>,
-  query: string
-): FunctionalGroupTreeNode[] {
-  if (!query.trim()) return nodes;
-
-  const result: FunctionalGroupTreeNode[] = [];
-  for (const node of nodes) {
-    const selfMatch = isTextMatch(node.name, query) || isTextMatch(node.code, query);
-    const hasModuleMatch = (modulesByGroup[node.id] ?? []).some((m) => isModuleMatch(m, query));
-    const filteredChildren = node.children ? filterGroupNodes(node.children, modulesByGroup, query) : [];
-    if (selfMatch || hasModuleMatch || filteredChildren.length > 0) {
-      result.push({
-        ...node,
-        children: filteredChildren,
-      });
-    }
-  }
-  return result;
+  return matched;
 }
 
 export const SubsystemGroupTreePanel: React.FC<SubsystemGroupTreePanelProps> = ({
-  viewMode: controlledViewMode,
-  onViewModeChange,
   subsystems,
   selectedSubsystemId,
   onSelectSubsystem,
@@ -144,18 +92,6 @@ export const SubsystemGroupTreePanel: React.FC<SubsystemGroupTreePanelProps> = (
   onCreateModule,
   onEditModule,
   onDeleteModule,
-  processes = [],
-  selectedProcessId = '',
-  onSelectProcess,
-  customProcessGroups = [],
-  selectedProcessGroupName = '',
-  onSelectProcessGroup,
-  onCreateProcessGroup,
-  onEditProcessGroup,
-  onDeleteProcessGroup,
-  onCreateProcess,
-  onEditProcess,
-  onDeleteProcess,
   isAdmin,
   onCreateSubsystem,
   onEditSubsystem,
@@ -165,43 +101,42 @@ export const SubsystemGroupTreePanel: React.FC<SubsystemGroupTreePanelProps> = (
   onMoveGroup,
   onDeleteGroup,
 }) => {
-  // 视角模式状态（逻辑树 vs 物理进程树）
-  const [internalViewMode, setInternalViewMode] = useState<TreeViewMode>('LOGICAL');
-  const viewMode = controlledViewMode ?? internalViewMode;
+  // 展开状态
+  const [expandedSubsystemIds, setExpandedSubsystemIds] = useState<Set<string>>(() => new Set());
+  const [expandedGroupIds, setExpandedGroupIds] = useState<Set<string>>(() => new Set());
 
-  const handleSwitchViewMode = (mode: TreeViewMode) => {
-    if (onViewModeChange) {
-      onViewModeChange(mode);
-    } else {
-      setInternalViewMode(mode);
-    }
-  };
-
-  // 逻辑树状态
-  const [expandedSubsystemIds, setExpandedSubsystemIds] = useState<Set<string>>(
-    () => new Set(selectedSubsystemId ? [selectedSubsystemId] : [])
-  );
-  const [expandedGroupIds, setExpandedGroupIds] = useState<Set<string>>(new Set());
-
-  // 物理架构树状态（两级目录：进程分组 ➔ 业务进程）
-  const [expandedProcessGroupNames, setExpandedProcessGroupNames] = useState<Set<string>>(new Set());
-
+  // 搜索关键字
   const [searchQuery, setSearchQuery] = useState('');
 
-  // 模块按功能组归类映射
+  // 模块按 group_id 分组索引
   const modulesByGroupId = useMemo(() => {
-    const map: Record<string, Module[]> = {};
-    for (const mod of modules) {
-      const key = String(mod.group_id);
-      if (!map[key]) {
-        map[key] = [];
+    const map = new Map<string, Module[]>();
+    for (const m of modules) {
+      const gid = String(m.group_id);
+      if (!map.has(gid)) {
+        map.set(gid, []);
       }
-      map[key].push(mod);
+      map.get(gid)!.push(m);
     }
     return map;
   }, [modules]);
 
-  // 默认展开当前选中的子系统与当前选中的功能组
+  // 获取子系统的功能组树
+  const getSubsystemGroupTree = useCallback(
+    (subsystemId: string | number): FunctionalGroupTreeNode[] => {
+      const subIdStr = String(subsystemId);
+      if (groupTreeMap[subIdStr]) {
+        return groupTreeMap[subIdStr];
+      }
+      if (String(selectedSubsystemId) === subIdStr) {
+        return groupTree;
+      }
+      return [];
+    },
+    [groupTreeMap, selectedSubsystemId, groupTree]
+  );
+
+  // 当外部选中的子系统、功能组或模块变更时，自动展开其父节点链路
   useEffect(() => {
     if (selectedSubsystemId) {
       setExpandedSubsystemIds((prev) => {
@@ -209,10 +144,10 @@ export const SubsystemGroupTreePanel: React.FC<SubsystemGroupTreePanelProps> = (
         next.add(String(selectedSubsystemId));
         return next;
       });
+      if (!groupTreeMap[String(selectedSubsystemId)] && onLoadSubsystemTree) {
+        void onLoadSubsystemTree(String(selectedSubsystemId));
+      }
     }
-  }, [selectedSubsystemId]);
-
-  useEffect(() => {
     if (selectedGroupId) {
       setExpandedGroupIds((prev) => {
         const next = new Set(prev);
@@ -220,153 +155,68 @@ export const SubsystemGroupTreePanel: React.FC<SubsystemGroupTreePanelProps> = (
         return next;
       });
     }
-  }, [selectedGroupId]);
+  }, [selectedSubsystemId, selectedGroupId, groupTreeMap, onLoadSubsystemTree]);
 
-  // 当选中某个模块时，自动展开其所在的功能组
+  // 响应搜索过滤并自动展开匹配的树链路
   useEffect(() => {
-    if (!selectedModuleId || !modules.length) return;
-    const targetMod = modules.find((m) => String(m.id) === String(selectedModuleId));
-    if (targetMod?.group_id) {
-      setExpandedGroupIds((prev) => {
-        const next = new Set(prev);
-        next.add(String(targetMod.group_id));
-        return next;
-      });
-    }
-  }, [selectedModuleId, modules]);
+    const q = searchQuery.trim();
+    if (!q) return;
 
-  // 当进入物理进程树时，默认展开所有进程组
-  useEffect(() => {
-    if (viewMode === 'PHYSICAL') {
-      setExpandedProcessGroupNames((prev) => {
-        const next = new Set(prev);
-        next.add('默认进程组');
-        for (const g of customProcessGroups) {
-          if (g.trim()) next.add(g.trim());
-        }
-        for (const p of processes) {
-          next.add(p.group_name || '默认进程组');
-        }
-        return next;
-      });
-    }
-  }, [viewMode, processes, customProcessGroups]);
+    const toExpandSubs = new Set<string>();
+    const toExpandGrps = new Set<string>();
 
-  // 辅助函数：获取某子系统下的功能组树
-  const getSubsystemGroupTree = useCallback(
-    (subsystemId: string | number): FunctionalGroupTreeNode[] => {
-      const subIdStr = String(subsystemId);
-      if (subIdStr === String(selectedSubsystemId) && groupTree.length > 0) {
-        return groupTree;
+    for (const sub of subsystems) {
+      const subIdStr = String(sub.id);
+      const subTree = getSubsystemGroupTree(sub.id);
+      const subMatched = isTextMatch(sub.name, q) || isTextMatch(sub.code, q);
+      const groupMatched = checkGroupTreeMatch(subTree, modulesByGroupId, q, toExpandGrps);
+
+      if (subMatched || groupMatched) {
+        toExpandSubs.add(subIdStr);
+        if (!groupTreeMap[subIdStr] && onLoadSubsystemTree) {
+          void onLoadSubsystemTree(subIdStr);
+        }
       }
-      return groupTreeMap[subIdStr] ?? (subIdStr === String(selectedSubsystemId) ? groupTree : []);
-    },
-    [selectedSubsystemId, groupTree, groupTreeMap]
-  );
-
-  // 切换子系统展开
-  const toggleSubsystemExpand = (id: string | number, e?: React.MouseEvent) => {
-    if (e) e.stopPropagation();
-    const strId = String(id);
-    if (onLoadSubsystemTree && !groupTreeMap[strId] && strId !== String(selectedSubsystemId)) {
-      void onLoadSubsystemTree(strId);
     }
+
+    setExpandedSubsystemIds(toExpandSubs);
+    setExpandedGroupIds(toExpandGrps);
+  }, [searchQuery, subsystems, getSubsystemGroupTree, modulesByGroupId, groupTreeMap, onLoadSubsystemTree]);
+
+  const toggleSubsystemExpand = (id: string | number, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    const idStr = String(id);
     setExpandedSubsystemIds((prev) => {
       const next = new Set(prev);
-      if (next.has(strId)) {
-        next.delete(strId);
+      if (next.has(idStr)) {
+        next.delete(idStr);
       } else {
-        next.add(strId);
+        next.add(idStr);
+        if (!groupTreeMap[idStr] && onLoadSubsystemTree) {
+          void onLoadSubsystemTree(idStr);
+        }
       }
       return next;
     });
   };
 
-  // 切换功能组展开
-  const toggleGroupExpand = (id: string | number, e: React.MouseEvent) => {
-    e.stopPropagation();
-    const strId = String(id);
+  const toggleGroupExpand = (id: string | number, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    const idStr = String(id);
     setExpandedGroupIds((prev) => {
       const next = new Set(prev);
-      if (next.has(strId)) next.delete(strId);
-      else next.add(strId);
+      if (next.has(idStr)) {
+        next.delete(idStr);
+      } else {
+        next.add(idStr);
+      }
       return next;
     });
   };
-
-  // 切换进程组展开
-  const toggleProcessGroupExpand = (groupName: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setExpandedProcessGroupNames((prev) => {
-      const next = new Set(prev);
-      if (next.has(groupName)) next.delete(groupName);
-      else next.add(groupName);
-      return next;
-    });
-  };
-
-  // 搜索时自动展开匹配路径
-  useEffect(() => {
-    if (!searchQuery.trim()) return;
-
-    if (viewMode === 'LOGICAL') {
-      const toExpandSub = new Set<string>();
-      const toExpandGrp = new Set<string>();
-
-      for (const sub of subsystems) {
-        const subTree = getSubsystemGroupTree(sub.id);
-        const subMatched = isTextMatch(sub.name, searchQuery) || isTextMatch(sub.code, searchQuery);
-        const grpMatched = checkGroupTreeMatch(subTree, modulesByGroupId, searchQuery, toExpandGrp);
-
-        if (subMatched || grpMatched) {
-          toExpandSub.add(sub.id);
-        }
-      }
-
-      setExpandedSubsystemIds((prev) => new Set([...prev, ...toExpandSub]));
-      setExpandedGroupIds((prev) => new Set([...prev, ...toExpandGrp]));
-    } else {
-      // 物理进程树搜索：展开匹配的组
-      const toExpandGroups = new Set<string>();
-
-      for (const p of processes) {
-        const groupName = p.group_name || '默认进程组';
-        const groupMatched = isTextMatch(groupName, searchQuery);
-        const procMatched =
-          isTextMatch(p.name, searchQuery) ||
-          isTextMatch(String(p.listen_port), searchQuery) ||
-          isTextMatch(p.cmd_pattern, searchQuery);
-
-        let moduleMatched = false;
-        for (const pm of p.process_modules ?? []) {
-          if (
-            isTextMatch(pm.module?.name, searchQuery) ||
-            isTextMatch(pm.module?.code, searchQuery)
-          ) {
-            moduleMatched = true;
-            break;
-          }
-        }
-
-        if (groupMatched || procMatched || moduleMatched) {
-          toExpandGroups.add(groupName);
-        }
-      }
-
-      for (const g of customProcessGroups) {
-        if (isTextMatch(g, searchQuery)) {
-          toExpandGroups.add(g);
-        }
-      }
-
-      setExpandedProcessGroupNames((prev) => new Set([...prev, ...toExpandGroups]));
-    }
-  }, [searchQuery, subsystems, processes, customProcessGroups, viewMode, getSubsystemGroupTree, modulesByGroupId]);
 
   // 过滤后的子系统列表
   const filteredSubsystems = useMemo(() => {
     if (!searchQuery.trim()) return subsystems;
-
     return subsystems.filter((sub) => {
       const subMatched = isTextMatch(sub.name, searchQuery) || isTextMatch(sub.code, searchQuery);
       if (subMatched) return true;
@@ -376,243 +226,183 @@ export const SubsystemGroupTreePanel: React.FC<SubsystemGroupTreePanelProps> = (
     });
   }, [subsystems, searchQuery, getSubsystemGroupTree, modulesByGroupId]);
 
-  // 物理进程两级目录聚合（进程分组 ➔ 进程列表）
-  const processGroupList = useMemo(() => {
-    const map = new Map<string, Process[]>();
-
-    // 默认进程组首先放入
-    map.set('默认进程组', []);
-
-    // 自定义显式创建的进程组放入
-    for (const g of customProcessGroups) {
-      const trimmed = g.trim();
-      if (trimmed && !map.has(trimmed)) {
-        map.set(trimmed, []);
-      }
-    }
-
-    // 归入所有物理进程
-    for (const proc of processes) {
-      const groupName = (proc.group_name || '默认进程组').trim();
-      if (!map.has(groupName)) {
-        map.set(groupName, []);
-      }
-      map.get(groupName)!.push(proc);
-    }
-
-    const groups = Array.from(map.entries()).map(([groupName, procs]) => ({
-      groupName,
-      processes: procs,
-    }));
-
-    if (!searchQuery.trim()) return groups;
-
-    // 过滤匹配的进程组
-    return groups
-      .map((g) => {
-        const groupMatched = isTextMatch(g.groupName, searchQuery);
-        const filteredProcs = g.processes.filter((p) => {
-          if (groupMatched) return true;
-          const procMatched =
-            isTextMatch(p.name, searchQuery) ||
-            isTextMatch(String(p.listen_port), searchQuery) ||
-            isTextMatch(p.cmd_pattern, searchQuery);
-          if (procMatched) return true;
-          return (p.process_modules ?? []).some(
-            (pm) =>
-              isTextMatch(pm.module?.name, searchQuery) ||
-              isTextMatch(pm.module?.code, searchQuery)
-          );
-        });
-
-        if (groupMatched || filteredProcs.length > 0) {
-          return {
-            groupName: g.groupName,
-            processes: filteredProcs,
-          };
-        }
-        return null;
-      })
-      .filter((g): g is { groupName: string; processes: Process[] } => g !== null);
-  }, [processes, customProcessGroups, searchQuery]);
-
-  // 渲染逻辑功能组节点（一直递归展开到 功能模块 FM）
-  const renderGroupNode = (node: FunctionalGroupTreeNode, subsystemId: string, depth = 1) => {
-    const groupMods = modulesByGroupId[node.id] ?? [];
-    const filteredMods = searchQuery.trim()
-      ? groupMods.filter((m) => isModuleMatch(m, searchQuery) || isTextMatch(node.name, searchQuery))
-      : groupMods;
-
-    const hasChildrenGroups = Boolean(node.children && node.children.length > 0);
-    const hasChildrenModules = groupMods.length > 0;
-    const hasAnyChildren = hasChildrenGroups || hasChildrenModules;
-    const isExpanded = expandedGroupIds.has(String(node.id)) || Boolean(searchQuery.trim());
-    const isSelected = String(selectedGroupId) === String(node.id) && !selectedModuleId;
-
+  // 渲染模块叶子节点
+  const renderModuleLeaf = (mod: Module, subsystemId: string | number, groupId: string | number) => {
+    const isSelected = String(selectedModuleId) === String(mod.id);
     return (
-      <div key={node.id} className="code-tree-node-wrapper">
-        <div
-          className={`code-tree-node code-tree-node--group ${isSelected ? 'code-tree-node--selected' : ''}`}
-          style={{ paddingLeft: `${depth * 16 + 8}px` }}
-          onClick={() => {
-            onSelectGroup(node.id, subsystemId);
-          }}
-        >
-          <div className="code-tree-node__left">
-            <button
-              type="button"
-              className="code-tree-expand-btn"
-              onClick={(e) => toggleGroupExpand(node.id, e)}
-              style={{ visibility: hasAnyChildren ? 'visible' : 'hidden' }}
-              title={isExpanded ? '折叠' : '展开'}
-            >
-              {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-            </button>
-            {isExpanded ? (
-              <FolderOpen size={16} className="code-tree-icon--group" style={{ color: 'var(--color-warning, #eab308)' }} />
-            ) : (
-              <Folder size={16} className="code-tree-icon--group" style={{ color: 'var(--color-warning, #eab308)' }} />
-            )}
-            <span className="code-tree-node__name" title={`${node.name} [${node.code}]`}>
-              {node.name}
-              <span className="code-tree-node__code">[{node.code}]</span>
-            </span>
-            {groupMods.length > 0 && (
-              <span className="code-tree-node__badge" title={`包含 ${groupMods.length} 个功能模块`}>
-                {groupMods.length} FM
-              </span>
-            )}
-          </div>
+      <div
+        key={`mod-${mod.id}`}
+        className={`code-tree-node code-tree-node--module ${isSelected ? 'code-tree-node--selected' : ''}`}
+        onClick={(e) => {
+          e.stopPropagation();
+          if (onSelectModuleLeaf) {
+            onSelectModuleLeaf(subsystemId, groupId, mod.id);
+          } else if (onSelectModule) {
+            onSelectModule(String(mod.id));
+          }
+        }}
+      >
+        <div className="code-tree-node__left">
+          <FileCode size={14} style={{ color: 'var(--color-primary)', flexShrink: 0 }} />
+          <span className="code-tree-node__name" title={`${mod.name} (${mod.code})`}>
+            {mod.name}
+          </span>
+          <span className="code-tree-node__code-chip">{mod.code}</span>
+        </div>
 
-          {isAdmin && (
-            <div className="code-tree-node__actions" onClick={(e) => e.stopPropagation()}>
-              {onCreateModule && (
-                <button
-                  type="button"
-                  className="code-tree-action-btn"
-                  onClick={() => onCreateModule(node.id)}
-                  title="新建功能模块"
-                >
-                  <FileCode size={13} style={{ color: '#10b981' }} />
-                </button>
-              )}
+        {isAdmin && (
+          <div className="code-tree-node__actions" onClick={(e) => e.stopPropagation()}>
+            {onEditModule && (
               <button
                 type="button"
                 className="code-tree-action-btn"
-                onClick={() => onCreateGroup(node.id, subsystemId)}
-                title="新增子功能组"
+                onClick={() => onEditModule(mod)}
+                title="编辑模块"
               >
-                <Plus size={14} />
+                <Edit size={13} />
               </button>
-              <button
-                type="button"
-                className="code-tree-action-btn"
-                onClick={() => onEditGroup(node)}
-                title="编辑功能组"
-              >
-                <Edit size={14} />
-              </button>
-              <button
-                type="button"
-                className="code-tree-action-btn"
-                onClick={() => onMoveGroup(node)}
-                title="移动功能组 (变更父级)"
-              >
-                <ArrowRightLeft size={14} />
-              </button>
+            )}
+            {onDeleteModule && (
               <button
                 type="button"
                 className="code-tree-action-btn code-tree-action-btn--danger"
-                onClick={() => onDeleteGroup(node.id)}
-                title="删除功能组"
+                onClick={() => onDeleteModule(String(mod.id))}
+                title="删除模块"
               >
-                <Trash2 size={14} />
+                <Trash2 size={13} />
               </button>
-            </div>
-          )}
-        </div>
-
-        {/* 展开子功能组与功能模块 */}
-        {isExpanded && (
-          <div className="code-tree-children">
-            {/* 1. 子功能组递归 */}
-            {hasChildrenGroups && (node.children ?? []).map((child) => renderGroupNode(child, subsystemId, depth + 1))}
-
-            {/* 2. 属于当前功能组的功能模块 (FM 叶子节点) */}
-            {filteredMods.map((mod) => {
-              const isModSelected = String(selectedModuleId) === String(mod.id);
-              return (
-                <div
-                  key={mod.id}
-                  className={`code-tree-node code-tree-node--module-leaf ${isModSelected ? 'code-tree-node--selected' : ''}`}
-                  style={{ paddingLeft: `${(depth + 1) * 16 + 8}px` }}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    if (onSelectModuleLeaf) {
-                      onSelectModuleLeaf(subsystemId, node.id, mod.id);
-                    } else {
-                      onSelectGroup(node.id, subsystemId);
-                      if (onSelectModule) onSelectModule(mod.id);
-                    }
-                  }}
-                >
-                  <div className="code-tree-node__left">
-                    <span style={{ width: '14px', flexShrink: 0 }} />
-                    <FileCode size={14} style={{ color: '#10b981', flexShrink: 0 }} />
-                    <span className="code-tree-node__name" title={`${mod.name} [${mod.code}]`}>
-                      {mod.name}
-                      <span className="code-tree-node__code">[{mod.code}]</span>
-                    </span>
-                  </div>
-
-                  {isAdmin && (
-                    <div className="code-tree-node__actions" onClick={(e) => e.stopPropagation()}>
-                      {onEditModule && (
-                        <button
-                          type="button"
-                          className="code-tree-action-btn"
-                          onClick={() => onEditModule(mod)}
-                          title="编辑功能模块"
-                        >
-                          <Edit size={13} />
-                        </button>
-                      )}
-                      {onDeleteModule && (
-                        <button
-                          type="button"
-                          className="code-tree-action-btn code-tree-action-btn--danger"
-                          onClick={() => onDeleteModule(mod.id)}
-                          title="删除功能模块"
-                        >
-                          <Trash2 size={13} />
-                        </button>
-                      )}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+            )}
           </div>
         )}
       </div>
     );
   };
 
-  // 渲染逻辑子系统节点
-  const renderSubsystemNode = (sub: Subsystem) => {
-    const rawTree = getSubsystemGroupTree(sub.id);
-    const displayedTree = filterGroupNodes(rawTree, modulesByGroupId, searchQuery);
-    const hasChildren = rawTree.length > 0;
-    const isExpanded = expandedSubsystemIds.has(String(sub.id)) || Boolean(searchQuery.trim());
-    const isSelected = String(selectedSubsystemId) === String(sub.id) && !selectedGroupId && !selectedModuleId;
+  // 递归渲染功能组节点
+  const renderGroupNode = (
+    node: FunctionalGroupTreeNode,
+    currentSubsystemId: string | number,
+    level = 1
+  ): React.ReactNode => {
+    const nodeIdStr = String(node.id);
+    const hasChildren = node.children && node.children.length > 0;
+    const groupMods = modulesByGroupId.get(nodeIdStr) || [];
+    const hasModules = groupMods.length > 0;
+    const hasExpandableContent = hasChildren || hasModules;
+
+    const isExpanded = expandedGroupIds.has(nodeIdStr) || Boolean(searchQuery.trim());
+    const isSelected = String(selectedGroupId) === nodeIdStr;
 
     return (
-      <div key={sub.id} className="code-tree-node-wrapper">
+      <div key={`grp-${node.id}`} className="code-tree-node-wrapper" style={{ paddingLeft: `${(level - 1) * 1.25}rem` }}>
+        <div
+          className={`code-tree-node code-tree-node--group ${isSelected ? 'code-tree-node--selected' : ''}`}
+          onClick={() => onSelectGroup(nodeIdStr, String(currentSubsystemId))}
+        >
+          <div className="code-tree-node__left">
+            {hasExpandableContent ? (
+              <button
+                type="button"
+                className="code-tree-expand-btn"
+                onClick={(e) => toggleGroupExpand(node.id, e)}
+                title={isExpanded ? '折叠' : '展开'}
+              >
+                {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+              </button>
+            ) : (
+              <span className="code-tree-expand-placeholder" />
+            )}
+            {isExpanded ? (
+              <FolderOpen size={16} className="code-tree-icon code-tree-icon--open" />
+            ) : (
+              <Folder size={16} className="code-tree-icon" />
+            )}
+            <span className="code-tree-node__name" title={`${node.name} (${node.code})`}>
+              {node.name}
+            </span>
+            <span className="code-tree-node__code-chip">{node.code}</span>
+            {hasModules && <span className="code-tree-node__badge">{groupMods.length} 模块</span>}
+          </div>
+
+          {isAdmin && (
+            <div className="code-tree-node__actions" onClick={(e) => e.stopPropagation()}>
+              <button
+                type="button"
+                className="code-tree-action-btn"
+                onClick={() => onCreateGroup(nodeIdStr, String(currentSubsystemId))}
+                title="在此功能组下新建子功能组"
+              >
+                <Plus size={13} />
+              </button>
+              {onCreateModule && (
+                <button
+                  type="button"
+                  className="code-tree-action-btn"
+                  onClick={() => onCreateModule(nodeIdStr)}
+                  title="在此组下新建功能模块"
+                >
+                  <FileCode size={13} />
+                </button>
+              )}
+              <button
+                type="button"
+                className="code-tree-action-btn"
+                onClick={() => onEditGroup(node)}
+                title="编辑功能组"
+              >
+                <Edit size={13} />
+              </button>
+              <button
+                type="button"
+                className="code-tree-action-btn"
+                onClick={() => onMoveGroup(node)}
+                title="调整层级 (变更父节点)"
+              >
+                <Layers size={13} />
+              </button>
+              <button
+                type="button"
+                className="code-tree-action-btn code-tree-action-btn--danger"
+                onClick={() => onDeleteGroup(nodeIdStr)}
+                title="删除功能组"
+              >
+                <Trash2 size={13} />
+              </button>
+            </div>
+          )}
+        </div>
+
+        {isExpanded && (
+          <div className="code-tree-children">
+            {hasChildren && node.children && node.children.map((child) => renderGroupNode(child, currentSubsystemId, level + 1))}
+            {hasModules && (
+              <div className="code-tree-modules-container" style={{ paddingLeft: `${level * 0.75}rem` }}>
+                {groupMods.map((mod) => renderModuleLeaf(mod, currentSubsystemId, node.id))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // 渲染子系统节点
+  const renderSubsystemNode = (sub: Subsystem) => {
+    const subIdStr = String(sub.id);
+    const subTree = getSubsystemGroupTree(sub.id);
+    const hasTree = subTree.length > 0;
+    const isExpanded = expandedSubsystemIds.has(subIdStr) || Boolean(searchQuery.trim());
+    const isSelected = String(selectedSubsystemId) === subIdStr;
+
+    return (
+      <div key={`sub-${sub.id}`} className="code-tree-node-wrapper code-tree-node-wrapper--subsystem">
         <div
           className={`code-tree-node code-tree-node--subsystem ${isSelected ? 'code-tree-node--selected' : ''}`}
           onClick={() => {
-            onSelectSubsystem(sub.id);
-            if (!isExpanded) toggleSubsystemExpand(sub.id);
+            onSelectSubsystem(subIdStr);
+            if (!expandedSubsystemIds.has(subIdStr)) {
+              toggleSubsystemExpand(sub.id);
+            }
           }}
         >
           <div className="code-tree-node__left">
@@ -624,11 +414,11 @@ export const SubsystemGroupTreePanel: React.FC<SubsystemGroupTreePanelProps> = (
             >
               {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
             </button>
-            <Cpu size={16} className="code-tree-icon--subsystem" style={{ color: 'var(--color-primary)' }} />
-            <span className="code-tree-node__name" title={`${sub.name} [${sub.code}]`}>
+            <Layers size={16} className="code-tree-icon code-tree-icon--subsystem" />
+            <span className="code-tree-node__name" title={`${sub.name} (${sub.code})`}>
               {sub.name}
-              <span className="code-tree-node__code">[{sub.code}]</span>
             </span>
+            <span className="code-tree-node__code-chip">{sub.code}</span>
           </div>
 
           {isAdmin && (
@@ -636,8 +426,8 @@ export const SubsystemGroupTreePanel: React.FC<SubsystemGroupTreePanelProps> = (
               <button
                 type="button"
                 className="code-tree-action-btn"
-                onClick={() => onCreateGroup(null, sub.id)}
-                title="新建根功能组"
+                onClick={() => onCreateGroup(null, subIdStr)}
+                title="在当前子系统下新建根功能组"
               >
                 <Plus size={14} />
               </button>
@@ -652,7 +442,7 @@ export const SubsystemGroupTreePanel: React.FC<SubsystemGroupTreePanelProps> = (
               <button
                 type="button"
                 className="code-tree-action-btn code-tree-action-btn--danger"
-                onClick={() => onDeleteSubsystem(sub.id)}
+                onClick={() => onDeleteSubsystem(subIdStr)}
                 title="删除子系统"
               >
                 <Trash2 size={14} />
@@ -663,159 +453,11 @@ export const SubsystemGroupTreePanel: React.FC<SubsystemGroupTreePanelProps> = (
 
         {isExpanded && (
           <div className="code-tree-children">
-            {displayedTree.length > 0 ? (
-              displayedTree.map((child) => renderGroupNode(child, sub.id, 1))
-            ) : hasChildren && searchQuery.trim() ? null : (
-              <div className="code-tree-empty-sub" style={{ paddingLeft: '2.5rem' }}>
+            {hasTree ? (
+              subTree.map((node) => renderGroupNode(node, sub.id, 1))
+            ) : (
+              <div className="code-tree-empty-sub" style={{ paddingLeft: '2rem' }}>
                 暂无功能组
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-    );
-  };
-
-  // 渲染物理架构两级树：进程分组 ➔ 业务进程 ➔ 装配承载模块
-  const renderProcessGroupNode = (g: { groupName: string; processes: Process[] }) => {
-    const isExpanded = expandedProcessGroupNames.has(g.groupName) || Boolean(searchQuery.trim());
-    const isSelected = selectedProcessGroupName === g.groupName && !selectedProcessId;
-
-    return (
-      <div key={g.groupName} className="code-tree-node-wrapper">
-        <div
-          className={`code-tree-node code-tree-node--proc-group ${isSelected ? 'code-tree-node--selected' : ''}`}
-          onClick={(e) => {
-            toggleProcessGroupExpand(g.groupName, e);
-            if (onSelectProcessGroup) onSelectProcessGroup(g.groupName);
-          }}
-        >
-          <div className="code-tree-node__left">
-            <button
-              type="button"
-              className="code-tree-expand-btn"
-              onClick={(e) => toggleProcessGroupExpand(g.groupName, e)}
-              title={isExpanded ? '折叠' : '展开'}
-            >
-              {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-            </button>
-            <Layers size={16} style={{ color: 'var(--color-primary)' }} />
-            <span className="code-tree-node__name" style={{ fontWeight: 600 }} title={g.groupName}>
-              {g.groupName}
-            </span>
-            <span className="code-tree-node__badge">{g.processes.length} 进程</span>
-          </div>
-
-          {isAdmin && (
-            <div className="code-tree-node__actions" onClick={(e) => e.stopPropagation()}>
-              {onCreateProcess && (
-                <button
-                  type="button"
-                  className="code-tree-action-btn"
-                  onClick={() => onCreateProcess(g.groupName)}
-                  title={`在 [${g.groupName}] 下新建进程`}
-                >
-                  <Plus size={14} />
-                </button>
-              )}
-              {onEditProcessGroup && g.groupName !== '默认进程组' && (
-                <button
-                  type="button"
-                  className="code-tree-action-btn"
-                  onClick={() => onEditProcessGroup(g.groupName)}
-                  title="重命名进程组"
-                >
-                  <Edit size={14} />
-                </button>
-              )}
-              {onDeleteProcessGroup && g.groupName !== '默认进程组' && (
-                <button
-                  type="button"
-                  className="code-tree-action-btn code-tree-action-btn--danger"
-                  onClick={() => onDeleteProcessGroup(g.groupName)}
-                  title="删除进程组"
-                >
-                  <Trash2 size={14} />
-                </button>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* 组内进程列表（二级目录，仅展示业务进程节点） */}
-        {isExpanded && (
-          <div className="code-tree-children">
-            {g.processes.map((proc) => {
-              const isSelected = selectedProcessId === proc.id;
-              const boundMods = proc.process_modules ?? [];
-
-              return (
-                <div key={proc.id} className="code-tree-node-wrapper">
-                  <div
-                    className={`code-tree-node code-tree-node--process ${isSelected ? 'code-tree-node--selected' : ''}`}
-                    style={{ paddingLeft: '28px' }}
-                    onClick={() => {
-                      if (onSelectProcess) onSelectProcess(proc.id);
-                    }}
-                  >
-                    <div className="code-tree-node__left">
-                      <Server size={15} style={{ color: 'var(--color-info, #0284c7)', flexShrink: 0 }} />
-                      <span className="code-tree-node__name" title={`${proc.name} ${proc.listen_port > 0 ? `(Port: ${proc.listen_port})` : '(纯客户端)'}`}>
-                        {proc.name}
-                        {proc.listen_port > 0 ? (
-                          <span className="code-tree-node__code">: {proc.listen_port}</span>
-                        ) : (
-                          <span className="code-tree-node__code" style={{ opacity: 0.65 }}> (Client)</span>
-                        )}
-                      </span>
-                      {boundMods.length > 0 && (
-                        <span className="code-tree-node__badge" title={`承载 ${boundMods.length} 个功能模块`}>
-                          {boundMods.length} FM
-                        </span>
-                      )}
-                    </div>
-
-                    {isAdmin && (
-                      <div className="code-tree-node__actions" onClick={(e) => e.stopPropagation()}>
-                        {onEditProcess && (
-                          <button
-                            type="button"
-                            className="code-tree-action-btn"
-                            onClick={() => onEditProcess(proc)}
-                            title="修改进程"
-                          >
-                            <Edit size={14} />
-                          </button>
-                        )}
-                        {onDeleteProcess && (
-                          <button
-                            type="button"
-                            className="code-tree-action-btn code-tree-action-btn--danger"
-                            onClick={() => onDeleteProcess(proc.id)}
-                            title="删除进程"
-                          >
-                            <Trash2 size={14} />
-                          </button>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-            {g.processes.length === 0 && (
-              <div className="code-tree-empty-sub" style={{ paddingLeft: '2.5rem' }}>
-                组内暂无进程
-                {isAdmin && onCreateProcess && (
-                  <button
-                    type="button"
-                    className="code-btn code-btn--text code-btn--xs"
-                    style={{ marginLeft: '0.5rem', color: 'var(--color-primary)' }}
-                    onClick={() => onCreateProcess(g.groupName)}
-                  >
-                    + 添加进程
-                  </button>
-                )}
               </div>
             )}
           </div>
@@ -826,30 +468,10 @@ export const SubsystemGroupTreePanel: React.FC<SubsystemGroupTreePanelProps> = (
 
   return (
     <div className="code-tree-panel">
-      {/* 视角双模切换器 (方案 2: 逻辑架构树 vs 物理进程树) */}
-      <div className="code-tree-view-tabs">
-        <button
-          type="button"
-          className={`code-tree-view-tab ${viewMode === 'LOGICAL' ? 'code-tree-view-tab--active' : ''}`}
-          onClick={() => handleSwitchViewMode('LOGICAL')}
-        >
-          逻辑业务树
-        </button>
-        <button
-          type="button"
-          className={`code-tree-view-tab ${viewMode === 'PHYSICAL' ? 'code-tree-view-tab--active' : ''}`}
-          onClick={() => handleSwitchViewMode('PHYSICAL')}
-        >
-          物理架构树 (进程)
-        </button>
-      </div>
-
       {/* 顶部标题与操作栏 */}
       <div className="code-tree-panel__header">
-        <h3 className="code-tree-panel__title">
-          {viewMode === 'LOGICAL' ? '架构元素树' : '物理进程架构'}
-        </h3>
-        {isAdmin && viewMode === 'LOGICAL' && (
+        <h3 className="code-tree-panel__title">逻辑架构元素树</h3>
+        {isAdmin && (
           <button
             type="button"
             className="code-btn code-btn--primary code-btn--sm"
@@ -859,30 +481,6 @@ export const SubsystemGroupTreePanel: React.FC<SubsystemGroupTreePanelProps> = (
             <Plus size={14} /> 子系统
           </button>
         )}
-        {isAdmin && viewMode === 'PHYSICAL' && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-            {onCreateProcessGroup && (
-              <button
-                type="button"
-                className="code-btn code-btn--secondary code-btn--sm"
-                onClick={onCreateProcessGroup}
-                title="新建进程分组"
-              >
-                <Plus size={14} /> 进程组
-              </button>
-            )}
-            {onCreateProcess && (
-              <button
-                type="button"
-                className="code-btn code-btn--primary code-btn--sm"
-                onClick={() => onCreateProcess()}
-                title="新建业务进程"
-              >
-                <Plus size={14} /> 进程
-              </button>
-            )}
-          </div>
-        )}
       </div>
 
       {/* 搜索框 */}
@@ -891,7 +489,7 @@ export const SubsystemGroupTreePanel: React.FC<SubsystemGroupTreePanelProps> = (
         <input
           type="text"
           className="code-tree-search-input"
-          placeholder={viewMode === 'LOGICAL' ? '搜索子系统、功能组、功能模块...' : '搜索进程组、进程名、端口、承载模块...'}
+          placeholder="搜索子系统、功能组、功能模块..."
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
         />
@@ -899,20 +497,12 @@ export const SubsystemGroupTreePanel: React.FC<SubsystemGroupTreePanelProps> = (
 
       {/* 树渲染区域 */}
       <div className="code-tree-list-container">
-        {viewMode === 'LOGICAL' ? (
-          filteredSubsystems.length > 0 ? (
-            filteredSubsystems.map((sub) => renderSubsystemNode(sub))
-          ) : subsystems.length === 0 ? (
-            <div className="code-tree-empty">暂无架构数据</div>
-          ) : (
-            <div className="code-tree-empty">无匹配的架构元素</div>
-          )
-        ) : processGroupList.length > 0 ? (
-          processGroupList.map((g) => renderProcessGroupNode(g))
-        ) : processes.length === 0 ? (
-          <div className="code-tree-empty">暂无业务进程数据，点击上方「+ 进程」新建</div>
+        {filteredSubsystems.length > 0 ? (
+          filteredSubsystems.map((sub) => renderSubsystemNode(sub))
+        ) : subsystems.length === 0 ? (
+          <div className="code-tree-empty">暂无架构数据</div>
         ) : (
-          <div className="code-tree-empty">无匹配的物理进程</div>
+          <div className="code-tree-empty">无匹配的架构元素</div>
         )}
       </div>
     </div>

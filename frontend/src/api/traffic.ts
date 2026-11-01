@@ -97,6 +97,7 @@ export async function listTrafficRecords(params: {
   trace_id?: string;
   keyword?: string;
   is_replayable?: boolean;
+  has_error?: boolean;
   page?: number;
   page_size?: number;
 }) {
@@ -114,6 +115,7 @@ export async function listTrafficRecords(params: {
   if (params.trace_id) query.set('trace_id', params.trace_id);
   if (params.keyword) query.set('keyword', params.keyword);
   if (params.is_replayable !== undefined) query.set('is_replayable', String(params.is_replayable));
+  if (params.has_error !== undefined) query.set('has_error', String(params.has_error));
   if (params.page) query.set('page', String(params.page));
   if (params.page_size) query.set('page_size', String(params.page_size));
   const qs = query.toString();
