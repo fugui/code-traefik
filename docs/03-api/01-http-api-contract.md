@@ -1,8 +1,8 @@
 # 业务流量监控与重放 (`code-traefik`) HTTP / SSE 与主从通信接口契约规范
 
 - **文档编号**：`01-http-api-contract.md`
-- **文档版本**：v1.0.0
-- **更新日期**：2026-10-29
+- **文档版本**：v1.1.0
+- **更新日期**：2026-11-01
 - **归属阶段**：阶段三：接口与数据契约冻结 (`03-api`)
 - **状态**：已冻结 (Frozen)
 - **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (`F-01`~`F-16`、`SC-01`~`SC-08`)、[`01-system-architecture.md`](../02-design/01-system-architecture.md)、[`04-control-plane-and-web-console.md`](../02-design/04-control-plane-and-web-console.md)、[`05-database-schema.md`](../02-design/05-database-schema.md)
@@ -145,9 +145,9 @@
 | `POST` | `/api/agents/:id/handshake` | `ScopeReadGuard` | Path: `id`（立即触发一次探活与双向租约对账） | `200`: `{agent: Agent, handshake: HandshakeResp}`<br>`403/404`；`503`: Agent 离线或连接超时 | - |
 | `GET` | `/api/agents/:id/discover-processes` | `ScopeReadGuard` | Path: `id`（`SHARED` Agent 仅 `AdminOnly` 可调用；`PRIVATE` 仅本人或管理员可调用） | `200`: `{"items": []DiscoveredProcess}`（含 `pid, listen_port, cmdline, exe_name`）<br>`403/404/503` | - |
 | `POST` | `/api/agents/:id/lease/force-unlock` | `AdminOnly` | Path: `id`；Body: `{reason: string}`（强制清空 DB 租约、终止关联未决任务并调用 Agent `/agent/v1/purge`） | `200`: `{"message":"排他租约已强制释放","agent":Agent}`<br>`400`: `reason` 为空；`403`: 非管理员；`404`: 不存在 | `traefik_agent:force_unlock_lease` |
-| `GET` | `/api/processes` | `ScopeReadGuard` | Query: `agent_id?, scope?, module_id?, search?, page?, page_size?` | `200`: 标准分页 `items: []Process`（预加载 `agent` 与 `process_modules.module`） | - |
-| `POST` | `/api/processes` | `ScopeWriteGuard` | Body: `{agent_id, name, listen_port, advertise_ip?, cmd_pattern, module_ids: uint64[], extra_downstreams?: string[], description?}` | `201`: `Process`（持久化 `traefik_process_modules`；`SHARED` 进程同步维护 `Module.ProcessID`，`PRIVATE` 进程不改写公共基线）<br>`400`: 端口越界或 `module_ids` 为空；`403`: 无目标 Agent 写权限；`404`: Agent/Module 不存在；`409`: 同 Agent 下 `listen_port`/`name` 重复，或同部署域内同一 `Module` 重复挂载到多个进程 (A-03) | `traefik_agent:create` |
-| `PUT` | `/api/processes/:id` | `ScopeWriteGuard` | Body: `{name, listen_port, advertise_ip?, cmd_pattern, module_ids: uint64[], extra_downstreams?: string[], description?}` | `200`: `Process`<br>`400/403/404`；`409`: 端口/模块挂载冲突，或所属 Agent 处于录制/重放租约中 | `traefik_agent:update` |
+| `GET` | `/api/processes` | `ScopeReadGuard` | Query: `agent_id?, scope?, module_id?, search?, page?, page_size?` | `200`: 标准分页 `items: []Process`（含 `group_name`，预加载 `agent` 与 `process_modules.module`） | - |
+| `POST` | `/api/processes` | `ScopeWriteGuard` | Body: `{agent_id, group_name?, name, listen_port, advertise_ip?, cmd_pattern, module_ids?: uint64[], extra_downstreams?: string[], description?}`（`listen_port` 允许 `0..65535`，`0` 表示纯客户端无监听端口；`group_name` 缺省为 `"默认进程组"`） | `201`: `Process`（持久化 `traefik_process_modules`；`SHARED` 进程同步维护 `Module.ProcessID`，`PRIVATE` 进程不改写公共基线）<br>`400`: 端口越界或名称格式非法；`403`: 无目标 Agent 写权限；`404`: Agent/Module 不存在；`409`: 同 Agent 下非零 `listen_port`/`name` 重复，或同部署域内同一 `Module` 重复挂载到多个进程 (A-03) | `traefik_agent:create` |
+| `PUT` | `/api/processes/:id` | `ScopeWriteGuard` | Body: `{group_name?, name, listen_port, advertise_ip?, cmd_pattern, module_ids?: uint64[], extra_downstreams?: string[], description?}` | `200`: `Process`<br>`400/403/404`；`409`: 端口/模块挂载冲突，或所属 Agent 处于录制/重放租约中 | `traefik_agent:update` |
 | `DELETE` | `/api/processes/:id` | `ScopeWriteGuard` | Path: `id` | `200`: `{"message":"进程映射已删除"}`<br>`403/404`；`409`: 所属 Agent 持有活跃租约或被 `ReplayTask` 引用 | `traefik_agent:delete` |
 
 ---
@@ -166,7 +166,7 @@
 | `PATCH` | `/api/recording-sessions/:id/publish` | `ScopeWriteGuard` | Path: `id`（将本人合格的 `PRIVATE` 录制批次发布为团队 `SHARED` 素材） | `200`: `RecordingSession`（`scope` 更新为 `"SHARED"`）<br>`400`: 批次未完成；`403/404` | `traefik_record:publish_session` |
 | `DELETE` | `/api/recording-sessions/:id` | `ScopeWriteGuard` | Path: `id`（`PRIVATE` 创建人或管理员可删；`SHARED` 仅管理员可删） | `200`: `{"message":"录制批次已删除"}`<br>`403/404`；`409`: 正在录制中或仍被 `ReplayTask` 引用 | `traefik_record:delete_session` |
 | `GET` | `/api/recording-sessions/:id/consistency-report` | `ScopeReadGuard` | Path: `id`；Query: `refresh?` (`bool`) | `200`: `ConsistencyReportDTO`（含 `VERIFIED / VIOLATION / UNCOVERED / NOT_MONITORED / NOT_OBSERVABLE / UNATTRIBUTED` 六分类统计与边列表，见 [`03-architecture-elements-and-topology.md` §5.3](../02-design/03-architecture-elements-and-topology.md)）<br>`403/404` | - |
-| `GET` | `/api/traffic-records` | `ScopeReadGuard` | Query: `session_id` (必填或按可见批次过滤), `scope?, subsystem_id?, module_id?, process_id?, direction?, exchange_type?, service_name?, operation?, sno?, trace_id?, keyword?, is_replayable?, page?, page_size?` | `200`: 标准分页 `items: []TrafficRecordSummary`（不加载 `raw_req_packet` / `raw_rsp_packet` `bytea` 列）<br>`400`: 筛选参数非法；`403`: `session_id` 为他人 `PRIVATE` 素材 | - |
+| `GET` | `/api/traffic-records` | `ScopeReadGuard` | Query: `session_id` (必填或按可见批次过滤), `scope?, subsystem_id?, module_id?, process_id?, direction?, exchange_type?, service_name?, operation?, sno?, trace_id?, has_error?` (`bool`, 过滤 `status_code != 0 OR exchange_type = 'REQ_ONLY'`), `keyword?, is_replayable?, page?, page_size?` | `200`: 标准分页 `items: []TrafficRecordSummary`（不加载 `raw_req_packet` / `raw_rsp_packet` `bytea` 列）<br>`400`: 筛选参数非法；`403`: `session_id` 为他人 `PRIVATE` 素材 | - |
 | `GET` | `/api/traffic-records/:id/anatomy` | `ScopeReadGuard` | Path: `id`；Query: `session_id?` | `200`: `PacketAnatomyDrawerDTO`（含 `reqSide` 与 `rspSide` 四段完整解剖：24B 公共头位图、会话头与耗时、扩展头 Trace、Protobuf JSON 与 16B 对齐 Raw Hex，见 [`04-control-plane-and-web-console.md` §4.3](../02-design/04-control-plane-and-web-console.md)）<br>`403/404` | - |
 | `POST` | `/api/traffic-records/:id/redecode` | `ScopeReadGuard` | Path: `id`（使用当前生效 `.pb` 版本按需重解码单条往返记录，F-03.4） | `200`: `PacketAnatomyDrawerDTO`<br>`400`: 无匹配生效 `.pb`；`403/404` | - |
 

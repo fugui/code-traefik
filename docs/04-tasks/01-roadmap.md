@@ -1,8 +1,8 @@
 # 业务流量监控与重放 (`code-traefik`) TDD 工程实施路线图与质量门禁
 
 - **文档编号**：`01-roadmap.md`
-- **文档版本**：v1.0.0
-- **更新日期**：2026-10-29
+- **文档版本**：v1.1.0
+- **更新日期**：2026-11-01
 - **归属阶段**：阶段三/四：TDD 实施路线图与全局门禁 (`04-tasks`)
 - **状态**：已冻结 (Frozen)
 - **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md)、[`01-system-architecture.md`](../02-design/01-system-architecture.md)、[`01-http-api-contract.md`](../03-api/01-http-api-contract.md)
@@ -21,7 +21,7 @@
 
 ---
 
-## 2. M1 ~ M5 里程碑依赖拓扑 (DAG) 与职责边界
+## 2. M1 ~ M8 里程碑依赖拓扑 (DAG) 与职责边界
 
 ```mermaid
 flowchart LR
@@ -38,8 +38,10 @@ flowchart LR
     M4 ==> M5
     M5 ==> M6
     M6 ==> M7
+    M7 ==> M8
     M6["M6: 分层复合拓扑与一致性画布<br/>(React Flow + ELK Worker + 边汇总 + 去 Agent 物理图)"]
     M7["M7: 契约资产化治理、嵌套服务表与消息体字段树<br/>(两级折叠表 + 字段字典树 + 可视化 Diff 忽略 + 原文件导出)"]
+    M8["M8: 控制台信息架构重组与调试工作流闭环<br/>(3组8项菜单 + 录制台账/单包调试重放 + 架构解耦与进程收口)"]
 ```
 
 | 里程碑 | 状态 | 作战卡文档 | 核心职责与交付边界 | 准出质量门禁 (Exit Gate) |
@@ -51,6 +53,7 @@ flowchart LR
 | **M5** | ✅ 已交付 | [`06-m5-microfrontend-and-e2e-delivery.md`](./06-m5-microfrontend-and-e2e-delivery.md) | 架构中心、Agent 看板、`.pb` 工作台、流量监控台（含四段解剖抽屉）、重放工作台（含双层 Diff 抽屉）、`--color-*` 语义主题、URL 5 页滑窗分页、`SC-01`~`SC-08` E2E 回归及双二进制打包交付 | `make test && make lint && make build && make clean` 100% 零警告通过 |
 | **M6** | ✅ 已交付 | [`07-m6-hierarchical-topology-canvas.md`](./07-m6-hierarchical-topology-canvas.md) | 分层复合架构拓扑与一致性画布（`ArchCanvas`）：全系统单画布、React Flow v12 + ELK Inline Worker 异步正交布局（含跨层拐点全局换算与拖拽退化）、纯前端边汇总与动态 `VIOLATION`/`UNATTRIBUTED` 叠加、物理视图去 Agent 化与 `SHA-256` 强 `ETag` `GET /api/arch/topology/graph` 契约 | Vitest 纯算法单测覆盖率 `≥ 90%` + `TEST_DB_DSN=... go test -race` 通过 + `make lint && make build` 零警告 |
 | **M7** | ✅ 已交付 | [`08-m7-proto-schema-deepening-and-nested-contract-workbench.md`](./08-m7-proto-schema-deepening-and-nested-contract-workbench.md) | Protobuf 契约资产化治理：两级嵌套折叠服务表（服务主行 ➔ 方法子表）、消息体参数字典树反射（Req/Rsp 字段树、Tag、类型高亮与注释透视）、可视化 Diff 忽略字段勾选与多级继承、原始 `.pb` 二进制下载导出及架构认领血缘分析 | `TEST_DB_DSN=... go test -race ./...` 全绿 + `make lint && make build` 零警告 |
+| **M8** | ⏳ 待实施 | [`09-m8-console-ia-restructuring-and-debug-workflow.md`](./09-m8-console-ia-restructuring-and-debug-workflow.md) | 微前端控制台信息架构重组与调试工作流闭环：3 组 8 项频次金字塔菜单（默认落地 `/record`）与旧深链无损重定向、独立 `流量录制` 素材台账与 `流量调试`（`has_error` 异常过滤 + `SinglePacketReplayDrawer` 单包快速重放原地 Diff）、全屏 `架构拓扑` 与纯逻辑 `架构元素` 解耦、物理进程单点收口至 `Agent 与进程` | `TEST_DB_DSN=... make test` 全绿 + `MenuAndLegacyRoutes` / `RecordingWorkbench` / `SinglePacketReplay` / `TopologyAndArchDecoupling` 单测全绿 + `make lint && make build && make clean` 零警告 |
 
 ---
 
@@ -61,7 +64,7 @@ flowchart LR
 | 特性编号 | 特性名称 | 落位里程碑 | 目标测试文件 | 关键先行测试函数 |
 | :--- | :--- | :---: | :--- | :--- |
 | **F-01** | 三级架构元素建模 | M1, M2 | `models/models_test.go`<br>`handlers/arch_proto_agent_test.go` | `TestArchHierarchyCRUDAndMoveValidation`<br>`TestDeleteNonEmptyArchElementsConflict` |
-| **F-02** | 进程部署映射与模块服务契约依赖 | M1, M2 | `internal/server/topology/topology_test.go`<br>`handlers/arch_proto_agent_test.go` | `TestModuleServiceProvideGlobalUnique`<br>`TestModuleDependenciesAndExternalSystem`<br>`TestProcessModuleBindingPublicVsPrivate` |
+| **F-02** | 进程部署映射与模块服务契约依赖 | M1, M2, M8 | `internal/server/topology/topology_test.go`<br>`handlers/arch_proto_agent_test.go`<br>`frontend/src/__tests__/WorkbenchRBAC.test.tsx` | `TestModuleServiceProvideGlobalUnique`<br>`TestModuleDependenciesAndExternalSystem`<br>`TestProcessModuleBindingPublicVsPrivate`<br>`testAgentProcessConsolidation_GroupNameAndRBAC` |
 | **F-03** | Protobuf 描述集注册与接口映射 | M2 | `internal/server/decoder/decoder_test.go`<br>`handlers/arch_proto_agent_test.go` | `TestProtoSchemaUploadAndDashServiceName`<br>`TestProtoSchemaActivateConflictAndHistoryImmutability` |
 | **F-03.1** | 两级嵌套折叠契约表与服务聚合视图 | M7 | `frontend/src/__tests__/ProtoNestedTable.test.tsx` | `testServiceGroupRollup_AggregationAndOperationCounting`<br>`testNestedTable_ExpandCollapseAllAndSearchPenetration` |
 | **F-03.2** | 消息体参数定义字典树查看与源码注释透视 | M7 | `internal/server/decoder/schema_tree_test.go`<br>`frontend/src/__tests__/MessageSchemaTree.test.tsx` | `TestExtractMessageFieldTree_RecursiveAndComments`<br>`testTreeRender_NestedMessageAndTypeBadges` |
@@ -78,7 +81,10 @@ flowchart LR
 | **F-12** | 跨进程同构重放编排与 Agent 本地执行 | M3, M4 | `internal/server/diff/diff_test.go`<br>`handlers/recording_replay_test.go` | `TestValidateReplayProcessCompatibility`<br>`TestCrossAgentReplayExecutionAndStatusAggregation` |
 | **F-13** | Agent 零 `.pb` 二进制 Mock 与头部自愈 | M3 | `pkg/replay/replay_test.go` | `TestScopedMockMatcherExactAndFallback`<br>`TestHealResponseFramesV1ToV4AndMultiSeg` |
 | **F-14** | 协议头级 + Protobuf 字段级双层 Diff | M4 | `internal/server/diff/diff_test.go` | `TestLayer1HeaderDiffAndTimestampExemption`<br>`TestLayer2ProtoSemanticDiffMapRepeatedAndIgnore` |
-| **F-15** | 一体化微前端控制台 | M5 | `frontend/src/__tests__/PacketAnatomyDrawer.test.tsx`<br>`frontend/src/__tests__/ThemeAndPagination.test.tsx` | `TestPacketAnatomyDrawerFourSections`<br>`TestPaginationWindowAndThemeTokens` |
+| **F-15** | 一体化微前端控制台（三层频次信息架构） | M5, M8 | `frontend/src/__tests__/PacketAnatomyDrawer.test.tsx`<br>`frontend/src/__tests__/ThemeAndPagination.test.tsx`<br>`frontend/src/__tests__/MenuAndLegacyRoutes.test.tsx` | `TestPacketAnatomyDrawerFourSections`<br>`TestPaginationWindowAndThemeTokens`<br>`testMenuStructure_ThreeGroupsEightItems`<br>`testLegacyDeepLinks_LosslessRedirect` |
+| **F-15.1** | 录制素材资产台账与跨工作台流转 | M8 | `frontend/src/__tests__/RecordingWorkbench.test.tsx` | `testSessionLedger_ActionsAndCrossWorkbenchLinks` |
+| **F-15.2** | 独立流量调试工作台与单包快速重放调试 | M8 | `handlers/recording_replay_test.go`<br>`frontend/src/__tests__/SinglePacketReplay.test.tsx` | `TestListTrafficRecords_HasErrorFilter`<br>`testSinglePacketReplay_IsomorphicFilterAndInlineDiff` |
+| **F-15.3** | 架构静态基线解耦与物理进程单点收口 | M8 | `frontend/src/__tests__/TopologyAndArchDecoupling.test.tsx`<br>`frontend/src/__tests__/WorkbenchRBAC.test.tsx` | `testArchWorkbench_PureLogicalAndBloodlineLinks`<br>`testAgentProcessConsolidation_GroupNameAndRBAC` |
 | **F-16** | RBAC 权限、公私域隔离与操作审计 | M2, M4, M5 | `handlers/arch_proto_agent_test.go`<br>`handlers/recording_replay_test.go` | `TestRBACAndPrivateResourceAntiIDOR`<br>`TestAuditLogFieldDiffAndActionEvents` |
 
 ### 3.2 端到端业务验收场景 (`SC-01` ~ `SC-08`) 追踪矩阵

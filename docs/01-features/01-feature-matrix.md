@@ -1,8 +1,8 @@
 # 业务流量监控与重放 (`code-traefik`) 特性清单与需求范围界定规范 (Feature Matrix & Scope)
 
 - **文档编号**：`01-feature-matrix.md`
-- **文档版本**：v2.7.0
-- **更新日期**：2026-10-29
+- **文档版本**：v2.8.0
+- **更新日期**：2026-11-01
 - **当前阶段**：阶段一：特性清单与边界明确
 - **状态**：定稿待审 (Ready for Review)
 - **协议依据**：详见项目内置参考文档 [`docs/07-references/01-cros-rpc-protocol-spec.md`](../07-references/01-cros-rpc-protocol-spec.md)（文档编号：`01-cros-rpc-protocol-spec.md` v1.0.0，基于 DOPHI 平台 `cros_rpccore.ph` / `cros_rpctcp` 规范，本文所有字段名、偏移与取值均以该规范原文为准）
@@ -20,6 +20,7 @@
 | v2.5.1 | 2026-10-29 | 挂载项目内置协议规范 (docs/07-references/01-cros-rpc-protocol-spec.md)；明确服务名映射为 package 前缀全名 ({package}-{serviceName}，package 保持原有点分结构，以中划线连接)；依据协议原文固化 F-13 应答头回填字段清单 (ullSNO/aucTraceBuff/ullClientSendTime) 与精准偏移 |
 | v2.6.0 | 2026-10-29 | 增补多人并发与双模持久化规范：Agent 与录制素材均划分公共级 (`SHARED`) 与个人级 (`PRIVATE`)，普通用户可自建自用私有 Agent（共享公共架构元素 SSOT）；确立 Agent 动态排他租约 (`Mutex Lease`，同 Agent 同时间仅 1 名用户操作，冲突返回 `409`)；支持有权限的录制素材在相同架构元素的进程间跨 Agent 重放；明确 `traefik_traffic_records` 采用 `raw_req_packet` / `raw_rsp_packet` (`bytea`) + `payload_json` (`jsonb`) 双模往返存储与双轨分发管道 |
 | v2.7.0 | 2026-10-29 | 依据架构检视与用户批复修订：1. 明确管理员特权（`traefik_admin` 可穿透查看/审计所有 `PRIVATE` 素材与 Agent，普通用户严格防横向越权）；2. 明确共享环境（`SHARED` Agent）排他重放支持；3. 主控直接连接 Agent（内网互通）；4. 数据库表数量放开，规范化拆解为 13 张核心物理表（新增 `traefik_process_modules` 关联表与 `traefik_replay_items` 重放条目表）并引入 PostgreSQL 原生范围物理分区（`PARTITION BY RANGE (created_at)`）；5. 架构一致性验证结果扩充 `Not Monitored` 分类 |
+| v2.8.0 | 2026-11-01 | 依据 M8 控制台信息架构重组修订（详见 ADR-07）：1. 菜单按操作频次重构为「`流量作业`（`流量录制` / `流量调试` / `流量重放`）➔ `架构与契约`（`架构拓扑` / `架构元素` / `Proto 契约`）➔ `环境与治理`（`Agent 与进程` / `模块参数配置`）」3 组 8 项，默认落地 `/record` 并无损兼容旧深链重定向；2. 拆分 `流量录制`（批次资产台账与跨页流转，`F-15.1`）与 `流量调试`（异常过滤、四段解剖、Trace 串联与单包快速重放调试闭环，`F-15.2`）；3. 剥离全屏 `架构拓扑` 与纯逻辑 `架构元素`，将物理业务进程（含进程分组 `group_name`）CRUD 唯一收口至 `Agent 与进程`（`F-15.3`）；4. 将基于 `.pb` 在线手填 JSON 主动组包发包调试归入 P2 演进项（`F-23`） |
 
 
 ---
@@ -73,9 +74,9 @@
 ```mermaid
 flowchart TB
     subgraph Portal["CodeBench 微前端控制台 (/traefik | :5181 -> :8091)"]
-        UI_Arch["架构元素管理与拓扑画布"]
-        UI_Monitor["流量监控台与 CROS RPC 四段报文解剖抽屉"]
-        UI_Replay["重放编排台与双层 Diff 报告"]
+        UI_Flow["流量作业组: 流量录制 / 流量调试(四段解剖+单包重放) / 流量重放"]
+        UI_Arch["架构与契约组: 架构拓扑 / 架构元素 / Proto 契约"]
+        UI_Env["环境与治理组: Agent 与进程 / 模块参数配置"]
     end
 
     subgraph ControlPlane["code-traefik-server 控制面 (cmd/server :8091)"]
@@ -201,7 +202,7 @@ erDiagram
 | 编号 | 特性名称 | 涉及组件 | 优先级 | 功能描述与技术规范 | TDD 验收指标 |
 | :--- | :--- | :---: | :---: | :--- | :--- |
 | **F-01** | **三级架构元素建模**（`traefik_subsystems` / `traefik_functional_groups` / `traefik_modules`） | `Server`<br>`Frontend` | **P0** | 1. 子系统：编码（全局唯一）、名称、负责人、描述；<br>2. 功能组：归属子系统，支持多级自嵌套，维护 `parent_id`、`level`、`path`、排序；编码在同一子系统内唯一；最大深度 8 级；<br>3. 功能模块：编码全局唯一，挂在任意层级的功能组下，冗余记录所属子系统；<br>4. 移动功能组时级联更新子孙节点的 `path` / `level`。 | 1. 三类元素 CRUD 单测全部通过；<br>2. 把功能组移到自身或其子孙下返回 `400`；超过最大深度返回 `400`；<br>3. 移动功能组后，所有子孙的 `path` / `level` 正确；<br>4. 删除非空功能组、或删除已声明接口的模块返回 `409`；<br>5. 编码重复返回 `409`。 |
-| **F-02** | **进程部署映射与模块服务契约依赖**（`traefik_processes` / `traefik_process_modules` / `traefik_module_services` / `traefik_module_dependencies`） | `Server`<br>`Frontend` | **P0** | 1. **模块表单与进程装载**：模块详情上方采用工整表单样式，展示基本元数据（名称、编码、子系统/功能组层级、负责人、描述）及详细进程装载状态（已装载/未装载、进程名、监听端口、宿主 Agent 节点与 IP、Scope、在线状态），并支持直接绑定/更换/解除装载；<br>2. **模块服务供给 (PROVIDE)**：契约收敛至 Service 级别，以 `ascServiceName` 声明，全系统内 **`PROVIDE` 的 `service_name` 全局唯一** (A-05)，支持配置默认 Diff 忽略字段路径；<br>3. **模块服务依赖 (DEPEND)**：契约收敛至 Service 级别，依赖关系显式关联「某个提供方 FM 提供的某个 Service」；同时支持依赖「外部第三方系统」（指定外部系统名与外部服务名）；<br>4. **界面双表格呈现**：详情下方分为上下两个表格，上部为对外供给服务列表 (PROVIDE)，下部为依赖下游服务列表 (DEPEND)，支持联动选择与快捷跳转；<br>5. **静态依赖推导**：基于 FM 间确切的 Service 依赖生成边 `A → B`；外部系统依赖生成指向外部节点的依赖边。 | 1. 同一 Agent 下监听端口重复或同一模块重复挂载到多进程返回 `409`；<br>2. 第二个模块声明已被供给的 `service_name` 返回 `409`；<br>3. 添加依赖时引用未供给的内部服务或循环自依赖校验拦截；外部系统依赖正确入库并生成拓扑边；<br>4. 静态依赖推导单测：内部正常边、外部占位边、同进程内两模块之间的边（标记为「进程内」）均正确；<br>5. 删除正在录制或重放中的进程返回 `409`。 |
+| **F-02** | **进程部署映射与模块服务契约依赖**（`traefik_processes` / `traefik_process_modules` / `traefik_module_services` / `traefik_module_dependencies`） | `Server`<br>`Frontend` | **P0** | 1. **模块表单与进程装载血缘**：物理进程（含进程组 `group_name`、端口、`cmd_pattern` 与模块挂载）的 CRUD 统一收口于 `Agent 与进程` 工作台；`架构元素` 模块详情上方展示基本元数据及进程装载血缘（进程名、监听端口、宿主 Agent、Scope、在线状态），支持公共基线进程绑定/解绑及一键跳转 `Agent 与进程`；<br>2. **模块服务供给 (PROVIDE)**：契约收敛至 Service 级别，以 `ascServiceName` 声明，全系统内 **`PROVIDE` 的 `service_name` 全局唯一** (A-05)，支持配置默认 Diff 忽略字段路径并与 `Proto 契约` 双向深链跳转；<br>3. **模块服务依赖 (DEPEND)**：契约收敛至 Service 级别，依赖关系显式关联「某个提供方 FM 提供的某个 Service」；同时支持依赖「外部第三方系统」（指定外部系统名与外部服务名）；<br>4. **界面双表格呈现**：详情下方分为上下两个表格，上部为对外供给服务列表 (PROVIDE)，下部为依赖下游服务列表 (DEPEND)，支持联动选择与快捷跳转；<br>5. **静态依赖推导**：基于 FM 间确切的 Service 依赖生成边 `A → B`；外部系统依赖生成指向外部节点的依赖边。 | 1. 同一 Agent 下监听端口重复（`listen_port > 0`）或同一模块重复挂载到同域多进程返回 `409`；允许 `listen_port = 0` 表示纯客户端进程；<br>2. 第二个模块声明已被供给的 `service_name` 返回 `409`；<br>3. 添加依赖时引用未供给的内部服务或循环自依赖校验拦截；外部系统依赖正确入库并生成拓扑边；<br>4. 静态依赖推导单测：内部正常边、外部占位边、同进程内两模块之间的边（标记为「进程内」）均正确；<br>5. 删除正在录制或重放中的进程返回 `409`。 |
 | **F-03** | **Protobuf 描述集注册与接口映射**（`traefik_proto_schemas` / `traefik_proto_operations`） | `Server`<br>`Frontend` | **P0** | 1. **上传与解析**：上传 `.pb`（`FileDescriptorSet`），校验体积 `<= 4MB` 与 `protodesc` 合法性；同名描述集每次上传生成新递增版本，支持原子切换生效版本；<br>2. **服务映射生成**：从 `ServiceDescriptor` / `MethodDescriptor` 自动提取 `(ascServiceName, ascOperation) → (Req, Rsp Message)` 映射；服务名匹配 package 前缀全名，**`ascServiceName` 格式为 `{package}-{serviceName}`**，**`ascOperation` 与 Method 名称直接对应** (A-07)；<br>3. **全局唯一与防冲突**：生效映射中 `(service, operation)` 全局唯一，激活存在重叠冲突时返回 `409 Conflict` 并回滚；<br>4. **历史不可变**：流量记录保存解码所用的 schema 版本，切换版本不改写历史解码结果（支持手动重解码）。 | 1. 合法 `.pb` 上传后，映射接口返回正确的 `(service, operation)` 清单（服务名包含 package 原样点分前缀并以中划线 `-` 连接全名）；<br>2. 损坏文件或超过 4MB 返回 `400`；<br>3. 激活与其他生效描述集存在 `(service, operation)` 冲突的版本返回 `409`；<br>4. 切换版本后，历史记录的 schema 版本字段保持不变。 |
 | **F-03.1** | **两级嵌套折叠契约表与服务聚合视图**（嵌套 Master-Detail 呈现） | `Frontend`<br>`Server` | **P0** | 1. **两级折叠模型**：将平铺刷屏的映射表重构为“服务主行 (Service Row) ➔ 方法子表 (Operation Table)”两级嵌套树形折叠表；<br>2. **外层服务行**：以 `{package}-{serviceName}` 为粒度聚合，展示契约全名、所属源 Proto 文件、归属架构模块（如已认领）、RPC 方法总数（Unary/Stream 分布）、生效态；行首提供折叠箭头，支持行展开及表头【一键全部展开/折叠】；<br>3. **内层方法表**：展开后展示该服务独享的方法列表（方法名、请求消息体、应答消息体、流式模式、忽略字段数、生效态与操作）；<br>4. **检索穿透与高亮**：输入搜索词时实时跨层过滤，命中的服务行自动展开并高亮匹配方法。 | 1. 相同 `service_name` 的方法 100% 聚合到单行展示，不再出现服务名前缀刷屏；<br>2. 折叠/展开动画流畅，支持多行同时独立展开与一键全部展开/折叠；<br>3. 搜索关键词能穿透展开并高亮命中方法。 |
 | **F-03.2** | **消息体参数定义字典树查看与源码注释透视**（Message Schema Inspector Tree） | `Server`<br>`Frontend` | **P0** | 1. **服务端动态字典树反射**：服务端依据 `FileDescriptorSet` 动态提取指定 Message 的全量字段反射元数据树（字段名、字段编号 Tag、类型、规则 `optional/required/repeated/map`、默认值、源码注释 `leading_comments`）；<br>2. **可点击交互**：表格中的 `req_message`、`rsp_message` 及【查看契约】支持直接点击，右侧无缝滑出抽屉式**消息体字典树 (Schema Inspector Tree)**；<br>3. **多层嵌套递归展开**：支持复杂嵌套 Message、Repeated 数组元素及 Map 结构的逐层展开/收起与类型高亮。 | 1. 接口 `GET /api/proto-operations/:id/schema-tree` 返回请求与应答的完整多层树结构与注释；<br>2. 前端树形控件能正确展开多层嵌套 Message，无递归死循环；<br>3. 字段类型（如 `int64`、`string`、`repeated`）带语义化颜色徽章。 |
@@ -246,7 +247,10 @@ erDiagram
 
 | 编号 | 特性名称 | 涉及组件 | 优先级 | 功能描述与技术规范 | TDD 验收指标 |
 | :--- | :--- | :---: | :---: | :--- | :--- |
-| **F-15** | **一体化微前端控制台** | `Frontend`<br>`Server` | **P0** | 在 `code-bench` 微前端体系内（暴露 `./App` 与 `./menu`，兼容嵌入与独立两种运行方式），提供：<br>1. **架构中心**：三级架构元素、模块接口、进程映射、Agent 管理，静态拓扑与一致性验证结果；<br>2. **流量监控台**：通过主控 `/api/events` SSE 实时展示流量；右侧 `Drawer` 分段展示 ① 24B 公共头偏移位图、② 会话头字段与收发耗时、③ 扩展头 Trace 与入队时间、④ Protobuf JSON 与 16B 对齐 Raw Hex 对照；<br>3. **重放台**：选择资产下发重放，展示结果状态、Mock 命中明细与双层 Diff；<br>4. `.pb` 管理：上传、版本切换与 `(service, operation)` 映射列表。 | 1. `tsc --noEmit` 与 `eslint` 零警告；<br>2. 解剖抽屉对预置报文正确展示四段内容（组件测试）；<br>3. 所有页面只使用 `--color-*` 语义 Token，列表使用标准 5 页滑动窗口 URL 分页（`15/25/50/100`，默认 `25`）。 |
+| **F-15** | **一体化微前端控制台与三层频次信息架构** | `Frontend`<br>`Server` | **P0** | 在 `code-bench` 微前端体系内（暴露 `./App` 与 `./menu`，兼容嵌入与独立两种运行方式），按用户操作频次与领域心智提供 **3 组 8 项**导航：<br>1. **流量作业组（置顶高频，默认落地 `/record`）**：`流量录制` (`/record`)、`流量调试` (`/debug`)、`流量重放` (`/replay`)；<br>2. **架构与契约组（静态基线 SSOT，按宏观➔中观➔微观排列）**：`架构拓扑` (`/topology`)、`架构元素` (`/architecture`)、`Proto 契约` (`/schemas`)；<br>3. **环境与治理组（低频沉底）**：`Agent 与进程` (`/agents`)、`模块参数配置` (`/admin/settings`, `adminOnly`)；<br>4. **旧路由平滑重定向**：`/traffic` 自动带参重定向至 `/debug`，`/architecture?tab=topology\|physical\|verify` 自动带参重定向至 `/topology`。 | 1. `tsc --noEmit` 与 `eslint` 零警告，`menu.ts` 严格输出 3 组 8 项配置且 `StandaloneShell` 与之一致；<br>2. 旧路径访问 100% 无损保留 Query 参数重定向至新路由；<br>3. 所有页面只使用 `--color-*` 语义 Token，列表使用标准 5 页滑动窗口 URL 分页（`15/25/50/100`，默认 `25`）。 |
+| **F-15.1** | **录制素材资产台账与跨工作台流转**（`流量录制` `/record`） | `Frontend`<br>`Server` | **P0** | 1. **活跃录制状态卡**：醒目呈现正在进行的协同录制批次、实时捕获帧数、A-01 存量长连接重连告警、一键停录及【实时跟流调试】入口；<br>2. **录制素材分页台账**：将 `RecordingSession` 升级为一等资产表，支持按 `全部 / 我的私有 (PRIVATE) / 团队共享 (SHARED)` 及状态筛选、URL 分页；<br>3. **一键跨页流转**：每条批次行内置 `[去调试]`（跳 `/debug?session_id=X`）、`[发起重放]`（跳 `/replay?session_id=X&auto_create=1`）、`[架构验证]`（跳 `/topology?session_id=X`）、`[发布共享]` 与 `[删除]` 动作。 | 1. 活跃录制状态下正确展示 A-01 重连提示与【实时跟流调试】跳转；<br>2. 批次台账分页、作用域过滤及 `[去调试]` / `[发起重放]` / `[架构验证]` URL 带参跳转组件单测全部通过。 |
+| **F-15.2** | **独立流量调试台与单包快速重放调试闭环**（`流量调试` `/debug`） | `Frontend`<br>`Server` | **P0** | 1. **报文多维检索与异常过滤**：支持切换历史录制批次或跟随活跃 SSE 实时流；`GET /api/traffic-records` 与前端筛选器新增 `has_error`（仅看非零状态码或 `REQ_ONLY` 异常报文）快速开关；<br>2. **四段解剖与 Trace 串联**：右侧 `PacketAnatomyDrawer` 分段展示 24B 公共头位图、会话头与耗时、DOTR 扩展头 Trace（一键按 `TraceID` 过滤整条跨进程调用链）、Protobuf JSON 与 16B Raw Hex 对照及 `.pb` 重解码；<br>3. **单包快速重放调试**：在可重放 `INGRESS` 报文行及解剖抽屉内提供【单包重放调试】，自动筛选承载相同模块的同构目标进程，复用 `POST /api/replay-tasks`（`selected_record_ids: [id]`）下发执行，并在原地抽屉即时展示 Expected vs Actual 双层 Diff 与下游 Mock 命中明细。 | 1. `GET /api/traffic-records?has_error=true` 精确过滤异常状态码与未应答请求；<br>2. 解剖抽屉正确展示四段报文结构，支持按 `TraceID` 一键联动筛选；<br>3. 点击【单包重放调试】可选择同构目标进程发起单请求 `ReplayTask`，并在同一抽屉内渲染双层 Diff 结果（零 Agent 协议改动）。 |
+| **F-15.3** | **架构静态基线解耦与物理进程单点收口**（`/topology` + `/architecture` + `/agents`） | `Frontend`<br>`Server` | **P0** | 1. **`架构拓扑` 独立全屏化 (`/topology`)**：剥离外层胶囊 Tab，释放全视口高度承载逻辑/物理复合拓扑画布与录制批次一致性比对图层；<br>2. **`架构元素` 纯逻辑瘦身 (`/architecture`)**：移除顶层胶囊 Tab、左树逻辑/物理切换开关及进程 CRUD 抽屉，专注 `子系统 ➔ 8级功能组 ➔ 功能模块 ➔ PROVIDE/DEPEND 契约` 台账，并与 `Proto 契约` (`/schemas`) 建立服务与模块双向深链互跳；<br>3. **物理进程唯一收口 (`/agents`)**：所有物理业务进程的增删改、Agent 在线探查、进程分组 (`group_name` 下拉选择与快捷新建) 及公共模块挂载统一收口至 `Agent 与进程` 工作台。 | 1. `ArchitectureWorkbenchPage` 不再渲染顶层 Tab 与物理进程编辑树，点击服务契约或装载进程正确跳转 `/schemas` 或 `/agents`；<br>2. `AgentManagementPage` 及 `ProcessModuleBinderModal` 完整支持 `group_name` 进程分组下拉/新建、`listen_port = 0` 纯客户端进程及 URL `agent_id`/`process_id` 定位高亮。 |
 | **F-16** | **RBAC 权限、公私域隔离与操作审计** | `Server`<br>`Frontend` | **P0** | 1. **权限与资源隔离矩阵**（基于 `commonAuth.AuthMiddleware` 与 `RequireAdmin("traefik_admin")`）：<br>   - **普通认证用户**：只读浏览公共架构元素、拓扑与 `.pb` 映射；自行创建、编辑、删除本人的个人 `PRIVATE` Agent 及其挂载公共架构模块的进程；在本人 `PRIVATE` Agent 或当前空闲的全局 `SHARED` Agent 上动态申请排他租约**发起/停止录制**与**发起重放**；管理本人的 `PRIVATE` 录制素材（支持共享为 `SHARED` 素材）并复用全量 `SHARED` 录制素材；严禁修改或租用他人 `PRIVATE` Agent 与他人 `PRIVATE` 录制素材；<br>   - **`traefik_admin` / `super_admin`**：维护全局公共三级架构元素、接口契约、`SHARED` Agent 及其基准进程、`.pb` 上传与版本切换、公共 `SHARED` 录制素材治理、**穿透查看与审计全部用户的 `PRIVATE` Agent 与素材**、**强制释放异常占用的 Agent 租约**及模块全局设置；<br>2. **审计**：所有写操作记录字段级 Diff；录制启停、重放发起、Agent 租约获取与强制解锁均写入操作审计。 | 1. 未认证返回 `401`；普通用户修改公共架构元素、管理 `SHARED` Agent 或上传 `.pb` 返回 `403`；普通用户创建并使用本人 `PRIVATE` Agent 录制/重放成功，访问他人 `PRIVATE` 资源返回 `403`；`traefik_admin` 可审计查看他人 `PRIVATE` 详情；<br>2. 修改架构元素与 Agent 后 `audit_logs` 含完整字段级 Old/New Diff；<br>3. 录制启停、发起重放及管理员强制释放租约均产生对应审计记录。 |
 
 ---
@@ -261,6 +265,7 @@ erDiagram
 | **F-20** | **录制批次一键回归套件** | **P2** | 把一个录制批次的多个进程、多条请求组织为回归套件批量重放，并汇总报告。 |
 | **F-21** | **从 `code-proto` 导入 `.pb`** | **P2** | 通过 `code-proto` 已有接口拉取编译好的描述集，减少手动上传。 |
 | **F-22** | **无特权用户态代理降级模式** | **P2** | 不具备 eBPF 特权时，由业务方把下游地址配置为 Agent 代理端口完成采集与重放。 |
+| **F-23** | **基于 `.pb` 契约的在线构造参数主动发包调试** | **P2** | 在 `流量调试` 台不依赖既有录制包，选定已激活 `.pb` 的 `(ascServiceName, ascOperation)` 在线填写/编辑 JSON 请求体，由主控 `dynamicpb` 编码并封装 CROS RPC 帧下发目标 Agent 注入业务进程，类似 CROS RPC 版 `grpcurl` / Postman。 |
 
 ---
 

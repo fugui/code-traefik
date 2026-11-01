@@ -1,11 +1,11 @@
 # 业务流量监控与重放 (`code-traefik`) 管理面服务、微前端控制台与回归断言设计
 
 - **文档编号**：`04-control-plane-and-web-console.md`
-- **文档版本**：v1.3.0
-- **更新日期**：2026-10-31
+- **文档版本**：v1.4.0
+- **更新日期**：2026-11-01
 - **归属阶段**：阶段二：系统架构与数据模型设计 (`02-design`)
 - **状态**：定稿待审 (Ready for Review)
-- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.6.0)、[`01-system-architecture.md`](./01-system-architecture.md)、[`02-data-plane-and-cros-rpc-engine.md`](./02-data-plane-and-cros-rpc-engine.md)、[`03-architecture-elements-and-topology.md`](./03-architecture-elements-and-topology.md)
+- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.8.0)、[`01-system-architecture.md`](./01-system-architecture.md)、[`02-data-plane-and-cros-rpc-engine.md`](./02-data-plane-and-cros-rpc-engine.md)、[`03-architecture-elements-and-topology.md`](./03-architecture-elements-and-topology.md)、[`07-console-ia-restructuring-and-workflow-workbench-adr.md`](../05-adr/07-console-ia-restructuring-and-workflow-workbench-adr.md) (ADR-07)
 
 ---
 
@@ -232,18 +232,25 @@ type FieldDiff struct {
 
 ## 4. 微前端控制台架构与组件设计 (`frontend/src/`)
 
-### 4.1 模块联邦导出契约与路由矩阵
+### 4.1 模块联邦导出契约、三层频次菜单与路由矩阵 (`ADR-07`)
 
-前端通过 `vite.config.ts` 固定 `base: '/traefik/'`，向外暴露 `./App` 与 `./menu`（`traefikMenuConfig`）：
+前端通过 `vite.config.ts` 固定 `base: '/traefik/'`，向外暴露 `./App` 与 `./menu`（`traefikMenuConfig`）。菜单体系严格按**操作频次金字塔**与**动态作业 / 静态基线 / 环境治理解耦原则**划分为 **3 个菜单组、8 个精炼菜单项**（默认落地页为 `/record`），`StandaloneShell` 独立调试侧边栏直接消费 `traefikMenuConfig` 渲染以保持单一真实源：
 
-| 菜单分组 | 子路由路径 (`MODULE_BASE_PATH = '/traefik'`) | 页面组件 | 可见角色 | URL Search Params 状态同步项 |
-| :--- | :--- | :--- | :---: | :--- |
-| **流量与架构** | `/architecture` | `ArchitectureWorkbenchPage` | 全体登录用户 | `tab` (`modeling` \| `topology`), `view` (`LOGICAL` \| `PHYSICAL`), `depth`, `session_id`, `focus`, `subsystem_id` |
-| **流量与架构** | `/traffic` | `TrafficMonitorWorkbenchPage` | 全体登录用户 | `scope` (`SHARED` \| `PRIVATE`), `session_id`, `subsystem_id`, `module_id`, `process_id`, `service_name`, `operation`, `sno`, `trace_id`, `keyword`, `page`, `page_size` |
-| **流量与架构** | `/replay` | `ReplayWorkbenchPage` | 全体登录用户 | `session_id`, `target_process_id`, `status`, `page`, `page_size` |
-| **流量与架构** | `/schemas` | `ProtoSchemaWorkbenchPage` | 全体登录用户 | `name`, `active_only`, `search`, `page`, `page_size` |
-| **资源与治理** | `/agents` | `AgentManagementPage` | 全体登录用户 | `scope` (`SHARED` \| `PRIVATE`), `lease_state`, `status`, `search`, `page`, `page_size` |
-| **资源与治理** | `/admin/settings` | `AdminSettingsPage` | `traefik_admin` | - |
+| 菜单分组 | 菜单名称 | 子路由路径 (`MODULE_BASE_PATH = '/traefik'`) | 页面组件 | 可见角色 | URL Search Params 状态同步项 |
+| :--- | :--- | :--- | :--- | :---: | :--- |
+| **流量作业** *(置顶高频)* | **流量录制** *(默认首页)* | `/record` | `RecordingWorkbenchPage` | 全体登录用户 | `scope` (`SHARED` \| `PRIVATE`), `status`, `search`, `page`, `page_size` |
+| **流量作业** | **流量调试** | `/debug` | `TrafficDebugWorkbenchPage` | 全体登录用户 | `session_id`, `live` (`1`), `direction`, `exchange_type`, `service_name`, `operation`, `sno`, `trace_id`, `has_error` (`true`), `is_replayable`, `keyword`, `page`, `page_size` |
+| **流量作业** | **流量重放** | `/replay` | `ReplayWorkbenchPage` | 全体登录用户 | `session_id`, `auto_create` (`1`), `target_process_id`, `status`, `page`, `page_size` |
+| **架构与契约** *(静态基线)* | **架构拓扑** | `/topology` | `TopologyWorkbenchPage` | 全体登录用户 | `view` (`LOGICAL` \| `PHYSICAL`), `depth`, `session_id`, `focus` |
+| **架构与契约** | **架构元素** | `/architecture` | `ArchitectureWorkbenchPage` | 全体登录用户 | `subsystem_id`, `group_id`, `module_id` |
+| **架构与契约** | **Proto 契约** | `/schemas` | `ProtoSchemaWorkbenchPage` | 全体登录用户 | `schema_id`, `active_only`, `search`, `page`, `page_size` |
+| **环境与治理** *(沉底低频)* | **Agent 与进程** | `/agents` | `AgentManagementPage` | 全体登录用户 | `scope` (`SHARED` \| `PRIVATE`), `agent_id`, `process_id`, `lease_state`, `status`, `page`, `page_size` |
+| **环境与治理** | **模块参数配置** | `/admin/settings` | `AdminSettingsPage` | `traefik_admin` (`adminOnly`) | - |
+
+* **历史深链平滑重定向契约（100% 无损保留 Query 参数）**：
+  - `/`、`/traefik`、`/traefik/`、`/sessions` $\rightarrow$ `replace` 重定向至 `/record`；
+  - `/traffic?...` $\rightarrow$ `replace` 重定向至 `/debug?...`（完整继承 `session_id`、`trace_id`、`sno` 等检索参数）；
+  - `/architecture?tab=topology|verify&...` $\rightarrow$ `replace` 重定向至 `/topology?...`；`/architecture?tab=physical&...` $\rightarrow$ `replace` 重定向至 `/topology?view=PHYSICAL&...`。
 
 > **通用分页硬约束**：所有分页列表统一复用 `@code/common` 的 `Pagination` 与 `usePaginationState`（同步至 `useSearchParams`），每页条数选项固定为 **`15 / 25 / 50 / 100`（默认 `25`）**，控件布局严格为 `[首页] [上一页] [5页连续数字滑动窗口] [下一页] [末页] [条/页下拉框]`。
 
@@ -269,45 +276,48 @@ src/
 │   │   ├── edges/
 │   │   │   └── RollupEdge.tsx              # 正交折线汇总边 (对数线宽、六分类着色、脉冲告警与拖拽自适应)
 │   │   └── panels/
-│   │       ├── CanvasToolbar.tsx           # 工具栏: 逻辑/物理切换、L0~Ln 层级滑杆、自动展开开关、重置布局
-│   │       ├── CanvasSearchBox.tsx         # 全图模块/服务快捷搜索与居中锚定
-│   │       ├── ElementInspectorDrawer.tsx  # 选中节点属性画像与 PROVIDE/DEPEND 快速跳转抽屉
+│   │       ├── ArchCanvasToolbar.tsx       # 工具栏: 逻辑/物理切换、L0~Ln 层级滑杆、自动展开开关、批次选择与重置布局
+│   │       ├── ArchSummaryBar.tsx          # 一致性比对六分类摘要栏与待定归属待办入口
+│   │       ├── NodeInspectDrawer.tsx       # 选中节点属性画像与 PROVIDE/DEPEND 快速跳转抽屉
 │   │       └── EdgeDetailDrawer.tsx        # 汇总边底层契约明细与一致性抽样报文联动抽屉
-│   └── PacketAnatomyDrawer/                # 公共四段式 CROS RPC 深度解剖抽屉 (供流量台与拓扑一致性边共同复用)
-│       ├── PacketAnatomyDrawer.tsx         # 单条往返内「请求帧 REQ <-> 应答帧 RSP」零延迟切换外壳
+│   └── PacketAnatomyDrawer/                # 公共四段式 CROS RPC 深度解剖抽屉 (供流量调试台与拓扑一致性边共同复用)
+│       ├── PacketAnatomyDrawer.tsx         # 单条往返内「请求帧 REQ <-> 应答帧 RSP」零延迟切换外壳 (+单包重放调试动作插槽)
 │       ├── CommHeadBitmapCard.tsx          # ① 24B 公共头字节偏移位图可视化卡片
 │       ├── SessionHeadDetailCard.tsx       # ② 会话头版本识别、字段表与客户端/服务端耗时拆解条
 │       ├── ExtendHeadTraceCard.tsx         # ③ DOTR TraceID/SpanID/FatherSpanID 链路跳转与入队等待耗时
 │       └── PayloadJsonHexSplitView.tsx     # ④ 左栏 payload_json.{req|rsp} 树 <-> 右栏 raw_{req|rsp}_packet 16B 对齐 Hex 对照
 ├── pages/
-│   ├── ArchitectureWorkbenchPage/          # 1. 架构中心与拓扑工作台 (兼容旧 tab=logical|physical|verify 重定向)
-│   │   ├── SubsystemGroupTreePanel.tsx     # 架构建模页: 子系统切换 + 8级功能组树 + 物理进程组树
-│   │   ├── ModuleContractDetailPane.tsx    # 架构建模页: 功能模块详情与双表格契约维护
-│   │   ├── ProcessDetailPane.tsx           # 架构建模页: 物理进程详情与模块装配面板
-│   │   └── ArchTopologyTabPane.tsx         # 拓扑视图页 (React.lazy 异步分包): 视图切换 + 批次叠加器 + 一致性摘要栏
-│   ├── AgentManagementPage/                # 2. 公私域 Agent 纳管与排他租约看板 (纯探测器运维管理)
-│   │   ├── AgentScopeTabs.tsx              # 切换「团队公共 Agent (SHARED)」与「我的私有 Agent (PRIVATE)」
-│   │   ├── AgentLeaseStatusBadge.tsx       # 实时展示空闲 / 录制占用(持锁人+剩余TTL) / 重放占用，管理员支持强制解锁
-│   │   └── ProcessModuleBinderModal.tsx    # 进程探查与挂载复用全局公共架构模块 (ModuleIDs) 配置弹窗
-│   ├── ProtoSchemaWorkbenchPage/           # 3. 接口文档与 IDL 描述集工作台 (M7 资产化与嵌套表架构)
+│   ├── RecordingWorkbenchPage/             # 1. [流量作业] 流量录制工作台 (/record - 默认落地页)
+│   │   ├── ActiveRecordingBanner.tsx       # 活跃录制状态卡: 实时帧计数、A-01 存量长连接重连告警、一键停录与【实时跟流调试】
+│   │   ├── RecordingStartModal.tsx         # 发起协同录制弹窗: 公私域作用域、进程勾选(租约占用置灰提示)与双阈值配置
+│   │   └── RecordingSessionTable.tsx       # 录制素材分页台账表: 展示进程/帧数/归属，内置 [去调试] [发起重放] [架构验证] [发布共享] [删除]
+│   ├── TrafficDebugWorkbenchPage/          # 2. [流量作业] 流量调试工作台 (/debug - 兼容 /traffic 重定向)
+│   │   ├── DebugSessionContextBar.tsx      # 调试上下文顶栏: 录制批次切换、活跃批次脉冲提示与 SSE 实时跟流暂停/继续控制
+│   │   ├── LiveTrafficFilterForm.tsx       # 多维 URL 筛选器: Service/Operation/ullSNO/TraceID/方向/has_error(仅看异常)/关键字
+│   │   ├── TrafficRecordTable.tsx          # 往返报文主表: 点击唤起四段解剖，可重放 INGRESS 行挂载【单包调试】快捷入口
+│   │   └── SinglePacketReplayDrawer.tsx    # 单包快速重放调试抽屉: 过滤同构目标进程 -> 一键触发单条 ReplayTask -> 原地呈现双层 Diff 与 Mock 明细
+│   ├── ReplayWorkbenchPage/                # 3. [流量作业] 流量重放工作台 (/replay)
+│   │   ├── ReplayTaskCreatorModal.tsx      # 批量同构重放创建弹窗 (支持 URL ?session_id=X&auto_create=1 自动预选唤起)
+│   │   ├── ReplayTaskTable.tsx             # 重放任务台账表 (PASS/FAILED/MOCK_MISS/TIMEOUT/ERROR 全序裁决)
+│   │   └── ReplayReportDrawer/             # 双层回归 Diff 报告抽屉 (HeaderAssertionCard + ProtoFieldDiffTable + MockHitMissTimeline)
+│   ├── TopologyWorkbenchPage/              # 4. [架构与契约] 架构拓扑工作台 (/topology - 全屏独立画布)
+│   │   └── TopologyWorkbenchPage.tsx       # 零外层胶囊 Tab，全视口高度承载逻辑/物理复合拓扑画布与录制批次一致性比对叠加层
+│   ├── ArchitectureWorkbenchPage/          # 5. [架构与契约] 架构元素工作台 (/architecture - 纯逻辑架构台账瘦身)
+│   │   ├── SubsystemGroupTreePanel.tsx     # 纯逻辑架构树: 子系统 ➔ 8级功能组 ➔ 功能模块叶子定位与跨层搜索
+│   │   └── ModuleContractDetailPane.tsx    # 模块元数据、进程装载血缘(深链跳 /agents)与 PROVIDE/DEPEND 双表(深链跳 /schemas)
+│   ├── ProtoSchemaWorkbenchPage/           # 6. [架构与契约] Proto 契约工作台 (/schemas)
 │   │   ├── SchemaUploadModal.tsx           # .pb 上传弹窗（<=4MB 预检、版本备注、自动激活开关）
-│   │   ├── SchemaVersionList.tsx           # 描述集资产制品列表（版本时间线、原文件下载导出、包含 Proto 文件透视、架构认领血缘概览）
-│   │   ├── OperationMappingTable.tsx       # 两级嵌套折叠表: 外层服务契约聚合行 (Service Row) ➔ 内层 RPC 方法子表 (Operation Table)
+│   │   ├── SchemaVersionList.tsx           # 描述集资产制品列表（原文件下载导出、包含 Proto 文件透视、架构认领血缘概览）
+│   │   ├── OperationMappingTable.tsx       # 两级嵌套折叠表: 外层服务聚合行 (含认领模块深链跳 /architecture) ➔ 内层 RPC 方法子表
 │   │   ├── ServiceSummaryRow.tsx           # 外层服务行组件: 服务全名、源 Proto、认领模块、RPC 计数、一键全部折叠/展开
 │   │   ├── OperationDocDrawer.tsx          # 契约详情与消息体参数定义抽屉 (双栏/Tab 切换查看 Req/Rsp Message)
 │   │   ├── MessageSchemaInspectorTree.tsx  # 消息体参数定义字典树组件 (多层递归展开、Tag、类型高亮、注释透视)
 │   │   └── DiffIgnoreFieldToggle.tsx       # 字段级 Diff 忽略复选框与路径自动生成控制器
-│   ├── TrafficMonitorWorkbenchPage/        # 4. 协同录制与流量解剖工作台
-│   │   ├── RecordingSessionBar.tsx         # 批次控制栏：公私域进程选择器(含租约冲突置灰提示)、素材作用域(SHARED/PRIVATE)、A-01 重连横幅
-│   │   ├── LiveTrafficFilterForm.tsx       # 多维 URL 同步筛选器(含 payload_json GIN 关键字检索) + SSE 实时流暂停/继续开关
-│   │   └── TrafficRecordTable.tsx          # 往返归档主表（点击行唤起公共 components/PacketAnatomyDrawer）
-│   └── ReplayWorkbenchPage/                # 5. 跨 Agent 同构离线重放与双层回归断言工作台
-│       ├── ReplayTaskCreatorModal.tsx     # 选定有权限的录制素材 -> 自动过滤承载相同公共模块的目标进程(含本人 PRIVATE Agent) -> 勾选请求
-│       ├── ReplayTaskTable.tsx            # 重放任务列表（PASS/FAILED/MOCK_MISS/TIMEOUT/ERROR 状态标签）
-│       └── ReplayReportDrawer/            # 重放回归报告详情抽屉
-│           ├── HeaderAssertionCard.tsx    # 第一层协议头断言结果卡片（状态码、消息类型、豁免时间戳说明）
-│           ├── ProtoFieldDiffTable.tsx    # 第二层语义字段级 Diff 表（FieldPath / Expected / Actual 高亮对比）
-│           └── MockHitMissTimeline.tsx    # 下游二进制 Mock 命中方式(精确哈希/顺序兜底)、自愈字段回显与 MOCK_MISS 告警表
+│   ├── AgentManagementPage/                # 7. [环境与治理] Agent 与进程工作台 (/agents - 物理进程唯一收口处)
+│   │   ├── AgentScopeTabs.tsx              # 切换「团队公共 Agent (SHARED)」与「我的私有 Agent (PRIVATE)」
+│   │   ├── AgentLeaseStatusBadge.tsx       # 实时展示空闲 / 录制占用 / 重放占用，管理员支持强制解锁
+│   │   └── ProcessModuleBinderModal.tsx    # 宿主机进程在线探查、所属进程组(group_name 下拉与快捷新建)、端口(含0纯客户端)与公共模块挂载
+│   └── AdminSettingsPage.tsx               # 8. [环境与治理] 模块参数配置 (/admin/settings - adminOnly)
 ```
 
 ### 4.3 四段报文解剖抽屉前后端 TypeScript DTO 契约 (`PacketAnatomyDTO`)
@@ -412,6 +422,7 @@ export interface PacketAnatomyDrawerDTO {
   reqSide?: FrameSideAnatomyDTO; // RSP_ORPHAN 时为空
   rspSide?: FrameSideAnatomyDTO; // ONEWAY 或 REQ_ONLY 时为空
 }
+```
 
 ### 4.4 消息体参数定义字典树与契约嵌套表 TypeScript DTO 契约 (`MessageSchemaTreeDTO`)
 
@@ -478,7 +489,23 @@ export interface ServiceContractGroupDTO {
   operations: ProtoOperation[]; // 展开后的子表数据
 }
 ```
-```
+
+### 4.5 跨工作台流转动线与单包快速重放调试交互契约 (`F-15.1`~`F-15.3`)
+
+1. **「录制 ➔ 调试 ➔ 重放 / 架构验证」高频作业闭环动线**：
+   - **从 `流量录制` (`/record`) 出发**：
+     - 活跃录制进行中时，点击顶部状态卡【实时跟流调试】$\rightarrow$ 跳转 `/debug?session_id=<id>&live=1`，自动开启 SSE `traffic.persisted` 实时订阅；
+     - 在录制素材台账表任一行点击 `[去调试]` $\rightarrow$ 跳转 `/debug?session_id=<id>`；
+     - 点击 `[发起重放]` $\rightarrow$ 跳转 `/replay?session_id=<id>&auto_create=1`，`ReplayWorkbenchPage` 自动唤起 `ReplayTaskCreatorModal` 并预选该来源批次；
+     - 点击 `[架构验证]` $\rightarrow$ 跳转 `/topology?session_id=<id>`，`TopologyWorkbenchPage` 自动叠加该批次的六分类架构一致性报告。
+   - **在 `流量调试` (`/debug`) 执行单包快速重放调试 (`SinglePacketReplayDrawer`)**：
+     - **触发条件**：仅当 `record.direction === 'INGRESS'` 且 `record.is_replayable === true` 时，在表格操作列与 `PacketAnatomyDrawer` 顶栏激活【单包重放调试】按钮；
+     - **同构进程智能匹配**：根据该报文命中的目标模块 `dst_module_id`（或源进程挂载的公共模块集合），从当前用户可见的 `Process` 列表中自动筛选承载相同模块且监听端口 `> 0` 的同构目标进程（优先推荐本人在线空闲的 `PRIVATE` Agent 进程，亦支持空闲 `SHARED` Agent 进程），支持用户可选填写本次临时 `extra_ignore_paths`；
+     - **零新协议原地闭环**：点击【立即发包调试】直接调用既有 `POST /api/replay-tasks`（传入 `selected_record_ids: [record.id]`，`name: "单包调试_" + service + "_" + operation + "_" + sno`），随后通过 SSE `replay.completed` 事件（及轻量 `GET /api/replay-tasks/:id` 兜底轮询）等待单条执行完毕，立即在同一抽屉内复用 `HeaderAssertionCard`、`ProtoFieldDiffTable` 与 `MockHitMissTimeline` 渲染 Expected vs Actual 对比结果，并提供「跳转至重放任务台账查看完整报告」深链。
+
+2. **「架构拓扑 $\leftrightarrow$ 架构元素 $\leftrightarrow$ Proto 契约 $\leftrightarrow$ Agent 与进程」静态基线双向血缘深链**：
+   - `架构元素` (`/architecture`) 模块详情中：点击任一 `PROVIDE` / `DEPEND` 服务契约的【查看 Proto 契约】$\rightarrow$ 跳转 `/schemas?active_only=true&search=<service_name>`（自动穿透展开该服务的方法子表）；点击进程装载信息 $\rightarrow$ 跳转 `/agents?scope=<scope>&agent_id=<agent_id>&process_id=<process_id>`；
+   - `Proto 契约` (`/schemas`) 服务聚合行中：点击已认领模块徽章 $\rightarrow$ 跳转 `/architecture?subsystem_id=<sid>&group_id=<gid>&module_id=<mid>` 精准展开并选中该模块叶子节点。
 
 ---
 
