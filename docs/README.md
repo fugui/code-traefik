@@ -44,7 +44,8 @@ docs/
 │   ├── 06-proto-schema-repository-and-field-inspection-adr.md          # ADR-06：Protobuf 契约资产化治理、嵌套服务表重构与消息体字段树 Diff 忽略设计
 │   ├── 07-console-ia-restructuring-and-workflow-workbench-adr.md       # ADR-07：微前端控制台信息架构重组、“录制-调试-重放”高频工作流闭环与物理进程收口
 │   ├── 08-recording-drawer-and-process-tree-selection-adr.md          # ADR-08：协同录制抽屉重构与进程树选择器设计（Drawer 侧边栏、Agent 选择防呆与业务分组树）
-│   └── 09-arch-process-ssot-and-ebpf-premount-standby-adr.md          # ADR-09：架构物理进程蓝图 SSOT 解耦、Agent 1:1 挂载覆盖与 eBPF 默认自动预挂待命架构
+│   ├── 09-arch-process-ssot-and-ebpf-premount-standby-adr.md          # ADR-09：架构物理进程蓝图 SSOT 解耦、Agent 1:1 挂载覆盖与 eBPF 默认自动预挂待命架构
+│   └── 10-enhanced-proto-schema-file-management-adr.md                # ADR-10：增强 Protobuf 描述集管理：多 .pb 资产台账、跨集依赖闭包解析与全局单一生效池
 ├── 06-ops/          # 交付与验证：双模联调、物理隔离数据库测试与生产环境单二进制部署手册
 │   └── 01-verification-and-deployment-guide.md    # 联调验证、自动化回归测试与生产部署操作指南
 └── 07-references/   # 外部参考与上位契约基准：协议包规范、字节字典与领域标准文档
