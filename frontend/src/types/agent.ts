@@ -6,6 +6,12 @@ export interface Agent {
   owner_id?: string;
   owner_name?: string;
   status: 'ONLINE' | 'OFFLINE';
+  boot_id?: string;
+  agent_version?: string;
+  protocol_version?: string;
+  kernel_version?: string;
+  has_ebpf_cap?: boolean;
+  cap_detail?: string;
   lease_type: 'RECORDING' | 'REPLAY' | '';
   lease_ref_id?: string;
   lease_holder_id?: string;
@@ -55,10 +61,14 @@ export interface DiscoveredProcess {
 }
 
 export interface HandshakeResp {
-  status: string;
-  version: string;
-  capabilities?: string[];
-  active_lease_type?: string;
-  active_lease_ref?: string;
-  timestamp?: string;
+  agent_version: string;
+  protocol_version: string;
+  boot_id: string;
+  started_at: string;
+  kernel_version: string;
+  has_ebpf_cap: boolean;
+  cap_detail?: string;
+  active_lease_type: string;
+  active_ref_id: number;
+  uptime_sec: number;
 }

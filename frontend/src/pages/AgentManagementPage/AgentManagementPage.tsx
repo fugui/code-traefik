@@ -132,7 +132,9 @@ export const AgentManagementPage: React.FC = () => {
   const handleHandshake = async (agentId: string) => {
     try {
       const res = await agentApi.handshakeAgent(agentId);
-      toast.success(`探活成功: 版本 ${res.handshake.version}, 状态 ${res.handshake.status}`);
+      const version = res.handshake.agent_version || res.agent.agent_version || '未知';
+      const status = res.agent.status || 'ONLINE';
+      toast.success(`探活成功: 版本 ${version}, 状态 ${status}`);
       void loadAgents();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '探活通信失败');

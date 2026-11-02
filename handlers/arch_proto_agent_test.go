@@ -421,6 +421,37 @@ func TestSC01_HealthAuthAndPublicPrivateRBAC(t *testing.T) {
 			t.Fatalf("期望用户 B 删除用户 A 私有 Agent 返回 403，实际: %d", w.Code)
 		}
 
+		// 用户 B 横向越权尝试探活用户 A 的 PRIVATE Agent -> 403 Forbidden
+		reqHandshakeB := httptest.NewRequest(http.MethodPost, createdAgentPath(createdAgent.ID)+"/handshake", nil)
+		reqHandshakeB.Header.Set("Authorization", "Bearer "+userBToken)
+		w = httptest.NewRecorder()
+		r.ServeHTTP(w, reqHandshakeB)
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("期望用户 B 探活用户 A 私有 Agent 返回 403，实际: %d", w.Code)
+		}
+
+		// 用户 A (owner) 探活自己的 PRIVATE Agent -> 200 OK
+		reqHandshakeA := httptest.NewRequest(http.MethodPost, createdAgentPath(createdAgent.ID)+"/handshake", nil)
+		reqHandshakeA.Header.Set("Authorization", "Bearer "+userAToken)
+		w = httptest.NewRecorder()
+		r.ServeHTTP(w, reqHandshakeA)
+		if w.Code != http.StatusOK {
+			t.Fatalf("期望用户 A 探活自己的私有 Agent 返回 200，实际: %d (body: %s)", w.Code, w.Body.String())
+		}
+		var handshakeBody struct {
+			Agent     models.Agent             `json:"agent"`
+			Handshake agentproto.HandshakeResp `json:"handshake"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &handshakeBody); err != nil {
+			t.Fatalf("反序列化握手响应失败: %v", err)
+		}
+		if handshakeBody.Handshake.AgentVersion != "1.0.0" {
+			t.Fatalf("期望握手返回版本 1.0.0，实际: %s", handshakeBody.Handshake.AgentVersion)
+		}
+		if handshakeBody.Agent.Status != models.AgentStatusOnline {
+			t.Fatalf("期望探活后 Agent 状态为 ONLINE，实际: %s", handshakeBody.Agent.Status)
+		}
+
 		// 管理员巡检查看用户 A 的 PRIVATE Agent -> 200 OK
 		reqGetAdmin := httptest.NewRequest(http.MethodGet, createdAgentPath(createdAgent.ID), nil)
 		reqGetAdmin.Header.Set("Authorization", "Bearer "+adminToken)

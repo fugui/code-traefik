@@ -426,6 +426,27 @@ func (m *Manager) HandshakeAgent(ctx context.Context, agentID uint64, currentUse
 		return nil, err
 	}
 
+	m.failureCounters.Store(agentID, 0)
+	now := time.Now()
+	updates := map[string]interface{}{
+		"status":            models.AgentStatusOnline,
+		"last_heartbeat_at": &now,
+		"boot_id":           handshake.BootID,
+		"agent_version":     handshake.AgentVersion,
+		"protocol_version":  handshake.ProtocolVersion,
+		"kernel_version":    handshake.KernelVersion,
+		"has_ebpf_cap":      handshake.HasEbpfCap,
+		"cap_detail":        handshake.CapDetail,
+	}
+	_ = m.db.Model(&models.Agent{}).Where("id = ?", agentID).Updates(updates).Error
+
+	m.BroadcastEvent(AgentEvent{
+		Type:      "STATUS_CHANGE",
+		AgentID:   agentID,
+		Timestamp: now.Unix(),
+		Data:      map[string]string{"status": models.AgentStatusOnline},
+	})
+
 	return &handshake, nil
 }
 
