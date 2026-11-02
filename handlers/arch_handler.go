@@ -78,12 +78,15 @@ type ProcessBindingReq struct {
 	ProcessID     *FlexUint64 `json:"process_id"`
 }
 
-// normalizePageSize 通用分页归一化 (15/25/50/100，默认 25)
+// normalizePageSize 通用分页归一化 (15/25/50/100，下拉/批量最大支持 1000，默认 25)
 func normalizePageSize(size int) int {
 	switch size {
 	case 15, 25, 50, 100:
 		return size
 	default:
+		if size > 0 && size <= 1000 {
+			return size
+		}
 		return 25
 	}
 }
@@ -429,10 +432,20 @@ func ListModules(c *gin.Context) {
 	page, pageSize := parsePagination(c)
 	subsystemIDStr := c.Query("subsystem_id")
 	groupIDStr := c.Query("group_id")
-	processIDStr := c.Query("process_id")
+	archProcessIDStr := c.Query("arch_process_id")
+	if archProcessIDStr == "" {
+		archProcessIDStr = c.Query("process_id")
+	}
+	includeDescendants := c.Query("include_descendants") == "true"
+	unassignedOnly := c.Query("unassigned_only") == "true"
 	search := strings.TrimSpace(c.Query("search"))
 
-	query := models.DB.Model(&models.Module{}).Preload("Group").Preload("Subsystem").Preload("Process").Preload("Owner")
+	query := models.DB.Model(&models.Module{}).
+		Preload("Group").
+		Preload("Subsystem").
+		Preload("ArchProcess.Group").
+		Preload("Owner")
+
 	if subsystemIDStr != "" {
 		if sid, err := strconv.ParseUint(subsystemIDStr, 10, 64); err == nil {
 			query = query.Where("subsystem_id = ?", sid)
@@ -440,12 +453,23 @@ func ListModules(c *gin.Context) {
 	}
 	if groupIDStr != "" {
 		if gid, err := strconv.ParseUint(groupIDStr, 10, 64); err == nil {
-			query = query.Where("group_id = ?", gid)
+			if includeDescendants {
+				var targetGroup models.FunctionalGroup
+				if err := models.DB.First(&targetGroup, gid).Error; err == nil && targetGroup.Path != "" {
+					query = query.Where("group_id IN (SELECT id FROM "+models.FunctionalGroup{}.TableName()+" WHERE path LIKE ? OR id = ?)", targetGroup.Path+"%", gid)
+				} else {
+					query = query.Where("group_id = ?", gid)
+				}
+			} else {
+				query = query.Where("group_id = ?", gid)
+			}
 		}
 	}
-	if processIDStr != "" {
-		if pid, err := strconv.ParseUint(processIDStr, 10, 64); err == nil {
-			query = query.Where("process_id = ?", pid)
+	if unassignedOnly {
+		query = query.Where("arch_process_id IS NULL")
+	} else if archProcessIDStr != "" {
+		if pid, err := strconv.ParseUint(archProcessIDStr, 10, 64); err == nil {
+			query = query.Where("arch_process_id = ?", pid)
 		}
 	}
 	if search != "" {

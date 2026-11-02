@@ -674,6 +674,44 @@ func TestSC02_ArchProtoAndTopologyFlows(t *testing.T) {
 	var mod2 models.Module
 	_ = json.Unmarshal(w.Body.Bytes(), &mod2)
 
+	// 3.1 验证 GET /api/arch/modules 列表查询 (防 500 回归及 page_size=1000 支持)
+	req = httptest.NewRequest(http.MethodGet, "/api/arch/modules?page_size=1000", nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("查询全量模块列表失败: %d (body: %s)", w.Code, w.Body.String())
+	}
+	var allModsResp struct {
+		Items    []models.Module `json:"items"`
+		Total    int64           `json:"total"`
+		PageSize int             `json:"page_size"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &allModsResp)
+	if allModsResp.Total < 2 || allModsResp.PageSize != 1000 {
+		t.Fatalf("预期返回至少 2 个模块且 page_size=1000，实际: total=%d, page_size=%d", allModsResp.Total, allModsResp.PageSize)
+	}
+
+	// 3.2 验证按 group_id 过滤模块列表
+	req = httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/arch/modules?group_id=%d&page_size=100", g1.ID), nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("按 group_id 查询模块列表失败: %d (body: %s)", w.Code, w.Body.String())
+	}
+	var groupModsResp struct {
+		Items []models.Module `json:"items"`
+		Total int64           `json:"total"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &groupModsResp)
+	if groupModsResp.Total != 1 || len(groupModsResp.Items) != 1 || groupModsResp.Items[0].ID != mod2.ID {
+		t.Fatalf("预期 group_id=%d 下仅有 1 个模块 (mod2)，实际: total=%d, len=%d", g1.ID, groupModsResp.Total, len(groupModsResp.Items))
+	}
+	if groupModsResp.Items[0].Group == nil || groupModsResp.Items[0].Group.ID != g1.ID {
+		t.Fatalf("预期 Group 正确预加载，实际: %+v", groupModsResp.Items[0].Group)
+	}
+
 	// 4. 为 MOD_RISK 声明对外供给服务 PROVIDE dophi.risk.v1.RiskService
 	svcBody, _ := json.Marshal(map[string]interface{}{
 		"service_name": "dophi.risk.v1.RiskService",
