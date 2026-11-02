@@ -1,18 +1,68 @@
-export interface ProtoSchema {
-  id: string;
+export type ProtoCategory = 'BASE_LIB' | 'BUSINESS' | 'GATEWAY';
+
+export interface ResolvedSchemaDependencyDTO {
+  schema_id?: number | string;
+  schema_name: string;
+  version?: number;
+  category?: string;
+  matched_protos: string[];
+  status: 'READY' | 'MISSING';
+}
+
+export interface ProtoPoolSummaryDTO {
+  active_schema_count: number;
+  active_base_lib_count: number;
+  active_service_count: number;
+  active_operation_count: number;
+  claimed_service_count: number;
+  orphan_service_count: number;
+  claimed_ratio: number;
+  unresolved_dep_count: number;
+}
+
+export interface ProtoSchemaLedgerItemDTO {
+  id: string | number;
   name: string;
   version: number;
   version_tag?: string;
-  file_name?: string;
+  category: ProtoCategory;
+  file_name: string;
   file_sha256?: string;
-  file_size?: number;
+  file_size: number;
   is_active: boolean;
+  proto_file_count: number;
+  service_count: number;
+  operation_count: number;
+  proto_files: string[];
+  external_imports?: string[];
   description?: string;
-  operations_count?: number;
-  operation_count?: number;
-  proto_files?: string[];
+  created_by?: number;
+  created_by_name?: string;
   created_at?: string;
   updated_at?: string;
+  version_count: number;
+  latest_version: number;
+  active_version?: number;
+  claimed_service_count: number;
+  claimed_ratio: number;
+  resolved_dependencies: ResolvedSchemaDependencyDTO[];
+}
+
+// 兼容别名与已有代码引用
+export interface ProtoSchema extends Partial<ProtoSchemaLedgerItemDTO> {
+  id: string;
+  name: string;
+  version: number;
+  is_active: boolean;
+  operations_count?: number;
+}
+
+export interface ProtoSchemaLedgerListResponse {
+  items: ProtoSchemaLedgerItemDTO[];
+  pool_summary: ProtoPoolSummaryDTO;
+  total: number;
+  page: number;
+  page_size: number;
 }
 
 export interface ProtoOperation {
@@ -32,9 +82,41 @@ export interface ProtoOperation {
   created_at?: string;
 }
 
-export interface SchemaConflict {
+export interface ConflictItem {
   service_name: string;
   operation: string;
   conflict_schema_name: string;
   conflict_version: number;
 }
+
+export interface SchemaConflict extends ConflictItem {}
+
+export interface BrokenDependentItemDTO {
+  schema_id: number;
+  schema_name: string;
+  version: number;
+  reason: string;
+}
+
+export interface ConflictOrBrokenResponse {
+  error: string;
+  conflicts?: ConflictItem[];
+  broken_dependents?: BrokenDependentItemDTO[];
+}
+
+export interface ClaimedModuleDTO {
+  module_id: number | string;
+  module_name: string;
+  subsystem_id?: number | string;
+  subsystem_name?: string;
+}
+
+export interface SourceSchemaDTO {
+  id: number | string;
+  name: string;
+  version: number;
+  category: string;
+  is_active: boolean;
+}
+
+export type { ServiceContractGroupDTO } from './schema_tree';

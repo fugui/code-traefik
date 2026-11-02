@@ -66,10 +66,28 @@ export interface OperationSchemaTreeDTO {
 }
 
 export interface ServiceContractGroupDTO {
-  serviceName: string;         // 聚合键: "{package}-{serviceName}" 或 "{service_name}"
-  protoPackage: string;
-  protoService: string;
-  protoFile: string;
+  serviceName?: string;         // 聚合键: "{package}-{serviceName}" 或 "{service_name}"
+  service_name?: string;
+  protoPackage?: string;
+  proto_package?: string;
+  protoService?: string;
+  proto_service?: string;
+  protoFile?: string;
+  proto_file?: string;
+  sourceSchema?: {
+    id: number | string;
+    name: string;
+    version: number;
+    category?: string;
+    is_active?: boolean;
+  };
+  source_schema?: {
+    id: number | string;
+    name: string;
+    version: number;
+    category?: string;
+    is_active?: boolean;
+  };
   claimedByModule?: {          // 架构血缘: 认领此服务的公共架构模块
     id: string;
     code: string;
@@ -81,10 +99,22 @@ export interface ServiceContractGroupDTO {
     groupId?: string | number;
     group_id?: string | number;
   };
-  totalOperations: number;
-  unaryCount: number;
-  streamCount: number;
-  isActive: boolean;
+  claimed_by_module?: {
+    module_id: number | string;
+    module_name: string;
+    subsystem_id?: number | string;
+    subsystem_name?: string;
+  };
+  totalOperations?: number;
+  operation_count?: number;
+  unaryCount?: number;
+  unary_count?: number;
+  streamCount?: number;
+  stream_count?: number;
+  isActive?: boolean;
+  is_active?: boolean;
+  isClaimed?: boolean;
+  is_claimed?: boolean;
   operations: ProtoOperation[]; // 展开后的子表方法清单
 }
 

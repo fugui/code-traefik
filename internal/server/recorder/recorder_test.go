@@ -472,7 +472,7 @@ func TestPacketAnatomyBuilderAndRedecode(t *testing.T) {
 	}
 
 	v1PB := buildOrderProtoDescriptorBytes(t, false)
-	s1, _, err := reg.UploadSchema(decoder.UploadSchemaInput{
+	s1, _, _, err := reg.UploadSchema(decoder.UploadSchemaInput{
 		Name:         "order_anatomy_idl",
 		VersionTag:   "v1.0.0",
 		FileName:     "order_anatomy.pb",
@@ -546,7 +546,7 @@ func TestPacketAnatomyBuilderAndRedecode(t *testing.T) {
 
 	// 4. 上传并激活新版本 V2 (带 extraField)
 	v2PB := buildOrderProtoDescriptorBytes(t, true)
-	s2, _, err := reg.UploadSchema(decoder.UploadSchemaInput{
+	s2, _, _, err := reg.UploadSchema(decoder.UploadSchemaInput{
 		Name:         "order_anatomy_idl",
 		VersionTag:   "v2.0.0",
 		FileName:     "order_anatomy_v2.pb",

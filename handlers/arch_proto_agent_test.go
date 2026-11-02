@@ -220,11 +220,16 @@ func RegisterRoutesForTest(r *gin.Engine) {
 
 		// 描述集
 		protected.GET("/proto-schemas", handlers.ListProtoSchemas)
+		protected.GET("/proto-schemas/dependencies-graph", handlers.GetProtoDependenciesGraph)
+		protected.POST("/proto-schemas/batch-activate", requireAdmin, handlers.BatchActivateProtoSchemas)
 		protected.GET("/proto-schemas/:id/download", handlers.DownloadProtoSchema)
 		protected.GET("/proto-schemas/:id/summary", handlers.GetProtoSchemaSummary)
 		protected.POST("/proto-schemas", requireAdmin, handlers.UploadProtoSchema)
+		protected.PATCH("/proto-schemas/:id", requireAdmin, handlers.UpdateProtoSchema)
 		protected.POST("/proto-schemas/:id/activate", requireAdmin, handlers.ActivateProtoSchema)
+		protected.POST("/proto-schemas/:id/deactivate", requireAdmin, handlers.DeactivateProtoSchema)
 		protected.DELETE("/proto-schemas/:id", requireAdmin, handlers.DeleteProtoSchema)
+		protected.GET("/proto-services", handlers.ListProtoServices)
 		protected.GET("/proto-operations", handlers.ListProtoOperations)
 		protected.GET("/proto-operations/:id/schema-tree", handlers.GetOperationSchemaTree)
 		protected.PUT("/proto-operations/:id/ignore-paths", requireAdmin, handlers.UpdateOperationIgnorePaths)
@@ -1729,6 +1734,577 @@ func TestBatchProcessMounts_OptimisticLock_AndDisarm(t *testing.T) {
 	for _, p := range allProcsAfter {
 		if p.ProbeDesiredState != models.ProbeDesiredStateDisarmed || p.ProbeStatus != models.ProbeStatusDisarmed {
 			t.Fatalf("expected all procs DISARMED after disarm-all, got %s / %s", p.ProbeDesiredState, p.ProbeStatus)
+		}
+	}
+}
+
+// buildTestBaseLibDescriptorBytes 构造 0 Service 纯公共消息包 common-base.pb (引用 google/protobuf/timestamp.proto)
+func buildTestBaseLibDescriptorBytes(t *testing.T, withMoney bool) []byte {
+	t.Helper()
+
+	baseHeaderFields := []*descriptorpb.FieldDescriptorProto{
+		{
+			Name:   proto.String("trace_id"),
+			Number: proto.Int32(1),
+			Label:  descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
+			Type:   descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum(),
+		},
+		{
+			Name:     proto.String("timestamp"),
+			Number:   proto.Int32(2),
+			Label:    descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
+			Type:     descriptorpb.FieldDescriptorProto_TYPE_MESSAGE.Enum(),
+			TypeName: proto.String(".google.protobuf.Timestamp"),
+		},
+	}
+
+	messages := []*descriptorpb.DescriptorProto{
+		{
+			Name:  proto.String("BaseHeader"),
+			Field: baseHeaderFields,
+		},
+	}
+
+	if withMoney {
+		moneyFields := []*descriptorpb.FieldDescriptorProto{
+			{
+				Name:   proto.String("currency"),
+				Number: proto.Int32(1),
+				Label:  descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
+				Type:   descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum(),
+			},
+			{
+				Name:   proto.String("amount"),
+				Number: proto.Int32(2),
+				Label:  descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
+				Type:   descriptorpb.FieldDescriptorProto_TYPE_INT64.Enum(),
+			},
+		}
+		messages = append(messages, &descriptorpb.DescriptorProto{
+			Name:  proto.String("Money"),
+			Field: moneyFields,
+		})
+	}
+
+	fileProto := &descriptorpb.FileDescriptorProto{
+		Syntax:      proto.String("proto3"),
+		Name:        proto.String("common/base.proto"),
+		Package:     proto.String("common"),
+		Dependency:  []string{"google/protobuf/timestamp.proto"},
+		MessageType: messages,
+		Service:     []*descriptorpb.ServiceDescriptorProto{}, // 0 Service
+	}
+
+	fds := &descriptorpb.FileDescriptorSet{
+		File: []*descriptorpb.FileDescriptorProto{fileProto},
+	}
+	raw, err := proto.Marshal(fds)
+	if err != nil {
+		t.Fatalf("序列化 common-base.pb 失败: %v", err)
+	}
+	return raw
+}
+
+// buildTestOrderWithBaseDescriptorBytes 构造不带 --include_imports 的拆包 order.pb (外部依赖 common/base.proto)
+func buildTestOrderWithBaseDescriptorBytes(t *testing.T, includeCancel bool) []byte {
+	t.Helper()
+
+	reqFields := []*descriptorpb.FieldDescriptorProto{
+		{
+			Name:     proto.String("header"),
+			Number:   proto.Int32(1),
+			Label:    descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
+			Type:     descriptorpb.FieldDescriptorProto_TYPE_MESSAGE.Enum(),
+			TypeName: proto.String(".common.BaseHeader"),
+		},
+		{
+			Name:     proto.String("total_fee"),
+			Number:   proto.Int32(2),
+			Label:    descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
+			Type:     descriptorpb.FieldDescriptorProto_TYPE_MESSAGE.Enum(),
+			TypeName: proto.String(".common.Money"),
+		},
+		{
+			Name:   proto.String("order_id"),
+			Number: proto.Int32(3),
+			Label:  descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
+			Type:   descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum(),
+		},
+	}
+
+	rspFields := []*descriptorpb.FieldDescriptorProto{
+		{
+			Name:     proto.String("header"),
+			Number:   proto.Int32(1),
+			Label:    descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
+			Type:     descriptorpb.FieldDescriptorProto_TYPE_MESSAGE.Enum(),
+			TypeName: proto.String(".common.BaseHeader"),
+		},
+		{
+			Name:   proto.String("success"),
+			Number: proto.Int32(2),
+			Label:  descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
+			Type:   descriptorpb.FieldDescriptorProto_TYPE_BOOL.Enum(),
+		},
+	}
+
+	messages := []*descriptorpb.DescriptorProto{
+		{
+			Name:  proto.String("CreateOrderReq"),
+			Field: reqFields,
+		},
+		{
+			Name:  proto.String("CreateOrderRsp"),
+			Field: rspFields,
+		},
+	}
+
+	methods := []*descriptorpb.MethodDescriptorProto{
+		{
+			Name:       proto.String("CreateOrder"),
+			InputType:  proto.String(".order.CreateOrderReq"),
+			OutputType: proto.String(".order.CreateOrderRsp"),
+		},
+	}
+
+	if includeCancel {
+		messages = append(messages, &descriptorpb.DescriptorProto{
+			Name: proto.String("CancelOrderReq"),
+			Field: []*descriptorpb.FieldDescriptorProto{
+				{
+					Name:   proto.String("order_id"),
+					Number: proto.Int32(1),
+					Label:  descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
+					Type:   descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum(),
+				},
+			},
+		}, &descriptorpb.DescriptorProto{
+			Name: proto.String("CancelOrderRsp"),
+			Field: []*descriptorpb.FieldDescriptorProto{
+				{
+					Name:   proto.String("cancelled"),
+					Number: proto.Int32(1),
+					Label:  descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
+					Type:   descriptorpb.FieldDescriptorProto_TYPE_BOOL.Enum(),
+				},
+			},
+		})
+
+		methods = append(methods, &descriptorpb.MethodDescriptorProto{
+			Name:       proto.String("CancelOrder"),
+			InputType:  proto.String(".order.CancelOrderReq"),
+			OutputType: proto.String(".order.CancelOrderRsp"),
+		})
+	}
+
+	fileProto := &descriptorpb.FileDescriptorProto{
+		Syntax:      proto.String("proto3"),
+		Name:        proto.String("order/order.proto"),
+		Package:     proto.String("order"),
+		Dependency:  []string{"common/base.proto"},
+		MessageType: messages,
+		Service: []*descriptorpb.ServiceDescriptorProto{
+			{
+				Name:   proto.String("OrderService"),
+				Method: methods,
+			},
+		},
+	}
+
+	fds := &descriptorpb.FileDescriptorSet{
+		File: []*descriptorpb.FileDescriptorProto{fileProto},
+	}
+	raw, err := proto.Marshal(fds)
+	if err != nil {
+		t.Fatalf("序列化 order.pb 失败: %v", err)
+	}
+	return raw
+}
+
+// TestProtoSchemaLedgerAPI_LatestOnlyGrouping_BatchActivate_Deactivate_GraphAndDownloadHeaders 验证 M11 文件资产台账、零 N+1 聚合、停用反向依赖门禁、批量激活与下载安全头 (F-03.5, F-03.6)
+func TestProtoSchemaLedgerAPI_LatestOnlyGrouping_BatchActivate_Deactivate_GraphAndDownloadHeaders(t *testing.T) {
+	r, db := setupRouterAndDB(t)
+	adminUser := createTestUserInDB(t, db, "admin_ledger", config.AdminRole)
+	adminToken := generateTestJWT(t, adminUser)
+
+	baseV1Bytes := buildTestBaseLibDescriptorBytes(t, true)
+	baseV2Bytes := buildTestBaseLibDescriptorBytes(t, true)
+	orderV1Bytes := buildTestOrderWithBaseDescriptorBytes(t, false)
+	orderV2Bytes := buildTestOrderWithBaseDescriptorBytes(t, true)
+
+	// 1. 构造 base v1 (未生效), base v2 (生效), order v1 (生效), order v2 (草稿)
+	baseV1 := models.ProtoSchema{
+		Name:            "base",
+		Version:         1,
+		Category:        models.ProtoCategoryBaseLib,
+		FileName:        "base_v1.pb",
+		FileSHA256:      "sha_base_v1",
+		FileSize:        len(baseV1Bytes),
+		DescriptorBytes: baseV1Bytes,
+		IsActive:        false,
+		ProtoFiles:      datatypes.JSON(`["common/base.proto"]`),
+		ProtoFileCount:  1,
+	}
+	baseV2 := models.ProtoSchema{
+		Name:            "base",
+		Version:         2,
+		Category:        models.ProtoCategoryBaseLib,
+		FileName:        "base_v2.pb",
+		FileSHA256:      "sha_base_v2",
+		FileSize:        len(baseV2Bytes),
+		DescriptorBytes: baseV2Bytes,
+		IsActive:        true,
+		ProtoFiles:      datatypes.JSON(`["common/base.proto"]`),
+		ProtoFileCount:  1,
+	}
+	orderV1 := models.ProtoSchema{
+		Name:            "order",
+		Version:         1,
+		Category:        models.ProtoCategoryBusiness,
+		FileName:        "order_v1.pb",
+		FileSHA256:      "sha_order_v1",
+		FileSize:        len(orderV1Bytes),
+		DescriptorBytes: orderV1Bytes,
+		IsActive:        true,
+		ProtoFiles:      datatypes.JSON(`["order/order.proto"]`),
+		ExternalImports: datatypes.JSON(`["common/base.proto"]`),
+		ProtoFileCount:  1,
+		ServiceCount:    1,
+		OperationCount:  1,
+	}
+	orderV2 := models.ProtoSchema{
+		Name:            "order",
+		Version:         2,
+		Category:        models.ProtoCategoryBusiness,
+		FileName:        "order_v2.pb",
+		FileSHA256:      "sha_order_v2",
+		FileSize:        len(orderV2Bytes),
+		DescriptorBytes: orderV2Bytes,
+		IsActive:        false,
+		ProtoFiles:      datatypes.JSON(`["order/order.proto"]`),
+		ExternalImports: datatypes.JSON(`["common/base.proto"]`),
+		ProtoFileCount:  1,
+		ServiceCount:    1,
+		OperationCount:  1,
+	}
+	_ = db.Create(&baseV1).Error
+	_ = db.Create(&baseV2).Error
+	_ = db.Create(&orderV1).Error
+	_ = db.Create(&orderV2).Error
+
+	opOrder := models.ProtoOperation{
+		SchemaID:           orderV1.ID,
+		ProtoFile:          "order/order.proto",
+		ProtoPackage:       "order",
+		ProtoService:       "OrderService",
+		ServiceName:        "order.OrderService",
+		Operation:          "CreateOrder",
+		ReqMessageFullName: "order.CreateOrderReq",
+		RspMessageFullName: "order.CreateOrderRsp",
+		IsActive:           true,
+	}
+	_ = db.Create(&opOrder).Error
+
+	opOrder2 := models.ProtoOperation{
+		SchemaID:           orderV2.ID,
+		ProtoFile:          "order/order.proto",
+		ProtoPackage:       "order",
+		ProtoService:       "OrderService",
+		ServiceName:        "order.OrderService",
+		Operation:          "CreateOrder",
+		ReqMessageFullName: "order.CreateOrderReq",
+		RspMessageFullName: "order.CreateOrderRsp",
+		IsActive:           false,
+	}
+	_ = db.Create(&opOrder2).Error
+
+	// 重置全局编解码中心（从包含激活 Schema 的数据库重新拉取）
+	reg, err := decoder.NewRegistry(db)
+	if err != nil {
+		t.Fatalf("NewRegistry 失败: %v", err)
+	}
+	handlers.ResetGlobalDecoderRegistry(reg)
+
+	// 认领 order.OrderService
+	sub := models.Subsystem{Code: "SUB_LEDGER", Name: "LedgerSub"}
+	_ = db.Create(&sub).Error
+	grp := models.FunctionalGroup{SubsystemID: sub.ID, Code: "GRP_LEDGER", Name: "LedgerGrp"}
+	_ = db.Create(&grp).Error
+	mod := models.Module{SubsystemID: sub.ID, GroupID: grp.ID, Code: "MOD_LEDGER", Name: "OrderModule"}
+	_ = db.Create(&mod).Error
+	ms := models.ModuleService{ModuleID: mod.ID, ServiceName: "order.OrderService"}
+	_ = db.Create(&ms).Error
+
+	// (A) 测试 GET /api/proto-schemas (默认 latest_only=true)
+	req := httptest.NewRequest(http.MethodGet, "/api/proto-schemas", nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("查询台账期望 200，实际: %d (body: %s)", w.Code, w.Body.String())
+	}
+
+	var res struct {
+		Items       []handlers.ProtoSchemaLedgerItemDTO `json:"items"`
+		Total       int64                               `json:"total"`
+		PoolSummary handlers.ProtoPoolSummaryDTO        `json:"pool_summary"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil {
+		t.Fatalf("反序列化台账响应失败: %v", err)
+	}
+	if res.Total != 2 || len(res.Items) != 2 {
+		t.Fatalf("latest_only=true 期望返回 2 条代表版本，实际 total=%d, len=%d", res.Total, len(res.Items))
+	}
+	if res.PoolSummary.ActiveSchemaCount != 2 || res.PoolSummary.ActiveBaseLibCount != 1 {
+		t.Fatalf("PoolSummary 统计不符: %+v", res.PoolSummary)
+	}
+
+	for _, item := range res.Items {
+		if item.Name == "base" {
+			if item.Version != 2 || !item.IsActive || item.VersionCount != 2 {
+				t.Errorf("base 代表版本期望 v2 且 version_count=2, 实际: %+v", item)
+			}
+		} else if item.Name == "order" {
+			if item.Version != 1 || !item.IsActive || item.VersionCount != 2 {
+				t.Errorf("order 代表版本期望 v1(active) 且 version_count=2, 实际: %+v", item)
+			}
+			if item.ClaimedRatio < 0.99 {
+				t.Errorf("order 认领率期望 1.0, 实际: %f", item.ClaimedRatio)
+			}
+			if len(item.ResolvedDependencies) != 1 || item.ResolvedDependencies[0].Status != "READY" {
+				t.Errorf("order 依赖状态期望 1 项 READY, 实际: %+v", item.ResolvedDependencies)
+			}
+		}
+	}
+
+	// (B) 测试 latest_only=false&name=base 拉取完整版本栈
+	req = httptest.NewRequest(http.MethodGet, "/api/proto-schemas?latest_only=false&name=base", nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("查询 base 历史版本期望 200，实际: %d", w.Code)
+	}
+	var resBaseHist struct {
+		Items []handlers.ProtoSchemaLedgerItemDTO `json:"items"`
+		Total int64                               `json:"total"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &resBaseHist)
+	if resBaseHist.Total != 2 {
+		t.Fatalf("base 历史版本数量期望 2，实际: %d", resBaseHist.Total)
+	}
+
+	// (C) 测试 PATCH /api/proto-schemas/:id 更新元数据
+	patchBody := `{"description":"订单微服务最新定义","version_tag":"v1.1.0"}`
+	req = httptest.NewRequest(http.MethodPatch, fmt.Sprintf("/api/proto-schemas/%d", orderV2.ID), strings.NewReader(patchBody))
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("PATCH 描述集元数据期望 200，实际: %d (body: %s)", w.Code, w.Body.String())
+	}
+
+	// (D) 测试 POST /api/proto-schemas/:id/deactivate
+	// 先停用 orderV1
+	req = httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/proto-schemas/%d/deactivate", orderV1.ID), nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("停用 orderV1 期望 200，实际: %d (body: %s)", w.Code, w.Body.String())
+	}
+
+	// 再停用 baseV2
+	req = httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/proto-schemas/%d/deactivate", baseV2.ID), nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("停用 baseV2 期望 200，实际: %d (body: %s)", w.Code, w.Body.String())
+	}
+
+	// (E) 测试 POST /api/proto-schemas/batch-activate 批量激活 [baseV2, orderV2]
+	batchBody := fmt.Sprintf(`{"schema_ids":[%d,%d]}`, baseV2.ID, orderV2.ID)
+	req = httptest.NewRequest(http.MethodPost, "/api/proto-schemas/batch-activate", strings.NewReader(batchBody))
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("批量激活期望 200，实际: %d (body: %s)", w.Code, w.Body.String())
+	}
+
+	// (F) 测试 GET /api/proto-schemas/dependencies-graph
+	req = httptest.NewRequest(http.MethodGet, "/api/proto-schemas/dependencies-graph", nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("查询依赖图期望 200，实际: %d", w.Code)
+	}
+	var graphRes struct {
+		Nodes []struct {
+			ID   uint64 `json:"id"`
+			Name string `json:"name"`
+		} `json:"nodes"`
+		Edges []struct {
+			FromSchemaID  uint64   `json:"from_schema_id"`
+			ToSchemaID    uint64   `json:"to_schema_id"`
+			MatchedProtos []string `json:"matched_protos"`
+		} `json:"edges"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &graphRes)
+	if len(graphRes.Nodes) != 2 {
+		t.Fatalf("依赖图节点期望 2，实际: %d", len(graphRes.Nodes))
+	}
+	if len(graphRes.Edges) != 1 || graphRes.Edges[0].FromSchemaID != orderV2.ID || graphRes.Edges[0].ToSchemaID != baseV2.ID {
+		t.Errorf("依赖图有向边不符合预期: %+v", graphRes.Edges)
+	}
+
+	// (G) 测试扩展名拦截 (非法扩展名返回 400)
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	_ = writer.WriteField("name", "bad_ext")
+	part, _ := writer.CreateFormFile("file", "malicious.exe")
+	_, _ = part.Write([]byte("not a pb"))
+	_ = writer.Close()
+
+	req = httptest.NewRequest(http.MethodPost, "/api/proto-schemas", body)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("上传 .exe 期望 400 Bad Request，实际: %d", w.Code)
+	}
+
+	// (H) 测试 GET /api/proto-schemas/:id/download 安全头
+	req = httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/proto-schemas/%d/download", baseV2.ID), nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("下载描述集期望 200，实际: %d", w.Code)
+	}
+	if w.Header().Get("X-Content-Type-Options") != "nosniff" {
+		t.Errorf("期望 X-Content-Type-Options: nosniff，实际为 %q", w.Header().Get("X-Content-Type-Options"))
+	}
+	if w.Header().Get("Cache-Control") != "no-store" {
+		t.Errorf("期望 Cache-Control: no-store，实际为 %q", w.Header().Get("Cache-Control"))
+	}
+	if !strings.Contains(w.Header().Get("Content-Disposition"), "attachment; filename=\"base_v2.pb\"") {
+		t.Errorf("Content-Disposition 响应头不符: %q", w.Header().Get("Content-Disposition"))
+	}
+}
+
+// TestListProtoServices_ServiceLevelPagination_SourceSchemaBadge_AndUnclaimedFilter 验证按 Service 组级分页与孤儿过滤 (F-03.1, F-03.7)
+func TestListProtoServices_ServiceLevelPagination_SourceSchemaBadge_AndUnclaimedFilter(t *testing.T) {
+	r, db := setupRouterAndDB(t)
+	adminUser := createTestUserInDB(t, db, "admin_services", config.AdminRole)
+	adminToken := generateTestJWT(t, adminUser)
+
+	schema := models.ProtoSchema{
+		Name:            "svc_schema",
+		Version:         1,
+		Category:        models.ProtoCategoryBusiness,
+		FileName:        "svc.pb",
+		FileSHA256:      "sha_svc",
+		FileSize:        1024,
+		DescriptorBytes: []byte{0x08, 0x01},
+		IsActive:        true,
+	}
+	if err := db.Create(&schema).Error; err != nil {
+		t.Fatalf("创建 Schema 失败: %v", err)
+	}
+
+	// 构造 5 个不同的服务，每个服务 3 个方法 (共 15 个方法)
+	svcNames := []string{"test.SvcA", "test.SvcB", "test.SvcC", "test.SvcD", "test.SvcE"}
+	for _, sn := range svcNames {
+		for i := 1; i <= 3; i++ {
+			op := models.ProtoOperation{
+				SchemaID:           schema.ID,
+				ProtoFile:          "test/service.proto",
+				ProtoPackage:       "test",
+				ProtoService:       sn[5:],
+				ServiceName:        sn,
+				Operation:          fmt.Sprintf("Method%d", i),
+				ReqMessageFullName: fmt.Sprintf("%s.Req%d", sn, i),
+				RspMessageFullName: fmt.Sprintf("%s.Rsp%d", sn, i),
+				IsActive:           true,
+			}
+			_ = db.Create(&op).Error
+		}
+	}
+
+	// 认领其中 2 个服务 (test.SvcA 与 test.SvcB)
+	sub := models.Subsystem{Code: "SUB_SVC", Name: "SvcSub"}
+	_ = db.Create(&sub).Error
+	grp := models.FunctionalGroup{SubsystemID: sub.ID, Code: "GRP_SVC", Name: "SvcGrp"}
+	_ = db.Create(&grp).Error
+	mod := models.Module{SubsystemID: sub.ID, GroupID: grp.ID, Code: "MOD_SVC", Name: "ServiceModule"}
+	_ = db.Create(&mod).Error
+	_ = db.Create(&models.ModuleService{ModuleID: mod.ID, ServiceName: "test.SvcA"}).Error
+	_ = db.Create(&models.ModuleService{ModuleID: mod.ID, ServiceName: "test.SvcB"}).Error
+
+	// 1. 请求 GET /api/proto-services?page=1&page_size=2
+	req := httptest.NewRequest(http.MethodGet, "/api/proto-services?page=1&page_size=2", nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /api/proto-services 期望 200，实际: %d (body: %s)", w.Code, w.Body.String())
+	}
+
+	var resPage1 struct {
+		Items []handlers.ServiceContractGroupDTO `json:"items"`
+		Total int64                              `json:"total"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resPage1); err != nil {
+		t.Fatalf("反序列化服务目录响应失败: %v", err)
+	}
+
+	// 服务级分页断言：total 必须是 5 个 Service，当前页精确返回 2 个完整 Service
+	if resPage1.Total != 5 {
+		t.Fatalf("服务目录 total 期望 5 个 Service，实际为: %d", resPage1.Total)
+	}
+	if len(resPage1.Items) != 2 {
+		t.Fatalf("page_size=2 期望精确返回 2 个 Service，实际为: %d", len(resPage1.Items))
+	}
+	// 验证同一 Service 的方法绝不被截断 (每个 Service 必须含有完整 3 个 operations)
+	for _, item := range resPage1.Items {
+		if len(item.Operations) != 3 || item.OperationCount != 3 {
+			t.Errorf("Service [%s] 方法被截断，期望 3 个，实际为 %d 个", item.ServiceName, len(item.Operations))
+		}
+		if !item.IsClaimed || item.ClaimedByModule == nil || item.ClaimedByModule.ModuleName != "ServiceModule" {
+			t.Errorf("前两个服务期望已认领，实际: %+v", item)
+		}
+		if item.SourceSchema["name"] != "svc_schema" {
+			t.Errorf("source_schema 携带信息不符合预期: %+v", item.SourceSchema)
+		}
+	}
+
+	// 2. 请求 GET /api/proto-services?claimed_status=UNCLAIMED (孤儿服务过滤)
+	req = httptest.NewRequest(http.MethodGet, "/api/proto-services?claimed_status=UNCLAIMED", nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /api/proto-services?claimed_status=UNCLAIMED 期望 200，实际: %d", w.Code)
+	}
+
+	var resUnclaimed struct {
+		Items []handlers.ServiceContractGroupDTO `json:"items"`
+		Total int64                              `json:"total"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &resUnclaimed)
+
+	if resUnclaimed.Total != 3 || len(resUnclaimed.Items) != 3 {
+		t.Fatalf("未认领孤儿服务期望返回 3 个，实际 total=%d, len=%d", resUnclaimed.Total, len(resUnclaimed.Items))
+	}
+	for _, item := range resUnclaimed.Items {
+		if item.IsClaimed {
+			t.Errorf("孤儿过滤返回的服务 [%s] 状态期望为未认领，实际已认领", item.ServiceName)
 		}
 	}
 }

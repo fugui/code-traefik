@@ -3,7 +3,7 @@
 - **文档编号**：`12-m11-enhanced-proto-schema-asset-management.md`
 - **文档版本**：v1.0.0
 - **更新日期**：2026-11-02
-- **状态**：⏳ 待实施 (Approved for M11)
+- **状态**：✅ 已交付 (Completed)
 - **归属阶段**：阶段三/四：M11 TDD 任务拆解与验收标准 (`04-tasks`)
 - **覆盖特性与场景**：`F-03` (全局单一生效池与跨集联合编译解码)、`F-03.1` (按 `Service` 组分页的全局嵌套契约目录)、`F-03.2` (跨集联合池与历史草稿回退的消息字段字典树)、`F-03.3` (描述集版本演进 `DiffIgnorePaths` 前向自动继承)、`F-03.4` (安全响应头加固的原文件导出与架构认领血缘)、`F-03.5` (多 `.pb` 描述集文件资产台账、三级分类、`16MB` 限额与 `680px` 透视抽屉)、`F-03.6` (跨 `.pb` 去重拓扑依赖闭包、`CompileTrialPool` 停用/激活预编译防破坏门禁与批量原子切换)、`F-03.7` (全局服务目录跨 `.pb` 溯源检索与孤儿服务治理)、`F-15` (`/schemas` 双视角无侧栏工作台)、`F-16` (`traefik_admin` RBAC 与 `commonAudit` 审计)、`SC-04`
 - **设计参考基线**：[`10-enhanced-proto-schema-file-management-adr.md`](../05-adr/10-enhanced-proto-schema-file-management-adr.md) (ADR-10 v1.1.0)、[`01-feature-matrix.md` §3.1 (`F-03`~`F-03.7`, `F-21 CANCELLED`)](../01-features/01-feature-matrix.md)、[`01-system-architecture.md` §6](../02-design/01-system-architecture.md)、[`04-control-plane-and-web-console.md` §2.1~§2.4 & §4.1~§4.4](../02-design/04-control-plane-and-web-console.md)、[`05-database-schema.md` §3.4 & §4~§5](../02-design/05-database-schema.md)、[`01-http-api-contract.md` §2.3 & §3](../03-api/01-http-api-contract.md)

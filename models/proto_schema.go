@@ -7,19 +7,31 @@ import (
 	"gorm.io/datatypes"
 )
 
-// 8. ProtoSchema Protobuf 编译描述集 (.pb FileDescriptorSet) 多版本仓库表 (traefik_proto_schemas)
+const (
+	ProtoCategoryBaseLib  = "BASE_LIB" // 公共基础依赖库（通用消息头、公共枚举/基础类型）
+	ProtoCategoryBusiness = "BUSINESS" // 业务微服务契约
+	ProtoCategoryGateway  = "GATEWAY"  // 接入网关/边缘代理契约
+
+	MaxDescriptorFileSize = 16 * 1024 * 1024 // 16MB (16,777,216 Bytes)
+)
+
+// ProtoSchema Protobuf 编译描述集 (.pb FileDescriptorSet) 多版本仓库表 (traefik_proto_schemas)
 type ProtoSchema struct {
 	ID              uint64         `gorm:"primaryKey;autoIncrement" json:"id"`
 	Name            string         `gorm:"size:128;not null;uniqueIndex:uk_traefik_proto_name_ver,priority:1" json:"name"`
 	Version         int            `gorm:"not null;uniqueIndex:uk_traefik_proto_name_ver,priority:2" json:"version"` // 同名递增版本号 1, 2, 3...
 	VersionTag      string         `gorm:"size:64;not null;default:''" json:"version_tag"`
-	FileName        string         `gorm:"size:255;not null" json:"file_name"` // 经 filepath.Base 净化的展示文件名
+	Category        string         `gorm:"size:32;not null;default:'BUSINESS';index:idx_traefik_proto_category" json:"category"` // BASE_LIB | BUSINESS | GATEWAY
+	FileName        string         `gorm:"size:255;not null" json:"file_name"`                                                   // 经 filepath.Base 净化的展示文件名
 	FileSHA256      string         `gorm:"size:64;not null;index:idx_traefik_proto_sha" json:"file_sha256"`
-	FileSize        int            `gorm:"not null;check:chk_traefik_proto_size,file_size > 0 AND file_size <= 4194304" json:"file_size"` // <= 4MB
-	DescriptorBytes []byte         `gorm:"type:bytea;not null" json:"-"`                                                                  // 二进制仅入库
+	FileSize        int            `gorm:"not null;check:chk_traefik_proto_size,file_size > 0 AND file_size <= 16777216" json:"file_size"` // <= 16MB
+	DescriptorBytes []byte         `gorm:"type:bytea;not null" json:"-"`                                                                   // 二进制仅入库
 	IsActive        bool           `gorm:"not null;default:false;index:idx_traefik_proto_active" json:"is_active"`
-	OperationCount  int            `gorm:"not null;default:0" json:"operation_count"`
-	ProtoFiles      datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"proto_files"` // 解析包含的 .proto 源文件清单 []string (F-03.4)
+	ProtoFileCount  int            `gorm:"not null;default:0" json:"proto_file_count"`               // 自有 .proto 文件数量
+	ServiceCount    int            `gorm:"not null;default:0" json:"service_count"`                  // 自有导出的去重 RPC Service 数量
+	OperationCount  int            `gorm:"not null;default:0" json:"operation_count"`                // 自有导出的 RPC Method 总数
+	ProtoFiles      datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"proto_files"`      // 解析包含的 .proto 源文件清单 []string (F-03.4)
+	ExternalImports datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"external_imports"` // 需外部描述集供给的 import .proto 路径清单 []string
 	Description     string         `gorm:"type:text" json:"description"`
 	CreatedBy       uint           `gorm:"not null;default:0" json:"created_by"`
 	CreatedAt       time.Time      `json:"created_at"`

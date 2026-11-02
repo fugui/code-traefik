@@ -108,9 +108,29 @@ END $$;`
 		return fmt.Errorf("更新进程端口检查约束失败: %w", err)
 	}
 
+	protoConstraintSQL := `
+DO $$
+BEGIN
+    -- traefik_proto_schemas 大小检查约束升级为 16MB (16777216 字节)
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_traefik_proto_size') THEN
+        ALTER TABLE traefik_proto_schemas DROP CONSTRAINT chk_traefik_proto_size;
+    END IF;
+    ALTER TABLE traefik_proto_schemas ADD CONSTRAINT chk_traefik_proto_size CHECK (file_size > 0 AND file_size <= 16777216);
+
+    -- traefik_proto_schemas 分类检查约束
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_traefik_proto_category') THEN
+        ALTER TABLE traefik_proto_schemas DROP CONSTRAINT chk_traefik_proto_category;
+    END IF;
+    ALTER TABLE traefik_proto_schemas ADD CONSTRAINT chk_traefik_proto_category CHECK (category IN ('BASE_LIB', 'BUSINESS', 'GATEWAY'));
+END $$;`
+	if err := DB.Exec(protoConstraintSQL).Error; err != nil {
+		return fmt.Errorf("更新描述集检查约束失败: %w", err)
+	}
+
 	partialIndexes := []string{
 		`CREATE UNIQUE INDEX IF NOT EXISTS uk_traefik_proto_active_name ON traefik_proto_schemas (name) WHERE is_active = true;`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS uk_traefik_active_proto_op ON traefik_proto_operations (service_name, operation) WHERE is_active = true;`,
+		`CREATE INDEX IF NOT EXISTS idx_traefik_proto_schemas_cat_active ON traefik_proto_schemas (category, is_active);`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS uk_traefik_proc_agent_port ON traefik_processes (agent_id, effective_listen_port) WHERE effective_listen_port > 0;`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS uk_traefik_proc_agent_arch ON traefik_processes (agent_id, arch_process_id);`,
 	}
@@ -118,6 +138,29 @@ END $$;`
 		if err := DB.Exec(idxSQL).Error; err != nil {
 			return fmt.Errorf("创建部分唯一索引失败: %w", err)
 		}
+	}
+
+	// 存量描述集 proto_file_count 与 service_count 幂等回填
+	backfillSQL := `
+UPDATE traefik_proto_schemas 
+SET proto_file_count = jsonb_array_length(proto_files) 
+WHERE proto_file_count = 0 
+  AND proto_files IS NOT NULL 
+  AND jsonb_typeof(proto_files) = 'array' 
+  AND jsonb_array_length(proto_files) > 0;
+
+UPDATE traefik_proto_schemas 
+SET service_count = sub.cnt
+FROM (
+    SELECT schema_id, COUNT(DISTINCT service_name) AS cnt
+    FROM traefik_proto_operations
+    GROUP BY schema_id
+) sub
+WHERE traefik_proto_schemas.id = sub.schema_id 
+  AND traefik_proto_schemas.service_count = 0;
+`
+	if err := DB.Exec(backfillSQL).Error; err != nil {
+		return fmt.Errorf("回填描述集统计计数失败: %w", err)
 	}
 
 	// 4. 显式创建外键约束（由于工作区基础库默认配置 DisableForeignKeyConstraintWhenMigrating，此处补充权威外键以保障数据防腐）

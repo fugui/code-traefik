@@ -364,7 +364,7 @@ func main() {
 		log.Fatalf("初始化 Protobuf 解码注册中心失败: %v", err)
 	}
 
-	schema, ops, err := decoderReg.UploadSchema(decoder.UploadSchemaInput{
+	schema, ops, _, err := decoderReg.UploadSchema(decoder.UploadSchemaInput{
 		Name:         "demo-ecommerce",
 		VersionTag:   "v1.0.0",
 		FileName:     "demo.pb",

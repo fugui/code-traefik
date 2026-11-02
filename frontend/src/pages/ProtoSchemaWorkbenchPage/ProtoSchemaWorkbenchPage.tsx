@@ -1,12 +1,22 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Modal, Pagination, usePaginationState } from '@code/common';
+import { Modal, usePaginationState } from '@code/common';
 import { useToast } from '../../utils/toast';
 import { useModuleUser } from '../../context/ModuleUserContext';
 import * as schemaApi from '../../api/schema';
-import type { ProtoSchema, ProtoOperation, SchemaConflict, ProtoSchemaSummaryDTO } from '../../types';
+import type {
+  ProtoCategory,
+  ProtoSchemaLedgerItemDTO,
+  ProtoPoolSummaryDTO,
+  ConflictOrBrokenResponse,
+  ProtoOperation,
+  ServiceContractGroupDTO,
+} from '../../types';
+import { SchemaPoolSummaryBar } from './SchemaPoolSummaryBar';
+import { SchemaAssetLedgerTable } from './SchemaAssetLedgerTable';
+import { SchemaAssetInspectDrawer } from './SchemaAssetInspectDrawer';
 import { SchemaUploadModal } from './SchemaUploadModal';
-import { SchemaVersionList } from './SchemaVersionList';
+import { SchemaConflictModal } from './SchemaConflictModal';
 import { OperationMappingTable } from './OperationMappingTable';
 import { OperationDocDrawer } from './OperationDocDrawer';
 
@@ -16,301 +26,571 @@ export const ProtoSchemaWorkbenchPage: React.FC = () => {
   const toast = useToast();
   const isAdmin = Boolean(user?.is_module_admin || user?.is_super_admin);
 
-  const { page, pageSize, setPage, setPageSize } = usePaginationState({
-    defaultPageSize: 25,
-  });
+  // 1. 顶层 Tab 判断与深链路由自动切换
+  const rawTab = searchParams.get('tab');
+  const serviceNameQuery = searchParams.get('service_name');
+  const schemaIdQuery = searchParams.get('schema_id');
+  const legacyActiveSearch = searchParams.get('active_only') === 'true' && Boolean(searchParams.get('search'));
 
-  const searchKeyword = searchParams.get('search') || '';
-  const activeOnly = searchParams.get('active_only') === 'true';
+  // 若携带深链参数且未显式指定 tab=assets，则自动切入 catalog 视图
+  const activeTab: 'assets' | 'catalog' =
+    rawTab === 'catalog' || (!rawTab && (serviceNameQuery || schemaIdQuery || legacyActiveSearch))
+      ? 'catalog'
+      : 'assets';
 
-  const [schemas, setSchemas] = useState<ProtoSchema[]>([]);
-  const [selectedSchemaId, setSelectedSchemaId] = useState<string>('');
-  const [selectedSummary, setSelectedSummary] = useState<ProtoSchemaSummaryDTO | null>(null);
-  const [operations, setOperations] = useState<ProtoOperation[]>([]);
-  const [totalOperations, setTotalOperations] = useState(0);
-  const [loading, setLoading] = useState(false);
+  const setTab = (tab: 'assets' | 'catalog') => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.set('tab', tab);
+      return next;
+    });
+  };
 
-  // 弹窗状态
+  // 2. 全局生效池摘要状态
+  const [poolSummary, setPoolSummary] = useState<ProtoPoolSummaryDTO | null>(null);
+
+  // 3. Tab 1: 文件资产台账状态
+  const {
+    page: assetPage,
+    pageSize: assetPageSize,
+    setPage: setAssetPage,
+    setPageSize: setAssetPageSize,
+  } = usePaginationState({ defaultPageSize: 25 });
+
+  const selectedCategory = searchParams.get('category') || '';
+  const activeStatusFilter = searchParams.get('status') || 'ALL';
+  const assetSearch = searchParams.get('search') || '';
+
+  const [assetSchemas, setAssetSchemas] = useState<ProtoSchemaLedgerItemDTO[]>([]);
+  const [totalAssetSchemas, setTotalAssetSchemas] = useState(0);
+  const [assetLoading, setAssetLoading] = useState(false);
+
+  // 4. Tab 2: 全局服务与接口目录状态
+  const {
+    page: catalogPage,
+    pageSize: catalogPageSize,
+    setPage: setCatalogPage,
+    setPageSize: setCatalogPageSize,
+  } = usePaginationState({ defaultPageSize: 25 });
+
+  const [catalogGroups, setCatalogGroups] = useState<ServiceContractGroupDTO[]>([]);
+  const [totalCatalogServices, setTotalCatalogServices] = useState(0);
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [orphanOnly, setOrphanOnly] = useState(searchParams.get('claimed_status') === 'UNCLAIMED');
+
+  // 5. 弹窗与抽屉受控状态
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
+  const [targetSchemaForNewVer, setTargetSchemaForNewVer] = useState<ProtoSchemaLedgerItemDTO | null>(null);
+
+  const [inspectDrawerOpen, setInspectDrawerOpen] = useState(false);
+  const [inspectSchema, setInspectSchema] = useState<ProtoSchemaLedgerItemDTO | null>(null);
+
+  const [conflictModalOpen, setConflictModalOpen] = useState(false);
+  const [conflictData, setConflictData] = useState<ConflictOrBrokenResponse | null>(null);
+
   const [docDrawerOpen, setDocDrawerOpen] = useState(false);
   const [selectedOp, setSelectedOp] = useState<ProtoOperation | null>(null);
 
-  // 409 冲突弹窗
-  const [conflictModalOpen, setConflictModalOpen] = useState(false);
-  const [conflicts, setConflicts] = useState<SchemaConflict[]>([]);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [schemaToDelete, setSchemaToDelete] = useState<ProtoSchemaLedgerItemDTO | null>(null);
 
-  const loadSchemas = useCallback(async () => {
+  // 加载描述集文件资产台账
+  const loadAssetLedger = useCallback(async () => {
+    setAssetLoading(true);
     try {
-      const res = await schemaApi.listProtoSchemas({ page_size: 100 });
-      const items = res.items ?? [];
-      setSchemas(items);
-      if (items.length > 0) {
-        setSelectedSchemaId((prev) => prev || items[0].id);
+      const res = await schemaApi.listProtoSchemas({
+        category: selectedCategory || undefined,
+        active_only: activeStatusFilter === 'ACTIVE' ? true : activeStatusFilter === 'INACTIVE' ? false : undefined,
+        search: assetSearch || undefined,
+        latest_only: true,
+        page: assetPage,
+        page_size: assetPageSize,
+      });
+      setAssetSchemas(res.items ?? []);
+      setTotalAssetSchemas(res.total ?? 0);
+      if (res.pool_summary) {
+        setPoolSummary(res.pool_summary);
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : '加载描述集列表失败');
-    }
-  }, [toast]);
-
-  useEffect(() => {
-    void loadSchemas();
-  }, [loadSchemas]);
-
-  const loadOperations = useCallback(async () => {
-    setLoading(true);
-    try {
-      const res = await schemaApi.listProtoOperations({
-        schema_id: selectedSchemaId || undefined,
-        active_only: activeOnly,
-        search: searchKeyword || undefined,
-        page,
-        page_size: pageSize,
-      });
-      setOperations(res.items ?? []);
-      setTotalOperations(res.total ?? 0);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : '加载方法映射失败');
+      toast.error(err instanceof Error ? err.message : '加载描述集资产台账失败');
     } finally {
-      setLoading(false);
+      setAssetLoading(false);
     }
-  }, [selectedSchemaId, activeOnly, searchKeyword, page, pageSize, toast]);
+  }, [selectedCategory, activeStatusFilter, assetSearch, assetPage, assetPageSize, toast]);
 
   useEffect(() => {
-    void loadOperations();
-  }, [loadOperations]);
-
-  useEffect(() => {
-    if (!selectedSchemaId) {
-      setSelectedSummary(null);
-      return;
+    if (activeTab === 'assets') {
+      void loadAssetLedger();
     }
-    let cancelled = false;
-    schemaApi
-      .getProtoSchemaSummary(selectedSchemaId)
-      .then((res) => {
-        if (!cancelled) setSelectedSummary(res);
-      })
-      .catch(() => {
-        if (!cancelled) setSelectedSummary(null);
+  }, [activeTab, loadAssetLedger]);
+
+  // 加载全局服务目录
+  const loadCatalogServices = useCallback(async () => {
+    setCatalogLoading(true);
+    try {
+      const res = await schemaApi.listProtoServices({
+        schema_id: schemaIdQuery || undefined,
+        claimed_status: orphanOnly ? 'UNCLAIMED' : undefined,
+        service_name: serviceNameQuery || undefined,
+        search: assetSearch || undefined,
+        page: catalogPage,
+        page_size: catalogPageSize,
       });
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedSchemaId]);
-
-  const handleOperationUpdated = (updated: ProtoOperation) => {
-    setOperations((prev) =>
-      prev.map((op) => (op.id === updated.id ? { ...op, ...updated } : op))
-    );
-    if (selectedOp && selectedOp.id === updated.id) {
-      setSelectedOp((prev) => (prev ? { ...prev, ...updated } : null));
+      setCatalogGroups(res.items ?? []);
+      setTotalCatalogServices(res.total ?? 0);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '加载全局服务目录失败');
+    } finally {
+      setCatalogLoading(false);
     }
+  }, [schemaIdQuery, orphanOnly, serviceNameQuery, assetSearch, catalogPage, catalogPageSize, toast]);
+
+  useEffect(() => {
+    if (activeTab === 'catalog') {
+      void loadCatalogServices();
+    }
+  }, [activeTab, loadCatalogServices]);
+
+  // 初始时若在 catalog 模式，补拉取一次 poolSummary
+  useEffect(() => {
+    if (!poolSummary) {
+      void schemaApi
+        .listProtoSchemas({ page_size: 1, latest_only: true })
+        .then((res) => {
+          if (res.pool_summary) setPoolSummary(res.pool_summary);
+        })
+        .catch(() => {});
+    }
+  }, [poolSummary]);
+
+  // 快捷筛选过滤变更
+  const handleCategoryChange = (cat: string) => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (cat) next.set('category', cat);
+      else next.delete('category');
+      next.set('page', '1');
+      return next;
+    });
+    setAssetPage(1);
   };
 
-  const handleActivate = async (schemaId: string) => {
+  const handleStatusFilterChange = (status: string) => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (status !== 'ALL') next.set('status', status);
+      else next.delete('status');
+      next.set('page', '1');
+      return next;
+    });
+    setAssetPage(1);
+  };
+
+  const handleSearchChange = (keyword: string) => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (keyword.trim()) next.set('search', keyword.trim());
+      else next.delete('search');
+      next.set('page', '1');
+      return next;
+    });
+    setAssetPage(1);
+    setCatalogPage(1);
+  };
+
+  // 激活单个描述集
+  const handleActivateSchema = async (s: ProtoSchemaLedgerItemDTO) => {
     try {
-      const res = await schemaApi.activateProtoSchema(schemaId);
-      toast.success(`描述集已激活，共生效 ${res.activated_operations} 个服务契约`);
-      void loadSchemas();
-      void loadOperations();
+      const res = await schemaApi.activateProtoSchema(s.id);
+      toast.success(`描述集 [${s.name} v${s.version}] 激活成功，生效 ${res.activated_operations} 个服务契约`);
+      void loadAssetLedger();
+      if (activeTab === 'catalog') void loadCatalogServices();
+      if (inspectDrawerOpen && inspectSchema?.name === s.name) {
+        setInspectSchema(res.schema);
+      }
     } catch (err: unknown) {
-      const errorMsg = err instanceof Error ? err.message : '激活描述集失败';
-      toast.error(errorMsg);
-      // 如果后端带出冲突列表，弹窗展示
-      setConflicts([]);
-      setConflictModalOpen(true);
+      const respData = (err as unknown as { responseData?: ConflictOrBrokenResponse })?.responseData;
+      if (respData && (respData.conflicts || respData.broken_dependents)) {
+        setConflictData(respData);
+        setConflictModalOpen(true);
+        return;
+      }
+      toast.error(err instanceof Error ? err.message : '激活描述集失败');
     }
   };
 
-  const handleDelete = async (schemaId: string) => {
+  // 停用描述集
+  const handleDeactivateSchema = async (s: ProtoSchemaLedgerItemDTO) => {
     try {
-      await schemaApi.deleteProtoSchema(schemaId);
-      toast.success('描述集已删除');
-      setSelectedSchemaId('');
-      void loadSchemas();
-      void loadOperations();
+      const res = await schemaApi.deactivateProtoSchema(s.id);
+      toast.success(`描述集 [${s.name} v${s.version}] 已停用，卸载 ${res.deactivated_operations} 个服务契约`);
+      void loadAssetLedger();
+      if (activeTab === 'catalog') void loadCatalogServices();
+      if (inspectDrawerOpen && inspectSchema?.name === s.name) {
+        setInspectSchema(res.schema);
+      }
+    } catch (err: unknown) {
+      const respData = (err as unknown as { responseData?: ConflictOrBrokenResponse })?.responseData;
+      if (respData && (respData.conflicts || respData.broken_dependents)) {
+        setConflictData(respData);
+        setConflictModalOpen(true);
+        return;
+      }
+      toast.error(err instanceof Error ? err.message : '停用描述集失败');
+    }
+  };
+
+  // 批量激活选中项
+  const handleBatchActivate = async (selectedIds: (string | number)[]) => {
+    try {
+      const res = await schemaApi.batchActivateProtoSchemas(selectedIds);
+      toast.success(res.message || `成功批量激活 ${res.activated_count} 个描述集`);
+      void loadAssetLedger();
+      if (activeTab === 'catalog') void loadCatalogServices();
+    } catch (err: unknown) {
+      const respData = (err as unknown as { responseData?: ConflictOrBrokenResponse })?.responseData;
+      if (respData && (respData.conflicts || respData.broken_dependents)) {
+        setConflictData(respData);
+        setConflictModalOpen(true);
+        return;
+      }
+      toast.error(err instanceof Error ? err.message : '批量激活失败');
+    }
+  };
+
+  // 删除确认
+  const handleDeleteSchema = (s: ProtoSchemaLedgerItemDTO) => {
+    setSchemaToDelete(s);
+    setDeleteConfirmOpen(true);
+  };
+
+  const confirmDeleteSchema = async () => {
+    if (!schemaToDelete) return;
+    try {
+      await schemaApi.deleteProtoSchema(schemaToDelete.id);
+      toast.success(`描述集 [${schemaToDelete.name} v${schemaToDelete.version}] 已彻底删除`);
+      setDeleteConfirmOpen(false);
+      setSchemaToDelete(null);
+      void loadAssetLedger();
+      if (activeTab === 'catalog') void loadCatalogServices();
+      if (inspectDrawerOpen && inspectSchema?.id === schemaToDelete.id) {
+        setInspectDrawerOpen(false);
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '删除描述集失败');
     }
   };
 
-  const handleSearchChange = (kw: string) => {
-    setSearchParams((prev) => {
-      const next = new URLSearchParams(prev);
-      if (kw) next.set('search', kw);
-      else next.delete('search');
-      next.set('page', '1');
-      return next;
-    });
+  // 透视指定描述集
+  const handleInspectSchema = (s: ProtoSchemaLedgerItemDTO) => {
+    setInspectSchema(s);
+    setInspectDrawerOpen(true);
   };
 
-  const handleToggleActiveOnly = (val: boolean) => {
+  // 按 ID 溯源透视描述集
+  const handleInspectSchemaById = async (schemaId: string | number) => {
+    const found = assetSchemas.find((item) => String(item.id) === String(schemaId));
+    if (found) {
+      handleInspectSchema(found);
+      return;
+    }
+    try {
+      const summary = await schemaApi.getProtoSchemaSummary(schemaId);
+      if (summary && summary.schema) {
+        const item: ProtoSchemaLedgerItemDTO = {
+          ...summary.schema,
+          id: summary.schema.id,
+          name: summary.schema.name,
+          version: summary.schema.version,
+          category: (summary.schema.category as ProtoCategory) || 'BUSINESS',
+          file_name: summary.schema.file_name || `${summary.schema.name}.pb`,
+          file_size: summary.schema.file_size || 0,
+          is_active: summary.schema.is_active,
+          proto_file_count: summary.proto_files.length,
+          service_count: summary.services_summary.length,
+          operation_count: summary.schema.operation_count || 0,
+          proto_files: summary.proto_files,
+          version_count: 1,
+          latest_version: summary.schema.version,
+          claimed_service_count: summary.services_summary.filter((s) => s.is_claimed).length,
+          claimed_ratio: summary.claimed_ratio,
+          resolved_dependencies: [],
+        };
+        handleInspectSchema(item);
+      }
+    } catch {
+      toast.error('未找到对应描述集元数据');
+    }
+  };
+
+  // 从抽屉跳至全局目录
+  const handleNavigateToCatalog = (schemaId: string | number) => {
+    setInspectDrawerOpen(false);
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
-      if (val) next.set('active_only', 'true');
-      else next.delete('active_only');
-      next.set('page', '1');
+      next.set('tab', 'catalog');
+      next.set('schema_id', String(schemaId));
       return next;
     });
   };
 
   return (
-    <div className="code-workbench-page code-schema-workbench" data-testid="proto-schema-workbench">
-      <div className="code-workbench-header">
-        <div className="code-workbench-title-group">
-          <h2 className="code-workbench-title">Protobuf 描述集与方法映射工作台</h2>
-          <span className="code-workbench-subtitle">
-            上传并解析 .pb 二进制描述集，自动维护 {'{package}-{serviceName}'} 服务契约并原子热切换注册表
-          </span>
-        </div>
-
-        <div className="code-header-actions">
-          {isAdmin && (
-            <button
-              type="button"
-              className="code-btn code-btn--primary"
-              onClick={() => setUploadModalOpen(true)}
-            >
-              + 上传 .pb 描述集
-            </button>
-          )}
-        </div>
-      </div>
-
-      <div className="code-schema-layout code-mt-md">
-        {/* 左侧：描述集版本时间线 */}
-        <div className="code-schema-left-pane">
-          <div className="code-pane-header">
-            <span className="code-pane-title">已注册描述集版本 ({schemas.length})</span>
-          </div>
-          <SchemaVersionList
-            schemas={schemas}
-            selectedSchemaId={selectedSchemaId}
-            selectedSummary={selectedSummary}
-            onSelectSchema={(id) => {
-              setSelectedSchemaId(id);
-              setPage(1);
-            }}
-            isAdmin={isAdmin}
-            onActivate={(id) => void handleActivate(id)}
-            onDelete={(id) => void handleDelete(id)}
-          />
-        </div>
-
-        {/* 右侧：契约方法映射表 */}
-        <div className="code-schema-right-pane">
-          <div className="code-pane-header">
-            <div className="code-filter-row">
-              <input
-                type="text"
-                className="code-input code-input--sm"
-                placeholder="检索 service_name 或 operation..."
-                value={searchKeyword}
-                onChange={(e) => handleSearchChange(e.target.value)}
-              />
-              <label className="code-checkbox-chip">
-                <input
-                  type="checkbox"
-                  checked={activeOnly}
-                  onChange={(e) => handleToggleActiveOnly(e.target.checked)}
-                />
-                <span>仅看当前生效契约</span>
-              </label>
-            </div>
-          </div>
-
-          {loading ? (
-            <div className="code-tpl-loading-screen">正在加载方法契约映射...</div>
-          ) : (
-            <OperationMappingTable
-              operations={operations}
-              searchKeyword={searchKeyword}
-              onSelectOperation={(op) => {
-                setSelectedOp(op);
-                setDocDrawerOpen(true);
-              }}
-            />
-          )}
-
-          <div className="code-mt-md">
-            <Pagination
-              totalItems={totalOperations}
-              page={page}
-              pageSize={pageSize}
-              onPageChange={setPage}
-              onPageSizeChange={setPageSize}
-            />
-          </div>
-        </div>
-      </div>
-
-      {/* 上传弹窗 */}
-      <SchemaUploadModal
-        open={uploadModalOpen}
-        onClose={() => setUploadModalOpen(false)}
-        onSuccess={() => {
-          void loadSchemas();
-          void loadOperations();
+    <div className="code-proto-schema-workbench" style={{ padding: '20px' }}>
+      {/* 顶部全局生效池健康摘要条 */}
+      <SchemaPoolSummaryBar
+        summary={poolSummary}
+        isAdmin={isAdmin}
+        onUploadClick={() => {
+          setTargetSchemaForNewVer(null);
+          setUploadModalOpen(true);
         }}
       />
 
-      {/* 契约详情抽屉 */}
-      <OperationDocDrawer
-        open={docDrawerOpen}
-        onClose={() => setDocDrawerOpen(false)}
-        operation={selectedOp}
-        onOperationUpdated={handleOperationUpdated}
+      {/* 顶层无侧栏双模分段 Tab 切换导航 */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          borderBottom: '1px solid var(--color-border-primary)',
+          marginBottom: '20px',
+        }}
+      >
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <button
+            type="button"
+            onClick={() => setTab('assets')}
+            style={{
+              padding: '10px 20px',
+              fontSize: '14px',
+              fontWeight: activeTab === 'assets' ? 600 : 400,
+              color: activeTab === 'assets' ? 'var(--color-primary, #3b82f6)' : 'var(--color-text-secondary)',
+              borderBottom: activeTab === 'assets' ? '2px solid var(--color-primary, #3b82f6)' : '2px solid transparent',
+              background: 'none',
+              borderTop: 'none',
+              borderLeft: 'none',
+              borderRight: 'none',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+            }}
+          >
+            <span>🗂️</span>
+            <span>描述集文件台账</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setTab('catalog')}
+            style={{
+              padding: '10px 20px',
+              fontSize: '14px',
+              fontWeight: activeTab === 'catalog' ? 600 : 400,
+              color: activeTab === 'catalog' ? 'var(--color-primary, #3b82f6)' : 'var(--color-text-secondary)',
+              borderBottom: activeTab === 'catalog' ? '2px solid var(--color-primary, #3b82f6)' : '2px solid transparent',
+              background: 'none',
+              borderTop: 'none',
+              borderLeft: 'none',
+              borderRight: 'none',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+            }}
+          >
+            <span>🔍</span>
+            <span>全局服务与接口目录</span>
+          </button>
+        </div>
+      </div>
+
+      {/* 主视图 1: 描述集文件台账 */}
+      {activeTab === 'assets' && (
+        <SchemaAssetLedgerTable
+          schemas={assetSchemas}
+          total={totalAssetSchemas}
+          page={assetPage}
+          pageSize={assetPageSize}
+          onPageChange={setAssetPage}
+          onPageSizeChange={setAssetPageSize}
+          selectedCategory={selectedCategory}
+          onCategoryChange={handleCategoryChange}
+          activeStatusFilter={activeStatusFilter}
+          onStatusFilterChange={handleStatusFilterChange}
+          searchKeyword={assetSearch}
+          onSearchChange={handleSearchChange}
+          loading={assetLoading}
+          isAdmin={isAdmin}
+          onInspect={handleInspectSchema}
+          onUploadNewVersion={(s) => {
+            setTargetSchemaForNewVer(s);
+            setUploadModalOpen(true);
+          }}
+          onActivate={(s) => void handleActivateSchema(s)}
+          onDeactivate={(s) => void handleDeactivateSchema(s)}
+          onBatchActivate={(ids) => void handleBatchActivate(ids)}
+          onDelete={handleDeleteSchema}
+          onDownload={(s) => void schemaApi.downloadProtoSchema(s.id, s.file_name)}
+        />
+      )}
+
+      {/* 主视图 2: 全局服务与接口目录 */}
+      {activeTab === 'catalog' && (
+        <OperationMappingTable
+          serviceGroups={catalogGroups}
+          totalServices={totalCatalogServices}
+          page={catalogPage}
+          pageSize={catalogPageSize}
+          onPageChange={setCatalogPage}
+          onPageSizeChange={setCatalogPageSize}
+          searchKeyword={assetSearch}
+          loading={catalogLoading}
+          onSelectOperation={(op) => {
+            setSelectedOp(op);
+            setDocDrawerOpen(true);
+          }}
+          onInspectSchema={(sid) => void handleInspectSchemaById(sid)}
+          orphanOnly={orphanOnly}
+          onOrphanOnlyChange={(val) => {
+            setOrphanOnly(val);
+            setSearchParams((prev) => {
+              const next = new URLSearchParams(prev);
+              if (val) next.set('claimed_status', 'UNCLAIMED');
+              else next.delete('claimed_status');
+              next.set('page', '1');
+              return next;
+            });
+            setCatalogPage(1);
+          }}
+          selectedSchemaId={schemaIdQuery || ''}
+          onSelectSchemaId={(sid) => {
+            setSearchParams((prev) => {
+              const next = new URLSearchParams(prev);
+              if (sid) next.set('schema_id', sid);
+              else next.delete('schema_id');
+              next.set('page', '1');
+              return next;
+            });
+            setCatalogPage(1);
+          }}
+          availableSchemas={assetSchemas}
+        />
+      )}
+
+      {/* 描述集上传与新版本弹窗 */}
+      <SchemaUploadModal
+        open={uploadModalOpen}
+        onClose={() => {
+          setUploadModalOpen(false);
+          setTargetSchemaForNewVer(null);
+        }}
+        initialName={targetSchemaForNewVer ? targetSchemaForNewVer.name : ''}
+        initialCategory={targetSchemaForNewVer ? targetSchemaForNewVer.category : 'BUSINESS'}
+        onSuccess={() => {
+          void loadAssetLedger();
+          if (activeTab === 'catalog') void loadCatalogServices();
+        }}
+        onConflict={(cData) => {
+          setConflictData(cData);
+          setConflictModalOpen(true);
+        }}
       />
 
-      {/* 409 契约冲突提示弹窗 */}
-      <Modal
+      {/* 409 契约冲突与依赖破坏诊断弹窗 */}
+      <SchemaConflictModal
         open={conflictModalOpen}
-        onClose={() => setConflictModalOpen(false)}
-        title="激活冲突拦截 (409 Conflict)"
+        onClose={() => {
+          setConflictModalOpen(false);
+          setConflictData(null);
+        }}
+        conflictData={conflictData}
+      />
+
+      {/* 680px 描述集多版本透视抽屉 */}
+      <SchemaAssetInspectDrawer
+        open={inspectDrawerOpen}
+        onClose={() => {
+          setInspectDrawerOpen(false);
+          setInspectSchema(null);
+        }}
+        schema={inspectSchema}
+        isAdmin={isAdmin}
+        onActivate={handleActivateSchema}
+        onDeactivate={handleDeactivateSchema}
+        onDelete={async (s) => {
+          handleDeleteSchema(s);
+        }}
+        onUploadNewVersion={(s) => {
+          setInspectDrawerOpen(false);
+          setTargetSchemaForNewVer(s);
+          setUploadModalOpen(true);
+        }}
+        onNavigateToCatalog={handleNavigateToCatalog}
+      />
+
+      {/* 接口字典树与 Diff 忽略规则抽屉 */}
+      <OperationDocDrawer
+        open={docDrawerOpen}
+        onClose={() => {
+          setDocDrawerOpen(false);
+          setSelectedOp(null);
+        }}
+        operation={selectedOp}
+        onOperationUpdated={(updated) => {
+          setCatalogGroups((prev) =>
+            prev.map((grp) => ({
+              ...grp,
+              operations: (grp.operations || []).map((op) =>
+                op.id === updated.id ? { ...op, ...updated } : op
+              ),
+            }))
+          );
+        }}
+      />
+
+      {/* 受控删除确认弹窗 */}
+      <Modal
+        open={deleteConfirmOpen}
+        onClose={() => {
+          setDeleteConfirmOpen(false);
+          setSchemaToDelete(null);
+        }}
+        title="确认删除描述集"
         footer={
-          <div className="code-modal-footer">
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
             <button
               type="button"
-              className="code-btn code-btn--secondary"
-              onClick={() => setConflictModalOpen(false)}
+              className="btn btn-secondary"
+              onClick={() => {
+                setDeleteConfirmOpen(false);
+                setSchemaToDelete(null);
+              }}
             >
-              关闭
+              取消
+            </button>
+            <button
+              type="button"
+              className="btn btn-danger"
+              style={{ background: 'var(--color-danger, #ef4444)', color: '#fff', border: 'none' }}
+              onClick={() => void confirmDeleteSchema()}
+            >
+              确认彻底删除
             </button>
           </div>
         }
       >
-        <div className="code-conflict-content">
-          <p className="code-color-danger">
-            目标描述集中的服务契约与当前其他生效中的描述集发生重叠冲突，原子激活已被安全回滚：
+        <div style={{ padding: '8px 0', color: 'var(--color-text-primary)' }}>
+          <p style={{ fontSize: '14px', marginBottom: '8px' }}>
+            确定要删除描述集版本{' '}
+            <strong>
+              {schemaToDelete?.name} v{schemaToDelete?.version}
+            </strong>{' '}
+            吗？
           </p>
-          {conflicts.length > 0 ? (
-            <div className="code-table-wrapper code-mt-sm">
-              <table className="code-table code-table--compact">
-                <thead>
-                  <tr>
-                    <th>服务名称</th>
-                    <th>方法名</th>
-                    <th>冲突描述集</th>
-                    <th>冲突版本</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(conflicts ?? []).map((c, idx) => (
-                    <tr key={idx}>
-                      <td className="code-font-mono">{c.service_name}</td>
-                      <td className="code-font-mono">{c.operation}</td>
-                      <td>{c.conflict_schema_name}</td>
-                      <td>v{c.conflict_version}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <div className="code-info-box code-mt-sm">
-              请检查目标 .pb 文件是否包含与其他生效 IDL 重复的 <code>{'{package}-{serviceName}'}</code> 契约。
-            </div>
-          )}
+          <p style={{ fontSize: '12px', color: 'var(--color-text-secondary)' }}>
+            删除后该版本对应的二进制产物与已解析的方法契约将被物理清除，且不可恢复。
+          </p>
         </div>
       </Modal>
     </div>

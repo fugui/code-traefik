@@ -240,7 +240,8 @@ func (s *ReplayScheduler) CreateAndExecuteTask(
 	}
 
 	// 8. 组装 ScopedMocks 与下发执行
-	go s.executeReplayAsync(task, &targetProc, records, req.ExtraIgnorePaths)
+	procCopy := targetProc
+	go s.executeReplayAsync(task, &procCopy, records, req.ExtraIgnorePaths)
 
 	commonAudit.Push(&models.SysAuditLog{
 		CreatedAt:  time.Now(),

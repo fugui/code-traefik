@@ -585,3 +585,107 @@ func TestCleanRebuild15Tables_MultiSharedEnvAndPortPartialUnique(t *testing.T) {
 		t.Fatalf("同一 Agent 端口冲突修改期望被 uk_traefik_proc_agent_port 拦截，但成功执行了！")
 	}
 }
+
+func TestProtoSchemaConstraints_16MBSize_CategoryEnum_AndBackfillCounts(t *testing.T) {
+	db := testdb.SetupIsolatedDB(t, config.ServiceName)
+	if err := SetupWithDB(db); err != nil {
+		t.Fatalf("初次 SetupWithDB 失败: %v", err)
+	}
+
+	// 模拟存量库状态：设置旧版 4MB CHECK 约束，并插入未回填计数的存量行
+	_ = db.Exec("ALTER TABLE traefik_proto_schemas DROP CONSTRAINT IF EXISTS chk_traefik_proto_size").Error
+	_ = db.Exec("ALTER TABLE traefik_proto_schemas ADD CONSTRAINT chk_traefik_proto_size CHECK (file_size > 0 AND file_size <= 4194304)").Error
+	_ = db.Exec("ALTER TABLE traefik_proto_schemas DROP CONSTRAINT IF EXISTS chk_traefik_proto_category").Error
+
+	legacySchema := ProtoSchema{
+		Name:            "legacy_proto_schema",
+		Version:         1,
+		FileName:        "legacy.pb",
+		FileSHA256:      "sha_legacy_test",
+		FileSize:        1024,
+		DescriptorBytes: []byte{0x08, 0x01},
+		ProtoFiles:      datatypes.JSON(`["common/base.proto", "common/header.proto"]`),
+		ProtoFileCount:  0,
+		ServiceCount:    0,
+		Category:        "BUSINESS",
+	}
+	if err := db.Create(&legacySchema).Error; err != nil {
+		t.Fatalf("插入存量描述集记录失败: %v", err)
+	}
+
+	opLegacy := ProtoOperation{
+		SchemaID:           legacySchema.ID,
+		ProtoFile:          "common/header.proto",
+		ProtoPackage:       "common",
+		ProtoService:       "HeaderService",
+		ServiceName:        "common.HeaderService",
+		Operation:          "GetHeader",
+		ReqMessageFullName: "common.HeaderReq",
+		RspMessageFullName: "common.HeaderRsp",
+	}
+	if err := db.Create(&opLegacy).Error; err != nil {
+		t.Fatalf("插入存量服务方法失败: %v", err)
+	}
+
+	// 执行升级迁移 SetupWithDB
+	if err := SetupWithDB(db); err != nil {
+		t.Fatalf("升级执行 SetupWithDB 失败: %v", err)
+	}
+
+	// 1. 验证存量行 proto_file_count 与 service_count 被幂等准确回填
+	var updatedLegacy ProtoSchema
+	if err := db.First(&updatedLegacy, legacySchema.ID).Error; err != nil {
+		t.Fatalf("查询更新后存量描述集失败: %v", err)
+	}
+	if updatedLegacy.ProtoFileCount != 2 {
+		t.Fatalf("存量 proto_file_count 回填期望为 2，实际为: %d", updatedLegacy.ProtoFileCount)
+	}
+	if updatedLegacy.ServiceCount != 1 {
+		t.Fatalf("存量 service_count 回填期望为 1，实际为: %d", updatedLegacy.ServiceCount)
+	}
+
+	// 2. 验证 8MB (8,388,608 bytes) BASE_LIB 描述集成功落库（旧 4MB 约束已成功升级为 16MB）
+	schema8MB := ProtoSchema{
+		Name:            "base_lib_8mb",
+		Version:         1,
+		FileName:        "base_lib_8mb.pb",
+		FileSHA256:      "sha_8mb_test",
+		FileSize:        8 * 1024 * 1024,
+		DescriptorBytes: []byte{0x08, 0x02},
+		Category:        ProtoCategoryBaseLib,
+		ProtoFiles:      datatypes.JSON(`["base.proto"]`),
+		ProtoFileCount:  1,
+		ServiceCount:    0,
+	}
+	if err := db.Create(&schema8MB).Error; err != nil {
+		t.Fatalf("插入 8MB BASE_LIB 描述集失败（旧 4MB 约束未能自动升级）: %v", err)
+	}
+
+	// 3. 验证 > 16MB (16,777,217 bytes) 触发 chk_traefik_proto_size 拦截
+	schemaTooLarge := ProtoSchema{
+		Name:            "too_large_pb",
+		Version:         1,
+		FileName:        "large.pb",
+		FileSHA256:      "sha_large_test",
+		FileSize:        16777217,
+		DescriptorBytes: []byte{0x08, 0x03},
+		Category:        ProtoCategoryBusiness,
+	}
+	if err := db.Create(&schemaTooLarge).Error; err == nil {
+		t.Fatalf("插入 > 16MB 记录期望被 chk_traefik_proto_size 拦截，但成功插入了！")
+	}
+
+	// 4. 验证非法 category = 'UNKNOWN' 触发 chk_traefik_proto_category 拦截
+	schemaBadCategory := ProtoSchema{
+		Name:            "bad_category_pb",
+		Version:         1,
+		FileName:        "bad.pb",
+		FileSHA256:      "sha_bad_test",
+		FileSize:        1024,
+		DescriptorBytes: []byte{0x08, 0x04},
+		Category:        "UNKNOWN",
+	}
+	if err := db.Create(&schemaBadCategory).Error; err == nil {
+		t.Fatalf("插入非法 category='UNKNOWN' 期望被 chk_traefik_proto_category 拦截，但成功插入了！")
+	}
+}
