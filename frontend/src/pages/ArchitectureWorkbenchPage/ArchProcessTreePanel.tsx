@@ -76,7 +76,7 @@ export const ArchProcessTreePanel: React.FC<ArchProcessTreePanelProps> = ({
       className="code-arch-tree-panel"
       data-testid="arch-process-tree-panel"
       style={{
-        width: '320px',
+        width: '350px',
         flexShrink: 0,
         display: 'flex',
         flexDirection: 'column',

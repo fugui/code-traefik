@@ -71,7 +71,7 @@ func main() {
 		HasEbpfCap:      true,
 		CapDetail:       "EUID=0 (Full root privileges)",
 		AgentVersion:    "1.0.0",
-		ProtocolVersion:  "1.0",
+		ProtocolVersion: "1.0",
 		MountsRevision:  1,
 		CreatedBy:       1,
 	}

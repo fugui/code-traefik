@@ -243,11 +243,12 @@ export const SubsystemGroupTreePanel: React.FC<SubsystemGroupTreePanelProps> = (
         }}
       >
         <div className="code-tree-node__left">
-          <FileCode size={14} style={{ color: 'var(--color-primary)', flexShrink: 0 }} />
+          <span className="code-tree-expand-placeholder" aria-hidden="true" />
+          <FileCode size={14} className="code-tree-icon code-tree-icon--module" />
           <span className="code-tree-node__name" title={`${mod.name} (${mod.code})`}>
             {mod.name}
           </span>
-          <span className="code-tree-node__code-chip">{mod.code}</span>
+          <span className="code-tree-node__code-chip" title={mod.code}>{mod.code}</span>
         </div>
 
         {isAdmin && (
@@ -294,7 +295,7 @@ export const SubsystemGroupTreePanel: React.FC<SubsystemGroupTreePanelProps> = (
     const isSelected = String(selectedGroupId) === nodeIdStr;
 
     return (
-      <div key={`grp-${node.id}`} className="code-tree-node-wrapper" style={{ paddingLeft: `${(level - 1) * 1.25}rem` }}>
+      <div key={`grp-${node.id}`} className="code-tree-node-wrapper code-tree-node-wrapper--group">
         <div
           className={`code-tree-node code-tree-node--group ${isSelected ? 'code-tree-node--selected' : ''}`}
           onClick={() => onSelectGroup(nodeIdStr, String(currentSubsystemId))}
@@ -310,17 +311,17 @@ export const SubsystemGroupTreePanel: React.FC<SubsystemGroupTreePanelProps> = (
                 {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
               </button>
             ) : (
-              <span className="code-tree-expand-placeholder" />
+              <span className="code-tree-expand-placeholder" aria-hidden="true" />
             )}
             {isExpanded ? (
-              <FolderOpen size={16} className="code-tree-icon code-tree-icon--open" />
+              <FolderOpen size={16} className="code-tree-icon code-tree-icon--group code-tree-icon--open" />
             ) : (
-              <Folder size={16} className="code-tree-icon" />
+              <Folder size={16} className="code-tree-icon code-tree-icon--group" />
             )}
             <span className="code-tree-node__name" title={`${node.name} (${node.code})`}>
               {node.name}
             </span>
-            <span className="code-tree-node__code-chip">{node.code}</span>
+            <span className="code-tree-node__code-chip" title={node.code}>{node.code}</span>
             {hasModules && <span className="code-tree-node__badge">{groupMods.length} 模块</span>}
           </div>
 
@@ -373,10 +374,10 @@ export const SubsystemGroupTreePanel: React.FC<SubsystemGroupTreePanelProps> = (
         </div>
 
         {isExpanded && (
-          <div className="code-tree-children">
+          <div className="code-tree-children code-tree-children--group">
             {hasChildren && node.children && node.children.map((child) => renderGroupNode(child, currentSubsystemId, level + 1))}
             {hasModules && (
-              <div className="code-tree-modules-container" style={{ paddingLeft: `${level * 0.75}rem` }}>
+              <div className="code-tree-modules-container">
                 {groupMods.map((mod) => renderModuleLeaf(mod, currentSubsystemId, node.id))}
               </div>
             )}
@@ -418,7 +419,7 @@ export const SubsystemGroupTreePanel: React.FC<SubsystemGroupTreePanelProps> = (
             <span className="code-tree-node__name" title={`${sub.name} (${sub.code})`}>
               {sub.name}
             </span>
-            <span className="code-tree-node__code-chip">{sub.code}</span>
+            <span className="code-tree-node__code-chip" title={sub.code}>{sub.code}</span>
           </div>
 
           {isAdmin && (
@@ -452,11 +453,11 @@ export const SubsystemGroupTreePanel: React.FC<SubsystemGroupTreePanelProps> = (
         </div>
 
         {isExpanded && (
-          <div className="code-tree-children">
+          <div className="code-tree-children code-tree-children--subsystem">
             {hasTree ? (
               subTree.map((node) => renderGroupNode(node, sub.id, 1))
             ) : (
-              <div className="code-tree-empty-sub" style={{ paddingLeft: '2rem' }}>
+              <div className="code-tree-empty-sub">
                 暂无功能组
               </div>
             )}
