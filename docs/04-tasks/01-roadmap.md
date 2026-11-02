@@ -1,11 +1,11 @@
 # 业务流量监控与重放 (`code-traefik`) TDD 工程实施路线图与质量门禁
 
 - **文档编号**：`01-roadmap.md`
-- **文档版本**：v1.2.0
+- **文档版本**：v1.2.1
 - **更新日期**：2026-11-02
 - **归属阶段**：阶段三/四：TDD 实施路线图与全局门禁 (`04-tasks`)
-- **状态**：已冻结 (Frozen)
-- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md)、[`01-system-architecture.md`](../02-design/01-system-architecture.md)、[`01-http-api-contract.md`](../03-api/01-http-api-contract.md)、[`09-arch-process-ssot-and-ebpf-premount-standby-adr.md`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md)
+- **状态**：已批准（待 M10 实施）(Approved for M10)
+- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.9.1)、[`01-system-architecture.md`](../02-design/01-system-architecture.md)、[`01-http-api-contract.md`](../03-api/01-http-api-contract.md)、[`09-arch-process-ssot-and-ebpf-premount-standby-adr.md`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md) (ADR-09 v1.1.0)
 
 ---
 
@@ -51,7 +51,7 @@ flowchart LR
 | 里程碑 | 状态 | 作战卡文档 | 核心职责与交付边界 | 准出质量门禁 (Exit Gate) |
 | :--- | :---: | :--- | :--- | :--- |
 | **M1** | ✅ 已交付 | [`02-m1-crosrpc-and-domain-models.md`](./02-m1-crosrpc-and-domain-models.md) | 清理模板 `traefik_items`；实现 `pkg/crosrpc`（24B 公共头、V1~V5 会话头、`LookupRspLayout`、扩展头、`StreamFramer`、`SplitFrames`）、`pkg/agentproto`（56B 二进制信封）、`models/` 13 张核心表与 `traefik_traffic_records` 按日范围分区管理器 | `go test -race ./pkg/... ./models/...` 全绿 + Fuzz 60s 零崩溃 + `testdb` 13 表迁移通过 |
-| **M2** | ✅ 已交付 | [`03-m2-arch-proto-and-agent-control.md`](./03-m2-arch-proto-and-agent-control.md) | 三级架构树（咨询锁防成环移动）、模块接口（`{package}-{serviceName}` 与 `PROVIDE` 全局唯一）、`traefik_process_modules` 映射、静态拓扑推导、`.pb` 上传/激活与 `dynamicpb` 解码、公私域 Agent 纳管/`AcquireAgentLeases` 升序排他锁/双向心跳对账与 RBAC 审计 API | `TEST_DB_DSN=... go test -race ./internal/server/... ./handlers/...` 全绿 |
+| **M2** | ✅ 已交付 | [`03-m2-arch-proto-and-agent-control.md`](./03-m2-arch-proto-and-agent-control.md) | 三级架构树（咨询锁防成环移动）、模块接口（`{package}.{serviceName}` 与 `PROVIDE` 全局唯一）、`traefik_process_modules` 映射、静态拓扑推导、`.pb` 上传/激活与 `dynamicpb` 解码、公私域 Agent 纳管/`AcquireAgentLeases` 升序排他锁/双向心跳对账与 RBAC 审计 API | `TEST_DB_DSN=... go test -race ./internal/server/... ./handlers/...` 全绿 |
 | **M3** | ✅ 已交付 | [`04-m3-agent-dataplane-ebpf-and-replay.md`](./04-m3-agent-dataplane-ebpf-and-replay.md) | `cmd/agent` 受控 HTTP+WS 服务（IP 白名单、`ClaimCode`、64MB 有界缓冲、5m 失联自洁）、`pkg/ebpf`（入站 RingBuf 复制、出站 `connect4` 重定向、`agent_pid` 自环豁免、`/proc` PID 巡检与存量连接诊断）、`pkg/replay`（零 `.pb` `ScopedMockMatcher` 与表驱动头部自愈） | 普通单测 + `//go:build linux && ebpf` 特权测试通过 + `cmd/agent` 零 DB/零 `.pb` 依赖断言通过 |
 | **M4** | ✅ 已交付 | [`05-m4-recording-topology-and-diff-engine.md`](./05-m4-recording-topology-and-diff-engine.md) | 多进程协同录制编排、Track A (SSE) / Track B (`ExchangeAssembler` 往返配对双模落盘)、四段报文解剖组装、离线架构一致性六分类验证、跨 Agent 同构重放调度与双层（协议头 + `protoreflect`）回归 Diff 引擎 | `TEST_DB_DSN=... go test -race ./...` 全绿 |
 | **M5** | ✅ 已交付 | [`06-m5-microfrontend-and-e2e-delivery.md`](./06-m5-microfrontend-and-e2e-delivery.md) | 架构中心、Agent 看板、`.pb` 工作台、流量监控台（含四段解剖抽屉）、重放工作台（含双层 Diff 抽屉）、`--color-*` 语义主题、URL 5 页滑窗分页、`SC-01`~`SC-08` E2E 回归及双二进制打包交付 | `make test && make lint && make build && make clean` 100% 零警告通过 |
@@ -59,7 +59,7 @@ flowchart LR
 | **M7** | ✅ 已交付 | [`08-m7-proto-schema-deepening-and-nested-contract-workbench.md`](./08-m7-proto-schema-deepening-and-nested-contract-workbench.md) | Protobuf 契约资产化治理：两级嵌套折叠服务表（服务主行 ➔ 方法子表）、消息体参数字典树反射（Req/Rsp 字段树、Tag、类型高亮与注释透视）、可视化 Diff 忽略字段勾选与多级继承、原始 `.pb` 二进制下载导出及架构认领血缘分析 | `TEST_DB_DSN=... go test -race ./...` 全绿 + `make lint && make build` 零警告 |
 | **M8** | ✅ 已交付 | [`09-m8-console-ia-restructuring-and-debug-workflow.md`](./09-m8-console-ia-restructuring-and-debug-workflow.md) | 微前端控制台信息架构重组与调试工作流闭环：3 组 8 项频次金字塔菜单（默认落地 `/record`）与旧深链无损重定向、独立 `流量录制` 素材台账与 `流量调试`（`has_error` 异常过滤 + `SinglePacketReplayDrawer` 单包快速重放原地 Diff）、全屏 `架构拓扑` 与纯逻辑 `架构元素` 解耦、物理进程单点收口至 `Agent 与进程` | `TEST_DB_DSN=... make test` 全绿 + `MenuAndLegacyRoutes` / `RecordingWorkbench` / `SinglePacketReplay` / `TopologyAndArchDecoupling` 单测全绿 + `make lint && make build && make clean` 零警告 |
 | **M9** | ✅ 已交付 | [`10-m9-recording-drawer-and-process-tree-selection.md`](./10-m9-recording-drawer-and-process-tree-selection.md) | 协同录制抽屉重构与进程树选择器：全面弃用居中 Modal 迁移至 680px `Drawer`（Sticky 吸底 Footer）、素材归属卡片式单选解挤、宿主 Agent 下拉选择与在线/租约防呆门禁、业务进程树形分层选择（组级全选/半选/折叠与搜索过滤） | `RecordingStartDrawer` 单测全绿 + `make test && make lint && make build` 零警告 |
-| **M10** | ⏳ 待实施 | [`11-m10-arch-process-blueprint-and-premount-workflow.md`](./11-m10-arch-process-blueprint-and-premount-workflow.md) | 架构物理进程蓝图解耦与 eBPF 默认自动预挂待命：15 表模型演进（`ArchProcessGroup`/`ArchProcess` + `1:1` 挂载覆盖）、零 Agent 物理拓扑直推、`/architecture` `[逻辑架构 \| 物理进程]` 双视图树、Agent `ARMED` 零拷贝待命透传与停录不断连 `0ms` 录制闸门、心跳 `Auto-Rearm`、`/agents` `/proc` 自动匹配批量挂载抽屉与 `/record` 就绪徽章联动 | `TEST_DB_DSN=... make test` (15 表 + 待命透传单测) + `ArchPhysicalBlueprintWorkbench` / `AgentProcessMountAndReadiness` / `RecordingStartDrawer` 单测全绿 + `make lint && make build && make clean` 零警告 |
+| **M10** | ⏳ 待实施 | [`11-m10-arch-process-blueprint-and-premount-workflow.md`](./11-m10-arch-process-blueprint-and-premount-workflow.md) | 架构物理进程蓝图解耦、多环境 `1:1` 挂载与 eBPF 自动预挂待命：15 表清库重建（`ArchProcessGroup`/`ArchProcess` + 多套 `SHARED`/`PRIVATE` 环境 `1:1` 挂载覆盖 + `FallbackAgentID` 基线兜底 + `ProcessSnapshots` 快照解耦）、零 Agent 物理拓扑与可选环境端点叠加、`/architecture` `[逻辑架构 \| 物理进程]` 双视图树、按需入站读写钩子（待命全机零读写 syscall 损耗）+ 三态 `EgressProxy`（`PASSTHROUGH` 停录不断连 / `CAPTURING` 有序闸门 / `REPLAY_MOCK` 既有连接零外泄接管）、Single-Flight 版本化 `Auto-Rearm`、`/agents` 七态就绪树与 `/record` 零重启抽屉联动 | `TEST_DB_DSN=... make test` (15 表 + 三态代理零外泄单测) + `ArchPhysicalBlueprintWorkbench` / `AgentProcessMountAndReadiness` / `RecordingStartDrawer` 单测全绿 + `make lint && make build && make clean` 零警告 |
 
 ---
 
@@ -80,11 +80,11 @@ flowchart LR
 | **F-05** | 实测调用拓扑还原与架构一致性验证 | M4, M6 | `internal/server/topology/consistency_test.go`<br>`frontend/src/__tests__/ArchCanvasRollup.test.ts` | `TestResolveSourceModuleThreeTierPriority`<br>`TestVerifySessionTopologySixCategories`<br>`testOverlay_WorstStatusAndDynamicViolationUnattributed` |
 | **F-06** | Agent 公私域纳管与动态排他租约 | M2 | `internal/server/hub/hub_test.go`<br>`handlers/arch_proto_agent_test.go` | `TestAgentPublicPrivateScopeAndAntiIDOR`<br>`TestAcquireAgentLeasesMutexAndHeartbeatReconcile` |
 | **F-07** | 主控—Agent 受控信道（HTTP + WS） | M1, M3 | `pkg/agentproto/envelope_test.go`<br>`internal/agent/server/server_test.go` | `TestAgentIPAllowlistAndClaimCode`<br>`TestBoundedSessionBufferBackpressureAndGracePurge` |
-| **F-08** | 多进程默认自动预挂载 (`ARMED`)、PID 定位与前置存量连接就绪诊断 | M3, M10 | `pkg/ebpf/ebpf_unit_test.go`<br>`internal/agent/server/server_test.go`<br>`internal/server/hub/hub_test.go` | `TestProcScannerPIDResolveAndEstablishedConns`<br>`TestAgentArmStandby_ZeroLease_ZeroRestartSyncAndGracePurge`<br>`TestAgentProcessMountSync_AutoArmAndBootIDAutoRearm` |
-| **F-09** | Agent 嵌入式 `cilium/ebpf` 采集引擎（待命透传与采集闸门分离） | M3, M10 | `pkg/ebpf/ebpf_unit_test.go`<br>`pkg/ebpf/ebpf_linux_test.go` (`ebpf`) | `TestEgressProxy_ArmedPassthroughAndNonDisruptiveCaptureSwitch`<br>`TestEbpfCapabilityCheckAndGracefulCleanup`<br>`TestEbpfSameHostDualProcessLoopbackBypass` |
-| **F-10** | `pkg/crosrpc` 分帧头解析与主控解码 | M1, M2 | `pkg/crosrpc/crosrpc_test.go`<br>`pkg/crosrpc/framer_fuzz_test.go` | `TestStreamFramerDirtyResyncFragmentAndOversize`<br>`FuzzStreamFramer` / `TestDynamicPBDecodeAndFallbackHex` |
-| **F-11** | 任务级多进程零重启协同录制、双轨分发与双模物理分区归档 | M1, M4, M10 | `models/models_test.go`<br>`internal/server/recorder/recorder_test.go`<br>`internal/agent/server/server_test.go` | `TestTrafficRecordsRangePartitionAndDropPurge`<br>`TestExchangeAssemblerDualModeAndLimitAutoStop`<br>`TestAgentArmStandby_ZeroLease_ZeroRestartSyncAndGracePurge` |
-| **F-12** | 跨进程同构重放编排与 Agent 本地执行 | M3, M4 | `internal/server/diff/diff_test.go`<br>`handlers/recording_replay_test.go` | `TestValidateReplayProcessCompatibility`<br>`TestCrossAgentReplayExecutionAndStatusAggregation` |
+| **F-08** | 多进程默认自动预挂载 (`ARMED`)、PID 定位与前置存量连接七态就绪诊断 | M3, M10 | `pkg/ebpf/ebpf_unit_test.go`<br>`internal/agent/server/server_test.go`<br>`internal/server/hub/hub_test.go` | `TestProcScannerPIDResolveAndEstablishedConns`<br>`TestAgentArmStandby_RevisionGuard_OrderedGatesAndGracefulDrain`<br>`TestAgentProcessMountSync_SingleFlightAutoRearmAndBackoff` |
+| **F-09** | Agent 嵌入式 `cilium/ebpf` 采集引擎（按需入站钩子与三态 `EgressProxy`） | M3, M10 | `pkg/ebpf/ebpf_unit_test.go`<br>`pkg/ebpf/ebpf_linux_test.go` (`ebpf`) | `TestEgressProxy_ThreeModes_NonDisruptiveStopAndReplayZeroLeakage`<br>`BenchmarkEgressProxy_ArmedPassthrough`<br>`TestEbpfSameHostDualProcessLoopbackBypass` |
+| **F-10** | `pkg/crosrpc` 分帧头解析与主控解码 | M1, M2, M10 | `pkg/crosrpc/crosrpc_test.go`<br>`pkg/crosrpc/framer_fuzz_test.go` | `TestStreamFramerDirtyResyncFragmentAndOversize`<br>`FuzzStreamFramer` / `TestDynamicPBDecodeAndFallbackHex` |
+| **F-11** | 任务级多进程零重启协同录制、双轨分发与双模物理分区归档 | M1, M4, M10 | `models/models_test.go`<br>`internal/server/recorder/recorder_test.go`<br>`internal/agent/server/server_test.go` | `TestTrafficRecordsRangePartitionAndDropPurge`<br>`TestExchangeAssemblerDualModeAndLimitAutoStop`<br>`TestAgentArmStandby_RevisionGuard_OrderedGatesAndGracefulDrain` |
+| **F-12** | 跨环境同构重放编排、既有连接零外泄接管与快照解耦校验 | M3, M4, M10 | `internal/server/diff/diff_test.go`<br>`handlers/recording_replay_test.go` | `TestValidateReplayProcessCompatibility_AfterProcessUnmount`<br>`TestReplayRejectsNeedReconnect409_AndZeroDownstreamLeakage` |
 | **F-13** | Agent 零 `.pb` 二进制 Mock 与头部自愈 | M3 | `pkg/replay/replay_test.go` | `TestScopedMockMatcherExactAndFallback`<br>`TestHealResponseFramesV1ToV4AndMultiSeg` |
 | **F-14** | 协议头级 + Protobuf 字段级双层 Diff | M4 | `internal/server/diff/diff_test.go` | `TestLayer1HeaderDiffAndTimestampExemption`<br>`TestLayer2ProtoSemanticDiffMapRepeatedAndIgnore` |
 | **F-15** | 一体化微前端控制台（三层频次信息架构） | M5, M8 | `frontend/src/__tests__/PacketAnatomyDrawer.test.tsx`<br>`frontend/src/__tests__/ThemeAndPagination.test.tsx`<br>`frontend/src/__tests__/MenuAndLegacyRoutes.test.tsx` | `TestPacketAnatomyDrawerFourSections`<br>`TestPaginationWindowAndThemeTokens`<br>`testMenuStructure_ThreeGroupsEightItems`<br>`testLegacyDeepLinks_LosslessRedirect` |
@@ -105,8 +105,8 @@ flowchart LR
 | **SC-04** | CROS RPC 分帧与解码 | M1, M2, M5 | `pkg/crosrpc/crosrpc_test.go`: `TestSC04_CrosRPCFramingAndDynamicDecode` |
 | **SC-05** | 单 Agent 多进程协同录制与双模物理分区落盘 | M4, M5, M10 | `handlers/recording_replay_test.go`: `TestSC05_MultiProcessRecordingAndDualModeStorage` |
 | **SC-06** | 架构一致性验证 | M4, M5 | `internal/server/topology/consistency_test.go`: `TestSC06_ArchitectureConsistencyVerification` |
-| **SC-07** | 跨 Agent 同构进程零 `.pb` 重放与头部自愈 | M3, M4, M5 | `handlers/recording_replay_test.go`: `TestSC07_CrossAgentZeroPBReplayAndHeaderHealing` |
-| **SC-08** | 业务突变与 Mock 未命中检出 | M3, M4, M5 | `handlers/recording_replay_test.go`: `TestSC08_MutationDiffAndMockMissZeroLeakage` |
+| **SC-07** | 跨 Agent 同构进程零 `.pb` 重放与头部自愈 | M3, M4, M5, M10 | `handlers/recording_replay_test.go`: `TestSC07_CrossAgentZeroPBReplayAndHeaderHealing` |
+| **SC-08** | 业务突变与 Mock 未命中零外泄检出 | M3, M4, M5, M10 | `handlers/recording_replay_test.go`: `TestSC08_MutationDiffAndMockMissZeroLeakage` |
 
 ---
 

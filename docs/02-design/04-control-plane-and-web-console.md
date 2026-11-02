@@ -1,11 +1,11 @@
 # 业务流量监控与重放 (`code-traefik`) 管理面服务、微前端控制台与回归断言设计
 
 - **文档编号**：`04-control-plane-and-web-console.md`
-- **文档版本**：v1.5.0
+- **文档版本**：v1.5.1
 - **更新日期**：2026-11-02
 - **归属阶段**：阶段二：系统架构与数据模型设计 (`02-design`)
-- **状态**：已冻结 (Frozen)
-- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.9.0)、[`01-system-architecture.md`](./01-system-architecture.md)、[`02-data-plane-and-cros-rpc-engine.md`](./02-data-plane-and-cros-rpc-engine.md)、[`03-architecture-elements-and-topology.md`](./03-architecture-elements-and-topology.md)、[`07-console-ia-restructuring-and-workflow-workbench-adr.md`](../05-adr/07-console-ia-restructuring-and-workflow-workbench-adr.md) (ADR-07)、[`08-recording-drawer-and-process-tree-selection-adr.md`](../05-adr/08-recording-drawer-and-process-tree-selection-adr.md) (ADR-08)、[`09-arch-process-ssot-and-ebpf-premount-standby-adr.md`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md) (ADR-09)
+- **状态**：已批准（待 M10 实施）(Approved for M10)
+- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.9.1)、[`01-system-architecture.md`](./01-system-architecture.md)、[`02-data-plane-and-cros-rpc-engine.md`](./02-data-plane-and-cros-rpc-engine.md)、[`03-architecture-elements-and-topology.md`](./03-architecture-elements-and-topology.md)、[`07-console-ia-restructuring-and-workflow-workbench-adr.md`](../05-adr/07-console-ia-restructuring-and-workflow-workbench-adr.md) (ADR-07)、[`08-recording-drawer-and-process-tree-selection-adr.md`](../05-adr/08-recording-drawer-and-process-tree-selection-adr.md) (ADR-08)、[`09-arch-process-ssot-and-ebpf-premount-standby-adr.md`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md) (ADR-09 v1.1.0)
 
 ---
 
@@ -80,20 +80,20 @@ flowchart LR
     BatchDB -. "补推 traffic.persisted 绑定正式 record_id" .-> SSEBus
 ```
 
-1. **周期心跳、自动预挂补齐 (`Auto-Rearm`)、离线熔断与悬空租约自愈**：
-   - 后台协程按 `10s` 间隔并发探活所有已登记 Agent（`GET /agent/v1/handshake`，超时 `3s`），刷新 `status = 'ONLINE'`、`last_heartbeat_at`，核对 `ActiveLeaseType / ActiveRefID` 与预挂载摘要 `ArmedDigest`；
-   - **默认自动预挂对账**：当在线且空闲（`lease_type == ''`）的 Agent 返回的 `ArmedDigest` 与数据库中 `probe_desired_state = 'ARMED'` 的挂载规格不一致（例如 Agent 首次上线、重启 `BootID` 刷新或架构进程默认端口变更）时，`hub.Manager` 自动调用 `PUT /agent/v1/monitors/arm` 补齐待命探针并更新 `traefik_processes` 就绪诊断列；
-   - 连续 **3 个周期（30s）** 探活失败则将数据库状态切换为 `OFFLINE`，**自动释放该 Agent 上残留的排他租约**并将关联录制批次或重放任务置为异常终止，防止团队共享 Agent 发生死锁挂死。
+1. **周期心跳、Single-Flight 自动预挂补齐 (`Auto-Rearm`)、离线熔断与悬空租约自愈**：
+   - 后台协程按 `10s` 间隔并发探活所有已登记 Agent（`GET /agent/v1/handshake`，超时 `3s`），刷新 `status = 'ONLINE'`、`last_heartbeat_at`，核对 `ActiveLeaseType / ActiveRefID` 与规范化预挂载摘要 `ArmedDigest`；
+   - **Single-Flight 版本化预挂对账与指数退避**：当在线且空闲（`lease_type == ''`）的 Agent 返回的 `ArmedDigest` 与 `traefik_agents.expected_armed_digest` 不一致或 `BootID` 刷新时，`hub.Manager` 在单机互斥锁 `rearmMu[agentID]` 保护下携带最新 `mounts_revision` 调用 `PUT /agent/v1/monitors/arm` 补齐待命探针并回写统一七态 `probe_status`；若遇 `CAP_DENIED`/`ERROR` 等持久性错误自动进入 `10s -> 30s -> 60s -> 300s` 指数退避（配置变更或手动触发立即重置退避）；
+   - 连续 **3 个周期（30s）** 探活失败则将数据库状态切换为 `OFFLINE`、将该 Agent 名下挂载进程 `probe_status` 同步置为 `'OFFLINE'`，**自动释放残留排他租约**并将关联录制批次或重放任务置为异常终止，防止共享测试环境 Agent 发生死锁挂死。
 2. **Track A 快轨（前端 SSE 实时预览推送）**：
    - 为每个已认证订阅者分配容量为 `128` 的缓冲 Channel；推送前严格校验订阅者对目标 `session_id` 的访问权（`PRIVATE` 批次仅推送给 `owner_id` 本人及 `traefik_admin`）；
    - Channel 瞬时满载时仅跳过实时预览通知，绝不反向阻塞 WebSocket 读取协程与 Track B 落盘管道，确保端到端呈现延迟 `<= 1s`。
 
 ### 1.2 预挂就绪零重启录制编排与无损+结构化双模落盘流水线 (`recorder.Orchestrator`)
 
-1. **多进程排他租约获取、零重启采集闸门与停录不断连**：
-   - 校验发起人对所选 `target_process_ids` 所属 Agent 的访问权（普通用户可组合本人 `PRIVATE` Agent 与当前空闲的 `SHARED` Agent），按 `agent_id` 升序调用 `AcquireAgentLeases` 原子加锁（冲突立即返回 `409 Conflict` 及持锁人信息）；
-   - 并发调用各 Agent `PUT /agent/v1/monitors/sync` 下发 `[]ProcessMonitorSpec`：对已处于 `ARMED` 预挂待命态的进程直接 **0ms 原子置 `session_id = S` 开启采集闸门（零进程重启）**，对处于 `DISARMED` 的进程自动兜底临时挂载，汇总诊断结果写入 `traefik_recording_sessions.process_diagnostics`；
-   - 录制正常结束或触发上限时，调用 `POST /agent/v1/monitors/:sessionId/stop` 将 `session_id` 拨回 `0` **无损回退至 `ARMED` 待命（不断开 `EgressProxy` 业务长连接）**，并在统一收尾函数中原子释放全部 Agent 租约。
+1. **多进程排他租约获取、有序采集闸门与停录不断连**：
+   - 校验发起人对所选 `target_process_ids` 所属环境 Agent 的访问权（普通用户可组合本人 `PRIVATE` Agent 与当前空闲的任意 `SHARED` 环境 Agent），固化 `process_snapshots` 进程蓝图快照（解耦日后卸载挂载实例），按 `agent_id` 升序调用 `AcquireAgentLeases` 原子加锁（冲突立即返回 `409 Conflict` 及持锁人信息）；
+   - 并发调用各 Agent `PUT /agent/v1/monitors/sync` 下发 `[]ProcessMonitorSpec`：Agent 实时复检 `/proc` 后按序先开启 `EgressProxy` `CAPTURING` 分帧、再预热 `ing_conn_map` 动态挂载入站读写钩子并置 `session_id = S`（已 `ARMED` 进程 **0ms 零重启开录**，`DISARMED` 进程自动兜底临时挂载），同时补报存量非代理直连出站 `IP:Port` 以消除 `VIOLATION` 检测盲区，将最新诊断写入 `traefik_recording_sessions.process_diagnostics`；
+   - 录制正常结束或触发上限时，调用 `POST /agent/v1/monitors/:sessionId/stop`：Agent 先卸载入站读写钩子 -> `200ms` 在途应答排空 -> 将 `EgressProxy` 拨回 `PASSTHROUGH` **不断开业务 TCP 长连接** -> 发送 `EVENT_SESSION_DRAINED`，并在统一收尾函数中原子释放全部 Agent 租约。
 2. **双阈值自动停录守卫**：
    - 内存原子维护当前批次 `capturedFrames` 与启动定时器 `time.AfterFunc(MaxDuration)`（默认 `30 分钟` / `100,000 帧`）；任一阈值触发时自动向全部参与 Agent 发送 `/stop`、刷空配对窗口并释放租约，状态落盘为 **`COMPLETED_BY_LIMIT`**。
 3. **Track B 慢轨：连接内 `ullSNO` 往返配对与双模归档 (`ExchangeAssembler`)**：
@@ -110,12 +110,13 @@ flowchart LR
 
 ### 1.3 跨 Agent 同构重放调度器与多请求明细持久化 (`diff.ReplayScheduler`)
 
-1. **权限、同构兼容性与排他租约三重前置门禁**：
+1. **权限、快照解耦同构兼容性、就绪硬门禁与排他租约四重前置校验**：
    - 校验选定的 `INGRESS` 往返记录均属于同一 `session_id` 与同一源进程 `source_process_id`，且 `is_replayable == true`（`raw_req_packet` 非空且未被 4MB 截断）；
-   - 调用 `topology.ValidateReplayProcessCompatibility` 校验发起人对录制素材（`SHARED` 或本人 `PRIVATE`，管理员可全团队重用）及目标进程 `target_process_id` 所属 Agent 的权限，并验证 `target_process_id` 完整承载选定请求命中的全部公共架构模块（支持将公共回归流量投递至开发者个人 `PRIVATE` Agent 上的同构本地进程，或当前空闲的 `SHARED` Agent 进程）；
-   - 对目标进程所属 Agent 获取 `REPLAY` 排他租约（若该 Agent 正在被录制或重放占用则立即返回 `409 Conflict`）。
-2. **重放生命周期状态机与流式切片下发**：
-   - **状态机流转**：`PENDING`（初始创建） -> `ARMED`（向 Agent 下发重定向规格与 Mock 预加载完成，此时提示 A-01 引导重启或重连） -> `INJECTING`（连接建立，按序注入请求切片） -> `COMPLETED / CANCELLED / FAILED`；
+   - 调用基于 `session.ProcessSnapshots` 解耦的 `topology.ValidateReplayProcessCompatibility`（即使源环境 Agent 日后已卸载原挂载实例亦不受阻碍），校验发起人对录制素材与目标进程 `target_process_id` 所属环境 Agent 的权限及模块同构性；
+   - **重放零外泄前置硬门禁**：校验目标进程实时就绪状态，若处于 `WAITING_PROC`（未启动）或 `NEED_RECONNECT`（存在绕过 `EgressProxy` 的预挂前直连长连接 `established_conns > 0`），**直接拒绝启动重放并返回 `409 Conflict`**；
+   - 对目标进程所属 Agent 获取 `REPLAY` 排他租约（冲突立即返回 `409 Conflict`）。
+2. **重放生命周期状态机与既有代理连接零外泄 Mock 接管**：
+   - **状态机流转**：`PENDING`（初始创建） -> `RUNNING`（目标进程已 `🟢 READY`，无需手动重启；Agent 将 `EgressProxy` 中该进程的既有长连接原子切入 `REPLAY_MOCK` 物理阻断真实下游写通道并按序注入请求切片） -> `COMPLETED / CANCELLED / FAILED`；
    - **单次扫描流式组装**：直接从 `traefik_traffic_records` 提取选定记录的 `raw_req_packet` 作为注入帧，并关联对应的局部 ScopedMock 集合及全局兜底 Mock 集合（严格过滤截断帧与 REQ_ONLY 帧），采用二进制分片流下发 Agent；
    - **双轨可靠回收与独立明细持久化**：
      - 重放执行进度与结果通过 WebSocket `EVENT_REPLAY_ITEM_DONE` 实时推送，同时支持通过 `GET /agent/v1/replays/:taskId/result` 幂等拉取；
@@ -138,7 +139,7 @@ flowchart LR
 1. **上传校验流水线**：
    - 通过 `http.MaxBytesReader` 强制限制上传流 `<= 4MB (4,194,304 Bytes)`；
    - `proto.Unmarshal` 解析为 `descriptorpb.FileDescriptorSet`，再经 `protodesc.NewFiles(fds)` 构建完整 `protoregistry.Files` 验证依赖闭包合法性（损坏或缺失 import 依赖返回 `400 Bad Request`）；
-   - 遍历全部 `FileDescriptor.Services()` 与 `ServiceDescriptor.Methods()`，严格按 **`service_name = string(file.Package()) + "-" + string(svc.Name())`**（无 `package` 时使用 `string(svc.Name())`）与 **`operation = string(method.Name())`** 生成操作映射行；
+   - 遍历全部 `FileDescriptor.Services()` 与 `ServiceDescriptor.Methods()`，严格按点分规范 **`service_name = string(file.Package()) + "." + string(svc.Name())`**（无 `package` 时使用 `string(svc.Name())`）与 **`operation = string(method.Name())`** 生成操作映射行；
    - 同名描述集（`name` 相同）每次上传自动递增 `version = max(version) + 1`。
 2. **激活冲突门禁 (`ActivateSchemaVersion`)**：
    - 激活某版本前，在事务内查询该版本的所有 `(service_name, operation)` 是否与**其他名称下当前已激活 (`is_active = true`)** 的描述集存在交集；若冲突则立即回滚并返回 `409 Conflict` 及冲突接口明细；
@@ -243,7 +244,7 @@ type FieldDiff struct {
 | **流量作业** *(置顶高频)* | **流量录制** *(默认首页)* | `/record` | `RecordingWorkbenchPage` | 全体登录用户 | `scope` (`SHARED` \| `PRIVATE`), `status`, `search`, `auto_start` (`1`), `agent_id`, `page`, `page_size` |
 | **流量作业** | **流量调试** | `/debug` | `TrafficDebugWorkbenchPage` | 全体登录用户 | `session_id`, `live` (`1`), `direction`, `exchange_type`, `service_name`, `operation`, `sno`, `trace_id`, `has_error` (`true`), `is_replayable`, `keyword`, `page`, `page_size` |
 | **流量作业** | **流量重放** | `/replay` | `ReplayWorkbenchPage` | 全体登录用户 | `session_id`, `auto_create` (`1`), `target_process_id`, `status`, `page`, `page_size` |
-| **架构与契约** *(静态基线)* | **架构拓扑** | `/topology` | `TopologyWorkbenchPage` | 全体登录用户 | `view` (`LOGICAL` \| `PHYSICAL`), `depth`, `session_id`, `focus` |
+| **架构与契约** *(静态基线)* | **架构拓扑** | `/topology` | `TopologyWorkbenchPage` | 全体登录用户 | `view` (`LOGICAL` \| `PHYSICAL`), `env_agent_id`, `depth`, `session_id`, `focus` |
 | **架构与契约** | **架构元素** | `/architecture` | `ArchitectureWorkbenchPage` | 全体登录用户 | `tree` (`logical` \| `physical`), `subsystem_id`, `group_id`, `module_id`, `proc_group_id`, `arch_process_id` |
 | **架构与契约** | **Proto 契约** | `/schemas` | `ProtoSchemaWorkbenchPage` | 全体登录用户 | `schema_id`, `active_only`, `search`, `page`, `page_size` |
 | **环境与治理** *(沉底低频)* | **Agent 与进程** | `/agents` | `AgentManagementPage` | 全体登录用户 | `scope` (`SHARED` \| `PRIVATE`), `agent_id`, `process_id`, `open_mount` (`1`), `lease_state`, `status`, `page`, `page_size` |
@@ -360,7 +361,7 @@ export interface SessionHeadAnatomyDTO {
   headKind: 'REQ' | 'RSP' | 'MNG';
   detectedVersion: string;   // 如 "V05 (256B)" 或 "V04 (200B)"
   sessionHeadLen: number;
-  serviceName: string;       // "{package}-{serviceName}"
+  serviceName: string;       // "{package}.{serviceName}"
   operation: string;
   reqType?: number;          // 1=Sync, 2=Async, 3=Oneway
   uiStatusCode?: number;
@@ -456,7 +457,7 @@ export interface ProtoFieldNodeDTO {
 
 export interface OperationSchemaTreeDTO {
   operationId: string;
-  serviceName: string;         // "{package}-{serviceName}"
+  serviceName: string;         // "{package}.{serviceName}"
   operation: string;           // "DeductBalance"
   protoFile: string;           // "account.proto"
   clientStreaming: boolean;
@@ -477,7 +478,7 @@ export interface OperationSchemaTreeDTO {
 #### (2) 两级嵌套折叠表聚合数据模型
 ```typescript
 export interface ServiceContractGroupDTO {
-  serviceName: string;         // 聚合键: "{package}-{serviceName}"
+  serviceName: string;         // 聚合键: "{package}.{serviceName}"
   protoPackage: string;
   protoService: string;
   protoFile: string;
@@ -504,13 +505,29 @@ export interface ServiceContractGroupDTO {
 export type ProbeDesiredState = 'ARMED' | 'DISARMED';
 
 export type ProbeReadinessStatus =
-  | 'READY'          // 🟢 eBPF 已预挂 + PID 已定位 + 存量直连连接数 == 0 (随时 0ms 零重启开录)
-  | 'NEED_RECONNECT' // 🟡 eBPF 已预挂 + PID 已定位 + 存在预挂前存量直连 (空闲期重连一次即可永久就绪)
-  | 'WAITING_PROC'   // 🔵 eBPF 已预挂 + sched_process_exec 待命等待目标进程启动
-  | 'MONITORING'     // 🟣 当前正处于活跃录制/重放采集中
-  | 'CAP_DENIED'     // 🔴 Agent 缺少 CAP_BPF / CAP_NET_ADMIN 权限
-  | 'ERROR'          // 🔴 探针挂载或规则同步异常
-  | 'DISARMED';      // ⚪ 用户手动暂停探针或 Agent 离线
+  | 'READY'          // 🟢 eBPF 已预挂 + PID 已定位 + 存量直连连接数 == 0 (随时 0ms 零重启开录/重放)
+  | 'NEED_RECONNECT' // 🟡 eBPF 已预挂 + PID 已定位 + 存在预挂前存量直连 (空闲期重连一次即可永久就绪；重放硬阻断 409)
+  | 'WAITING_PROC'   // 🔵 eBPF 已预挂 + sched_process_exec/fork 待命等待目标进程启动
+  | 'MONITORING'     // 🟣 当前正处于活跃录制/重放作业中
+  | 'DISARMED'       // ⚪ 用户手动暂停该进程探针
+  | 'OFFLINE'        // ⚫ 所属环境 Agent 离线失联
+  | 'CAP_DENIED'     // 🔴 Agent 缺少 CAP_BPF / CAP_NET_ADMIN / CAP_PERFMON / CAP_SYS_PTRACE 权限
+  | 'ERROR';         // 🔴 探针挂载或规则同步异常
+
+export interface AgentEnvironmentDTO {
+  id: number;
+  name: string;                        // 1 台 Agent = 1 套独立环境 (如 "SIT-公共环境-01", "Alice-本地联调")
+  endpoint: string;
+  scope: 'SHARED' | 'PRIVATE';
+  owner_id: number | null;
+  fallback_agent_id: number | null;    // 可选绑定的公共 SHARED 基线环境 Agent ID（同机未挂载下游兜底）
+  status: 'ONLINE' | 'OFFLINE';
+  mounts_revision: number;             // 乐观并发版本号，保存挂载抽屉时回传 expected_revision
+  expected_armed_digest: string;
+  armed_digest: string;
+  lease_type: '' | 'RECORDING' | 'REPLAY';
+  lease_holder_name?: string;
+}
 
 export interface ArchProcessGroupDTO {
   id: number;
@@ -568,9 +585,9 @@ export interface AgentProcessMountDTO {
 
 #### (2) 「架构进程定义 ➔ Agent 挂载与自动预挂就绪 ➔ 秒级零重启录制」三台同构树动线
 - **`架构元素` (`/architecture?tree=physical`) 定义蓝图**：左栏顶部分段开关切换 `[逻辑架构 | 物理进程]`；在 `物理进程` 树中由 `traefik_admin` 统一维护 `ArchProcessGroup ➔ ArchProcess`、默认端口/启动特征及 `FM` 模块组装；点击任一组装模块可切回 `?tree=logical&module_id=M`，点击服务契约跳 `/schemas?active_only=true&search=<service_name>`，点击下方宿主机挂载血缘跳 `/agents?scope=<scope>&agent_id=<aid>&process_id=<pid>`；
-- **`Agent 与进程` (`/agents`) `1:1` 挂载与预挂就绪**：
-  - 右栏以同构的 **`ArchProcessGroup ➔ 挂载进程` 分组就绪树 (`AgentMountedProcessTree`)** 取代旧平铺表，实时展示四色探针就绪灯、`[本地已覆盖]` 标记与按进程/组/整机 `暂停探针 / 恢复预挂`；
-  - 点击 `[+ 挂载架构进程]` 滑出 **`AgentProcessMountDrawer` (`680px` Drawer)**：呈现完整架构进程树复选框，点击顶部 **`[⚡ 自动扫描宿主机进程并匹配架构树]`** 调用 `/proc` 探查自动匹配点亮 `✨ 本机已探测 (PID · :Port)` 并一键勾选，节点内联支持折叠展开 `⚙ 本地覆盖配置`；若架构树中缺少所需进程，底部横幅直接深链引导至 `/architecture?tree=physical`；保存后在线 Agent 自动触发 `/agent/v1/monitors/arm` 预挂待命；
+- **`Agent 与进程` (`/agents`) 多环境 `1:1` 挂载与七态预挂就绪**：
+  - 每台 `Agent` 代表一套独立环境（支持多套 `SHARED` 公共测试环境与个人 `PRIVATE` 联调环境，个人/分片环境可绑定 `fallback_agent_id` 公共基线兜底）；右栏以同构的 **`ArchProcessGroup ➔ 挂载进程` 分组就绪树 (`AgentMountedProcessTree`)** 取代旧平铺表，实时展示统一七态探针就绪徽章、`[本地已覆盖]` 标记与按进程/组/整机 `暂停探针 / 恢复预挂`（含活跃任务下的紧急 `force=true` 中止卸挂确认弹窗）；
+  - 点击 `[+ 挂载架构进程]` 滑出 **`AgentProcessMountDrawer` (`680px` Drawer)**：呈现完整架构进程树复选框，点击顶部 **`[⚡ 自动扫描宿主机进程并匹配架构树]`** 调用 `/proc` 探查自动匹配点亮 `✨ 本机已探测 (PID · :Port)` 并一键勾选，节点内联支持折叠展开 `⚙ 本地覆盖配置`；若架构树中缺少所需进程，底部横幅直接深链引导至 `/architecture?tree=physical`；保存时携带 `expected_revision` 防多人并发静默覆盖，在线空闲 Agent 自动触发 `/agent/v1/monitors/arm` 预挂待命；
   - 就绪后点击右栏顶部的 **`[前往发起录制 ->]`** 一键跳转 `/record?auto_start=1&agent_id=<id>` 自动滑出录制抽屉并预选该 Agent；
 - **`流量录制` (`/record`) `RecordingStartDrawer` 秒级零重启录制**：复用同一棵分组进程树，实时回显各挂载进程的预挂就绪徽章并自动预勾选已就绪进程；全部 `🟢 READY` 时点击启动即 **0ms 零重启开启采集闸门**。
 

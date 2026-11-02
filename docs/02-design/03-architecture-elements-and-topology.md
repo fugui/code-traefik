@@ -1,11 +1,11 @@
 # 业务流量监控与重放 (`code-traefik`) 架构元素建模与拓扑一致性验证设计
 
 - **文档编号**：`03-architecture-elements-and-topology.md`
-- **文档版本**：v1.4.0
+- **文档版本**：v1.4.1
 - **更新日期**：2026-11-02
 - **归属阶段**：阶段二：系统架构与数据模型设计 (`02-design`)
-- **状态**：已冻结 (Frozen)
-- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.9.0)、[`01-system-architecture.md`](./01-system-architecture.md)、[`09-arch-process-ssot-and-ebpf-premount-standby-adr.md`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md) (ADR-09)
+- **状态**：已批准（待 M10 实施）(Approved for M10)
+- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.9.1)、[`01-system-architecture.md`](./01-system-architecture.md)、[`09-arch-process-ssot-and-ebpf-premount-standby-adr.md`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md) (ADR-09 v1.1.0)
 
 ---
 
@@ -115,21 +115,21 @@ func MoveFunctionalGroup(tx *gorm.DB, groupID uint64, newParentID *uint64) error
 - 删除功能组：若存在子功能组（`parent_id = id`）或挂载的功能模块（`group_id = id`），拒绝删除并返回 `409`；
 - 删除功能模块：若已声明被其他模块引用的 `PROVIDE` 服务契约，或当前仍装载于某个架构标准进程（`arch_process_id IS NOT NULL`），拒绝删除并返回 `409`；
 - 删除物理进程组 (`ArchProcessGroup`)：若组下仍存在标准架构进程（`ArchProcess`），拒绝删除并返回 `409`；
-- 删除标准架构进程 (`ArchProcess`)：若当前已被任何宿主机 Agent 挂载实例化（`traefik_processes` 中存在引用），拒绝删除并返回 `409`（附带已挂载 Agent 名称列表）。
+- 删除标准架构进程 (`ArchProcess`)：若当前已被任何宿主机 Agent 挂载实例化（`traefik_processes` 中存在引用）或被历史重放任务 `ReplayTask` 引用，拒绝删除并返回 `409`（附带已挂载环境 Agent 名称列表）。
 
 ---
 
-## 2. 模块级接口供给与依赖契约 (Module Interface Contracts)
+## 2. 模块级服务供给与依赖契约 (Module Service Contracts)
 
-功能模块是接口契约声明的最小业务单元，通过 `traefik_module_interfaces` 表维护两类关系：
-- **`PROVIDE`（供给接口）**：本功能模块对外实现的 CROS RPC 服务方法；
-- **`DEPEND`（依赖接口）**：本功能模块运行期需要调用的下游 CROS RPC 服务方法。
+功能模块是接口契约声明的最小业务单元，遵循 [`ADR-05`](../05-adr/05-hierarchical-topology-canvas-redesign.md) 与 [`ADR-06`](../05-adr/06-proto-schema-repository-and-field-inspection-adr.md) 服务级（Service-Level）治理粒度，通过 `traefik_module_services` 与 `traefik_module_dependencies` 两张表维护契约：
+- **`PROVIDE`（供给服务，`traefik_module_services`）**：本功能模块对外实现的 CROS RPC 服务（`service_name`）；
+- **`DEPEND`（依赖服务，`traefik_module_dependencies`）**：本功能模块运行期需要调用的下游内部 CROS RPC 服务（关联 `service_id`）或外部异构系统（`is_external = true`）。
 
-### 2.1 `{package}-{serviceName}` 规范化命名契约 (A-07)
+### 2.1 `{package}.{serviceName}` 规范化命名契约 (A-07)
 
 依据 DOPHI CROS RPC 框架运行时规范，线上报文 `RPC_REQ_HEAD_S` 中的 `ascServiceName` 与 `ascOperation` 严格满足以下映射公式：
 
-$$\text{ascServiceName} = \text{package} + \text{"."} + \text{serviceName}, \quad \text{ascOperation} = \text{methodName}$$
+$$\text{ascServiceName} = \begin{cases} \text{package} + \text{"."} + \text{serviceName}, & \text{package} \neq \text{""} \\ \text{serviceName}, & \text{package} = \text{""} \end{cases}, \quad \text{ascOperation} = \text{methodName}$$
 
 | Protobuf 定义示例 | `package` 声明 | `service` 名称 | `rpc` 方法名 | 规范化 `service_name` (`ascServiceName`) | 规范化 `operation` (`ascOperation`) |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -137,21 +137,21 @@ $$\text{ascServiceName} = \text{package} + \text{"."} + \text{serviceName}, \qua
 | `cros/auth/session.proto` | `cros.auth` | `SessionMgr` | `VerifyTicket` | `cros.auth.SessionMgr` | `VerifyTicket` |
 
 * **强校验规则**：
-  1. `package` 与 `serviceName` **统一遵循点分连接规范**（`.`，若未声明 package 则直接采用 `serviceName`）；
+  1. `package` 与 `serviceName` **统一遵循点分连接规范**（`.`，与 `internal/server/decoder/registry.go` 动态解码注册表完全一致；若未声明 `package` 则直接采用 `serviceName`）；
   2. 受限于 CROS RPC 协议头 `CHAR[64]`（含末尾 `\0` 终止符），`service_name` 与 `operation` 字节长度均强制校验为 **`1..63` 位可见 ASCII 字符**（正则：`^[A-Za-z0-9._]{1,63}$` 与 `^[A-Za-z0-9_]{1,63}$`）。
   3. **唯一性红线**：
-     - 同一模块内 `(module_id, relation_type, service_name, operation)` 唯一；
-     - **全局唯一供给 (A-05)**：任意时刻同一 `(service_name, operation)` 在全库至多只能被 **1 个**功能模块声明为 `PROVIDE`；第二个模块尝试声明相同 `PROVIDE` 时立即拦截返回 `409 Conflict` 并附带已占用模块编码与名称。
+     - **全局唯一供给 (A-05)**：任意时刻同一 `service_name` 在全库 `traefik_module_services` 中至多只能被 **1 个**功能模块声明为 `PROVIDE`（`uk_traefik_mod_svc_name`）；第二个模块尝试声明相同 `service_name` 时立即拦截返回 `409 Conflict` 并附带已占用模块编码与名称；
+     - 同一消费模块对同一内部服务的依赖声明唯一（`UNIQUE(consumer_module_id, service_id)`）。
 
 ---
 
-## 3. 架构物理进程蓝图 SSOT、宿主机 `1:1` 挂载覆盖与同构重放校验
+## 3. 架构物理进程蓝图 SSOT、多环境 `1:1` 挂载覆盖与同构重放校验
 
-### 3.1 全局物理进程蓝图 (`ArchProcessGroup -> ArchProcess`) 与宿主机 `1:1` 挂载覆盖模型 (`ADR-09`)
+### 3.1 全局物理进程蓝图 (`ArchProcessGroup -> ArchProcess`) 与多环境 `1:1` 挂载模型 (`1 台 Agent = 1 套独立环境`)
 
-依据 [`ADR-09`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md)，系统将**「标准业务进程蓝图（全局架构 SSOT）」**与**「宿主机进程挂载实例（Agent 运行态）」**彻底解耦为两层正交模型：
+依据 [`ADR-09`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md)，系统将**「标准业务进程蓝图（全局架构 SSOT）」**与**「环境宿主机进程挂载实例（Agent 运行态）」**彻底解耦为两层正交模型：
 - 所有逻辑架构元素（`Subsystem`、`FunctionalGroup`、`Module`、`ModuleService`、`ModuleDependency`）与**物理进程蓝图（`ArchProcessGroup`、`ArchProcess` 及 `ArchProcess <-> Module` 组装关系）**均为全团队共享的**公共唯一真实源（SSOT）**，统一在 `/architecture`（`[逻辑架构 | 物理进程]`）中由 `traefik_admin` 维护，零 Agent 机器耦合；
-- 各宿主机 `Agent`（无论公共基线域 `SHARED` 还是个人开发域 `PRIVATE`）仅允许从已定义的 `ArchProcess` 树中 **`1:1` 勾选挂载进程**（`traefik_processes`），并按需施加上下文局部的本地覆盖配置：
+- **1 台 `Agent` 代表 1 套独立的运行环境**（包含多套团队公共测试环境如 `SHARED Agent_SIT`、`SHARED Agent_UAT`，以及每位开发者个人的 `PRIVATE Agent_Dev`）。任意一套环境 `Agent` 均从已定义的 `ArchProcess` 树中 **`1:1` 勾选挂载进程**（`traefik_processes`），并按需施加上下文局部的本地覆盖配置：
 
 ```mermaid
 flowchart TB
@@ -159,9 +159,9 @@ flowchart TB
         PGrp1["ArchProcessGroup: 核心交易组 (CORE_TRADE)"]
         AP1["ArchProcess: sut-order (default_port=9001, default_cmd='./sut-order')"]
         AP2["ArchProcess: backend-stock (default_port=9002, default_cmd='./backend-stock')"]
-        Mod1["Module_Order (PROVIDE: dophi.order-OrderSvc)"]
-        Mod2["Module_Risk (PROVIDE: dophi.risk-RiskSvc)"]
-        Mod3["Module_Stock (PROVIDE: dophi.stock-StockSvc)"]
+        Mod1["Module_Order (PROVIDE: dophi.order.OrderSvc)"]
+        Mod2["Module_Risk (PROVIDE: dophi.risk.RiskSvc)"]
+        Mod3["Module_Stock (PROVIDE: dophi.stock.StockSvc)"]
 
         PGrp1 --> AP1
         PGrp1 --> AP2
@@ -170,57 +170,79 @@ flowchart TB
         AP2 -- "1:N 模块组装" --> Mod3
     end
 
-    subgraph SharedEnv["公共基线环境: SHARED Agent_1 (192.168.56.19)"]
+    subgraph SharedSIT["公共测试环境 1: SHARED Agent_SIT (192.168.56.19)"]
         SProc1["Process Mount #1 (arch=sut-order, 继承默认 :9001, probe='ARMED')"]
         SProc2["Process Mount #2 (arch=backend-stock, 继承默认 :9002, probe='ARMED')"]
     end
 
-    subgraph PrivateEnv["开发者个人环境: PRIVATE Agent_Dev (owner_id=Alice, 192.168.56.88)"]
-        PProc1["Process Mount #3 (arch=sut-order, override_port=19001, probe='ARMED')"]
+    subgraph SharedUAT["公共测试环境 2: SHARED Agent_UAT (192.168.56.20)"]
+        UProc1["Process Mount #3 (arch=sut-order, 继承默认 :9001, probe='ARMED')"]
+        UProc2["Process Mount #4 (arch=backend-stock, 继承默认 :9002, probe='ARMED')"]
+    end
+
+    subgraph PrivateEnv["个人联调环境: PRIVATE Agent_Dev (owner=Alice, fallback=Agent_SIT)"]
+        PProc1["Process Mount #5 (arch=sut-order, override_port=19001, probe='ARMED')"]
     end
 
     SProc1 -- "1:1 实例化" --> AP1
     SProc2 -- "1:1 实例化" --> AP2
-    PProc1 -. "1:1 实例化 + 本地端口覆盖 (不污染公共基线)" .-> AP1
+    UProc1 -- "1:1 实例化 (多套 SHARED 环境并存)" --> AP1
+    UProc2 -- "1:1 实例化" --> AP2
+    PProc1 -. "1:1 实例化 + 本地端口覆盖 (未挂载下游兜底指向 Agent_SIT)" .-> AP1
 ```
 
 核心领域不变量：
-1. **单机严格 `1:1` 单实例约束 (`UNIQUE(agent_id, arch_process_id)`)**：
-   - 同一标准架构进程在单台计算机（单个 `Agent`）上至多部署 1 个实例，数据库层以 `uk_traefik_proc_agent_arch` 强制保证不重复挂载；
+1. **单环境（单机）严格 `1:1` 单实例约束 (`UNIQUE(agent_id, arch_process_id)`)**：
+   - 同一标准架构进程在单套环境（单个 `Agent`）上至多部署 1 个实例，数据库层以 `uk_traefik_proc_agent_arch` 强制保证不重复挂载；
    - **禁止自造野生进程与篡改模块组装**：Agent 挂载界面不提供自由新建进程名或自由增删 `FM` 模块入口；缺失的标准进程必须回到 `/architecture?tree=physical` 定义。
-2. **有效运行参数继承与端口互斥 (A-02)**：
+2. **有效运行参数继承、匹配语法契约与蓝图端口演进自动固化 (A-02)**：
    - 挂载实例的有效属性遵循**「本地覆盖优先 ➔ 架构蓝图默认兜底」**确定性公式：
      $$\text{EffectiveListenPort} = \text{OverrideListenPort} \neq \text{nil} \ ? \ *\text{OverrideListenPort} : \text{ArchProcess.DefaultListenPort}$$
      $$\text{EffectiveCmdPattern} = \text{OverrideCmdPattern} \neq \text{""} \ ? \ \text{OverrideCmdPattern} : \text{ArchProcess.DefaultCmdPattern}$$
      $$\text{EffectiveIP} = \text{AdvertiseIP} \neq \text{""} \ ? \ \text{AdvertiseIP} : \text{HostIP(Agent.Endpoint)}$$
      $$\text{EffectiveExtraDownstreams} = \text{Dedupe}(\text{ArchProcess.DefaultExtraDownstreams} \cup \text{Process.ExtraDownstreams})$$
-   - 同一 `agent_id` 下所有非零有效端口（`effective_listen_port > 0`）通过部分唯一索引 `uk_traefik_proc_agent_port` 严格互斥（冲突返回 `409 Conflict`），同时允许同一台 Agent 并存多个 `effective_listen_port = 0` 的纯客户端进程。
-3. **模块单归属与公私双域隔离 (A-03)**：
+   - **`cmd_pattern` 匹配语法与防 ReDoS 校验**：长度强制 `<= 256` 字符；默认按**精确子串包含**（`strings.Contains(cmdline, pattern)`）匹配 `/proc/<pid>/cmdline`（`\0` 替换为空格后）；若以显式前缀 `re:` 开头，则按 **Go `regexp` (RE2 线性时间引擎)** 编译匹配，主控在保存 `ArchProcess` 或 `Process` 覆盖参数时强制预执行 `regexp.Compile` 语法校验（非法正则返回 `400 Bad Request`）；
+   - **同机非零端口互斥与蓝图变更自动固化**：同一 `agent_id` 下所有非零有效端口（`effective_listen_port > 0`）通过部分唯一索引 `uk_traefik_proc_agent_port` 严格互斥（同时允许并存多个 `0` 端口纯客户端进程）。当管理员在 `/architecture` 修改 `ArchProcess.DefaultListenPort`（由 $P_{\text{old}} \to P_{\text{new}}$）时，主控在单事务内自动检测各已挂载该蓝图的 Agent：若某挂载实例未设置覆盖端口（`override_listen_port IS NULL`）且 $P_{\text{new}} > 0$ 与该 Agent 同机其他已挂载进程的有效端口冲突，**自动将该冲突实例的 `override_listen_port` 固化为原有效端口 $P_{\text{old}}$**（并在响应 `auto_pinned_overrides` 中返回提示），既绝对不破坏个人/特定环境既有挂载，又保证全局蓝图自由演进。
+3. **模块单归属与多环境公私双域并存 (A-03)**：
    - **架构层**：1 个 `ArchProcess` 可组装承载 $N \ge 0$ 个 `Module`（记录于 `traefik_modules.arch_process_id`），每个 `Module` 全局至多归属 **1 个** `ArchProcess`（尝试将已分配给进程 A 的模块重复绑给进程 B 时返回 `409 Conflict`）；
-   - **公共基线域 (`SHARED` Agent)**：全局所有 `SHARED` Agent 构成的公共基线域内，同一个 `ArchProcess` 至多只能挂载于 **1 台** `SHARED` Agent（在第二台 `SHARED` Agent 重复挂载同一 `ArchProcess` 时拦截返回 `409 Conflict`）；
-   - **个人私有域 (`PRIVATE` Agent)**：每位开发者本人的 `PRIVATE` Agent 作为独立隔离沙箱，均可自由 `1:1` 勾选挂载任意 `ArchProcess` 进行本地联调、录制与跨环境同构重放，绝不污染公共基线。
-4. **动态 PID 非权威与预挂就绪快照**：操作系统 `PID` 随业务重启动态变化，不作为静态权威配置，由 Agent 在 `ARMED` 预挂待命及活跃录制期通过 `(EffectiveListenPort, EffectiveCmdPattern)` 实时扫描 `/proc` 获取，并将最新四态就绪诊断（`READY` / `NEED_RECONNECT` / `WAITING_PROC` / `DISARMED`）回写至 `traefik_processes` 快照列。
+   - **公共测试环境域 (`SHARED` Agent)**：`1 台 SHARED Agent = 1 套独立公共测试环境`（如 `SIT`、`UAT`、`准生产回归`），**支持多台不同的 `SHARED` Agent 各自 `1:1` 挂载同一个 `ArchProcess`**，互不排斥；
+   - **个人私有域 (`PRIVATE` Agent)**：每位开发者本人的 `PRIVATE` Agent 作为独立隔离沙箱，同样自由 `1:1` 勾选挂载任意 `ArchProcess`，并可通过 `Agent.FallbackAgentID` 可选绑定某台 `SHARED` 公共环境 Agent 作为本地未启动下游的跨机连接兜底。
+4. **动态 PID 非权威与统一七态预挂就绪快照**：操作系统 `PID` 随业务重启动态变化，不作为静态权威配置，由 Agent 在 `ARMED` 预挂待命及活跃录制期通过 `(EffectiveListenPort, EffectiveCmdPattern)` 实时扫描 `/proc` 获取，并将统一七态就绪诊断（`READY` / `NEED_RECONNECT` / `WAITING_PROC` / `MONITORING` / `DISARMED` / `OFFLINE` / `CAP_DENIED` 或 `ERROR`）回写至 `traefik_processes` 快照列。
 
-### 3.2 混合下游 `IP:Port` 自动推导算法 (`CompileProcessDownstreams` — 本机优先 + 公共基线兜底)
+### 3.2 多环境混合下游 `IP:Port` 自动推导算法 (`CompileProcessDownstreams` — 同机优先 + 绑定基线环境兜底)
 
-当主控向 Agent 下发某挂载进程 `P`（所属宿主机 `Agent_X`，对应蓝图 `ArchProcess_Src`）的预挂载待命（`/monitors/arm`）、录制（`/monitors/sync`）或重放规格 `ProcessMonitorSpec` 时，自动聚合以下四层下游网络端点集合：
+当主控向 Agent 下发某挂载进程 `P`（所属环境 `Agent_X`，对应蓝图 `ArchProcess_Src`）的预挂载待命（`/monitors/arm`）、录制（`/monitors/sync`）或重放规格 `ProcessMonitorSpec` 时，自动聚合以下三层下游网络端点集合：
 
-1. **已声明架构依赖混合端点（同机挂载优先 ➔ 全局 `SHARED` 基线兜底）**：
+1. **已声明架构依赖混合端点（同环境同机优先 ➔ `FallbackAgentID` 绑定公共环境兜底）**：
    - 读取 `ArchProcess_Src` 承载的全部模块集合 $M(\text{ArchProcess\_Src})$ 及其内部依赖 `ModuleDependency`，定位目标供给模块所属的标准架构进程 `ArchProcess_Dst`；
    - 若 `ArchProcess_Dst != ArchProcess_Src`：
-     - **优先级 ①（同机挂载实例优先）**：检查当前这台 `Agent_X` 上是否同样挂载了 `ArchProcess_Dst`（记为 `P_local`，常见于研发在本机 `PRIVATE` Agent 同时启动上下游两个微服务，或同机合设的公共服务）；若存在且 `P_local.EffectiveListenPort > 0`，加入 `(EffectiveIP(P_local), P_local.EffectiveListenPort)` 及同机回环别名 `("127.0.0.1", P_local.EffectiveListenPort)`；
-     - **优先级 ②（全局 `SHARED` 基线挂载兜底）**：查找 `ArchProcess_Dst` 在全局公共 `SHARED` Agent 上的唯一挂载实例 `P_shared`；若存在且 `P_shared.EffectiveListenPort > 0`（且与 `P_local` 不同机），一并加入 `(EffectiveIP(P_shared), P_shared.EffectiveListenPort)`，无缝支撑“本机单服务调用远端公共测试环境真实下游”的混合调试拓扑！
-2. **同机预挂与本批次协同监控监听端点全集 (`PeerListenEndpoints`)**：
-   - **核心物理保障（解决未声明调用拦截盲区）**：将同机 `Agent_X` 上所有已挂载 `ARMED` 进程的非零监听端口（含 `127.0.0.1:<port>`）以及当前录制批次所纳管的**全部目标进程监听端点**（剔除 `P` 自身端口）并入 `Downstreams`；即使模块 $A$ 源码未声明对模块 $B$ 的依赖，一旦 $A$ 发起跨进程调用 $B$，出站连接同样被 `cgroup/connect4` 透明重定向至 Agent `EgressProxy`，确保 `VIOLATION` 在物理上 100% 具备可观测性！
+     - **优先级 ①（同环境同机挂载实例优先）**：检查当前这台 `Agent_X` 上是否挂载了 `ArchProcess_Dst`（记为 `P_local`）；若存在且 `P_local.EffectiveListenPort > 0`，加入 `(EffectiveIP(P_local), P_local.EffectiveListenPort)` 及同机回环别名 `("127.0.0.1", P_local.EffectiveListenPort)`；
+     - **优先级 ②（绑定公共基线环境兜底，严禁多环境盲目串绑）**：当同机未挂载 `ArchProcess_Dst`（如开发者仅在个人 `PRIVATE` Agent 启动单个待测微服务，或某套分片环境依赖公共底座 Agent）时：
+       - 若 `Agent_X.FallbackAgentID != nil`，精确查找该绑定公共 `SHARED` 环境 Agent 上的挂载实例 `P_fallback`，若 `P_fallback.EffectiveListenPort > 0` 则加入 `(EffectiveIP(P_fallback), P_fallback.EffectiveListenPort)`；
+       - 若 `Agent_X.FallbackAgentID == nil` 且全库所有 `SHARED` Agent 中**恰好仅有唯一 1 台**挂载了 `ArchProcess_Dst`，自动回退纳入该唯一公共实例端点；若存在 $\ge 2$ 套 `SHARED` 环境同时挂载了 `ArchProcess_Dst` 且未显式指定 `FallbackAgentID`，**绝不跨环境盲目合并其他 `SHARED` 环境 IP:Port**，彻底杜绝 `SIT` 与 `UAT` 跨环境串流！
+2. **同机已挂载进程监听端口全集（`PeerListenEndpoints` & `ArmedDownstreams` 超集不变量）**：
+   - **核心物理保障（解决未声明 `VIOLATION` 调用拦截盲区）**：在编译预挂待命规格与录制规格时，统一将同机 `Agent_X` 上**全部已挂载进程的非零有效监听端口**（含 `(EffectiveIP, Port)` 与 `("127.0.0.1", Port)`，剔除 `P` 自身端口）悉数并入 `Downstreams`，严格保持**预挂超集不变量**：
+     $$\text{ArmedDownstreams}(P) \supseteq \text{ActiveRecordingDownstreams}(P, S)$$
+   - 由此，无论模块 $A$ 源码是否声明了对同机模块 $B$ 的依赖，只要进程在 `ARMED` 预挂后建立连接，出站长连接在待命期即已 100% 接入 `EgressProxy` 纯透传，开启录制时无需任何重连即可 100% 捕获未声明跨进程 `VIOLATION` 调用！
 3. **架构默认补充端点 + 本地覆盖补充端点 + 离线重放历史端点**：
-   - 合并 `ArchProcess_Src.DefaultExtraDownstreams` 与 `P.ExtraDownstreams`；若为离线重放，并入源录制批次观测到的全部 `EGRESS` 原始目的端点；最终按 `IP:Port` 去重输出。
+   - 合并 `ArchProcess_Src.DefaultExtraDownstreams` 与 `P.ExtraDownstreams`；若为离线重放（`CompileReplayDownstreams`），额外并入源录制批次观测到的全部 `EGRESS` 原始 `dst_addr`（`IP:Port`）；最终按 `IP:Port` 稳定排序去重输出。
 
-### 3.3 跨 Agent 同构进程重放兼容性校验算法 (`ValidateReplayProcessCompatibility`)
+### 3.3 基于录制快照解耦的跨 Agent 同构进程重放兼容性校验 (`ValidateReplayProcessCompatibility`)
 
-得益于 `Process -> ArchProcess -> Modules` 规范化蓝图关联，跨 Agent 同构重放（如将公共 `SHARED` 回归流量投递至开发者 `PRIVATE` Agent 上的挂载实例）具备极简且严密的同构判定准则：
+为确保某台环境 Agent 日后卸载 `Process` 挂载实例（`DELETE /api/processes/:id`）后，历史录制批次依然可以随时跨环境重放，录制批次创建时在 `RecordingSession.ProcessSnapshots` 中固化参与进程的蓝图快照 `ProcessSnapshotItem{ProcessID, ArchProcessID, Code, Name, ModuleIDs, ListenPort}`。兼容性校验优先读取批次快照，彻底解除对源 `traefik_processes` 存活状态的硬依赖：
 
 ```go
 package topology
+
+// ProcessSnapshotItem 固化在 RecordingSession.ProcessSnapshots 中的录制时刻进程蓝图快照
+type ProcessSnapshotItem struct {
+	ProcessID     uint64   `json:"process_id"`
+	ArchProcessID uint64   `json:"arch_process_id"`
+	Code          string   `json:"code"`
+	Name          string   `json:"name"`
+	ModuleIDs     []uint64 `json:"module_ids"`
+	ListenPort    uint16   `json:"listen_port"`
+}
 
 // ValidateReplayProcessCompatibility 校验录制源进程选定报文能否安全重放到目标挂载进程 targetProc
 func ValidateReplayProcessCompatibility(
@@ -228,7 +250,7 @@ func ValidateReplayProcessCompatibility(
 	isAdmin bool,
 	session *models.RecordingSession,
 	selectedRecords []models.TrafficRecord,
-	sourceProc *models.Process,
+	sourceSnap *ProcessSnapshotItem, // 优先从 session.ProcessSnapshots 按 source_process_id 提取（兼容回退现存 sourceProc）
 	targetProc *models.Process,
 	targetAgent *models.Agent,
 	archProcModules map[uint64][]uint64, // key: ArchProcessID -> []ModuleID
@@ -241,6 +263,9 @@ func ValidateReplayProcessCompatibility(
 	if targetAgent.Scope == models.ScopePrivate && (targetAgent.OwnerID == nil || *targetAgent.OwnerID != callerID) && !isAdmin {
 		return ErrForbiddenPrivateAgent // 403 Forbidden
 	}
+	if sourceSnap == nil {
+		return ErrSourceProcessSnapshotNotFound // 400 Bad Request
+	}
 
 	// 2. 目标挂载进程必须具备有效监听端口 (> 0，纯客户端进程无法接收重放注入)
 	if targetProc.EffectiveListenPort <= 0 {
@@ -248,7 +273,7 @@ func ValidateReplayProcessCompatibility(
 	}
 
 	// 3. 原地同挂载实例 或 挂载同一标准架构进程蓝图 (ArchProcessID 相等) 天然 100% 同构兼容！
-	if sourceProc.ID == targetProc.ID || sourceProc.ArchProcessID == targetProc.ArchProcessID {
+	if sourceSnap.ProcessID == targetProc.ID || sourceSnap.ArchProcessID == targetProc.ArchProcessID {
 		return nil
 	}
 
@@ -266,7 +291,10 @@ func ValidateReplayProcessCompatibility(
 	}
 
 	if hasUnregisteredIface || len(requiredMods) == 0 {
-		sourceMods := toUint64Set(archProcModules[sourceProc.ArchProcessID])
+		sourceMods := toUint64Set(sourceSnap.ModuleIDs)
+		if len(sourceMods) == 0 {
+			sourceMods = toUint64Set(archProcModules[sourceSnap.ArchProcessID])
+		}
 		if len(sourceMods) == 0 || !isSubset(sourceMods, targetModSet) {
 			return ErrIncompatibleReplayTargetModule // 400 Bad Request
 		}
@@ -305,7 +333,9 @@ func ValidateReplayProcessCompatibility(
 
 #### 2. 物理部署视角 (`view=PHYSICAL`，100% 源自架构物理进程蓝图 SSOT、彻底去 Agent 化)
 > [!IMPORTANT]
-> **物理拓扑去 Agent 化与零机器依赖铁律（[`ADR-05`](../05-adr/05-hierarchical-topology-canvas-redesign.md) & [`ADR-09`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md)）**：`Agent` 仅作为宿主机上无状态的字节流采集探测器与 eBPF 探针载体，不是系统业务架构的构成元素。物理部署视图 **100% 直接由 `ArchProcessGroup -> ArchProcess -> Module` 架构物理进程蓝图推导生成**（即使尚未纳管任何 Agent 机器也能完整构建物理全景图！），**绝对不出现 `AGENT` 节点，且 `meta` 中严禁透出 `agent_id`**；若某 `ArchProcess` 已挂载于公共 `SHARED` Agent，后端自动结合 `Process.AdvertiseIP`（优先）与所属 `Agent.Endpoint` Hostname 计算完整 `EffectiveIP:EffectiveListenPort` 富化填入 `meta.endpoint`（未挂载至 `SHARED` Agent 时填入 `:<default_listen_port>` 或 `"client-only"`）：
+> **物理拓扑去 Agent 化与多环境可选端点叠加铁律（[`ADR-05`](../05-adr/05-hierarchical-topology-canvas-redesign.md) & [`ADR-09`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md)）**：`Agent` 仅作为环境宿主机上无状态的字节流采集探测器与 eBPF 探针载体，不是系统业务架构的构成元素。物理部署视图节点与连线骨架 **100% 直接由 `ArchProcessGroup -> ArchProcess -> Module` 架构物理进程蓝图推导生成**（即使尚未纳管任何 Agent 机器也能完整构建物理全景图！），**画布绝对不出现 `AGENT` 节点，且 `meta` 中严禁透出 `agent_id`**：
+> - **默认纯蓝图态（未指定 `env_agent_id`）**：`meta.endpoint` 确定性输出 `:<default_listen_port>`（纯客户端为 `"client-only"`），并附带 `meta.mounted_shared_env_count`（已挂载该蓝图的公共环境数），避免多套 `SHARED` 环境并存时随机选取某台机器 IP 引发歧义；
+> - **指定环境叠加态（传入可选查询参数 `env_agent_id`，调用方需对该 `SHARED` 或本人 `PRIVATE` 环境具备可见权，越权返 `403`）**：后端按该环境上的挂载实例富化填入 `EffectiveIP:EffectiveListenPort`（该环境未挂载时标记 `meta.env_mounted = false` 并回退显示 `:<default_listen_port>`），同时合并该环境挂载实例的 `extra_downstreams` 展示外部网络端点：
 
 ```text
 (画布根视口 Viewport)
@@ -428,7 +458,7 @@ type TopologyGraphDTO struct {
 
 ### 5.1 目的模块穿透定位 (`ResolveDestinationModule`)
 
-依据全局唯一供给假设（A-05），无论报文来自 `INGRESS` 还是 `EGRESS`，直接以请求头 `(ascServiceName, ascOperation)` 查表 `ProvideMap[serviceName + ":" + operation]`：
+依据服务级全局唯一供给契约（A-05，`traefik_module_services`），无论报文来自 `INGRESS` 还是 `EGRESS`，直接以请求头 `ascServiceName` 查表 `ProvideMap[serviceName]`：
 - **命中**：唯一定位到目标功能模块 `DstModule`（同时确定所属功能组与子系统）；
 - **未命中**：归属至虚拟异常节点 `VIRTUAL_UNREGISTERED_INTERFACE`（「未登记接口」）。
 
