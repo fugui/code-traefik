@@ -73,20 +73,22 @@ export const RecordingWorkbenchPage: React.FC = () => {
   }, [loadSessions]);
 
   // 加载进程与 Agent 基础元数据
-  useEffect(() => {
-    void (async () => {
-      try {
-        const [procRes, agentRes] = await Promise.all([
-          agentApi.listProcesses({ page_size: 100 }),
-          agentApi.listAgents({ page_size: 100 }),
-        ]);
-        setAllProcesses(procRes.items ?? []);
-        setAllAgents(agentRes.items ?? []);
-      } catch {
-        // 静默
-      }
-    })();
+  const loadMeta = useCallback(async () => {
+    try {
+      const [procRes, agentRes] = await Promise.all([
+        agentApi.listProcesses({ page_size: 100 }),
+        agentApi.listAgents({ page_size: 100 }),
+      ]);
+      setAllProcesses(procRes.items ?? []);
+      setAllAgents(agentRes.items ?? []);
+    } catch {
+      // 静默
+    }
   }, []);
+
+  useEffect(() => {
+    void loadMeta();
+  }, [loadMeta]);
 
   const handleStopSession = async (sessionId: string) => {
     setStopping(true);
@@ -155,7 +157,10 @@ export const RecordingWorkbenchPage: React.FC = () => {
           <button
             type="button"
             className="code-btn code-btn--primary"
-            onClick={() => setStartModalOpen(true)}
+            onClick={() => {
+              void loadMeta();
+              setStartModalOpen(true);
+            }}
             data-testid="btn-open-start-recording"
           >
             + 发起协同录制

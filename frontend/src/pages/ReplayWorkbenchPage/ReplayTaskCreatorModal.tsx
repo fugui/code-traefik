@@ -45,7 +45,7 @@ export const ReplayTaskCreatorModal: React.FC<ReplayTaskCreatorModalProps> = ({
     }
   }, [sessions, processes, defaultSessionId]);
 
-  // 当录制批次变更时，加载其 INGRESS 且可重放的流量记录
+  // 当录制批次或目标进程变更时，加载其 INGRESS 且可重放的流量记录
   useEffect(() => {
     if (!selectedSessionId || !open) return;
     void (async () => {
@@ -53,6 +53,7 @@ export const ReplayTaskCreatorModal: React.FC<ReplayTaskCreatorModalProps> = ({
       try {
         const res = await trafficApi.listTrafficRecords({
           session_id: selectedSessionId,
+          process_id: selectedProcessId || undefined,
           direction: 'INGRESS',
           is_replayable: true,
           page_size: 50,
@@ -67,7 +68,7 @@ export const ReplayTaskCreatorModal: React.FC<ReplayTaskCreatorModalProps> = ({
         setLoadingRecords(false);
       }
     })();
-  }, [selectedSessionId, open, toast]);
+  }, [selectedSessionId, selectedProcessId, open, toast]);
 
   const toggleRecord = (recId: string) => {
     setSelectedRecordIds((prev) => {

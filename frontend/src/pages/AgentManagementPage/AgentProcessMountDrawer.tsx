@@ -310,7 +310,7 @@ export const AgentProcessMountContent: React.FC<AgentProcessMountContentProps> =
       };
     });
 
-    const expectedRevision = agent.mounts_revision || 1;
+    const expectedRevision = agent.mounts_revision ?? 0;
     setSubmitting(true);
     try {
       const res = await agentApi.batchUpdateProcessMounts(agent.id, {
@@ -797,7 +797,7 @@ export const AgentProcessMountDrawer: React.FC<AgentProcessMountDrawerProps> = (
       open={open}
       onClose={onClose}
       title={`批量挂载架构进程 - [${agent.name}]`}
-      subtitle={`作用域: ${agent.scope} | 当前版本: v${agent.mounts_revision || 1} | 端点: ${agent.endpoint}`}
+      subtitle={`作用域: ${agent.scope} | 当前版本: v${agent.mounts_revision ?? 0} | 端点: ${agent.endpoint}`}
       width="xl"
     >
       <AgentProcessMountContent

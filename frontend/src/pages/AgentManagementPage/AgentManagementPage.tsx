@@ -490,7 +490,7 @@ export const AgentManagementPage: React.FC = () => {
                       style={{ fontSize: '0.75rem', fontWeight: 600 }}
                       data-testid="mounts-revision-badge"
                     >
-                      v{selectedAgent.mounts_revision || 1}
+                      v{selectedAgent.mounts_revision ?? 0}
                     </span>
                     {selectedAgent.fallback_agent_id && (
                       <span

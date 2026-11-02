@@ -1,0 +1,110 @@
+[
+  {
+    "step": "Login",
+    "status": "PASS",
+    "details": "Logged in successfully as admin@code-shield.com, URL: http://192.168.56.18:8091/record",
+    "time": "2026-11-02T12:50:54.174Z"
+  },
+  {
+    "step": "Theme Toggle",
+    "status": "PASS",
+    "details": "Verified Dark and Light theme switching",
+    "time": "2026-11-02T12:50:55.308Z"
+  },
+  {
+    "step": "Create Subsystem",
+    "status": "PASS",
+    "details": "Subsystem ECOMMERCE created",
+    "time": "2026-11-02T12:51:00.309Z"
+  },
+  {
+    "step": "Create Functional Group",
+    "status": "PASS",
+    "details": "Functional Group TRADE_CORE created",
+    "time": "2026-11-02T12:51:02.923Z"
+  },
+  {
+    "step": "Create Module",
+    "status": "PASS",
+    "details": "Module ORDER_CORE created",
+    "time": "2026-11-02T12:51:05.535Z"
+  },
+  {
+    "step": "Create Service",
+    "status": "PASS",
+    "details": "Service demo.order-OrderService created in ORDER_CORE",
+    "time": "2026-11-02T12:51:10.257Z"
+  },
+  {
+    "step": "Create ArchProcesses",
+    "status": "PASS",
+    "details": "sut-order (:9001), backend-account (:9002), backend-inventory (:9003) created",
+    "time": "2026-11-02T12:51:22.513Z"
+  },
+  {
+    "step": "Upload Proto Schema",
+    "status": "PASS",
+    "details": "demo.pb uploaded & activated successfully",
+    "time": "2026-11-02T12:51:29.216Z"
+  },
+  {
+    "step": "Register Agent",
+    "status": "PASS",
+    "details": "Agent demo-local-agent registered and verified ONLINE with eBPF",
+    "time": "2026-11-02T12:51:35.284Z"
+  },
+  {
+    "step": "Auto Match Processes",
+    "status": "PASS",
+    "details": "Auto-scanned host processes and matched arch blueprints",
+    "time": "2026-11-02T12:51:39.784Z"
+  },
+  {
+    "step": "Mount Processes",
+    "status": "PASS",
+    "details": "3 processes mounted and armed on Agent",
+    "time": "2026-11-02T12:51:43.009Z"
+  },
+  {
+    "step": "Start Recording",
+    "status": "PASS",
+    "details": "Recording session E2E-BROWSER-TEST started (RECORDING)",
+    "time": "2026-11-02T12:51:52.022Z"
+  },
+  {
+    "step": "Trigger Demo Traffic",
+    "status": "PASS",
+    "details": "Executed all 4 CROS RPC traffic scenarios",
+    "time": "2026-11-02T12:52:01.617Z"
+  },
+  {
+    "step": "Stop Recording",
+    "status": "PASS",
+    "details": "Recording session stopped, lease released",
+    "time": "2026-11-02T12:52:09.299Z"
+  },
+  {
+    "step": "Packet Anatomy Dark",
+    "status": "PASS",
+    "details": "4-stage packet dissection drawer verified in Dark mode",
+    "time": "2026-11-02T12:52:14.241Z"
+  },
+  {
+    "step": "Packet Anatomy Light",
+    "status": "PASS",
+    "details": "4-stage packet dissection drawer verified in Light mode",
+    "time": "2026-11-02T12:52:15.245Z"
+  },
+  {
+    "step": "Create Replay Task",
+    "status": "PASS",
+    "details": "Replay task initiated and completed",
+    "time": "2026-11-02T12:52:27.237Z"
+  },
+  {
+    "step": "Replay Diff Audit",
+    "status": "PASS",
+    "details": "Diff report verified (baseline vs replay in Dark & Light modes)",
+    "time": "2026-11-02T12:52:31.126Z"
+  }
+]
