@@ -3,7 +3,7 @@
 - **文档编号**：`11-m10-arch-process-blueprint-and-premount-workflow.md`
 - **文档版本**：v1.1.0
 - **更新日期**：2026-11-02
-- **状态**：⏳ 待实施 (Pending Implementation)
+- **状态**：✅ 已完成 (Completed)
 - **归属阶段**：阶段三/四：M10 TDD 任务拆解与验收标准 (`04-tasks`)
 - **覆盖特性与场景**：`F-02` (架构物理进程蓝图与多环境 Agent 1:1 挂载覆盖)、`F-04` (零 Agent 依赖的静态物理架构拓扑与可选环境端点叠加)、`F-08` (多进程默认自动预挂、PID 定位与七态就绪体检)、`F-09` (按需入站读写钩子 + 三态 `EgressProxy` 停录不断连与重放零外泄引擎)、`F-10` (中途切流严密头校验重同步)、`F-11` (有序闸门 `0ms` 零重启协同录制与快照固化)、`F-12` (重放直连 `409` 硬门禁与卸载解耦同构重放)、`F-15.3` (`/architecture` `[逻辑架构 | 物理进程]` 双视图树)、`F-15.4` (`/record` 七态就绪联动录制抽屉)、`F-15.5` (`/agents` 同构分组就绪树、`FallbackAgentID` 与 1:1 批量扫描挂载抽屉)、`SC-02`、`SC-05`、`SC-07`、`SC-08`
 - **设计参考基线**：[`09-arch-process-ssot-and-ebpf-premount-standby-adr.md`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md) (ADR-09 v1.1.0)、[`01-system-architecture.md` §3~§5](../02-design/01-system-architecture.md)、[`02-data-plane-and-cros-rpc-engine.md` §1~§3](../02-design/02-data-plane-and-cros-rpc-engine.md)、[`03-architecture-elements-and-topology.md` §2~§5](../02-design/03-architecture-elements-and-topology.md)、[`04-control-plane-and-web-console.md` §1 & §4~§5](../02-design/04-control-plane-and-web-console.md)、[`05-database-schema.md` §1~§5](../02-design/05-database-schema.md)、[`01-http-api-contract.md` §2.2, §2.4~§2.7 & §3](../03-api/01-http-api-contract.md)

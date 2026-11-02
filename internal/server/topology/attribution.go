@@ -121,31 +121,25 @@ func OfflineBatchAttribution(ctx context.Context, db *gorm.DB, sessionID uint64)
 		}
 	}
 
-	// 3. 加载进程承载模块映射
-	var procMods []models.ProcessModule
-	if err := db.WithContext(ctx).Find(&procMods).Error; err != nil {
+	// 3. 加载进程承载模块映射 (通过 ArchProcessID 映射)
+	var allProcs []models.Process
+	if err := db.WithContext(ctx).Find(&allProcs).Error; err != nil {
 		return err
 	}
-	processModules := make(map[uint64][]uint64)
-	for _, pm := range procMods {
-		processModules[pm.ProcessID] = append(processModules[pm.ProcessID], pm.ModuleID)
-	}
-
-	// 补充通过 module.process_id 关联的承载模块 (双保险)
 	var allModules []models.Module
-	if err := db.WithContext(ctx).Where("process_id IS NOT NULL AND process_id > 0").Find(&allModules).Error; err == nil {
-		for _, m := range allModules {
-			pid := *m.ProcessID
-			already := false
-			for _, mid := range processModules[pid] {
-				if mid == m.ID {
-					already = true
-					break
-				}
-			}
-			if !already {
-				processModules[pid] = append(processModules[pid], m.ID)
-			}
+	if err := db.WithContext(ctx).Where("arch_process_id IS NOT NULL").Find(&allModules).Error; err != nil {
+		return err
+	}
+	archModules := make(map[uint64][]uint64)
+	for _, m := range allModules {
+		if m.ArchProcessID != nil {
+			archModules[*m.ArchProcessID] = append(archModules[*m.ArchProcessID], m.ID)
+		}
+	}
+	processModules := make(map[uint64][]uint64)
+	for _, p := range allProcs {
+		if mods, ok := archModules[p.ArchProcessID]; ok {
+			processModules[p.ID] = mods
 		}
 	}
 

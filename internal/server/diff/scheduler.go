@@ -102,7 +102,7 @@ func (s *ReplayScheduler) CreateAndExecuteTask(
 
 	// 2. 加载目标进程与目标 Agent
 	var targetProc models.Process
-	if err := s.db.WithContext(ctx).Preload("Agent").Where("id = ?", req.TargetProcessID).First(&targetProc).Error; err != nil {
+	if err := s.db.WithContext(ctx).Preload("Agent").Preload("ArchProcess").Where("id = ?", req.TargetProcessID).First(&targetProc).Error; err != nil {
 		return nil, errors.New("404 Not Found: 目标进程不存在")
 	}
 	if targetProc.Agent == nil {
@@ -112,10 +112,34 @@ func (s *ReplayScheduler) CreateAndExecuteTask(
 		return nil, ErrForbiddenPrivateAgent
 	}
 
-	// 3. 加载源进程
+	// 3. 加载源进程（优先从 session.ProcessSnapshots 获取，解耦源进程被卸载后依然可重放）
 	var sourceProc models.Process
-	if err := s.db.WithContext(ctx).Where("id = ?", req.SourceProcessID).First(&sourceProc).Error; err != nil {
-		return nil, errors.New("404 Not Found: 源进程不存在")
+	_ = s.db.WithContext(ctx).Preload("ArchProcess").Where("id = ?", req.SourceProcessID).First(&sourceProc).Error
+
+	var sourceSnap *models.ProcessSnapshotItem
+	if len(session.ProcessSnapshots) > 0 {
+		var snapshots []models.ProcessSnapshotItem
+		if err := json.Unmarshal(session.ProcessSnapshots, &snapshots); err == nil {
+			for i := range snapshots {
+				if snapshots[i].ProcessID == req.SourceProcessID {
+					sourceSnap = &snapshots[i]
+					break
+				}
+			}
+		}
+	}
+	if sourceSnap == nil && sourceProc.ID > 0 {
+		sourceProc.FillFromArchProcess()
+		sourceSnap = &models.ProcessSnapshotItem{
+			ProcessID:     sourceProc.ID,
+			ArchProcessID: sourceProc.ArchProcessID,
+			Code:          sourceProc.Code,
+			Name:          sourceProc.Name,
+			ListenPort:    sourceProc.EffectiveListenPort,
+		}
+	}
+	if sourceSnap == nil {
+		return nil, errors.New("404 Not Found: 源进程不存在且未在录制快照中固化")
 	}
 
 	// 4. 加载选定流量记录并校验可重放性
@@ -134,7 +158,7 @@ func (s *ReplayScheduler) CreateAndExecuteTask(
 		}
 	}
 
-	// 5. 跨 Agent 同构进程模块兼容性校验 (F-12.1)
+	// 5. 跨 Agent 同构进程模块兼容性校验 (F-12.1, ADR-09)
 	var provideServices []models.ModuleService
 	_ = s.db.WithContext(ctx).Find(&provideServices).Error
 	provideMap := make(map[string]uint64)
@@ -143,19 +167,17 @@ func (s *ReplayScheduler) CreateAndExecuteTask(
 		provideMap[k] = svc.ModuleID
 	}
 
-	// 加载两进程绑定的全部 ModuleIDs
-	var srcProcMods, tgtProcMods []models.ProcessModule
-	_ = s.db.WithContext(ctx).Where("process_id = ?", sourceProc.ID).Find(&srcProcMods).Error
-	for _, pm := range srcProcMods {
-		sourceProc.ModuleIDs = append(sourceProc.ModuleIDs, pm.ModuleID)
-	}
-	_ = s.db.WithContext(ctx).Where("process_id = ?", targetProc.ID).Find(&tgtProcMods).Error
-	for _, pm := range tgtProcMods {
-		targetProc.ModuleIDs = append(targetProc.ModuleIDs, pm.ModuleID)
+	archProcModules := make(map[uint64][]uint64)
+	var allMods []models.Module
+	_ = s.db.WithContext(ctx).Where("arch_process_id IS NOT NULL").Find(&allMods).Error
+	for _, m := range allMods {
+		if m.ArchProcessID != nil {
+			archProcModules[*m.ArchProcessID] = append(archProcModules[*m.ArchProcessID], m.ID)
+		}
 	}
 
 	if err := ValidateReplayProcessCompatibility(
-		userID, isAdmin, &session, records, &sourceProc, &targetProc, targetProc.Agent, provideMap,
+		userID, isAdmin, &session, records, sourceSnap, &targetProc, targetProc.Agent, archProcModules, provideMap,
 	); err != nil {
 		return nil, err
 	}
@@ -170,13 +192,29 @@ func (s *ReplayScheduler) CreateAndExecuteTask(
 		timeoutMs = 30000
 	}
 
+	srcPID := req.SourceProcessID
+	tgtPID := req.TargetProcessID
+	var srcPIDPtr *uint64
+	if srcPID > 0 {
+		srcPIDPtr = &srcPID
+	}
+	var tgtPIDPtr *uint64
+	if tgtPID > 0 {
+		tgtPIDPtr = &tgtPID
+	}
+	archPID := targetProc.ArchProcessID
+	if archPID == 0 && sourceSnap != nil {
+		archPID = sourceSnap.ArchProcessID
+	}
+
 	task := &models.ReplayTask{
 		TaskNo:            taskNo,
 		Name:              req.Name,
 		OwnerID:           userID,
 		SessionID:         req.SessionID,
-		SourceProcessID:   req.SourceProcessID,
-		TargetProcessID:   req.TargetProcessID,
+		ArchProcessID:     archPID,
+		SourceProcessID:   srcPIDPtr,
+		TargetProcessID:   tgtPIDPtr,
 		AgentID:           targetProc.AgentID,
 		SelectedRecordIDs: datatypes.JSON(selBytes),
 		ExtraIgnorePaths:  datatypes.JSON(ignoreBytes),
@@ -253,9 +291,10 @@ func (s *ReplayScheduler) executeReplayAsync(
 		}
 	}
 
+	targetProc.FillFromArchProcess()
 	spec := agentproto.ProcessMonitorSpec{
 		ProcessID:  targetProc.ID,
-		ListenPort: uint16(targetProc.ListenPort),
+		ListenPort: uint16(targetProc.EffectiveListenPort),
 		CmdPattern: targetProc.CmdPattern,
 	}
 

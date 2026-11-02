@@ -30,7 +30,12 @@ func InitDB() error {
 func SetupWithDB(db *gorm.DB) error {
 	DB = db
 
-	// 1. 自动迁移标准实体表
+	// 0. 清库直接重建检测：若存在旧版 traefik_process_modules 或旧版进程/模块列，执行幂等直接级联清理重建
+	if err := cleanLegacyTablesIfNeeded(DB); err != nil {
+		return fmt.Errorf("检测并清理旧版表结构失败: %w", err)
+	}
+
+	// 1. 自动迁移标准实体表（15 张核心 traefik_* 表 + 平台公共审计/用户表）
 	if err := DB.AutoMigrate(
 		&Department{},
 		&User{},
@@ -38,12 +43,13 @@ func SetupWithDB(db *gorm.DB) error {
 		&TraefikSetting{},
 		&Subsystem{},
 		&FunctionalGroup{},
+		&ArchProcessGroup{},
+		&ArchProcess{},
 		&Module{},
 		&ModuleService{},
 		&ModuleDependency{},
 		&Agent{},
 		&Process{},
-		&ProcessModule{},
 		&ProtoSchema{},
 		&ProtoOperation{},
 		&RecordingSession{},
@@ -64,17 +70,39 @@ func SetupWithDB(db *gorm.DB) error {
 	}
 
 	// 3. 显式创建关键业务部分唯一索引与端口检查约束
-	// 3.1 兼容纯客户端进程 (listen_port = 0 无监听端口)：升级检查约束与创建部分唯一索引 (WHERE listen_port > 0)
 	procConstraintSQL := `
 DO $$
 BEGIN
+    -- arch_processes 默认端口检查约束
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_traefik_arch_proc_port') THEN
+        ALTER TABLE traefik_arch_processes DROP CONSTRAINT chk_traefik_arch_proc_port;
+    END IF;
+    ALTER TABLE traefik_arch_processes ADD CONSTRAINT chk_traefik_arch_proc_port CHECK (default_listen_port >= 0 AND default_listen_port <= 65535);
+
+    -- processes 物化有效端口检查约束
     IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_traefik_proc_port') THEN
         ALTER TABLE traefik_processes DROP CONSTRAINT chk_traefik_proc_port;
     END IF;
-    ALTER TABLE traefik_processes ADD CONSTRAINT chk_traefik_proc_port CHECK (listen_port >= 0 AND listen_port <= 65535);
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_traefik_proc_eff_port') THEN
+        ALTER TABLE traefik_processes DROP CONSTRAINT chk_traefik_proc_eff_port;
+    END IF;
+    ALTER TABLE traefik_processes ADD CONSTRAINT chk_traefik_proc_eff_port CHECK (effective_listen_port >= 0 AND effective_listen_port <= 65535);
 
-    -- 移除旧的全量唯一索引（若存在且未带 WHERE listen_port > 0）
+    -- processes 覆盖端口检查约束
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_traefik_proc_override_port') THEN
+        ALTER TABLE traefik_processes DROP CONSTRAINT chk_traefik_proc_override_port;
+    END IF;
+    ALTER TABLE traefik_processes ADD CONSTRAINT chk_traefik_proc_override_port CHECK (override_listen_port IS NULL OR (override_listen_port >= 0 AND override_listen_port <= 65535));
+
+    -- processes 预挂期望状态检查约束
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_traefik_proc_desired') THEN
+        ALTER TABLE traefik_processes DROP CONSTRAINT chk_traefik_proc_desired;
+    END IF;
+    ALTER TABLE traefik_processes ADD CONSTRAINT chk_traefik_proc_desired CHECK (probe_desired_state IN ('ARMED','DISARMED'));
+
+    -- 移除旧索引（若存在）
     DROP INDEX IF EXISTS uk_traefik_proc_agent_port;
+    DROP INDEX IF EXISTS uk_traefik_proc_agent_name;
 END $$;`
 	if err := DB.Exec(procConstraintSQL).Error; err != nil {
 		return fmt.Errorf("更新进程端口检查约束失败: %w", err)
@@ -83,7 +111,8 @@ END $$;`
 	partialIndexes := []string{
 		`CREATE UNIQUE INDEX IF NOT EXISTS uk_traefik_proto_active_name ON traefik_proto_schemas (name) WHERE is_active = true;`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS uk_traefik_active_proto_op ON traefik_proto_operations (service_name, operation) WHERE is_active = true;`,
-		`CREATE UNIQUE INDEX IF NOT EXISTS uk_traefik_proc_agent_port ON traefik_processes (agent_id, listen_port) WHERE listen_port > 0;`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uk_traefik_proc_agent_port ON traefik_processes (agent_id, effective_listen_port) WHERE effective_listen_port > 0;`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uk_traefik_proc_agent_arch ON traefik_processes (agent_id, arch_process_id);`,
 	}
 	for _, idxSQL := range partialIndexes {
 		if err := DB.Exec(idxSQL).Error; err != nil {
@@ -119,6 +148,12 @@ BEGIN
         FOREIGN KEY (group_id) REFERENCES traefik_functional_groups(id)
         ON UPDATE CASCADE ON DELETE RESTRICT;
     END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_traefik_modules_arch_proc') THEN
+        ALTER TABLE traefik_modules
+        ADD CONSTRAINT fk_traefik_modules_arch_proc
+        FOREIGN KEY (arch_process_id) REFERENCES traefik_arch_processes(id)
+        ON UPDATE CASCADE ON DELETE SET NULL;
+    END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_traefik_mod_svc_module') THEN
         ALTER TABLE traefik_module_services
         ADD CONSTRAINT fk_traefik_mod_svc_module
@@ -143,23 +178,29 @@ BEGIN
         FOREIGN KEY (provider_module_id) REFERENCES traefik_modules(id)
         ON UPDATE CASCADE ON DELETE SET NULL;
     END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_traefik_arch_proc_group') THEN
+        ALTER TABLE traefik_arch_processes
+        ADD CONSTRAINT fk_traefik_arch_proc_group
+        FOREIGN KEY (group_id) REFERENCES traefik_arch_process_groups(id)
+        ON UPDATE CASCADE ON DELETE RESTRICT;
+    END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_traefik_proc_agent') THEN
         ALTER TABLE traefik_processes
         ADD CONSTRAINT fk_traefik_proc_agent
         FOREIGN KEY (agent_id) REFERENCES traefik_agents(id)
         ON UPDATE CASCADE ON DELETE RESTRICT;
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_traefik_proc_mod_proc') THEN
-        ALTER TABLE traefik_process_modules
-        ADD CONSTRAINT fk_traefik_proc_mod_proc
-        FOREIGN KEY (process_id) REFERENCES traefik_processes(id)
-        ON UPDATE CASCADE ON DELETE CASCADE;
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_traefik_proc_mod_module') THEN
-        ALTER TABLE traefik_process_modules
-        ADD CONSTRAINT fk_traefik_proc_mod_module
-        FOREIGN KEY (module_id) REFERENCES traefik_modules(id)
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_traefik_proc_arch') THEN
+        ALTER TABLE traefik_processes
+        ADD CONSTRAINT fk_traefik_proc_arch
+        FOREIGN KEY (arch_process_id) REFERENCES traefik_arch_processes(id)
         ON UPDATE CASCADE ON DELETE RESTRICT;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_traefik_agents_fallback') THEN
+        ALTER TABLE traefik_agents
+        ADD CONSTRAINT fk_traefik_agents_fallback
+        FOREIGN KEY (fallback_agent_id) REFERENCES traefik_agents(id)
+        ON UPDATE CASCADE ON DELETE SET NULL;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_traefik_proto_op_schema') THEN
         ALTER TABLE traefik_proto_operations
@@ -172,6 +213,24 @@ BEGIN
         ADD CONSTRAINT fk_traefik_replay_task_session
         FOREIGN KEY (session_id) REFERENCES traefik_recording_sessions(id)
         ON UPDATE CASCADE ON DELETE RESTRICT;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_traefik_replay_task_arch_proc') THEN
+        ALTER TABLE traefik_replay_tasks
+        ADD CONSTRAINT fk_traefik_replay_task_arch_proc
+        FOREIGN KEY (arch_process_id) REFERENCES traefik_arch_processes(id)
+        ON UPDATE CASCADE ON DELETE RESTRICT;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_traefik_replay_task_src_proc') THEN
+        ALTER TABLE traefik_replay_tasks
+        ADD CONSTRAINT fk_traefik_replay_task_src_proc
+        FOREIGN KEY (source_process_id) REFERENCES traefik_processes(id)
+        ON UPDATE CASCADE ON DELETE SET NULL;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_traefik_replay_task_tgt_proc') THEN
+        ALTER TABLE traefik_replay_tasks
+        ADD CONSTRAINT fk_traefik_replay_task_tgt_proc
+        FOREIGN KEY (target_process_id) REFERENCES traefik_processes(id)
+        ON UPDATE CASCADE ON DELETE SET NULL;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_traefik_replay_task_item') THEN
         ALTER TABLE traefik_replay_items
@@ -195,6 +254,46 @@ END $$;
 		log.Printf("[%s] 提示: 初始化模块配置参数种子未完成: %v", config.ServiceName, err)
 	}
 
+	return nil
+}
+
+func cleanLegacyTablesIfNeeded(db *gorm.DB) error {
+	var hasLegacyTable bool
+	var hasMissingArchCol bool
+	var hasLegacyModProcessCol bool
+
+	// Check traefik_process_modules
+	_ = db.Raw(`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'traefik_process_modules')`).Scan(&hasLegacyTable).Error
+
+	// Check traefik_processes lacking arch_process_id
+	var procTableExists bool
+	_ = db.Raw(`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'traefik_processes')`).Scan(&procTableExists).Error
+	if procTableExists {
+		var colExists bool
+		_ = db.Raw(`SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'traefik_processes' AND column_name = 'arch_process_id')`).Scan(&colExists).Error
+		if !colExists {
+			hasMissingArchCol = true
+		}
+	}
+
+	// Check traefik_modules.process_id
+	_ = db.Raw(`SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'traefik_modules' AND column_name = 'process_id')`).Scan(&hasLegacyModProcessCol).Error
+
+	if hasLegacyTable || hasMissingArchCol || hasLegacyModProcessCol {
+		log.Println("[models] 检测到旧版表结构，执行清库直接重建级联清理...")
+		cleanSQL := `
+			DROP TABLE IF EXISTS traefik_replay_items CASCADE;
+			DROP TABLE IF EXISTS traefik_replay_tasks CASCADE;
+			DROP TABLE IF EXISTS traefik_traffic_records CASCADE;
+			DROP TABLE IF EXISTS traefik_recording_sessions CASCADE;
+			DROP TABLE IF EXISTS traefik_process_modules CASCADE;
+			DROP TABLE IF EXISTS traefik_processes CASCADE;
+			ALTER TABLE IF EXISTS traefik_modules DROP COLUMN IF EXISTS process_id CASCADE;
+		`
+		if err := db.Exec(cleanSQL).Error; err != nil {
+			return fmt.Errorf("清理旧表结构失败: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -227,6 +326,18 @@ func seedDefaultSettings(db *gorm.DB) error {
 				SettingKey:  "default_max_frame_bytes",
 				SettingVal:  "4194304",
 				Description: "单帧报文截断排空阈值（字节，默认 4MB）",
+				UpdatedBy:   "system",
+			},
+			{
+				SettingKey:  "default_probe_desired_state_shared",
+				SettingVal:  "ARMED",
+				Description: "公共环境 Agent 挂载进程默认预挂探针期望状态 (ARMED/DISARMED)",
+				UpdatedBy:   "system",
+			},
+			{
+				SettingKey:  "default_probe_desired_state_private",
+				SettingVal:  "ARMED",
+				Description: "个人环境 Agent 挂载进程默认预挂探针期望状态 (ARMED/DISARMED)",
 				UpdatedBy:   "system",
 			},
 		}

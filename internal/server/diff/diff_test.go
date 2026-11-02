@@ -2,8 +2,8 @@ package diff
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"errors"
-	"fmt"
 	"testing"
 
 	"code-common/backend/testdb"
@@ -33,16 +33,28 @@ func setupIsolatedDiffDB(t *testing.T) *gorm.DB {
 func TestValidateReplayProcessCompatibility(t *testing.T) {
 	db := setupIsolatedDiffDB(t)
 
-	// 1. 架构元素
+	// 1. 架构元素与标准进程蓝图
+	pgrp := models.ArchProcessGroup{Code: "PGRP_REP", Name: "重放组"}
+	db.Create(&pgrp)
+	archOrder := models.ArchProcess{GroupID: pgrp.ID, Code: "ARCH_ORDER", Name: "订单标准进程", DefaultListenPort: 18001}
+	archStock := models.ArchProcess{GroupID: pgrp.ID, Code: "ARCH_STOCK", Name: "库存标准进程", DefaultListenPort: 18002}
+	db.Create(&archOrder)
+	db.Create(&archStock)
+
 	sub := models.Subsystem{Code: "SUB_M4", Name: "重放子系统", CreatedBy: 1}
 	db.Create(&sub)
 	grp := models.FunctionalGroup{SubsystemID: sub.ID, Code: "GRP_M4", Name: "重放功能组", Level: 1, CreatedBy: 1}
 	db.Create(&grp)
 
-	modOrder := models.Module{SubsystemID: sub.ID, GroupID: grp.ID, Code: "MOD_ORDER", Name: "订单模块", CreatedBy: 1}
-	modStock := models.Module{SubsystemID: sub.ID, GroupID: grp.ID, Code: "MOD_STOCK", Name: "库存模块", CreatedBy: 1}
+	modOrder := models.Module{SubsystemID: sub.ID, GroupID: grp.ID, ArchProcessID: &archOrder.ID, Code: "MOD_ORDER", Name: "订单模块", CreatedBy: 1}
+	modStock := models.Module{SubsystemID: sub.ID, GroupID: grp.ID, ArchProcessID: &archStock.ID, Code: "MOD_STOCK", Name: "库存模块", CreatedBy: 1}
 	db.Create(&modOrder)
 	db.Create(&modStock)
+
+	archProcModules := map[uint64][]uint64{
+		archOrder.ID: {modOrder.ID},
+		archStock.ID: {modStock.ID},
+	}
 
 	// 提供接口
 	provideMap := map[string]uint64{
@@ -62,19 +74,28 @@ func TestValidateReplayProcessCompatibility(t *testing.T) {
 	db.Create(&agtShared)
 
 	// 进程定义
-	// procSrc: 承载 modOrder
-	procSrc := models.Process{AgentID: agtShared.ID, Agent: &agtShared, Name: "proc-src-order", ListenPort: 18001, CreatedBy: 1, ModuleIDs: []uint64{modOrder.ID}}
-	// procStockOnlyB: 用户 B 的 Agent 上的异构进程，仅承载 modStock
-	procStockOnlyB := models.Process{AgentID: agtPrivB.ID, Agent: &agtPrivB, Name: "proc-stock-b", ListenPort: 18002, CreatedBy: userB, ModuleIDs: []uint64{modStock.ID}}
-	// procOrderB: 用户 B 的 Agent 上的同构进程，完整承载 modOrder
-	procOrderB := models.Process{AgentID: agtPrivB.ID, Agent: &agtPrivB, Name: "proc-order-b", ListenPort: 18003, CreatedBy: userB, ModuleIDs: []uint64{modOrder.ID}}
-	// procOrderShared: 公共 Agent 上的同构进程，完整承载 modOrder
-	procOrderShared := models.Process{AgentID: agtShared.ID, Agent: &agtShared, Name: "proc-order-shared", ListenPort: 18004, CreatedBy: 1, ModuleIDs: []uint64{modOrder.ID}}
+	// procSrc: 挂载 archOrder
+	procSrc := models.Process{AgentID: agtShared.ID, Agent: &agtShared, ArchProcessID: archOrder.ID, EffectiveListenPort: 18001, CreatedBy: 1}
+	// procStockOnlyB: 用户 B 的 Agent 上的异构进程，仅挂载 archStock
+	procStockOnlyB := models.Process{AgentID: agtPrivB.ID, Agent: &agtPrivB, ArchProcessID: archStock.ID, EffectiveListenPort: 18002, CreatedBy: userB}
+	// procOrderB: 用户 B 的 Agent 上的同构进程，挂载 archOrder
+	procOrderB := models.Process{AgentID: agtPrivB.ID, Agent: &agtPrivB, ArchProcessID: archOrder.ID, EffectiveListenPort: 18003, CreatedBy: userB}
+	// procOrderShared: 公共 Agent 上的同构进程，挂载 archOrder
+	procOrderShared := models.Process{AgentID: agtShared.ID, Agent: &agtShared, ArchProcessID: archOrder.ID, EffectiveListenPort: 18004, CreatedBy: 1}
 
 	db.Create(&procSrc)
 	db.Create(&procStockOnlyB)
 	db.Create(&procOrderB)
 	db.Create(&procOrderShared)
+
+	sourceSnap := &models.ProcessSnapshotItem{
+		ProcessID:     procSrc.ID,
+		ArchProcessID: archOrder.ID,
+		Code:          "ARCH_ORDER",
+		Name:          "订单标准进程",
+		ListenPort:    18001,
+	}
+	snapsBytes, _ := json.Marshal([]models.ProcessSnapshotItem{*sourceSnap})
 
 	// 会话素材
 	sessPrivA := models.RecordingSession{
@@ -83,7 +104,7 @@ func TestValidateReplayProcessCompatibility(t *testing.T) {
 		Scope:            models.ScopePrivate,
 		OwnerID:          userA,
 		Status:           models.SessionStatusCompleted,
-		TargetProcessIDs: datatypes.JSON([]byte(fmt.Sprintf("[%d]", procSrc.ID))),
+		ProcessSnapshots: datatypes.JSON(snapsBytes),
 		CreatedBy:        userA,
 	}
 	sessShared := models.RecordingSession{
@@ -92,7 +113,7 @@ func TestValidateReplayProcessCompatibility(t *testing.T) {
 		Scope:            models.ScopeShared,
 		OwnerID:          1,
 		Status:           models.SessionStatusCompleted,
-		TargetProcessIDs: datatypes.JSON([]byte(fmt.Sprintf("[%d]", procSrc.ID))),
+		ProcessSnapshots: datatypes.JSON(snapsBytes),
 		CreatedBy:        1,
 	}
 	db.Create(&sessPrivA)
@@ -109,7 +130,7 @@ func TestValidateReplayProcessCompatibility(t *testing.T) {
 
 	// 1. 用户 B 尝试选用用户 A 的 PRIVATE 录制素材 -> 403 Forbidden
 	err := ValidateReplayProcessCompatibility(
-		userB, false, &sessPrivA, selectedRecords, &procSrc, &procOrderB, &agtPrivB, provideMap,
+		userB, false, &sessPrivA, selectedRecords, sourceSnap, &procOrderB, &agtPrivB, archProcModules, provideMap,
 	)
 	if !errors.Is(err, ErrForbiddenPrivateSession) {
 		t.Errorf("预期拦截私有会话返回 ErrForbiddenPrivateSession，实际: %v", err)
@@ -117,7 +138,7 @@ func TestValidateReplayProcessCompatibility(t *testing.T) {
 
 	// 1.2 用户 B 尝试投递至用户 A 的 PRIVATE Agent -> 403 Forbidden
 	err = ValidateReplayProcessCompatibility(
-		userB, false, &sessShared, selectedRecords, &procSrc, &procOrderB, &agtPrivA, provideMap,
+		userB, false, &sessShared, selectedRecords, sourceSnap, &procOrderB, &agtPrivA, archProcModules, provideMap,
 	)
 	if !errors.Is(err, ErrForbiddenPrivateAgent) {
 		t.Errorf("预期拦截私有 Agent 返回 ErrForbiddenPrivateAgent，实际: %v", err)
@@ -125,7 +146,7 @@ func TestValidateReplayProcessCompatibility(t *testing.T) {
 
 	// 2. 用户 B 选用公共 SHARED 素材投递至本人 PRIVATE Agent 上仅承载 Mod_Stock 的异构进程 -> 400 Bad Request
 	err = ValidateReplayProcessCompatibility(
-		userB, false, &sessShared, selectedRecords, &procSrc, &procStockOnlyB, &agtPrivB, provideMap,
+		userB, false, &sessShared, selectedRecords, sourceSnap, &procStockOnlyB, &agtPrivB, archProcModules, provideMap,
 	)
 	if !errors.Is(err, ErrIncompatibleReplayTargetModule) {
 		t.Errorf("预期异构目标进程拦截返回 ErrIncompatibleReplayTargetModule，实际: %v", err)
@@ -133,7 +154,7 @@ func TestValidateReplayProcessCompatibility(t *testing.T) {
 
 	// 3. 投递至本人 PRIVATE Agent 上承载 Mod_Order 的同构进程 -> 校验通过 (nil)
 	err = ValidateReplayProcessCompatibility(
-		userB, false, &sessShared, selectedRecords, &procSrc, &procOrderB, &agtPrivB, provideMap,
+		userB, false, &sessShared, selectedRecords, sourceSnap, &procOrderB, &agtPrivB, archProcModules, provideMap,
 	)
 	if err != nil {
 		t.Errorf("预期投递至同构私有进程成功，实际失败: %v", err)
@@ -141,10 +162,102 @@ func TestValidateReplayProcessCompatibility(t *testing.T) {
 
 	// 3.2 投递至空闲公共 SHARED Agent 上承载 Mod_Order 的同构进程 -> 校验通过 (nil)
 	err = ValidateReplayProcessCompatibility(
-		userB, false, &sessShared, selectedRecords, &procSrc, &procOrderShared, &agtShared, provideMap,
+		userB, false, &sessShared, selectedRecords, sourceSnap, &procOrderShared, &agtShared, archProcModules, provideMap,
 	)
 	if err != nil {
 		t.Errorf("预期投递至同构公共进程成功，实际失败: %v", err)
+	}
+}
+
+// TestValidateReplayProcessCompatibility_AfterProcessUnmount 验证源进程卸载后依然可通过 ProcessSnapshots 快照解耦同构重放 (F-12.2)
+func TestValidateReplayProcessCompatibility_AfterProcessUnmount(t *testing.T) {
+	db := setupIsolatedDiffDB(t)
+
+	// 1. 构造架构进程蓝图与模块
+	pgrp := models.ArchProcessGroup{Code: "PGRP_UNM", Name: "解耦测试组"}
+	db.Create(&pgrp)
+	archOrder := models.ArchProcess{GroupID: pgrp.ID, Code: "ARCH_ORDER_UNM", Name: "订单解耦进程", DefaultListenPort: 18001}
+	db.Create(&archOrder)
+
+	sub := models.Subsystem{Code: "SUB_UNM", Name: "解耦子系统"}
+	db.Create(&sub)
+	grp := models.FunctionalGroup{SubsystemID: sub.ID, Code: "GRP_UNM", Name: "解耦功能组", Level: 1}
+	db.Create(&grp)
+	modOrder := models.Module{SubsystemID: sub.ID, GroupID: grp.ID, ArchProcessID: &archOrder.ID, Code: "MOD_ORDER_UNM", Name: "订单模块"}
+	db.Create(&modOrder)
+
+	archProcModules := map[uint64][]uint64{
+		archOrder.ID: {modOrder.ID},
+	}
+	provideMap := map[string]uint64{
+		"dophi.order-OrderService:CreateOrder": modOrder.ID,
+	}
+
+	agtShared := models.Agent{Name: "agt-unm-shared", Endpoint: "http://127.0.0.1:19811", Scope: models.ScopeShared, Status: models.AgentStatusOnline}
+	agtUAT := models.Agent{Name: "agt-unm-uat", Endpoint: "http://127.0.0.1:19812", Scope: models.ScopeShared, Status: models.AgentStatusOnline}
+	db.Create(&agtShared)
+	db.Create(&agtUAT)
+
+	// 源进程挂载在 agtShared 上
+	procSrc := models.Process{AgentID: agtShared.ID, ArchProcessID: archOrder.ID, EffectiveListenPort: 18001}
+	db.Create(&procSrc)
+
+	// 目标进程挂载在 agtUAT 上
+	procTgt := models.Process{AgentID: agtUAT.ID, ArchProcessID: archOrder.ID, EffectiveListenPort: 18001}
+	db.Create(&procTgt)
+
+	// 固化 Session 及其 ProcessSnapshots
+	snapItem := models.ProcessSnapshotItem{
+		ProcessID:     procSrc.ID,
+		ArchProcessID: archOrder.ID,
+		Code:          archOrder.Code,
+		Name:          archOrder.Name,
+		ListenPort:    18001,
+	}
+	snapBytes, _ := json.Marshal([]models.ProcessSnapshotItem{snapItem})
+	sess := models.RecordingSession{
+		SessionNo:        "REC_UNM_TEST",
+		Name:             "解耦测试会话",
+		Scope:            models.ScopeShared,
+		Status:           models.SessionStatusCompleted,
+		ProcessSnapshots: datatypes.JSON(snapBytes),
+	}
+	db.Create(&sess)
+
+	// 模拟卸载源进程: 从数据库物理删除 procSrc
+	if err := db.Delete(&procSrc).Error; err != nil {
+		t.Fatalf("卸载源进程失败: %v", err)
+	}
+
+	// 确认 procSrc 已不存在于 DB 中
+	var checkProc models.Process
+	if err := db.First(&checkProc, procSrc.ID).Error; !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("源进程期望已被删除")
+	}
+
+	// 选定流量记录
+	selectedRecords := []models.TrafficRecord{
+		{
+			SessionID:   sess.ID,
+			ServiceName: "dophi.order-OrderService",
+			Operation:   "CreateOrder",
+		},
+	}
+
+	// 从 session.ProcessSnapshots 反序列化出 sourceSnap
+	var restoredSnaps []models.ProcessSnapshotItem
+	_ = json.Unmarshal(sess.ProcessSnapshots, &restoredSnaps)
+	if len(restoredSnaps) == 0 {
+		t.Fatalf("反序列化 ProcessSnapshots 失败")
+	}
+	restoredSourceSnap := &restoredSnaps[0]
+
+	// 即使源进程已被卸载，基于快照与蓝图的同构校验依然 100% 通过！
+	err := ValidateReplayProcessCompatibility(
+		1, true, &sess, selectedRecords, restoredSourceSnap, &procTgt, &agtUAT, archProcModules, provideMap,
+	)
+	if err != nil {
+		t.Fatalf("源进程卸载后同构重放兼容性校验应该成功，但报错: %v", err)
 	}
 }
 

@@ -1,6 +1,6 @@
 import React from 'react';
-import { Search, RotateCcw, Eye, Layers, X } from 'lucide-react';
-import type { RecordingSession } from '../../../types';
+import { Search, RotateCcw, Eye, Layers, X, Server } from 'lucide-react';
+import type { RecordingSession, Agent } from '../../../types';
 
 export interface ArchCanvasToolbarProps {
   view: 'LOGICAL' | 'PHYSICAL';
@@ -16,6 +16,9 @@ export interface ArchCanvasToolbarProps {
   sessions: RecordingSession[];
   selectedSessionId: string | null;
   onSelectSession: (sessionId: string | null) => void;
+  agents?: Agent[];
+  selectedEnvAgentId?: string | null;
+  onSelectEnvAgentId?: (agentId: string | null) => void;
 }
 
 export const ArchCanvasToolbar: React.FC<ArchCanvasToolbarProps> = ({
@@ -32,6 +35,9 @@ export const ArchCanvasToolbar: React.FC<ArchCanvasToolbarProps> = ({
   sessions,
   selectedSessionId,
   onSelectSession,
+  agents = [],
+  selectedEnvAgentId = null,
+  onSelectEnvAgentId,
 }) => {
   return (
     <div className="code-arch-toolbar">
@@ -56,6 +62,41 @@ export const ArchCanvasToolbar: React.FC<ArchCanvasToolbarProps> = ({
         </div>
 
         <div className="code-arch-toolbar__divider" />
+
+        {/* 物理部署视图下：多环境端点叠加选择器 (AC-M10-04) */}
+        {view === 'PHYSICAL' && (
+          <div className="code-arch-toolbar__session-group" data-testid="env-overlay-group">
+            <Server size={14} className="code-arch-toolbar__icon" />
+            <span className="code-arch-toolbar__label">环境叠加:</span>
+            <select
+              value={selectedEnvAgentId || ''}
+              onChange={(e) => onSelectEnvAgentId?.(e.target.value || null)}
+              className="code-arch-toolbar__select"
+              data-testid="env-agent-selector"
+              style={{ maxWidth: '200px' }}
+            >
+              <option value="">纯架构蓝图 (设计态)</option>
+              {agents.map((ag) => (
+                <option key={ag.id} value={ag.id}>
+                  [{ag.scope}] #{ag.id} {ag.name}
+                </option>
+              ))}
+            </select>
+            {selectedEnvAgentId && (
+              <button
+                type="button"
+                className="code-btn code-btn--secondary code-btn--xs code-arch-toolbar__detach-btn"
+                onClick={() => onSelectEnvAgentId?.(null)}
+                title="清除环境叠加，恢复纯设计态"
+                data-testid="clear-env-overlay-btn"
+              >
+                清除
+              </button>
+            )}
+          </div>
+        )}
+
+        {view === 'PHYSICAL' && <div className="code-arch-toolbar__divider" />}
 
         {/* 层级滑杆 (L0 ~ Ln) */}
         <div className="code-arch-toolbar__slider-group" title={`当前展开层级: L${depthLevel} (0 ~ ${maxDepth})`}>

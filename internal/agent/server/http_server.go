@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -58,6 +59,10 @@ type AgentServer struct {
 	listener        net.Listener
 	watchdogStop    chan struct{}
 	upgrader        websocket.Upgrader
+	armedRevision   uint64
+	armedDigest     string
+	armedProcesses  []agentproto.ProcessMonitorSpec
+	latestDiags     []agentproto.ProcessDiagStatus
 }
 
 // NewAgentServer 构造 Agent 服务端实例
@@ -347,7 +352,9 @@ func (s *AgentServer) registerRoutes(mux *http.ServeMux) {
 	// 2. 候选进程探查
 	mux.HandleFunc("GET /agent/v1/processes/discover", s.handleDiscoverProcesses)
 
-	// 3. 声明式下发监控
+	// 3. 待命预挂载与状态同步
+	mux.HandleFunc("POST /agent/v1/monitors/arm", s.handleArmStandby)
+	mux.HandleFunc("POST /agent/v1/monitors/sync", s.handleSyncMonitors)
 	mux.HandleFunc("PUT /agent/v1/monitors/sync", s.handleSyncMonitors)
 
 	// 4. 单独移除进程监控
@@ -405,16 +412,18 @@ func (s *AgentServer) handleHandshake(w http.ResponseWriter, r *http.Request) {
 	uptime := uint64(time.Since(s.startedAt).Seconds())
 
 	resp := agentproto.HandshakeResp{
-		AgentVersion:    s.cfg.AgentVersion,
-		ProtocolVersion: agentproto.ProtocolVersion,
-		BootID:          s.bootID,
-		StartedAt:       s.startedAt,
-		KernelVersion:   "Linux",
-		HasEbpfCap:      hasCaps,
-		CapDetail:       capDetail,
-		ActiveLeaseType: s.activeLeaseType,
-		ActiveRefID:     s.activeRefID,
-		UptimeSec:       uptime,
+		AgentVersion:      s.cfg.AgentVersion,
+		ProtocolVersion:   agentproto.ProtocolVersion,
+		BootID:            s.bootID,
+		StartedAt:         s.startedAt,
+		KernelVersion:     "Linux",
+		HasEbpfCap:        hasCaps,
+		CapDetail:         capDetail,
+		ActiveLeaseType:   s.activeLeaseType,
+		ActiveRefID:       s.activeRefID,
+		UptimeSec:         uptime,
+		ArmedProcessCount: len(s.armedProcesses),
+		ArmedDigest:       s.armedDigest,
 	}
 	s.mu.Unlock()
 
@@ -468,6 +477,49 @@ func (s *AgentServer) handleSyncMonitors(w http.ResponseWriter, r *http.Request)
 	})
 }
 
+func (s *AgentServer) handleArmStandby(w http.ResponseWriter, r *http.Request) {
+	clientClaim := r.Header.Get(agentproto.HeaderClaimCode)
+	if clientClaim != "" && clientClaim != s.claimCode {
+		http.Error(w, "Forbidden: Invalid ClaimCode", http.StatusForbidden)
+		return
+	}
+
+	var req agentproto.ArmStandbyReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON payload: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	diags, err := s.ebpfMgr.ArmStandby(req.Processes)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"error":       err.Error(),
+			"diagnostics": diags,
+		})
+		return
+	}
+
+	digest := agentproto.ComputeArmedDigest(req.Processes)
+
+	s.mu.Lock()
+	s.armedRevision = req.Revision
+	s.armedDigest = digest
+	s.armedProcesses = req.Processes
+	s.latestDiags = diags
+	s.mu.Unlock()
+
+	resp := agentproto.ArmStandbyResp{
+		Revision:    req.Revision,
+		ArmedDigest: digest,
+		Diagnostics: diags,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
 func (s *AgentServer) handleRemoveProcessMonitor(w http.ResponseWriter, r *http.Request) {
 	procIDStr := r.PathValue("processId")
 	procID, err := strconv.ParseUint(procIDStr, 10, 64)
@@ -513,7 +565,8 @@ func (s *AgentServer) handleStopMonitor(w http.ResponseWriter, r *http.Request) 
 	}
 	s.buffer.Push(agentproto.MarshalEnvelope(drainedEnv, nil))
 
-	s.ebpfMgr.PurgeAllMonitors()
+	// 平滑停止录制：排空在途数据并解绑大流量 Tracepoint，但保留长连接与待命状态 (停录不断连)
+	s.ebpfMgr.StopCapture()
 	s.activeLeaseType = ""
 	s.activeRefID = 0
 
@@ -534,6 +587,31 @@ func (s *AgentServer) handleExecuteReplay(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// 1. 拦截检查：若目标进程处于 NEED_RECONNECT 或 WAITING_PROC / NOT_FOUND，直接以 HTTP 409 拦截
+	pid, err := s.procScanner.FindPIDByPortAndCmd(req.ProcessSpec.ListenPort, req.ProcessSpec.CmdPattern)
+	if err != nil || pid == 0 {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"error":        "目标进程未运行，禁止盲目发起回放",
+			"status":       "WAITING_PROC",
+			"diag_message": fmt.Sprintf("未在端口 %d 检测到符合特征 [%s] 的进程", req.ProcessSpec.ListenPort, req.ProcessSpec.CmdPattern),
+		})
+		return
+	}
+
+	estConns, needRec, _ := s.procScanner.DiagnoseEstablishedConns(pid, req.ProcessSpec.Downstreams)
+	if needRec {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"error":        fmt.Sprintf("检测到 %d 条存量长连接未重启，禁止盲目发起回放 (A-01)", estConns),
+			"status":       "NEED_RECONNECT",
+			"diag_message": fmt.Sprintf("存量连接数 %d > 0，需重启业务进程生效", estConns),
+		})
+		return
+	}
+
 	s.mu.Lock()
 	if s.activeLeaseType != "" && (s.activeLeaseType != "REPLAY" || s.activeRefID != req.TaskID) {
 		s.mu.Unlock()
@@ -544,6 +622,27 @@ func (s *AgentServer) handleExecuteReplay(w http.ResponseWriter, r *http.Request
 	s.activeRefID = req.TaskID
 	s.mu.Unlock()
 
+	// 2. 将 EgressProxy 切换为 REPLAY_MOCK 模式并注入 Mock 数据
+	if s.ebpfMgr != nil {
+		matcher := replay.NewScopedMockMatcher()
+		// 加载 Mocks
+		for _, mng := range req.MngMocks {
+			if len(mng) > 22 {
+				matcher.AddMngMock(mng[22], mng)
+			}
+		}
+		for _, egMock := range req.EgressMocks {
+			if len(egMock) >= 24+136 {
+				svc := string(bytes.TrimRight(egMock[24+8:24+72], "\x00"))
+				op := string(bytes.TrimRight(egMock[24+72:24+136], "\x00"))
+				headLen := int(egMock[20])<<8 | int(egMock[21])
+				payload := egMock[24+headLen:]
+				matcher.AddGlobalFallback(svc, op, payload, [][]byte{egMock})
+			}
+		}
+		s.ebpfMgr.SetReplayMock(req.TaskID, matcher, req.ProcessSpec.Downstreams)
+	}
+
 	// 异步执行重放
 	go func() {
 		_, _ = s.replayExec.Execute(context.Background(), req)
@@ -553,8 +652,11 @@ func (s *AgentServer) handleExecuteReplay(w http.ResponseWriter, r *http.Request
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"status": "ARMED",
 		"diagnostics": agentproto.ProcessDiagStatus{
-			ProcessID: req.ProcessSpec.ProcessID,
-			Status:    "MONITORING",
+			ProcessID:        req.ProcessSpec.ProcessID,
+			Status:           "MONITORING",
+			ResolvedPID:      pid,
+			EstablishedConns: estConns,
+			NeedReconnect:    needRec,
 		},
 	})
 }

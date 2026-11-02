@@ -1,6 +1,7 @@
 package hub
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,10 +13,24 @@ import (
 	"time"
 
 	"code-traefik/config"
+	"code-traefik/internal/server/topology"
 	"code-traefik/models"
 	"code-traefik/pkg/agentproto"
+	"golang.org/x/sync/singleflight"
 	"gorm.io/gorm"
 )
+
+type rearmBackoffState struct {
+	nextAllowed time.Time
+	backoffIdx  int
+}
+
+var rearmBackoffIntervals = []time.Duration{
+	10 * time.Second,
+	30 * time.Second,
+	60 * time.Second,
+	300 * time.Second,
+}
 
 // AgentRegisterReq 注册 Agent 请求
 type AgentRegisterReq struct {
@@ -65,6 +80,9 @@ type Manager struct {
 	eventSubscribers sync.Map // subscriberID -> chan AgentEvent
 	subCounter       uint64
 	subMutex         sync.Mutex
+	rearmGroup       singleflight.Group
+	rearmBackoffs    sync.Map // agentID -> *rearmBackoffState
+	rearmMu          sync.Mutex
 }
 
 // NewManager 构造 Hub 管理器
@@ -621,10 +639,21 @@ func (m *Manager) ProbeAgentOnce(ctx context.Context, agentID uint64) error {
 			updates["lease_expires_at"] = &exp
 		}
 
+		if handshake.ArmedDigest != "" {
+			updates["armed_digest"] = handshake.ArmedDigest
+		}
+
 		return tx.Model(&models.Agent{}).Where("id = ?", agentID).Updates(updates).Error
 	})
 	if err != nil {
 		return err
+	}
+
+	// 检查待命状态对账: 若 ArmedDigest 与预期 ExpectedArmedDigest 不一致，触发 Single-Flight 自动对账
+	if agent.ExpectedArmedDigest != "" && handshake.ArmedDigest != agent.ExpectedArmedDigest {
+		go func(aid uint64) {
+			_, _ = m.AutoRearmAgent(context.Background(), aid)
+		}(agentID)
 	}
 
 	return nil
@@ -733,4 +762,164 @@ func (m *Manager) BroadcastEvent(event AgentEvent) {
 		}
 		return true
 	})
+}
+
+// AutoRearmAgent 对指定 Agent 触发 Single-Flight 预挂载待命对账 (ADR-09, AC-M10-02)
+func (m *Manager) AutoRearmAgent(ctx context.Context, agentID uint64) (*agentproto.ArmStandbyResp, error) {
+	// 退避检查
+	now := time.Now()
+	if val, ok := m.rearmBackoffs.Load(agentID); ok {
+		state := val.(*rearmBackoffState)
+		if now.Before(state.nextAllowed) {
+			return nil, fmt.Errorf("Agent %d 处于对账失败退避中，将在 %v 后重试", agentID, state.nextAllowed.Sub(now))
+		}
+	}
+
+	// Single-Flight 并发防重暴风锁
+	res, err, _ := m.rearmGroup.Do(fmt.Sprintf("rearm:%d", agentID), func() (interface{}, error) {
+		var agent models.Agent
+		if err := m.db.Preload("Processes.ArchProcess").First(&agent, agentID).Error; err != nil {
+			return nil, err
+		}
+
+		if agent.Status == models.AgentStatusOffline || agent.Endpoint == "" {
+			return nil, fmt.Errorf("Agent %d 离线，跳过待命对账", agentID)
+		}
+
+		// 编译当前待命规格
+		specs := make([]agentproto.ProcessMonitorSpec, 0, len(agent.Processes))
+		for _, p := range agent.Processes {
+			if p.ProbeDesiredState == models.ProbeDesiredStateDisarmed {
+				continue
+			}
+			downstreams, _ := topology.CompileProcessDownstreams(m.db, p.ID, nil, nil)
+			p.FillFromArchProcess()
+			specs = append(specs, agentproto.ProcessMonitorSpec{
+				ProcessID:   p.ID,
+				ListenPort:  uint16(p.EffectiveListenPort),
+				CmdPattern:  p.EffectiveCmdPattern(),
+				Downstreams: downstreams,
+			})
+		}
+
+		expectedDigest := agentproto.ComputeArmedDigest(specs)
+		armReq := agentproto.ArmStandbyReq{
+			Revision:  agent.MountsRevision,
+			Processes: specs,
+		}
+
+		reqBytes, _ := json.Marshal(armReq)
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, agent.Endpoint+"/agent/v1/monitors/arm", bytes.NewReader(reqBytes))
+		if err != nil {
+			return nil, err
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
+		if agent.ClaimCode != "" {
+			httpReq.Header.Set(agentproto.HeaderClaimCode, agent.ClaimCode)
+		}
+
+		httpResp, doErr := m.httpClient.Do(httpReq)
+		if doErr != nil || (httpResp != nil && httpResp.StatusCode != http.StatusOK) {
+			// 对账失败：指数退避推进 (10s -> 30s -> 60s -> 300s)
+			if httpResp != nil {
+				_ = httpResp.Body.Close()
+			}
+			idx := 0
+			if val, ok := m.rearmBackoffs.Load(agentID); ok {
+				idx = val.(*rearmBackoffState).backoffIdx + 1
+				if idx >= len(rearmBackoffIntervals) {
+					idx = len(rearmBackoffIntervals) - 1
+				}
+			}
+			backoffDur := rearmBackoffIntervals[idx]
+			m.rearmBackoffs.Store(agentID, &rearmBackoffState{
+				nextAllowed: time.Now().Add(backoffDur),
+				backoffIdx:  idx,
+			})
+
+			errMsg := "对账网络通信失败"
+			if doErr != nil {
+				errMsg = doErr.Error()
+			} else if httpResp != nil {
+				errMsg = fmt.Sprintf("HTTP 状态码 %d", httpResp.StatusCode)
+			}
+
+			// 标记进程异常状态 ProbeStatus = ERROR_FAILED
+			_ = m.db.Model(&models.Process{}).Where("agent_id = ? AND probe_desired_state != ?", agentID, models.ProbeDesiredStateDisarmed).
+				Updates(map[string]interface{}{
+					"probe_status": models.ProbeStatusErrorFailed,
+					"diag_message": "自动对账待命失败: " + errMsg,
+				}).Error
+
+			return nil, fmt.Errorf("Agent %d 自动对账失败: %s", agentID, errMsg)
+		}
+
+		defer httpResp.Body.Close()
+		var armResp agentproto.ArmStandbyResp
+		if err := json.NewDecoder(httpResp.Body).Decode(&armResp); err != nil {
+			return nil, err
+		}
+
+		// 成功：清除退避状态
+		m.rearmBackoffs.Delete(agentID)
+
+		// 更新数据库持久化
+		diagMap := make(map[uint64]agentproto.ProcessDiagStatus)
+		for _, d := range armResp.Diagnostics {
+			diagMap[d.ProcessID] = d
+		}
+
+		nowDiag := time.Now()
+		_ = m.db.Transaction(func(tx *gorm.DB) error {
+			// 更新 Agent 实际与期望摘要
+			if err := tx.Model(&models.Agent{}).Where("id = ?", agentID).Updates(map[string]interface{}{
+				"armed_digest":          armResp.ArmedDigest,
+				"expected_armed_digest": expectedDigest,
+			}).Error; err != nil {
+				return err
+			}
+
+			// 逐一根据最新诊断结果推进各进程 ProbeStatus
+			for _, p := range agent.Processes {
+				if p.ProbeDesiredState == models.ProbeDesiredStateDisarmed {
+					_ = tx.Model(&models.Process{}).Where("id = ?", p.ID).Updates(map[string]interface{}{
+						"probe_status": models.ProbeStatusDisarmed,
+						"diag_message": "",
+					}).Error
+					continue
+				}
+
+				diag, ok := diagMap[p.ID]
+				if !ok {
+					continue
+				}
+
+				probeStatus := models.ProbeStatusArmed
+				if diag.Status == "NOT_FOUND" {
+					probeStatus = models.ProbeStatusWaitingProc
+				} else if diag.NeedReconnect {
+					probeStatus = models.ProbeStatusNeedReconnect
+				} else if diag.Status != "MONITORING" {
+					probeStatus = models.ProbeStatusErrorFailed
+				}
+
+				_ = tx.Model(&models.Process{}).Where("id = ?", p.ID).Updates(map[string]interface{}{
+					"probe_status":      probeStatus,
+					"resolved_p_id":     diag.ResolvedPID,
+					"established_conns": diag.EstablishedConns,
+					"need_reconnect":    diag.NeedReconnect,
+					"diag_message":      diag.Message,
+					"last_diag_at":      &nowDiag,
+				}).Error
+			}
+			return nil
+		})
+
+		return &armResp, nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+	return res.(*agentproto.ArmStandbyResp), nil
 }

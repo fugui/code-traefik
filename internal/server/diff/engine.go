@@ -3,7 +3,6 @@ package diff
 import (
 	"bytes"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"math"
 	"regexp"
@@ -17,12 +16,6 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/dynamicpb"
-)
-
-var (
-	ErrForbiddenPrivateSession        = errors.New("403 Forbidden: 无权选用他人私有录制素材")
-	ErrForbiddenPrivateAgent          = errors.New("403 Forbidden: 目标 Agent 属于他人私有，无权投递")
-	ErrIncompatibleReplayTargetModule = errors.New("400 Bad Request: 目标进程未承载源请求所需的全部公共模块")
 )
 
 // FieldDiff Protobuf 语义树字段级差异明细
@@ -42,89 +35,6 @@ type DiffResult struct {
 	ExpectedStatus uint64      `json:"expected_status"`
 	ActualStatus   uint64      `json:"actual_status"`
 	FieldDiffs     []FieldDiff `json:"field_diffs,omitempty"`
-}
-
-// ValidateReplayProcessCompatibility 校验录制源进程选定报文能否安全重放到目标进程 targetProc (F-12.1, SC-07)
-func ValidateReplayProcessCompatibility(
-	callerID uint,
-	isAdmin bool,
-	session *models.RecordingSession,
-	selectedRecords []models.TrafficRecord,
-	sourceProc *models.Process,
-	targetProc *models.Process,
-	targetAgent *models.Agent,
-	provideMap map[string]uint64, // key: "serviceName:operation" -> DstModuleID
-) error {
-	if session == nil || targetProc == nil || targetAgent == nil {
-		return errors.New("400 Bad Request: 缺少必要参数")
-	}
-
-	// 1. 录制素材与目标 Agent 的公私域归属防越权校验 (Anti-IDOR)
-	if session.Scope == models.ScopePrivate && session.OwnerID != callerID && !isAdmin {
-		return ErrForbiddenPrivateSession
-	}
-	if targetAgent.Scope == models.ScopePrivate && (targetAgent.OwnerID == nil || *targetAgent.OwnerID != callerID) && !isAdmin {
-		return ErrForbiddenPrivateAgent
-	}
-
-	// 2. 原地同进程重放天然兼容
-	if sourceProc != nil && sourceProc.ID == targetProc.ID {
-		return nil
-	}
-
-	// 3. 跨进程/跨 Agent 重放：目标进程必须完整承载选定请求命中的全部公共架构模块
-	targetModSet := make(map[uint64]struct{})
-	for _, mid := range targetProc.ModuleIDs {
-		targetModSet[mid] = struct{}{}
-	}
-
-	requiredMods := make(map[uint64]struct{})
-	var missingModuleIDs []uint64
-	hasUnregisteredIface := false
-
-	for _, rec := range selectedRecords {
-		svc := strings.TrimSpace(rec.ServiceName)
-		keyOp := svc + ":" + strings.TrimSpace(rec.Operation)
-		if dstModID, ok := provideMap[svc]; ok {
-			requiredMods[dstModID] = struct{}{}
-		} else if dstModID, ok := provideMap[keyOp]; ok {
-			requiredMods[dstModID] = struct{}{}
-		} else {
-			hasUnregisteredIface = true
-		}
-	}
-
-	// 若包含未登记接口，退化要求源进程声明的模块集合非空且被目标进程完全覆盖
-	if hasUnregisteredIface || len(requiredMods) == 0 {
-		if sourceProc != nil {
-			sourceMods := make(map[uint64]struct{})
-			for _, mid := range sourceProc.ModuleIDs {
-				sourceMods[mid] = struct{}{}
-			}
-			if len(sourceMods) == 0 {
-				return ErrIncompatibleReplayTargetModule
-			}
-			for sm := range sourceMods {
-				if _, ok := targetModSet[sm]; !ok {
-					return fmt.Errorf("%w: 缺失源进程公共模块 ID=%d", ErrIncompatibleReplayTargetModule, sm)
-				}
-			}
-			return nil
-		}
-		return ErrIncompatibleReplayTargetModule
-	}
-
-	for rm := range requiredMods {
-		if _, ok := targetModSet[rm]; !ok {
-			missingModuleIDs = append(missingModuleIDs, rm)
-		}
-	}
-
-	if len(missingModuleIDs) > 0 {
-		return fmt.Errorf("%w: 目标进程缺少公共模块 ID=%v", ErrIncompatibleReplayTargetModule, missingModuleIDs)
-	}
-
-	return nil
 }
 
 // DiffLayer1Header 第一层：CROS RPC 协议头与载荷原始字节快速比对 (F-14.1, F-14.3, SC-08)

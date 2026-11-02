@@ -112,6 +112,11 @@ export const ReplayTaskCreatorModal: React.FC<ReplayTaskCreatorModalProps> = ({
       .map((s) => s.trim())
       .filter(Boolean);
 
+    const targetProc = processes.find((p) => String(p.id) === String(selectedProcessId));
+    if (targetProc?.probe_status === 'WAITING_PROC' || targetProc?.probe_status === 'NEED_RECONNECT') {
+      toast.warning(`目标进程探针处于未就绪状态 (${targetProc.probe_status})，请先确保宿主机进程启动并建立网络监听`);
+    }
+
     setSubmitting(true);
     try {
       await replayApi.createReplayTask({
@@ -127,7 +132,12 @@ export const ReplayTaskCreatorModal: React.FC<ReplayTaskCreatorModalProps> = ({
       onSuccess();
       onClose();
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : '创建重放任务失败');
+      const errMsg = err instanceof Error ? err.message : String(err);
+      if (errMsg.includes('409') || errMsg.includes('WAITING_PROC') || errMsg.includes('NEED_RECONNECT')) {
+        toast.error(`启动被拒绝 (409): 目标业务进程探针未就绪 (${errMsg})，请检查宿主机进程与网络连接`);
+      } else {
+        toast.error(errMsg || '创建重放任务失败');
+      }
     } finally {
       setSubmitting(false);
     }

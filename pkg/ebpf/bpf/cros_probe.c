@@ -305,20 +305,7 @@ static __always_inline void handle_rw_enter(void *buf, __s32 fd, __u8 is_read) {
     pid_fd pfd = { .pid = pid, .fd = fd };
     conn_tuple *conn = bpf_map_lookup_elem(&ing_conn_map, &pfd);
     if (!conn) {
-        conn_tuple default_conn = {
-            .src_ip = bpf_htonl(0x7f000001),
-            .dst_ip = bpf_htonl(0x7f000001),
-            .src_port = 0,
-            .dst_port = bpf_htons(tp->listen_port),
-            .conn_seq = (__u32)fd,
-            .stream_off_rx = 0,
-            .stream_off_tx = 0,
-        };
-        bpf_map_update_elem(&ing_conn_map, &pfd, &default_conn, BPF_NOEXIST);
-        conn = bpf_map_lookup_elem(&ing_conn_map, &pfd);
-        if (!conn) {
-            return;
-        }
+        return; // 彻底清除 fd > 2 懒插入，未被白名单追踪的连接/文件 fd 零追踪
     }
 
     rw_args args = {
@@ -437,6 +424,70 @@ int trace_sys_enter_sendto(struct trace_event_raw_sys_enter *ctx) {
 SEC("tracepoint/syscalls/sys_exit_sendto")
 int trace_sys_exit_sendto(struct trace_event_raw_sys_exit *ctx) {
     handle_rw_exit(ctx->ret);
+    return 0;
+}
+
+// 目标进程出入连接生命周期追踪
+SEC("tracepoint/syscalls/sys_exit_accept4")
+int trace_sys_exit_accept4(struct trace_event_raw_sys_exit *ctx) {
+    if (ctx->ret <= 0) {
+        return 0;
+    }
+    __u64 tgid_pid = bpf_get_current_pid_tgid();
+    __u32 pid = (__u32)(tgid_pid >> 32);
+    target_proc *tp = bpf_map_lookup_elem(&target_pids_map, &pid);
+    if (!tp) {
+        return 0;
+    }
+    pid_fd pfd = { .pid = pid, .fd = (__s32)ctx->ret };
+    conn_tuple conn = {
+        .src_ip = bpf_htonl(0x7f000001),
+        .dst_ip = bpf_htonl(0x7f000001),
+        .src_port = 0,
+        .dst_port = bpf_htons(tp->listen_port),
+        .conn_seq = (__u32)ctx->ret,
+        .stream_off_rx = 0,
+        .stream_off_tx = 0,
+    };
+    bpf_map_update_elem(&ing_conn_map, &pfd, &conn, BPF_ANY);
+    return 0;
+}
+
+SEC("tracepoint/syscalls/sys_exit_accept")
+int trace_sys_exit_accept(struct trace_event_raw_sys_exit *ctx) {
+    if (ctx->ret <= 0) {
+        return 0;
+    }
+    __u64 tgid_pid = bpf_get_current_pid_tgid();
+    __u32 pid = (__u32)(tgid_pid >> 32);
+    target_proc *tp = bpf_map_lookup_elem(&target_pids_map, &pid);
+    if (!tp) {
+        return 0;
+    }
+    pid_fd pfd = { .pid = pid, .fd = (__s32)ctx->ret };
+    conn_tuple conn = {
+        .src_ip = bpf_htonl(0x7f000001),
+        .dst_ip = bpf_htonl(0x7f000001),
+        .src_port = 0,
+        .dst_port = bpf_htons(tp->listen_port),
+        .conn_seq = (__u32)ctx->ret,
+        .stream_off_rx = 0,
+        .stream_off_tx = 0,
+    };
+    bpf_map_update_elem(&ing_conn_map, &pfd, &conn, BPF_ANY);
+    return 0;
+}
+
+SEC("tracepoint/syscalls/sys_enter_close")
+int trace_sys_enter_close(struct trace_event_raw_sys_enter *ctx) {
+    __u64 tgid_pid = bpf_get_current_pid_tgid();
+    __u32 pid = (__u32)(tgid_pid >> 32);
+    target_proc *tp = bpf_map_lookup_elem(&target_pids_map, &pid);
+    if (!tp) {
+        return 0;
+    }
+    pid_fd pfd = { .pid = pid, .fd = (__s32)ctx->args[0] };
+    bpf_map_delete_elem(&ing_conn_map, &pfd);
     return 0;
 }
 

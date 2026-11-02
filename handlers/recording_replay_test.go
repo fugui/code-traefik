@@ -312,42 +312,55 @@ func TestSC05_SC07_SC08_EndToEndRecordingAndReplayPipeline(t *testing.T) {
 		t.Fatalf("创建 Agent 2 失败: %v", err)
 	}
 
-	// 注册进程：proc1 (Order, Agent 1), proc2 (Stock, Agent 1), proc3 (Order, Agent 2)
+	// 注册架构进程蓝图与挂载实例
+	pgrp := models.ArchProcessGroup{Code: "PGRP_REC", Name: "录制组"}
+	db.Create(&pgrp)
+	archOrder := models.ArchProcess{GroupID: pgrp.ID, Code: "ARCH_ORDER", Name: "order_service", DefaultListenPort: 8081}
+	archStock := models.ArchProcess{GroupID: pgrp.ID, Code: "ARCH_STOCK", Name: "stock_service", DefaultListenPort: 8082}
+	db.Create(&archOrder)
+	db.Create(&archStock)
+
+	db.Model(&modOrder).Update("arch_process_id", archOrder.ID)
+	db.Model(&modStock).Update("arch_process_id", archStock.ID)
+
+	// proc1 (Order, Agent 1), proc2 (Stock, Agent 1), proc3 (Order, Agent 2)
 	proc1 := models.Process{
-		AgentID:     agent1.ID,
-		Name:        "order_service_prod",
-		ListenPort:  8081,
-		AdvertiseIP: "192.168.56.18",
-		CmdPattern:  "order_service",
+		AgentID:             agent1.ID,
+		ArchProcessID:       archOrder.ID,
+		EffectiveListenPort: 8081,
+		AdvertiseIP:         "192.168.56.18",
+		ProbeDesiredState:   models.ProbeDesiredStateArmed,
+		ProbeStatus:         models.ProbeStatusReady,
 	}
 	if err := db.Create(&proc1).Error; err != nil {
 		t.Fatalf("创建 Process 1 失败: %v", err)
 	}
-	_ = db.Create(&models.ProcessModule{ProcessID: proc1.ID, ModuleID: modOrder.ID}).Error
 
 	proc2 := models.Process{
-		AgentID:     agent1.ID,
-		Name:        "stock_service_prod",
-		ListenPort:  8082,
-		AdvertiseIP: "192.168.56.18",
-		CmdPattern:  "stock_service",
+		AgentID:             agent1.ID,
+		ArchProcessID:       archStock.ID,
+		EffectiveListenPort: 8082,
+		AdvertiseIP:         "192.168.56.18",
+		ProbeDesiredState:   models.ProbeDesiredStateArmed,
+		ProbeStatus:         models.ProbeStatusReady,
 	}
 	if err := db.Create(&proc2).Error; err != nil {
 		t.Fatalf("创建 Process 2 失败: %v", err)
 	}
-	_ = db.Create(&models.ProcessModule{ProcessID: proc2.ID, ModuleID: modStock.ID}).Error
 
+	ov18081 := 18081
 	proc3 := models.Process{
-		AgentID:     agent2.ID,
-		Name:        "order_service_test",
-		ListenPort:  18081,
-		AdvertiseIP: "192.168.56.18",
-		CmdPattern:  "order_service",
+		AgentID:             agent2.ID,
+		ArchProcessID:       archOrder.ID,
+		OverrideListenPort:  &ov18081,
+		EffectiveListenPort: 18081,
+		AdvertiseIP:         "192.168.56.18",
+		ProbeDesiredState:   models.ProbeDesiredStateArmed,
+		ProbeStatus:         models.ProbeStatusReady,
 	}
 	if err := db.Create(&proc3).Error; err != nil {
 		t.Fatalf("创建 Process 3 失败: %v", err)
 	}
-	_ = db.Create(&models.ProcessModule{ProcessID: proc3.ID, ModuleID: modOrder.ID}).Error
 
 	// -------------------------------------------------------------------------
 	// 4. SC-05 协同录制与双模微批落盘

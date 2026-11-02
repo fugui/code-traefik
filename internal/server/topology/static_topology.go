@@ -105,16 +105,20 @@ type AvailableServiceDTO struct {
 
 // ProcessInput 进程部署与模块承载映射新增/修改入参
 type ProcessInput struct {
-	AgentID          uint64
-	GroupName        string
-	Name             string
-	ListenPort       int
-	AdvertiseIP      string
-	CmdPattern       string
-	ModuleIDs        []uint64
-	ExtraDownstreams []string
-	Description      string
-	OperatorID       uint
+	AgentID            uint64
+	ArchProcessID      uint64
+	GroupName          string
+	Name               string
+	ListenPort         int
+	OverrideListenPort *int
+	OverrideCmdPattern string
+	AdvertiseIP        string
+	CmdPattern         string
+	ModuleIDs          []uint64
+	ExtraDownstreams   []string
+	ProbeDesiredState  string
+	Description        string
+	OperatorID         uint
 }
 
 // StaticTopologyNode 静态架构拓扑节点 DTO
@@ -414,23 +418,8 @@ func validateIPv4Endpoint(ep string) error {
 	return nil
 }
 
-// CreateProcess 创建进程并承载模块
+// CreateProcess 创建进程并挂载架构进程 (多环境 1:1 挂载模型)
 func CreateProcess(db *gorm.DB, in ProcessInput) (*models.Process, error) {
-	if in.ListenPort < 0 || in.ListenPort > 65535 {
-		return nil, ErrInvalidListenPort
-	}
-	name := strings.TrimSpace(in.Name)
-	if name == "" {
-		return nil, ErrInvalidProcessName
-	}
-	cmdPattern := strings.TrimSpace(in.CmdPattern)
-	if cmdPattern == "" {
-		cmdPattern = "./bin/" + name
-	}
-	groupName := strings.TrimSpace(in.GroupName)
-	if groupName == "" {
-		groupName = "默认进程组"
-	}
 	for _, ep := range in.ExtraDownstreams {
 		if err := validateIPv4Endpoint(ep); err != nil {
 			return nil, err
@@ -444,8 +433,8 @@ func CreateProcess(db *gorm.DB, in ProcessInput) (*models.Process, error) {
 				agent = models.Agent{
 					Name:        "default-host-agent",
 					Endpoint:    "127.0.0.1:8090",
-					Scope:       "SHARED",
-					Status:      "ONLINE",
+					Scope:       models.ScopeShared,
+					Status:      models.AgentStatusOnline,
 					Description: "系统预置默认宿主 Agent",
 				}
 				if err := db.Create(&agent).Error; err != nil {
@@ -467,63 +456,99 @@ func CreateProcess(db *gorm.DB, in ProcessInput) (*models.Process, error) {
 		return nil, ErrAgentHasActiveLease
 	}
 
-	// 端口与名称互斥 (仅当 listen_port > 0 时校验端口互斥，0 表示纯客户端无监听端口)
-	if in.ListenPort > 0 {
+	if in.ListenPort < 0 || in.ListenPort > 65535 {
+		return nil, ErrInvalidListenPort
+	}
+	if in.OverrideListenPort != nil && (*in.OverrideListenPort < 0 || *in.OverrideListenPort > 65535) {
+		return nil, ErrInvalidListenPort
+	}
+
+	// 1. 查找或创建 ArchProcess
+	var archProc models.ArchProcess
+	if in.ArchProcessID > 0 {
+		if err := db.First(&archProc, in.ArchProcessID).Error; err != nil {
+			return nil, errors.New("架构进程不存在")
+		}
+	} else {
+		name := strings.TrimSpace(in.Name)
+		if name == "" {
+			return nil, ErrInvalidProcessName
+		}
+		if err := db.Where("name = ?", name).First(&archProc).Error; err != nil {
+			groupName := strings.TrimSpace(in.GroupName)
+			if groupName == "" {
+				groupName = "默认进程组"
+			}
+			var pgrp models.ArchProcessGroup
+			if err := db.Where("name = ?", groupName).First(&pgrp).Error; err != nil {
+				pgrp = models.ArchProcessGroup{
+					Code: fmt.Sprintf("PGRP_%s", strings.ToUpper(strings.ReplaceAll(groupName, " ", "_"))),
+					Name: groupName,
+				}
+				if err := db.Create(&pgrp).Error; err != nil {
+					return nil, err
+				}
+			}
+			cmdPattern := strings.TrimSpace(in.CmdPattern)
+			if cmdPattern == "" {
+				cmdPattern = "./bin/" + name
+			}
+			archProc = models.ArchProcess{
+				GroupID:           pgrp.ID,
+				Code:              fmt.Sprintf("PROC_%s", strings.ToUpper(strings.ReplaceAll(name, " ", "_"))),
+				Name:              name,
+				DefaultListenPort: in.ListenPort,
+				DefaultCmdPattern: cmdPattern,
+			}
+			if err := db.Create(&archProc).Error; err != nil {
+				return nil, err
+			}
+		}
+		in.ArchProcessID = archProc.ID
+	}
+
+	// 2. 检查同一部署域内模块是否重复挂载 (A-03)
+	if agent.Scope == models.ScopeShared && len(in.ModuleIDs) > 0 {
+		var conflictModCount int64
+		if err := db.Model(&models.Module{}).
+			Where("id IN ? AND arch_process_id IS NOT NULL AND arch_process_id != ?", in.ModuleIDs, archProc.ID).
+			Count(&conflictModCount).Error; err != nil {
+			return nil, err
+		}
+		if conflictModCount > 0 {
+			return nil, ErrDuplicateModuleBinding
+		}
+	}
+
+	// 3. 计算 EffectiveListenPort 与端口/1:1约束
+	effectiveListenPort := archProc.DefaultListenPort
+	if in.OverrideListenPort != nil {
+		effectiveListenPort = *in.OverrideListenPort
+	} else if in.ListenPort > 0 && in.ListenPort != archProc.DefaultListenPort {
+		effectiveListenPort = in.ListenPort
+		in.OverrideListenPort = &in.ListenPort
+	}
+
+	if effectiveListenPort < 0 || effectiveListenPort > 65535 {
+		return nil, ErrInvalidListenPort
+	}
+
+	if effectiveListenPort > 0 {
 		var portCount int64
-		if err := db.Model(&models.Process{}).Where("agent_id = ? AND listen_port = ?", in.AgentID, in.ListenPort).Count(&portCount).Error; err != nil {
+		if err := db.Model(&models.Process{}).Where("agent_id = ? AND effective_listen_port = ?", in.AgentID, effectiveListenPort).Count(&portCount).Error; err != nil {
 			return nil, err
 		}
 		if portCount > 0 {
 			return nil, ErrDuplicateProcessPort
 		}
 	}
-	var nameCount int64
-	if err := db.Model(&models.Process{}).Where("agent_id = ? AND name = ?", in.AgentID, name).Count(&nameCount).Error; err != nil {
+
+	var archMountCount int64
+	if err := db.Model(&models.Process{}).Where("agent_id = ? AND arch_process_id = ?", in.AgentID, in.ArchProcessID).Count(&archMountCount).Error; err != nil {
 		return nil, err
 	}
-	if nameCount > 0 {
+	if archMountCount > 0 {
 		return nil, ErrDuplicateProcessName
-	}
-
-	if len(in.ModuleIDs) > 0 {
-		// 校验所有 Module 存在
-		var modCount int64
-		if err := db.Model(&models.Module{}).Where("id IN ?", in.ModuleIDs).Count(&modCount).Error; err != nil {
-			return nil, err
-		}
-		if modCount != int64(len(in.ModuleIDs)) {
-			return nil, ErrModuleNotFound
-		}
-
-		// 校验单域单进程挂载约束 (A-03)
-		if agent.Scope == models.ScopeShared {
-			// SHARED Agent 域：检查全部 SHARED 进程中是否已绑定该模块
-			var conflictCount int64
-			err := db.Model(&models.ProcessModule{}).
-				Joins("JOIN traefik_processes ON traefik_processes.id = traefik_process_modules.process_id").
-				Joins("JOIN traefik_agents ON traefik_agents.id = traefik_processes.agent_id").
-				Where("traefik_agents.scope = ? AND traefik_process_modules.module_id IN ?", models.ScopeShared, in.ModuleIDs).
-				Count(&conflictCount).Error
-			if err != nil {
-				return nil, err
-			}
-			if conflictCount > 0 {
-				return nil, ErrDuplicateModuleBinding
-			}
-		} else {
-			// PRIVATE Agent 域：检查当前 Agent 下是否已绑定该模块
-			var conflictCount int64
-			err := db.Model(&models.ProcessModule{}).
-				Joins("JOIN traefik_processes ON traefik_processes.id = traefik_process_modules.process_id").
-				Where("traefik_processes.agent_id = ? AND traefik_process_modules.module_id IN ?", in.AgentID, in.ModuleIDs).
-				Count(&conflictCount).Error
-			if err != nil {
-				return nil, err
-			}
-			if conflictCount > 0 {
-				return nil, ErrDuplicateModuleBinding
-			}
-		}
 	}
 
 	extraJSON, _ := json.Marshal(in.ExtraDownstreams)
@@ -531,17 +556,27 @@ func CreateProcess(db *gorm.DB, in ProcessInput) (*models.Process, error) {
 		extraJSON = []byte("[]")
 	}
 
+	desiredState := in.ProbeDesiredState
+	if desiredState == "" {
+		desiredState = models.ProbeDesiredStateArmed
+	}
+
 	proc := &models.Process{
-		AgentID:          in.AgentID,
-		GroupName:        groupName,
-		Name:             name,
-		ListenPort:       in.ListenPort,
-		AdvertiseIP:      strings.TrimSpace(in.AdvertiseIP),
-		CmdPattern:       cmdPattern,
-		ExtraDownstreams: datatypes.JSON(extraJSON),
-		Description:      in.Description,
-		CreatedBy:        in.OperatorID,
-		UpdatedBy:        in.OperatorID,
+		AgentID:             in.AgentID,
+		ArchProcessID:       in.ArchProcessID,
+		OverrideListenPort:  in.OverrideListenPort,
+		EffectiveListenPort: effectiveListenPort,
+		OverrideCmdPattern:  strings.TrimSpace(in.OverrideCmdPattern),
+		AdvertiseIP:         strings.TrimSpace(in.AdvertiseIP),
+		ExtraDownstreams:    datatypes.JSON(extraJSON),
+		Description:         in.Description,
+		ProbeDesiredState:   desiredState,
+		ProbeStatus:         models.ProbeStatusReady,
+		CreatedBy:           in.OperatorID,
+		UpdatedBy:           in.OperatorID,
+	}
+	if in.CmdPattern != "" && in.CmdPattern != archProc.DefaultCmdPattern && proc.OverrideCmdPattern == "" {
+		proc.OverrideCmdPattern = in.CmdPattern
 	}
 
 	err := db.Transaction(func(tx *gorm.DB) error {
@@ -552,44 +587,27 @@ func CreateProcess(db *gorm.DB, in ProcessInput) (*models.Process, error) {
 			return err
 		}
 
-		for _, mid := range in.ModuleIDs {
-			pm := &models.ProcessModule{
-				ProcessID: proc.ID,
-				ModuleID:  mid,
-			}
-			if err := tx.Create(pm).Error; err != nil {
+		if agent.Scope == models.ScopeShared && len(in.ModuleIDs) > 0 {
+			if err := tx.Model(&models.Module{}).Where("id IN ?", in.ModuleIDs).Update("arch_process_id", archProc.ID).Error; err != nil {
 				return err
 			}
-
-			// 若是公共 SHARED 进程，同步维护 Module.ProcessID 基线字段
-			if agent.Scope == models.ScopeShared {
-				if err := tx.Model(&models.Module{}).Where("id = ?", mid).Update("process_id", proc.ID).Error; err != nil {
-					return err
-				}
-			}
 		}
-		return nil
+
+		// 递增 Agent.MountsRevision
+		return tx.Model(&models.Agent{}).Where("id = ?", in.AgentID).
+			Update("mounts_revision", gorm.Expr("mounts_revision + 1")).Error
 	})
 	if err != nil {
 		return nil, err
 	}
 
+	proc.ArchProcess = &archProc
+	proc.FillFromArchProcess()
 	return proc, nil
 }
 
-// UpdateProcess 更新进程
+// UpdateProcess 更新进程挂载配置
 func UpdateProcess(db *gorm.DB, procID uint64, in ProcessInput) (*models.Process, *models.Process, error) {
-	if in.ListenPort < 0 || in.ListenPort > 65535 {
-		return nil, nil, ErrInvalidListenPort
-	}
-	name := strings.TrimSpace(in.Name)
-	if name == "" {
-		return nil, nil, ErrInvalidProcessName
-	}
-	cmdPattern := strings.TrimSpace(in.CmdPattern)
-	if cmdPattern == "" {
-		cmdPattern = "./bin/" + name
-	}
 	for _, ep := range in.ExtraDownstreams {
 		if err := validateIPv4Endpoint(ep); err != nil {
 			return nil, nil, err
@@ -597,64 +615,44 @@ func UpdateProcess(db *gorm.DB, procID uint64, in ProcessInput) (*models.Process
 	}
 
 	var before models.Process
-	if err := db.Preload("Agent").First(&before, procID).Error; err != nil {
+	if err := db.Preload("Agent").Preload("ArchProcess.Group").First(&before, procID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil, ErrProcessNotFound
 		}
 		return nil, nil, err
 	}
+	before.FillFromArchProcess()
 
 	if before.Agent != nil && before.Agent.LeaseType != "" {
 		return nil, nil, ErrAgentHasActiveLease
 	}
 
-	// 端口与名称冲突检查 (仅当 listen_port > 0 时校验端口互斥)
-	if in.ListenPort > 0 && in.ListenPort != before.ListenPort {
+	after := before
+	effectiveListenPort := before.EffectiveListenPort
+	if in.OverrideListenPort != nil {
+		effectiveListenPort = *in.OverrideListenPort
+		after.OverrideListenPort = in.OverrideListenPort
+	} else if before.ArchProcess != nil {
+		if in.ListenPort == before.ArchProcess.DefaultListenPort {
+			effectiveListenPort = in.ListenPort
+			after.OverrideListenPort = nil
+		} else if in.ListenPort >= 0 {
+			effectiveListenPort = in.ListenPort
+			after.OverrideListenPort = &in.ListenPort
+		}
+	}
+
+	if effectiveListenPort < 0 || effectiveListenPort > 65535 {
+		return nil, nil, ErrInvalidListenPort
+	}
+
+	if effectiveListenPort > 0 {
 		var portCount int64
-		if err := db.Model(&models.Process{}).Where("agent_id = ? AND listen_port = ? AND id != ?", before.AgentID, in.ListenPort, procID).Count(&portCount).Error; err != nil {
+		if err := db.Model(&models.Process{}).Where("agent_id = ? AND id != ? AND effective_listen_port = ?", before.AgentID, procID, effectiveListenPort).Count(&portCount).Error; err != nil {
 			return nil, nil, err
 		}
 		if portCount > 0 {
 			return nil, nil, ErrDuplicateProcessPort
-		}
-	}
-	if strings.TrimSpace(in.Name) != before.Name {
-		var nameCount int64
-		if err := db.Model(&models.Process{}).Where("agent_id = ? AND name = ? AND id != ?", before.AgentID, strings.TrimSpace(in.Name), procID).Count(&nameCount).Error; err != nil {
-			return nil, nil, err
-		}
-		if nameCount > 0 {
-			return nil, nil, ErrDuplicateProcessName
-		}
-	}
-
-	// 校验单域单进程挂载约束 (A-03)
-	if before.Agent != nil && before.Agent.Scope == models.ScopeShared {
-		var conflictCount int64
-		err := db.Model(&models.ProcessModule{}).
-			Joins("JOIN traefik_processes ON traefik_processes.id = traefik_process_modules.process_id").
-			Joins("JOIN traefik_agents ON traefik_agents.id = traefik_processes.agent_id").
-			Where("traefik_agents.scope = ? AND traefik_process_modules.process_id != ? AND traefik_process_modules.module_id IN ?",
-				models.ScopeShared, procID, in.ModuleIDs).
-			Count(&conflictCount).Error
-		if err != nil {
-			return nil, nil, err
-		}
-		if conflictCount > 0 {
-			return nil, nil, ErrDuplicateModuleBinding
-		}
-	} else {
-		var conflictCount int64
-		err := db.Model(&models.ProcessModule{}).
-			Joins("JOIN traefik_processes ON traefik_processes.id = traefik_process_modules.process_id").
-			Where("traefik_processes.agent_id = ? AND traefik_process_modules.process_id != ? AND traefik_process_modules.module_id IN ?",
-				before.AgentID, procID, in.ModuleIDs).
-			Count(&conflictCount).Error
-		if err != nil {
-			return nil, nil, err
-		}
-		if conflictCount > 0 {
-			return nil, nil, ErrDuplicateModuleBinding
 		}
 	}
 
@@ -663,98 +661,81 @@ func UpdateProcess(db *gorm.DB, procID uint64, in ProcessInput) (*models.Process
 		extraJSON = []byte("[]")
 	}
 
-	after := before
-	if in.GroupName != "" {
-		after.GroupName = strings.TrimSpace(in.GroupName)
+	after.EffectiveListenPort = effectiveListenPort
+	if in.OverrideCmdPattern != "" {
+		after.OverrideCmdPattern = in.OverrideCmdPattern
+	} else if in.CmdPattern != "" {
+		after.OverrideCmdPattern = in.CmdPattern
 	}
-	after.Name = strings.TrimSpace(in.Name)
-	after.ListenPort = in.ListenPort
 	after.AdvertiseIP = strings.TrimSpace(in.AdvertiseIP)
-	after.CmdPattern = cmdPattern
 	after.ExtraDownstreams = datatypes.JSON(extraJSON)
+	if in.ProbeDesiredState != "" {
+		after.ProbeDesiredState = in.ProbeDesiredState
+	}
 	after.Description = in.Description
 	after.UpdatedBy = in.OperatorID
 
 	err := db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Model(&models.Process{}).Where("id = ?", procID).Updates(map[string]interface{}{
-			"group_name":        after.GroupName,
-			"name":              after.Name,
-			"listen_port":       after.ListenPort,
-			"advertise_ip":      after.AdvertiseIP,
-			"cmd_pattern":       after.CmdPattern,
-			"extra_downstreams": after.ExtraDownstreams,
-			"description":       after.Description,
-			"updated_by":        after.UpdatedBy,
+			"override_listen_port":  after.OverrideListenPort,
+			"effective_listen_port": after.EffectiveListenPort,
+			"override_cmd_pattern":  after.OverrideCmdPattern,
+			"advertise_ip":          after.AdvertiseIP,
+			"extra_downstreams":     after.ExtraDownstreams,
+			"probe_desired_state":   after.ProbeDesiredState,
+			"description":           after.Description,
+			"updated_by":            after.UpdatedBy,
 		}).Error; err != nil {
 			return err
 		}
 
-		// 刷新 process_modules
-		if before.Agent != nil && before.Agent.Scope == models.ScopeShared {
-			// 解绑前清空旧 Module.ProcessID
-			_ = tx.Model(&models.Module{}).Where("process_id = ?", procID).Update("process_id", nil).Error
-		}
-		if err := tx.Where("process_id = ?", procID).Delete(&models.ProcessModule{}).Error; err != nil {
-			return err
-		}
-
-		for _, mid := range in.ModuleIDs {
-			pm := &models.ProcessModule{
-				ProcessID: procID,
-				ModuleID:  mid,
-			}
-			if err := tx.Create(pm).Error; err != nil {
+		if len(in.ModuleIDs) > 0 && before.ArchProcessID > 0 {
+			if err := tx.Model(&models.Module{}).Where("id IN ?", in.ModuleIDs).Update("arch_process_id", before.ArchProcessID).Error; err != nil {
 				return err
 			}
-			if before.Agent != nil && before.Agent.Scope == models.ScopeShared {
-				if err := tx.Model(&models.Module{}).Where("id = ?", mid).Update("process_id", procID).Error; err != nil {
-					return err
-				}
-			}
 		}
 
-		return nil
+		return tx.Model(&models.Agent{}).Where("id = ?", before.AgentID).
+			Update("mounts_revision", gorm.Expr("mounts_revision + 1")).Error
 	})
 	if err != nil {
 		return nil, nil, err
 	}
 
+	after.FillFromArchProcess()
 	return &before, &after, nil
 }
 
-// DeleteProcess 删除进程映射
+// DeleteProcess 卸载/删除进程挂载实例 (F-12.2 解耦重放，置空任务外键)
 func DeleteProcess(db *gorm.DB, procID uint64) (*models.Process, error) {
 	var proc models.Process
-	if err := db.Preload("Agent").First(&proc, procID).Error; err != nil {
+	if err := db.Preload("Agent").Preload("ArchProcess").First(&proc, procID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrProcessNotFound
 		}
 		return nil, err
 	}
+	proc.FillFromArchProcess()
 
 	if proc.Agent != nil && proc.Agent.LeaseType != "" {
 		return nil, ErrAgentHasActiveLease
 	}
 
-	// 检查是否仍被重放任务引用
-	var replayCount int64
-	if err := db.Model(&models.ReplayTask{}).
-		Where("source_process_id = ? OR target_process_id = ?", procID, procID).
-		Count(&replayCount).Error; err != nil {
-		return nil, err
-	}
-	if replayCount > 0 {
-		return nil, ErrProcessReferencedByReplay
-	}
-
 	err := db.Transaction(func(tx *gorm.DB) error {
-		if proc.Agent != nil && proc.Agent.Scope == models.ScopeShared {
-			_ = tx.Model(&models.Module{}).Where("process_id = ?", procID).Update("process_id", nil).Error
-		}
-		if err := tx.Where("process_id = ?", procID).Delete(&models.ProcessModule{}).Error; err != nil {
+		// 置空历史重放任务引用 (ON DELETE SET NULL 软解耦)
+		if err := tx.Model(&models.ReplayTask{}).Where("source_process_id = ?", procID).Update("source_process_id", nil).Error; err != nil {
 			return err
 		}
-		return tx.Delete(&proc).Error
+		if err := tx.Model(&models.ReplayTask{}).Where("target_process_id = ?", procID).Update("target_process_id", nil).Error; err != nil {
+			return err
+		}
+
+		if err := tx.Delete(&proc).Error; err != nil {
+			return err
+		}
+
+		return tx.Model(&models.Agent{}).Where("id = ?", proc.AgentID).
+			Update("mounts_revision", gorm.Expr("mounts_revision + 1")).Error
 	})
 	if err != nil {
 		return nil, err
@@ -803,24 +784,32 @@ func BuildStaticTopology(db *gorm.DB, view string, subsystemID *uint64) (*Static
 	}
 
 	var processes []models.Process
-	if err := db.Joins("JOIN traefik_agents ON traefik_agents.id = traefik_processes.agent_id").
+	if err := db.Preload("ArchProcess").Joins("JOIN traefik_agents ON traefik_agents.id = traefik_processes.agent_id").
 		Where("traefik_agents.scope = ?", models.ScopeShared).
 		Order("traefik_processes.id ASC").Find(&processes).Error; err != nil {
 		return nil, err
 	}
+	for i := range processes {
+		processes[i].FillFromArchProcess()
+	}
 
-	var pms []models.ProcessModule
-	if err := db.Joins("JOIN traefik_processes ON traefik_processes.id = traefik_process_modules.process_id").
-		Joins("JOIN traefik_agents ON traefik_agents.id = traefik_processes.agent_id").
-		Where("traefik_agents.scope = ?", models.ScopeShared).
-		Find(&pms).Error; err != nil {
-		return nil, err
+	var allModulesList []models.Module
+	_ = db.Where("arch_process_id IS NOT NULL").Find(&allModulesList).Error
+	archModMap := make(map[uint64][]uint64)
+	for _, m := range allModulesList {
+		if m.ArchProcessID != nil {
+			archModMap[*m.ArchProcessID] = append(archModMap[*m.ArchProcessID], m.ID)
+		}
 	}
 	procModulesMap := make(map[uint64][]uint64) // processID -> []moduleID
 	moduleProcMap := make(map[uint64]uint64)    // moduleID -> processID
-	for _, pm := range pms {
-		procModulesMap[pm.ProcessID] = append(procModulesMap[pm.ProcessID], pm.ModuleID)
-		moduleProcMap[pm.ModuleID] = pm.ProcessID
+	for _, p := range processes {
+		if mIDs, ok := archModMap[p.ArchProcessID]; ok {
+			procModulesMap[p.ID] = append(procModulesMap[p.ID], mIDs...)
+			for _, mid := range mIDs {
+				moduleProcMap[mid] = p.ID
+			}
+		}
 	}
 
 	var dependencies []models.ModuleDependency
@@ -867,7 +856,7 @@ func BuildStaticTopology(db *gorm.DB, view string, subsystemID *uint64) (*Static
 			ParentNodeID: fmt.Sprintf("grp_%d", m.GroupID),
 			Code:         m.Code,
 			Name:         m.Name,
-			ProcessID:    m.ProcessID,
+			ProcessID:    m.ArchProcessID,
 		})
 	}
 
@@ -888,7 +877,7 @@ func BuildStaticTopology(db *gorm.DB, view string, subsystemID *uint64) (*Static
 				EntityID:     p.ID,
 				ParentNodeID: fmt.Sprintf("agt_%d", p.AgentID),
 				Name:         p.Name,
-				ListenPort:   p.ListenPort,
+				ListenPort:   p.EffectiveListenPort,
 				ModuleIDs:    procModulesMap[p.ID],
 			})
 		}
@@ -1004,49 +993,170 @@ func BuildStaticTopology(db *gorm.DB, view string, subsystemID *uint64) (*Static
 	}, nil
 }
 
-// CompileProcessDownstreams 四层聚合编译进程下游依赖端点 (F-02.3)
+// CompileProcessDownstreams 四层聚合编译进程下游依赖端点 (F-02.3, ADR-09)
+// 优先级策略：① 同机挂载优先 -> ② FallbackAgentID 绑定 SHARED 环境兜底（多套 SHARED 环境未绑定时绝不串绑）
+// -> ③ 同机全部已挂载非零端口 (满足 ArmedDownstreams ⊇ SingleAgentCapturingDownstreams 超集不变量) + ExtraDownstreams + ReplayEgress
 func CompileProcessDownstreams(db *gorm.DB, procID uint64, batchProcessIDs []uint64, replayEgress []agentproto.DownstreamEndpoint) ([]agentproto.DownstreamEndpoint, error) {
 	var proc models.Process
-	if err := db.Preload("Agent").First(&proc, procID).Error; err != nil {
+	if err := db.Preload("Agent").Preload("ArchProcess").First(&proc, procID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrProcessNotFound
 		}
 		return nil, err
 	}
+	proc.FillFromArchProcess()
 
-	var pms []models.ProcessModule
-	if err := db.Where("process_id = ?", procID).Find(&pms).Error; err != nil {
-		return nil, err
-	}
-	moduleIDs := make([]uint64, 0, len(pms))
-	for _, pm := range pms {
-		moduleIDs = append(moduleIDs, pm.ModuleID)
-	}
-
-	// 1. 契约声明下游：从所承载模块的 DEPEND 依赖反查提供该服务的 PROVIDE 模块及对应进程
+	// 1. 契约声明下游：从所承载模块的 DEPEND 依赖反查提供该服务的 PROVIDE 模块及对应架构进程
 	var declaredEndpoints []agentproto.DownstreamEndpoint
+
+	var modules []models.Module
+	_ = db.Where("arch_process_id = ?", proc.ArchProcessID).Find(&modules).Error
+	moduleIDs := make([]uint64, 0, len(modules))
+	for _, m := range modules {
+		moduleIDs = append(moduleIDs, m.ID)
+	}
+
 	if len(moduleIDs) > 0 {
 		var deps []models.ModuleDependency
 		_ = db.Preload("ProviderModule").Where("consumer_module_id IN ? AND is_external = false", moduleIDs).Find(&deps).Error
 
+		// 检查系统中 SHARED Agent 数量
+		var sharedAgents []models.Agent
+		_ = db.Where("scope = ?", models.ScopeShared).Find(&sharedAgents).Error
+
 		for _, dep := range deps {
-			if dep.ProviderModule != nil && dep.ProviderModule.ProcessID != nil {
-				var tgtProc models.Process
-				if err := db.Preload("Agent").First(&tgtProc, *dep.ProviderModule.ProcessID).Error; err == nil && tgtProc.Agent != nil {
-					ip := parseHostFromEndpoint(tgtProc.Agent.Endpoint)
-					if tgtProc.AdvertiseIP != "" {
-						ip = tgtProc.AdvertiseIP
+			var targetArchPID uint64
+			if dep.ProviderModule != nil && dep.ProviderModule.ArchProcessID != nil {
+				targetArchPID = *dep.ProviderModule.ArchProcessID
+			} else if dep.ProviderModuleID != nil {
+				var pm models.Module
+				if err := db.First(&pm, *dep.ProviderModuleID).Error; err == nil && pm.ArchProcessID != nil {
+					targetArchPID = *pm.ArchProcessID
+				}
+			} else if dep.ServiceID != nil {
+				var svc models.ModuleService
+				if err := db.First(&svc, *dep.ServiceID).Error; err == nil {
+					var pm models.Module
+					if err := db.First(&pm, svc.ModuleID).Error; err == nil && pm.ArchProcessID != nil {
+						targetArchPID = *pm.ArchProcessID
 					}
-					if ip != "" && tgtProc.ListenPort > 0 {
+				}
+			}
+			if targetArchPID == 0 {
+				continue
+			}
+
+			// 优先检查同机挂载 (同一 AgentID)
+			var tgtProc models.Process
+			err := db.Preload("Agent").Where("agent_id = ? AND arch_process_id = ?", proc.AgentID, targetArchPID).First(&tgtProc).Error
+			if err == nil && tgtProc.EffectiveListenPort > 0 {
+				tgtIP := extractHostFromEndpoint(proc.Agent.Endpoint)
+				if tgtProc.AdvertiseIP != "" {
+					tgtIP = tgtProc.AdvertiseIP
+				}
+				if tgtIP != "" {
+					declaredEndpoints = append(declaredEndpoints, agentproto.DownstreamEndpoint{
+						IP:   tgtIP,
+						Port: uint16(tgtProc.EffectiveListenPort),
+					})
+				}
+				declaredEndpoints = append(declaredEndpoints, agentproto.DownstreamEndpoint{
+					IP:   "127.0.0.1",
+					Port: uint16(tgtProc.EffectiveListenPort),
+				})
+				continue
+			}
+
+			// 同机未挂载：检查 FallbackAgentID 兜底环境
+			var fallbackAgentID uint64
+			if proc.Agent != nil && proc.Agent.FallbackAgentID != nil && *proc.Agent.FallbackAgentID > 0 {
+				fallbackAgentID = *proc.Agent.FallbackAgentID
+			} else if len(sharedAgents) == 1 {
+				// 仅当系统中恰好存在唯一 1 套 SHARED Agent 时作为默认 fallback
+				fallbackAgentID = sharedAgents[0].ID
+			}
+			// 若 len(sharedAgents) >= 2 且未指定 FallbackAgentID，严格禁止跨环境串绑
+
+			if fallbackAgentID > 0 {
+				var fbProc models.Process
+				err := db.Preload("Agent").Where("agent_id = ? AND arch_process_id = ?", fallbackAgentID, targetArchPID).First(&fbProc).Error
+				if err == nil && fbProc.EffectiveListenPort > 0 && fbProc.Agent != nil {
+					tgtIP := extractHostFromEndpoint(fbProc.Agent.Endpoint)
+					if fbProc.AdvertiseIP != "" {
+						tgtIP = fbProc.AdvertiseIP
+					}
+					if tgtIP != "" {
 						declaredEndpoints = append(declaredEndpoints, agentproto.DownstreamEndpoint{
-							IP:   ip,
-							Port: uint16(tgtProc.ListenPort),
+							IP:   tgtIP,
+							Port: uint16(fbProc.EffectiveListenPort),
 						})
-						// 同机 127.0.0.1 别名探测
-						if proc.AgentID == tgtProc.AgentID {
-							declaredEndpoints = append(declaredEndpoints, agentproto.DownstreamEndpoint{
-								IP:   "127.0.0.1",
-								Port: uint16(tgtProc.ListenPort),
+					}
+				}
+			}
+		}
+	}
+
+	// 2. 同机全部已挂载非零端口 (满足 ArmedDownstreams ⊇ SingleAgentCapturingDownstreams 超集不变量)
+	var peerEndpoints []agentproto.DownstreamEndpoint
+	var peerProcs []models.Process
+	_ = db.Preload("Agent").Where("agent_id = ? AND id != ? AND effective_listen_port > 0", proc.AgentID, proc.ID).Find(&peerProcs).Error
+	for _, pp := range peerProcs {
+		pIP := extractHostFromEndpoint(proc.Agent.Endpoint)
+		if pp.AdvertiseIP != "" {
+			pIP = pp.AdvertiseIP
+		}
+		if pIP != "" {
+			peerEndpoints = append(peerEndpoints, agentproto.DownstreamEndpoint{
+				IP:   pIP,
+				Port: uint16(pp.EffectiveListenPort),
+			})
+		}
+		peerEndpoints = append(peerEndpoints, agentproto.DownstreamEndpoint{
+			IP:   "127.0.0.1",
+			Port: uint16(pp.EffectiveListenPort),
+		})
+	}
+
+	// 补充批次协同进程端点 (如果提供)
+	if len(batchProcessIDs) > 0 {
+		var batchProcs []models.Process
+		_ = db.Preload("Agent").Where("id IN ? AND id != ?", batchProcessIDs, proc.ID).Find(&batchProcs).Error
+		for _, bp := range batchProcs {
+			if bp.EffectiveListenPort > 0 && bp.Agent != nil {
+				bIP := extractHostFromEndpoint(bp.Agent.Endpoint)
+				if bp.AdvertiseIP != "" {
+					bIP = bp.AdvertiseIP
+				}
+				if bIP != "" {
+					peerEndpoints = append(peerEndpoints, agentproto.DownstreamEndpoint{
+						IP:   bIP,
+						Port: uint16(bp.EffectiveListenPort),
+					})
+				}
+				if bp.AgentID == proc.AgentID {
+					peerEndpoints = append(peerEndpoints, agentproto.DownstreamEndpoint{
+						IP:   "127.0.0.1",
+						Port: uint16(bp.EffectiveListenPort),
+					})
+				}
+			}
+		}
+	}
+
+	// 3. 补充外部固定下游: ArchProcess.DefaultExtraDownstreams + proc.ExtraDownstreams
+	var extraEndpoints []agentproto.DownstreamEndpoint
+	addExtras := func(raw datatypes.JSON) {
+		if len(raw) > 0 {
+			var eps []string
+			if err := json.Unmarshal(raw, &eps); err == nil {
+				for _, ep := range eps {
+					host, portStr, err := net.SplitHostPort(strings.TrimSpace(ep))
+					if err == nil {
+						port, err := strconv.Atoi(portStr)
+						if err == nil && port > 0 && port <= 65535 {
+							extraEndpoints = append(extraEndpoints, agentproto.DownstreamEndpoint{
+								IP:   host,
+								Port: uint16(port),
 							})
 						}
 					}
@@ -1054,68 +1164,23 @@ func CompileProcessDownstreams(db *gorm.DB, procID uint64, batchProcessIDs []uin
 			}
 		}
 	}
-
-	// 2. 批次协同进程监听端点
-	var batchEndpoints []agentproto.DownstreamEndpoint
-	if len(batchProcessIDs) > 0 {
-		var batchProcs []models.Process
-		_ = db.Preload("Agent").Where("id IN ?", batchProcessIDs).Find(&batchProcs).Error
-		for _, bp := range batchProcs {
-			if bp.ID == procID {
-				continue
-			}
-			if bp.Agent != nil {
-				ip := parseHostFromEndpoint(bp.Agent.Endpoint)
-				if bp.AdvertiseIP != "" {
-					ip = bp.AdvertiseIP
-				}
-				if ip != "" && bp.ListenPort > 0 {
-					batchEndpoints = append(batchEndpoints, agentproto.DownstreamEndpoint{
-						IP:   ip,
-						Port: uint16(bp.ListenPort),
-					})
-					if proc.AgentID == bp.AgentID {
-						batchEndpoints = append(batchEndpoints, agentproto.DownstreamEndpoint{
-							IP:   "127.0.0.1",
-							Port: uint16(bp.ListenPort),
-						})
-					}
-				}
-			}
-		}
+	if proc.ArchProcess != nil {
+		addExtras(proc.ArchProcess.DefaultExtraDownstreams)
 	}
-
-	// 3. 补充外部固定下游 ExtraDownstreams
-	var extraEndpoints []agentproto.DownstreamEndpoint
-	if len(proc.ExtraDownstreams) > 0 {
-		var eps []string
-		_ = json.Unmarshal(proc.ExtraDownstreams, &eps)
-		for _, ep := range eps {
-			host, portStr, err := net.SplitHostPort(ep)
-			if err == nil {
-				port, err := strconv.Atoi(portStr)
-				if err == nil && port > 0 && port <= 65535 {
-					extraEndpoints = append(extraEndpoints, agentproto.DownstreamEndpoint{
-						IP:   host,
-						Port: uint16(port),
-					})
-				}
-			}
-		}
-	}
+	addExtras(proc.ExtraDownstreams)
 
 	// 4. 合并去重并剔除自身监听端口
 	merged := make([]agentproto.DownstreamEndpoint, 0)
 	seen := make(map[string]bool)
 
-	all := append(declaredEndpoints, batchEndpoints...)
+	all := append(declaredEndpoints, peerEndpoints...)
 	all = append(all, extraEndpoints...)
 	all = append(all, replayEgress...)
 
-	selfPort := uint16(proc.ListenPort)
+	selfPort := uint16(proc.EffectiveListenPort)
 
 	for _, ep := range all {
-		if ep.Port == selfPort {
+		if selfPort > 0 && ep.Port == selfPort {
 			continue
 		}
 		key := fmt.Sprintf("%s:%d", ep.IP, ep.Port)

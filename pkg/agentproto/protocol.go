@@ -1,7 +1,12 @@
 package agentproto
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"fmt"
+	"sort"
+	"strings"
 	"time"
 )
 
@@ -62,16 +67,71 @@ var (
 
 // HandshakeResp 握手与心跳双向对账数据载荷
 type HandshakeResp struct {
-	AgentVersion    string    `json:"agent_version"`     // Agent 构建版本号
-	ProtocolVersion string    `json:"protocol_version"`  // 主协议版本，如 "1.0"
-	BootID          string    `json:"boot_id"`           // Agent 实例重启 UUID
-	StartedAt       time.Time `json:"started_at"`        // 启动时刻
-	KernelVersion   string    `json:"kernel_version"`    // 宿主机内核版本
-	HasEbpfCap      bool      `json:"has_ebpf_cap"`      // 是否具备完整 eBPF 运行权限
-	CapDetail       string    `json:"cap_detail"`        // 权限详情说明
-	ActiveLeaseType string    `json:"active_lease_type"` // 当前内存持有的租约类型: "" | "RECORDING" | "REPLAY"
-	ActiveRefID     uint64    `json:"active_ref_id"`     // 当前持有的 SessionID 或 TaskID
-	UptimeSec       uint64    `json:"uptime_sec"`        // 运行秒数
+	AgentVersion      string    `json:"agent_version"`     // Agent 构建版本号
+	ProtocolVersion   string    `json:"protocol_version"`  // 主协议版本，如 "1.0"
+	BootID            string    `json:"boot_id"`           // Agent 实例重启 UUID
+	StartedAt         time.Time `json:"started_at"`        // 启动时刻
+	KernelVersion     string    `json:"kernel_version"`    // 宿主机内核版本
+	HasEbpfCap        bool      `json:"has_ebpf_cap"`      // 是否具备完整 eBPF 运行权限
+	CapDetail         string    `json:"cap_detail"`        // 权限详情说明
+	ActiveLeaseType   string    `json:"active_lease_type"` // 当前内存持有的租约类型: "" | "RECORDING" | "REPLAY"
+	ActiveRefID       uint64    `json:"active_ref_id"`     // 当前持有的 SessionID 或 TaskID
+	UptimeSec         uint64    `json:"uptime_sec"`        // 运行秒数
+	ArmedProcessCount int       `json:"armed_process_count"`
+	ArmedDigest       string    `json:"armed_digest"`
+}
+
+// ArmStandbyReq 管控端向 Agent 预下发待命规格请求
+type ArmStandbyReq struct {
+	Revision  uint64               `json:"revision"`
+	Processes []ProcessMonitorSpec `json:"processes"`
+}
+
+// ArmStandbyResp Agent 待命预挂载与状态响应
+type ArmStandbyResp struct {
+	Revision    uint64              `json:"revision"`
+	ArmedDigest string              `json:"armed_digest"`
+	Diagnostics []ProcessDiagStatus `json:"diagnostics"`
+}
+
+// ComputeArmedDigest 确定性计算进程预挂载规格哈希 (按 ProcessID 升序排序，拼装关键字段计算 SHA-256)
+func ComputeArmedDigest(processes []ProcessMonitorSpec) string {
+	if len(processes) == 0 {
+		return ""
+	}
+	sorted := make([]ProcessMonitorSpec, len(processes))
+	copy(sorted, processes)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].ProcessID < sorted[j].ProcessID
+	})
+
+	var sb strings.Builder
+	for i, p := range sorted {
+		if i > 0 {
+			sb.WriteString(";")
+		}
+		sb.WriteString(fmt.Sprintf("%d:%d:%s", p.ProcessID, p.ListenPort, p.CmdPattern))
+		if len(p.Downstreams) > 0 {
+			dsList := make([]DownstreamEndpoint, len(p.Downstreams))
+			copy(dsList, p.Downstreams)
+			sort.Slice(dsList, func(a, b int) bool {
+				if dsList[a].IP == dsList[b].IP {
+					return dsList[a].Port < dsList[b].Port
+				}
+				return dsList[a].IP < dsList[b].IP
+			})
+			sb.WriteString(":[")
+			for di, ds := range dsList {
+				if di > 0 {
+					sb.WriteString(",")
+				}
+				sb.WriteString(fmt.Sprintf("%s:%d", ds.IP, ds.Port))
+			}
+			sb.WriteString("]")
+		}
+	}
+	sum := sha256.Sum256([]byte(sb.String()))
+	return hex.EncodeToString(sum[:])
 }
 
 // DownstreamEndpoint 描述目标进程允许访问并需被透明拦截的下游 CROS RPC 地址

@@ -91,10 +91,15 @@ func extractHostFromEndpoint(ep string) string {
 	return ep
 }
 
-// BuildTopologyGraph 构建全系统分层复合架构拓扑图 (支持 LOGICAL / PHYSICAL 视角)
-func BuildTopologyGraph(db *gorm.DB, view string) (*TopologyGraphDTO, error) {
+// BuildTopologyGraph 构建全系统分层复合架构拓扑图 (支持 LOGICAL / PHYSICAL 视角，支持可选环境端点叠加)
+func BuildTopologyGraph(db *gorm.DB, view string, envAgentIDs ...uint64) (*TopologyGraphDTO, error) {
 	if view != TopologyViewLogical && view != TopologyViewPhysical {
 		return nil, ErrInvalidTopologyView
+	}
+
+	var envAgentID uint64
+	if len(envAgentIDs) > 0 {
+		envAgentID = envAgentIDs[0]
 	}
 
 	dto := &TopologyGraphDTO{
@@ -108,7 +113,7 @@ func BuildTopologyGraph(db *gorm.DB, view string) (*TopologyGraphDTO, error) {
 			return nil, err
 		}
 	} else {
-		if err := buildPhysicalTopologyGraph(db, dto); err != nil {
+		if err := buildPhysicalTopologyGraph(db, dto, envAgentID); err != nil {
 			return nil, err
 		}
 	}
@@ -286,7 +291,7 @@ func buildLogicalTopologyGraph(db *gorm.DB, dto *TopologyGraphDTO) error {
 			ancestors = []string{parentID}
 		}
 
-		isDeployed := m.ProcessID != nil && *m.ProcessID > 0
+		isDeployed := m.ArchProcessID != nil && *m.ArchProcessID > 0
 		meta := map[string]any{
 			"is_deployed":   isDeployed,
 			"provide_count": provideCountMap[m.ID],
@@ -295,7 +300,7 @@ func buildLogicalTopologyGraph(db *gorm.DB, dto *TopologyGraphDTO) error {
 			"group_id":      m.GroupID,
 		}
 		if isDeployed {
-			meta["process_id"] = *m.ProcessID
+			meta["arch_process_id"] = *m.ArchProcessID
 		}
 
 		dto.Nodes = append(dto.Nodes, GraphNode{
@@ -369,8 +374,8 @@ func buildLogicalTopologyGraph(db *gorm.DB, dto *TopologyGraphDTO) error {
 		if !ok {
 			continue
 		}
-		if srcMod.ProcessID != nil && *srcMod.ProcessID > 0 {
-			srcProcID = srcMod.ProcessID
+		if srcMod.ArchProcessID != nil && *srcMod.ArchProcessID > 0 {
+			srcProcID = srcMod.ArchProcessID
 		}
 
 		if dep.IsExternal {
@@ -397,8 +402,8 @@ func buildLogicalTopologyGraph(db *gorm.DB, dto *TopologyGraphDTO) error {
 			dstNodeID = fmt.Sprintf("mod_%d", providerID)
 			dstModID = &providerID
 			dstMod, ok2 := modMap[providerID]
-			if ok2 && dstMod.ProcessID != nil && *dstMod.ProcessID > 0 {
-				dstProcID = dstMod.ProcessID
+			if ok2 && dstMod.ArchProcessID != nil && *dstMod.ArchProcessID > 0 {
+				dstProcID = dstMod.ArchProcessID
 			}
 
 			if srcProcID != nil && dstProcID != nil && *srcProcID == *dstProcID {
@@ -454,50 +459,63 @@ func buildLogicalTopologyGraph(db *gorm.DB, dto *TopologyGraphDTO) error {
 	return nil
 }
 
-// buildPhysicalTopologyGraph 物理部署视角去 Agent 分层树与边构建
-func buildPhysicalTopologyGraph(db *gorm.DB, dto *TopologyGraphDTO) error {
-	// 仅拉取 SHARED 域 Agent
-	var agents []models.Agent
-	if err := db.Where("scope = ?", models.ScopeShared).Find(&agents).Error; err != nil {
-		return err
-	}
-	agentMap := make(map[uint64]models.Agent)
-	for _, a := range agents {
-		agentMap[a.ID] = a
-	}
-
-	// 仅拉取 SHARED Agent 下的进程
-	var processes []models.Process
-	if err := db.Joins("JOIN traefik_agents ON traefik_agents.id = traefik_processes.agent_id").
-		Where("traefik_agents.scope = ?", models.ScopeShared).
-		Order("traefik_processes.id ASC").Find(&processes).Error; err != nil {
+// buildPhysicalTopologyGraph 物理进程架构蓝图去 Agent 拓扑与可选环境端点叠加 (F-04, ADR-09)
+func buildPhysicalTopologyGraph(db *gorm.DB, dto *TopologyGraphDTO, envAgentID uint64) error {
+	// 1. 查询全部架构进程组与架构进程蓝图
+	var pgrps []models.ArchProcessGroup
+	if err := db.Order("sort_order ASC, id ASC").Find(&pgrps).Error; err != nil {
 		return err
 	}
 
-	// 映射进程承载的模块
-	var pms []models.ProcessModule
-	if err := db.Joins("JOIN traefik_processes ON traefik_processes.id = traefik_process_modules.process_id").
-		Joins("JOIN traefik_agents ON traefik_agents.id = traefik_processes.agent_id").
-		Where("traefik_agents.scope = ?", models.ScopeShared).
-		Find(&pms).Error; err != nil {
+	var archProcs []models.ArchProcess
+	if err := db.Order("group_id ASC, id ASC").Find(&archProcs).Error; err != nil {
 		return err
 	}
-	procModulesMap := make(map[uint64][]uint64)
-	moduleProcMap := make(map[uint64]uint64)
-	for _, pm := range pms {
-		procModulesMap[pm.ProcessID] = append(procModulesMap[pm.ProcessID], pm.ModuleID)
-		moduleProcMap[pm.ModuleID] = pm.ProcessID
-	}
 
+	// 2. 查询全部功能模块
 	var allModules []models.Module
 	if err := db.Order("id ASC").Find(&allModules).Error; err != nil {
 		return err
 	}
 	moduleMap := make(map[uint64]models.Module)
+	archModMap := make(map[uint64][]models.Module)
 	for _, m := range allModules {
 		moduleMap[m.ID] = m
+		if m.ArchProcessID != nil && *m.ArchProcessID > 0 {
+			archModMap[*m.ArchProcessID] = append(archModMap[*m.ArchProcessID], m)
+		}
 	}
 
+	// 3. 统计各标准进程被多少套 SHARED 环境挂载
+	type sharedCount struct {
+		ArchProcessID uint64
+		Count         int
+	}
+	var counts []sharedCount
+	_ = db.Model(&models.Process{}).
+		Select("traefik_processes.arch_process_id, count(DISTINCT traefik_processes.agent_id) as count").
+		Joins("JOIN traefik_agents ON traefik_agents.id = traefik_processes.agent_id").
+		Where("traefik_agents.scope = ?", models.ScopeShared).
+		Group("traefik_processes.arch_process_id").
+		Scan(&counts).Error
+	sharedCountMap := make(map[uint64]int)
+	for _, c := range counts {
+		sharedCountMap[c.ArchProcessID] = c.Count
+	}
+
+	// 4. 若指定 envAgentID，加载该环境 Agent 及其挂载实例
+	var envAgent models.Agent
+	agentProcMap := make(map[uint64]models.Process)
+	if envAgentID > 0 {
+		_ = db.First(&envAgent, envAgentID).Error
+		var envProcs []models.Process
+		_ = db.Where("agent_id = ?", envAgentID).Find(&envProcs).Error
+		for _, p := range envProcs {
+			agentProcMap[p.ArchProcessID] = p
+		}
+	}
+
+	// 5. 加载服务供给与依赖关系
 	var services []models.ModuleService
 	if err := db.Find(&services).Error; err != nil {
 		return err
@@ -516,106 +534,188 @@ func buildPhysicalTopologyGraph(db *gorm.DB, dto *TopologyGraphDTO) error {
 		return err
 	}
 
-	// 1. 按 Process.group_name 分组 (空值归一化为 "默认进程组")
-	groupProcessMap := make(map[string][]models.Process)
-	for _, p := range processes {
-		gName := strings.TrimSpace(p.GroupName)
-		if gName == "" {
-			gName = "默认进程组"
-		}
-		groupProcessMap[gName] = append(groupProcessMap[gName], p)
+	// 6. 按组组织架构进程
+	groupArchProcMap := make(map[uint64][]models.ArchProcess)
+	for _, ap := range archProcs {
+		groupArchProcMap[ap.GroupID] = append(groupArchProcMap[ap.GroupID], ap)
 	}
-
-	sortedGroups := make([]string, 0, len(groupProcessMap))
-	for gName := range groupProcessMap {
-		sortedGroups = append(sortedGroups, gName)
-	}
-	sort.Strings(sortedGroups)
 
 	deployedModuleIDs := make(map[uint64]bool)
 
-	// 2. 依次生成 PROCESS_GROUP (depth=0) -> PROCESS (depth=1) -> MODULE (depth=2)
-	for gIdx, gName := range sortedGroups {
-		pgrpID := fmt.Sprintf("pgrp_%s", gName)
+	type procExtraEp struct {
+		procID uint64
+		ep     string
+	}
+	var procExtraEps []procExtraEp
+	externalEndpoints := make(map[string]bool)
+
+	// 7. 生成 PROCESS_GROUP (depth=0) -> PROCESS (depth=1) -> MODULE (depth=2)
+	for gIdx, pgrp := range pgrps {
+		pgrpID := fmt.Sprintf("pgrp_%d", pgrp.ID)
 		dto.Nodes = append(dto.Nodes, GraphNode{
 			ID:        pgrpID,
 			Type:      NodeTypeProcessGroup,
 			ParentID:  "",
 			Ancestors: []string{},
 			Depth:     0,
-			Name:      gName,
+			EntityID:  pgrp.ID,
+			Code:      pgrp.Code,
+			Name:      pgrp.Name,
 			SortOrder: gIdx + 1,
+			Meta: map[string]any{
+				"group_code":  pgrp.Code,
+				"description": pgrp.Description,
+			},
 		})
 
-		procs := groupProcessMap[gName]
-		for _, p := range procs {
-			procID := fmt.Sprintf("proc_%d", p.ID)
+		apList := groupArchProcMap[pgrp.ID]
+		for _, ap := range apList {
+			procNodeID := fmt.Sprintf("proc_%d", ap.ID)
+			mountedSharedCount := sharedCountMap[ap.ID]
 
-			// 计算 EffectiveIP 并合成 endpoint
-			var effectiveIP string
-			if strings.TrimSpace(p.AdvertiseIP) != "" {
-				effectiveIP = strings.TrimSpace(p.AdvertiseIP)
-			} else if ag, ok := agentMap[p.AgentID]; ok {
-				effectiveIP = extractHostFromEndpoint(ag.Endpoint)
-			} else {
-				effectiveIP = "127.0.0.1"
-			}
-			var effectiveEndpoint string
-			if p.ListenPort > 0 {
-				effectiveEndpoint = fmt.Sprintf("%s:%d", effectiveIP, p.ListenPort)
-			} else {
-				effectiveEndpoint = fmt.Sprintf("%s (纯客户端)", effectiveIP)
+			var procMeta map[string]any
+			var extraDownstreams []string
+			if len(ap.DefaultExtraDownstreams) > 0 {
+				_ = json.Unmarshal(ap.DefaultExtraDownstreams, &extraDownstreams)
 			}
 
-			// 绝对禁止透出 agent_id 字段
-			procMeta := map[string]any{
-				"endpoint":    effectiveEndpoint,
-				"listen_port": p.ListenPort,
-				"cmd_pattern": p.CmdPattern,
-				"description": p.Description,
-				"group_name":  gName,
+			if envAgentID > 0 {
+				if procInst, isMounted := agentProcMap[ap.ID]; isMounted {
+					var effectiveIP string
+					if strings.TrimSpace(procInst.AdvertiseIP) != "" {
+						effectiveIP = strings.TrimSpace(procInst.AdvertiseIP)
+					} else if envAgent.ID > 0 {
+						effectiveIP = extractHostFromEndpoint(envAgent.Endpoint)
+					} else {
+						effectiveIP = "127.0.0.1"
+					}
+
+					listenPort := procInst.EffectiveListenPort
+					var effectiveEndpoint string
+					if listenPort > 0 {
+						effectiveEndpoint = fmt.Sprintf("%s:%d", effectiveIP, listenPort)
+					} else {
+						effectiveEndpoint = fmt.Sprintf("%s (纯客户端)", effectiveIP)
+					}
+
+					cmdPattern := ap.DefaultCmdPattern
+					if procInst.OverrideCmdPattern != "" {
+						cmdPattern = procInst.OverrideCmdPattern
+					}
+
+					if len(procInst.ExtraDownstreams) > 0 {
+						var localExtras []string
+						if err := json.Unmarshal(procInst.ExtraDownstreams, &localExtras); err == nil {
+							extraDownstreams = append(extraDownstreams, localExtras...)
+						}
+					}
+
+					procMeta = map[string]any{
+						"arch_process_id":          ap.ID,
+						"code":                     ap.Code,
+						"is_mounted":               true,
+						"process_id":               procInst.ID,
+						"endpoint":                 effectiveEndpoint,
+						"listen_port":              listenPort,
+						"default_listen_port":      ap.DefaultListenPort,
+						"probe_status":             procInst.ProbeStatus,
+						"resolved_pid":             procInst.ResolvedPID,
+						"established_conns":        procInst.EstablishedConns,
+						"need_reconnect":           procInst.NeedReconnect,
+						"cmd_pattern":              cmdPattern,
+						"description":              ap.Description,
+						"group_name":               pgrp.Name,
+						"mounted_shared_env_count": mountedSharedCount,
+					}
+				} else {
+					var effectiveEndpoint string
+					if ap.DefaultListenPort > 0 {
+						effectiveEndpoint = fmt.Sprintf(":%d", ap.DefaultListenPort)
+					} else {
+						effectiveEndpoint = ":0 (纯客户端)"
+					}
+					procMeta = map[string]any{
+						"arch_process_id":          ap.ID,
+						"code":                     ap.Code,
+						"is_mounted":               false,
+						"endpoint":                 effectiveEndpoint,
+						"listen_port":              ap.DefaultListenPort,
+						"default_listen_port":      ap.DefaultListenPort,
+						"probe_status":             models.ProbeStatusOffline,
+						"cmd_pattern":              ap.DefaultCmdPattern,
+						"description":              ap.Description,
+						"group_name":               pgrp.Name,
+						"mounted_shared_env_count": mountedSharedCount,
+					}
+				}
+			} else {
+				var effectiveEndpoint string
+				if ap.DefaultListenPort > 0 {
+					effectiveEndpoint = fmt.Sprintf(":%d", ap.DefaultListenPort)
+				} else {
+					effectiveEndpoint = ":0 (纯客户端)"
+				}
+				procMeta = map[string]any{
+					"arch_process_id":          ap.ID,
+					"code":                     ap.Code,
+					"is_mounted":               false,
+					"endpoint":                 effectiveEndpoint,
+					"listen_port":              ap.DefaultListenPort,
+					"default_listen_port":      ap.DefaultListenPort,
+					"cmd_pattern":              ap.DefaultCmdPattern,
+					"description":              ap.Description,
+					"group_name":               pgrp.Name,
+					"mounted_shared_env_count": mountedSharedCount,
+				}
 			}
 
 			dto.Nodes = append(dto.Nodes, GraphNode{
-				ID:        procID,
+				ID:        procNodeID,
 				Type:      NodeTypeProcess,
 				ParentID:  pgrpID,
 				Ancestors: []string{pgrpID},
 				Depth:     1,
-				EntityID:  p.ID,
-				Name:      p.Name,
-				SortOrder: int(p.ID),
+				EntityID:  ap.ID,
+				Code:      ap.Code,
+				Name:      ap.Name,
+				SortOrder: int(ap.ID),
 				Meta:      procMeta,
 			})
 
-			// 进程挂载的模块 (depth=2)
-			mountedModIDs := procModulesMap[p.ID]
-			for idx, modID := range mountedModIDs {
-				deployedModuleIDs[modID] = true
-				if mod, ok := moduleMap[modID]; ok {
-					dto.Nodes = append(dto.Nodes, GraphNode{
-						ID:        fmt.Sprintf("mod_%d", mod.ID),
-						Type:      NodeTypeModule,
-						ParentID:  procID,
-						Ancestors: []string{pgrpID, procID},
-						Depth:     2,
-						EntityID:  mod.ID,
-						Code:      mod.Code,
-						Name:      mod.Name,
-						SortOrder: idx + 1,
-						Meta: map[string]any{
-							"is_deployed":   true,
-							"process_id":    p.ID,
-							"provide_count": provideCountMap[mod.ID],
-							"description":   mod.Description,
-						},
-					})
+			for _, ep := range extraDownstreams {
+				ep = strings.TrimSpace(ep)
+				if ep != "" {
+					externalEndpoints[ep] = true
+					procExtraEps = append(procExtraEps, procExtraEp{procID: ap.ID, ep: ep})
 				}
+			}
+
+			// 挂载的模块 (depth=2)
+			mountedMods := archModMap[ap.ID]
+			for idx, mod := range mountedMods {
+				deployedModuleIDs[mod.ID] = true
+				dto.Nodes = append(dto.Nodes, GraphNode{
+					ID:        fmt.Sprintf("mod_%d", mod.ID),
+					Type:      NodeTypeModule,
+					ParentID:  procNodeID,
+					Ancestors: []string{pgrpID, procNodeID},
+					Depth:     2,
+					EntityID:  mod.ID,
+					Code:      mod.Code,
+					Name:      mod.Name,
+					SortOrder: idx + 1,
+					Meta: map[string]any{
+						"is_deployed":     true,
+						"arch_process_id": ap.ID,
+						"provide_count":   provideCountMap[mod.ID],
+						"description":     mod.Description,
+					},
+				})
 			}
 		}
 	}
 
-	// 3. 收集未在任何 SHARED 进程中装载的孤立模块 -> UNDEPLOYED_CONTAINER
+	// 8. 收集未在任何架构进程中装载的孤立模块 -> UNDEPLOYED_CONTAINER
 	var undeployedMods []models.Module
 	for _, m := range allModules {
 		if !deployedModuleIDs[m.ID] {
@@ -657,33 +757,11 @@ func buildPhysicalTopologyGraph(db *gorm.DB, dto *TopologyGraphDTO) error {
 		}
 	}
 
-	// 4. 收集外部依赖与网络端点 (EXTERNAL_CONTAINER + EXTERNAL_SYSTEM + EXTERNAL_ENDPOINT)
+	// 9. 收集外部依赖与网络端点 (EXTERNAL_CONTAINER + EXTERNAL_SYSTEM + EXTERNAL_ENDPOINT)
 	externalSystems := make(map[string]bool)
 	for _, dep := range dependencies {
 		if dep.IsExternal && strings.TrimSpace(dep.ExternalSystem) != "" {
 			externalSystems[strings.TrimSpace(dep.ExternalSystem)] = true
-		}
-	}
-
-	externalEndpoints := make(map[string]bool)
-	type procExtraEp struct {
-		procID uint64
-		ep     string
-	}
-	var procExtraEps []procExtraEp
-
-	for _, p := range processes {
-		if len(p.ExtraDownstreams) > 0 {
-			var eps []string
-			if err := json.Unmarshal(p.ExtraDownstreams, &eps); err == nil {
-				for _, ep := range eps {
-					ep = strings.TrimSpace(ep)
-					if ep != "" {
-						externalEndpoints[ep] = true
-						procExtraEps = append(procExtraEps, procExtraEp{procID: p.ID, ep: ep})
-					}
-				}
-			}
 		}
 	}
 
@@ -736,7 +814,7 @@ func buildPhysicalTopologyGraph(db *gorm.DB, dto *TopologyGraphDTO) error {
 		}
 	}
 
-	// 5. 聚合物理叶子依赖边
+	// 10. 聚合物理叶子依赖边
 	type edgeKey struct {
 		src string
 		dst string
@@ -744,6 +822,10 @@ func buildPhysicalTopologyGraph(db *gorm.DB, dto *TopologyGraphDTO) error {
 	edgeMap := make(map[edgeKey]*GraphEdge)
 
 	for _, dep := range dependencies {
+		srcMod, ok := moduleMap[dep.ConsumerModuleID]
+		if !ok {
+			continue
+		}
 		srcNodeID := fmt.Sprintf("mod_%d", dep.ConsumerModuleID)
 		var dstNodeID string
 		var kind string
@@ -751,9 +833,8 @@ func buildPhysicalTopologyGraph(db *gorm.DB, dto *TopologyGraphDTO) error {
 		var extSys string
 		var srcProcID, dstProcID *uint64
 
-		if pid, ok := moduleProcMap[dep.ConsumerModuleID]; ok && pid > 0 {
-			pCopy := pid
-			srcProcID = &pCopy
+		if srcMod.ArchProcessID != nil && *srcMod.ArchProcessID > 0 {
+			srcProcID = srcMod.ArchProcessID
 		}
 
 		if dep.IsExternal {
@@ -780,9 +861,8 @@ func buildPhysicalTopologyGraph(db *gorm.DB, dto *TopologyGraphDTO) error {
 			dstNodeID = fmt.Sprintf("mod_%d", providerID)
 			dstModID = &providerID
 
-			if pid, ok := moduleProcMap[providerID]; ok && pid > 0 {
-				pCopy := pid
-				dstProcID = &pCopy
+			if dstMod, ok2 := moduleMap[providerID]; ok2 && dstMod.ArchProcessID != nil && *dstMod.ArchProcessID > 0 {
+				dstProcID = dstMod.ArchProcessID
 			}
 
 			if srcProcID == nil || dstProcID == nil {

@@ -12,6 +12,10 @@ import type {
   ClaimableProtoServiceItem,
   StaticTopologyDTO,
   PaginatedResponse,
+  ArchProcessGroup,
+  ArchProcess,
+  ArchProcessDetailDTO,
+  AutoPinnedOverride,
 } from '../types';
 import type { TopologyGraphDTO } from '../types/topology_graph';
 
@@ -251,21 +255,145 @@ export async function getStaticTopology(params?: { view?: 'LOGICAL' | 'PHYSICAL'
   return apiRequest<StaticTopologyDTO>(`/arch/topology/static${qs ? `?${qs}` : ''}`);
 }
 
+// --- Arch Process Groups (物理进程组) ---
+export async function listArchProcessGroups(search?: string) {
+  const query = new URLSearchParams();
+  if (search) query.set('search', search);
+  const qs = query.toString();
+  return apiRequest<{ items: ArchProcessGroup[] }>(`/arch/process-groups${qs ? `?${qs}` : ''}`);
+}
+
+export async function createArchProcessGroup(data: {
+  code: string;
+  name: string;
+  sort_order?: number;
+  description?: string;
+}) {
+  return apiRequest<ArchProcessGroup>('/arch/process-groups', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function updateArchProcessGroup(
+  id: string | number,
+  data: {
+    code?: string;
+    name?: string;
+    sort_order?: number;
+    description?: string;
+  }
+) {
+  return apiRequest<ArchProcessGroup>(`/arch/process-groups/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteArchProcessGroup(id: string | number) {
+  return apiRequest<{ message: string }>(`/arch/process-groups/${id}`, {
+    method: 'DELETE',
+  });
+}
+
+// --- Arch Processes (标准架构物理进程) ---
+export async function getArchProcessTree(search?: string) {
+  const query = new URLSearchParams();
+  if (search) query.set('search', search);
+  const qs = query.toString();
+  return apiRequest<{ items: ArchProcessGroup[] }>(`/arch/processes/tree${qs ? `?${qs}` : ''}`);
+}
+
+export async function listArchProcesses(params?: {
+  group_id?: string | number;
+  search?: string;
+  page?: number;
+  page_size?: number;
+}) {
+  const query = new URLSearchParams();
+  if (params?.group_id) query.set('group_id', String(params.group_id));
+  if (params?.search) query.set('search', params.search);
+  if (params?.page) query.set('page', String(params.page));
+  if (params?.page_size) query.set('page_size', String(params.page_size));
+  const qs = query.toString();
+  return apiRequest<PaginatedResponse<ArchProcess>>(`/arch/processes${qs ? `?${qs}` : ''}`);
+}
+
+export async function getArchProcess(id: string | number) {
+  return apiRequest<ArchProcessDetailDTO>(`/arch/processes/${id}`);
+}
+
+export async function createArchProcess(data: {
+  group_id: string | number;
+  code: string;
+  name: string;
+  default_listen_port: number;
+  default_cmd_pattern?: string;
+  default_extra_downstreams?: string[];
+  module_ids?: (string | number)[];
+  sort_order?: number;
+  description?: string;
+}) {
+  return apiRequest<ArchProcess>('/arch/processes', {
+    method: 'POST',
+    body: JSON.stringify({
+      ...data,
+      group_id: Number(data.group_id),
+      default_listen_port: Number(data.default_listen_port),
+    }),
+  });
+}
+
+export async function updateArchProcess(
+  id: string | number,
+  data: {
+    group_id?: string | number;
+    code?: string;
+    name?: string;
+    default_listen_port?: number;
+    default_cmd_pattern?: string;
+    default_extra_downstreams?: string[];
+    module_ids?: (string | number)[];
+    sort_order?: number;
+    description?: string;
+  }
+) {
+  return apiRequest<{ arch_process: ArchProcess; auto_pinned_overrides?: AutoPinnedOverride[] }>(
+    `/arch/processes/${id}`,
+    {
+      method: 'PUT',
+      body: JSON.stringify({
+        ...data,
+        group_id: data.group_id ? Number(data.group_id) : undefined,
+        default_listen_port: data.default_listen_port !== undefined ? Number(data.default_listen_port) : undefined,
+      }),
+    }
+  );
+}
+
+export async function deleteArchProcess(id: string | number) {
+  return apiRequest<{ message: string }>(`/arch/processes/${id}`, {
+    method: 'DELETE',
+  });
+}
+
 interface CachedGraph {
   etag: string;
   data: TopologyGraphDTO;
 }
 
-const topologyGraphCache = new Map<'LOGICAL' | 'PHYSICAL', CachedGraph>();
+const topologyGraphCache = new Map<string, CachedGraph>();
 
 /**
  * 获取全系统分层复合架构拓扑图
- * 内置 (view -> { etag, data }) 协商缓存并显式处理 304 Not Modified
+ * 内置 (cacheKey -> { etag, data }) 协商缓存并显式处理 304 Not Modified
  */
 export async function getTopologyGraph(
-  view: 'LOGICAL' | 'PHYSICAL' = 'LOGICAL'
+  view: 'LOGICAL' | 'PHYSICAL' = 'LOGICAL',
+  envAgentId?: string | number | null
 ): Promise<TopologyGraphDTO> {
-  const cached = topologyGraphCache.get(view);
+  const cacheKey = envAgentId ? `${view}_${envAgentId}` : view;
+  const cached = topologyGraphCache.get(cacheKey);
   const token = typeof window !== 'undefined' ? localStorage.getItem(AUTH_TOKEN_KEY) : null;
   const headers: Record<string, string> = {
     Accept: 'application/json',
@@ -279,7 +407,13 @@ export async function getTopologyGraph(
     ? `${MODULE_BASE_PATH}/api`
     : '/api';
 
-  const res = await fetch(`${baseUrl}/arch/topology/graph?view=${encodeURIComponent(view)}`, {
+  const qs = new URLSearchParams();
+  qs.set('view', view);
+  if (envAgentId) {
+    qs.set('env_agent_id', String(envAgentId));
+  }
+
+  const res = await fetch(`${baseUrl}/arch/topology/graph?${qs.toString()}`, {
     method: 'GET',
     headers,
   });
@@ -296,7 +430,7 @@ export async function getTopologyGraph(
   const data = (await res.json()) as TopologyGraphDTO;
   const etag = res.headers.get('ETag') || data.model_version;
   if (etag) {
-    topologyGraphCache.set(view, { etag, data });
+    topologyGraphCache.set(cacheKey, { etag, data });
   }
 
   return data;

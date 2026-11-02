@@ -77,12 +77,20 @@ export const ContainerNode: React.FC<NodeProps<ContainerNodeType>> = ({ id, data
   const endpoint = graphNode.meta?.endpoint ? String(graphNode.meta.endpoint) : undefined;
   const internalEdges = badgeCounts?.internalEdgeCount ?? 0;
   const intraCalls = badgeCounts?.intraProcessCallCount ?? 0;
+  const isUnmounted = graphNode.type === 'PROCESS' && graphNode.meta?.is_mounted === false;
+  const probeStatus =
+    graphNode.type === 'PROCESS' && graphNode.meta?.probe_status
+      ? String(graphNode.meta.probe_status)
+      : undefined;
 
   // 展开态渲染：大框容器（Container Box）
   if (isExpanded) {
     return (
       <div
-        className={`code-arch-container code-arch-container--expanded code-arch-container--${graphNode.type.toLowerCase()}`}
+        className={`code-arch-container code-arch-container--expanded code-arch-container--${graphNode.type.toLowerCase()} ${
+          isUnmounted ? 'code-arch-container--unmounted' : ''
+        }`}
+        style={isUnmounted ? { borderStyle: 'dashed', borderColor: 'var(--color-warning)' } : undefined}
         onDoubleClick={handleDoubleClick}
         title="双击折叠容器"
       >
@@ -146,7 +154,10 @@ export const ContainerNode: React.FC<NodeProps<ContainerNodeType>> = ({ id, data
   // 折叠态渲染：实体卡片（Collapsed Card）
   return (
     <div
-      className={`code-arch-container code-arch-container--collapsed code-arch-container--${graphNode.type.toLowerCase()}`}
+      className={`code-arch-container code-arch-container--collapsed code-arch-container--${graphNode.type.toLowerCase()} ${
+        isUnmounted ? 'code-arch-container--unmounted' : ''
+      }`}
+      style={isUnmounted ? { borderStyle: 'dashed', borderColor: 'var(--color-warning)' } : undefined}
       onDoubleClick={handleDoubleClick}
       title="双击展开容器查看内部节点"
     >
@@ -193,6 +204,36 @@ export const ContainerNode: React.FC<NodeProps<ContainerNodeType>> = ({ id, data
         )}
 
         <div className="code-arch-container__badges">
+          {isUnmounted && (
+            <span className="code-arch-badge code-arch-badge--warning" title="该进程在选定环境尚未挂载">
+              未挂载
+            </span>
+          )}
+          {probeStatus && (
+            <span
+              className="code-arch-badge"
+              style={{
+                fontSize: '0.675rem',
+                padding: '1px 5px',
+                background:
+                  probeStatus === 'READY'
+                    ? 'rgba(34, 197, 94, 0.15)'
+                    : probeStatus === 'NEED_RECONNECT'
+                    ? 'rgba(234, 179, 8, 0.15)'
+                    : 'var(--color-bg-muted)',
+                color:
+                  probeStatus === 'READY'
+                    ? 'var(--color-success)'
+                    : probeStatus === 'NEED_RECONNECT'
+                    ? 'var(--color-warning)'
+                    : 'var(--color-text-secondary)',
+                border: '1px solid currentColor',
+              }}
+              title={`探针状态: ${probeStatus}`}
+            >
+              {probeStatus}
+            </span>
+          )}
           {graphNode.type === 'UNDEPLOYED_CONTAINER' && graphNode.meta?.module_count != null && (
             <span className="code-arch-badge code-arch-badge--warning">
               孤立模块: {String(graphNode.meta.module_count)}

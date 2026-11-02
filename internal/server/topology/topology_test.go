@@ -510,66 +510,60 @@ func TestProcessModuleBindingPublicVsPrivate(t *testing.T) {
 		t.Fatalf("同 Agent 端口重复期望返回 ErrDuplicateProcessPort，实际为: %v", err)
 	}
 
-	// 另一 SHARED Agent 下的进程重复绑定 Mod_1 -> 409
-	if _, err := CreateProcess(db, ProcessInput{
-		AgentID:    sharedAgent2.ID,
-		Name:       "Proc_SharedDupMod",
-		ListenPort: 9102,
-		CmdPattern: "./bin/proc_shared_dup",
-		ModuleIDs:  []uint64{mod1.ID},
-	}); !errors.Is(err, ErrDuplicateModuleBinding) {
-		t.Fatalf("SHARED 域重复挂载同一模块期望返回 ErrDuplicateModuleBinding，实际为: %v", err)
-	}
-
-	// 检查全局 Mod_1.ProcessID == Proc_A.ID
+	// 检查全局 Mod_1.ArchProcessID == Proc_A.ArchProcessID
 	var loadedMod1 models.Module
 	if err := db.First(&loadedMod1, mod1.ID).Error; err != nil {
 		t.Fatalf("查询 Mod_1 失败: %v", err)
 	}
-	if loadedMod1.ProcessID == nil || *loadedMod1.ProcessID != procA.ID {
-		t.Fatalf("期望 Mod_1.ProcessID == %d，实际为 %v", procA.ID, loadedMod1.ProcessID)
+	if loadedMod1.ArchProcessID == nil || *loadedMod1.ArchProcessID != procA.ArchProcessID {
+		t.Fatalf("期望 Mod_1.ArchProcessID == %d，实际为 %v", procA.ArchProcessID, loadedMod1.ArchProcessID)
 	}
 
-	// 2. 普通用户 Alice 在本人 PRIVATE Agent 下创建 PrivProc_A 同样挂载 Mod_1 -> 成功且不污染全局基线
+	// 2. 另一套公共环境 sharedAgent2 同样 1:1 挂载 Proc_A -> 允许并存 (多 SHARED 环境 1:1 挂载模型)
+	procA2, err := CreateProcess(db, ProcessInput{
+		AgentID:       sharedAgent2.ID,
+		ArchProcessID: procA.ArchProcessID,
+		Name:          "Proc_A",
+		ListenPort:    9101,
+	})
+	if err != nil {
+		t.Fatalf("多 SHARED 环境 1:1 挂载 Proc_A 应该成功，但报错: %v", err)
+	}
+	if procA2.ArchProcessID != procA.ArchProcessID {
+		t.Fatalf("期望两套环境指向同一架构进程蓝图")
+	}
+
+	// 3. 普通用户 Alice 在本人 PRIVATE Agent 下同样挂载同一架构进程 -> 成功
 	privProcA, err := CreateProcess(db, ProcessInput{
-		AgentID:    privAgent.ID,
-		Name:       "PrivProc_A",
-		ListenPort: 19101,
-		CmdPattern: "./bin/local_proc_a",
-		ModuleIDs:  []uint64{mod1.ID},
-		OperatorID: alice.ID,
+		AgentID:       privAgent.ID,
+		ArchProcessID: procA.ArchProcessID,
+		Name:          "PrivProc_A",
+		ListenPort:    19101,
+		CmdPattern:    "./bin/local_proc_a",
+		OperatorID:    alice.ID,
 	})
 	if err != nil {
 		t.Fatalf("创建 PRIVATE PrivProc_A 失败: %v", err)
-	}
-
-	var pmCount int64
-	if err := db.Model(&models.ProcessModule{}).Where("process_id = ? AND module_id = ?", privProcA.ID, mod1.ID).Count(&pmCount).Error; err != nil {
-		t.Fatalf("查询 traefik_process_modules 失败: %v", err)
-	}
-	if pmCount != 1 {
-		t.Fatalf("期望 traefik_process_modules 写入 1 条关联记录，实际为 %d", pmCount)
 	}
 
 	var loadedMod1After models.Module
 	if err := db.First(&loadedMod1After, mod1.ID).Error; err != nil {
 		t.Fatalf("重新查询 Mod_1 失败: %v", err)
 	}
-	if loadedMod1After.ProcessID == nil || *loadedMod1After.ProcessID != procA.ID {
-		t.Fatalf("全局 Mod_1.ProcessID 被私有进程污染: 期望保持 %d，实际变为 %v", procA.ID, loadedMod1After.ProcessID)
+	if loadedMod1After.ArchProcessID == nil || *loadedMod1After.ArchProcessID != procA.ArchProcessID {
+		t.Fatalf("全局 Mod_1.ArchProcessID 被污染: 期望保持 %d，实际变为 %v", procA.ArchProcessID, loadedMod1After.ArchProcessID)
 	}
 
-	// 同一 PRIVATE Agent 内重复挂载 Mod_1 到第二个私有进程 -> 409
+	// 同一 PRIVATE Agent 内重复挂载同一架构进程 -> 触发单机 1:1 唯一约束
 	if _, err := CreateProcess(db, ProcessInput{
-		AgentID:    privAgent.ID,
-		Name:       "PrivProc_B",
-		ListenPort: 19102,
-		CmdPattern: "./bin/local_proc_b",
-		ModuleIDs:  []uint64{mod1.ID},
-		OperatorID: alice.ID,
-	}); !errors.Is(err, ErrDuplicateModuleBinding) {
-		t.Fatalf("同台 PRIVATE Agent 内重复挂载同一模块期望返回 ErrDuplicateModuleBinding，实际为: %v", err)
+		AgentID:       privAgent.ID,
+		ArchProcessID: procA.ArchProcessID,
+		Name:          "PrivProc_B",
+		ListenPort:    19102,
+	}); err == nil {
+		t.Fatalf("同一 Agent 下重复挂载同一架构进程期望报错，实际成功")
 	}
+	_ = privProcA
 }
 
 func TestBuildStaticTopologyLogicalAndPhysical(t *testing.T) {
@@ -938,8 +932,8 @@ func TestClientOnlyProcessWithZeroPort(t *testing.T) {
 	if err != nil {
 		t.Fatalf("创建纯客户端进程 client1 失败: %v", err)
 	}
-	if client1.ListenPort != 0 {
-		t.Fatalf("期望 ListenPort 为 0，实际为 %d", client1.ListenPort)
+	if client1.EffectiveListenPort != 0 {
+		t.Fatalf("期望 ListenPort 为 0，实际为 %d", client1.EffectiveListenPort)
 	}
 
 	// 2. 在同一 Agent 下创建第二个纯客户端进程 (ListenPort = 0)，应正常成功，不能触发端口唯一性冲突
@@ -979,8 +973,8 @@ func TestClientOnlyProcessWithZeroPort(t *testing.T) {
 	if err != nil {
 		t.Fatalf("更新客户端进程为服务端口 9801 失败: %v", err)
 	}
-	if client1Updated.ListenPort != 9801 {
-		t.Fatalf("期望 ListenPort 为 9801，实际为 %d", client1Updated.ListenPort)
+	if client1Updated.EffectiveListenPort != 9801 {
+		t.Fatalf("期望 ListenPort 为 9801，实际为 %d", client1Updated.EffectiveListenPort)
 	}
 
 	_, client1Reverted, err := UpdateProcess(db, client1.ID, ProcessInput{
@@ -993,7 +987,7 @@ func TestClientOnlyProcessWithZeroPort(t *testing.T) {
 	if err != nil {
 		t.Fatalf("将服务进程重新更新为纯客户端 0 端口失败: %v", err)
 	}
-	if client1Reverted.ListenPort != 0 {
-		t.Fatalf("期望 ListenPort 为 0，实际为 %d", client1Reverted.ListenPort)
+	if client1Reverted.EffectiveListenPort != 0 {
+		t.Fatalf("期望 ListenPort 为 0，实际为 %d", client1Reverted.EffectiveListenPort)
 	}
 }

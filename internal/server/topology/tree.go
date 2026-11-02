@@ -93,14 +93,16 @@ type FunctionalGroupTreeNode struct {
 
 // ModuleInput 功能模块新增/修改入参
 type ModuleInput struct {
-	GroupID      uint64
-	Code         string
-	Name         string
-	OwnerID      *uint
-	ProcessID    *uint64
-	HasProcessID bool
-	Description  string
-	OperatorID   uint
+	GroupID          uint64
+	Code             string
+	Name             string
+	OwnerID          *uint
+	ArchProcessID    *uint64
+	HasArchProcessID bool
+	ProcessID        *uint64 // 向后兼容
+	HasProcessID     bool    // 向后兼容
+	Description      string
+	OperatorID       uint
 }
 
 // CreateSubsystem 创建子系统
@@ -615,29 +617,32 @@ func CreateModule(db *gorm.DB, in ModuleInput) (*models.Module, error) {
 		return nil, ErrDuplicateCode
 	}
 
-	if in.HasProcessID && in.ProcessID != nil {
-		var proc models.Process
-		if err := db.Preload("Agent").First(&proc, *in.ProcessID).Error; err != nil {
+	var archProcessID *uint64
+	if in.ArchProcessID != nil {
+		archProcessID = in.ArchProcessID
+	} else if in.ProcessID != nil {
+		archProcessID = in.ProcessID
+	}
+	if archProcessID != nil && *archProcessID > 0 {
+		var ap models.ArchProcess
+		if err := db.First(&ap, *archProcessID).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return nil, ErrProcessNotFound
+				return nil, errors.New("目标标准架构进程不存在")
 			}
 			return nil, err
-		}
-		if proc.Agent == nil || proc.Agent.Scope != models.ScopeShared {
-			return nil, ErrInvalidBaseProcessScope
 		}
 	}
 
 	mod := &models.Module{
-		SubsystemID: group.SubsystemID,
-		GroupID:     in.GroupID,
-		Code:        code,
-		Name:        strings.TrimSpace(in.Name),
-		OwnerID:     in.OwnerID,
-		ProcessID:   in.ProcessID,
-		Description: in.Description,
-		CreatedBy:   in.OperatorID,
-		UpdatedBy:   in.OperatorID,
+		SubsystemID:   group.SubsystemID,
+		GroupID:       in.GroupID,
+		Code:          code,
+		Name:          strings.TrimSpace(in.Name),
+		OwnerID:       in.OwnerID,
+		ArchProcessID: archProcessID,
+		Description:   in.Description,
+		CreatedBy:     in.OperatorID,
+		UpdatedBy:     in.OperatorID,
 	}
 
 	err = db.Transaction(func(tx *gorm.DB) error {
@@ -646,15 +651,6 @@ func CreateModule(db *gorm.DB, in ModuleInput) (*models.Module, error) {
 				return ErrDuplicateCode
 			}
 			return err
-		}
-		if in.HasProcessID && in.ProcessID != nil {
-			pm := &models.ProcessModule{
-				ProcessID: *in.ProcessID,
-				ModuleID:  mod.ID,
-			}
-			if err := tx.Create(pm).Error; err != nil {
-				return err
-			}
 		}
 		return nil
 	})
@@ -714,21 +710,29 @@ func UpdateModule(db *gorm.DB, id uint64, in ModuleInput) (*models.Module, *mode
 		actualName = strings.TrimSpace(in.Name)
 	}
 
-	processID := before.ProcessID
-	if in.HasProcessID {
-		if in.ProcessID != nil {
-			var proc models.Process
-			if err := db.Preload("Agent").First(&proc, *in.ProcessID).Error; err != nil {
+	archProcessID := before.ArchProcessID
+	if in.HasArchProcessID {
+		if in.ArchProcessID != nil && *in.ArchProcessID > 0 {
+			var ap models.ArchProcess
+			if err := db.First(&ap, *in.ArchProcessID).Error; err != nil {
 				if errors.Is(err, gorm.ErrRecordNotFound) {
-					return nil, nil, ErrProcessNotFound
+					return nil, nil, errors.New("目标标准架构进程不存在")
 				}
 				return nil, nil, err
 			}
-			if proc.Agent == nil || proc.Agent.Scope != models.ScopeShared {
-				return nil, nil, ErrInvalidBaseProcessScope
+		}
+		archProcessID = in.ArchProcessID
+	} else if in.HasProcessID {
+		if in.ProcessID != nil && *in.ProcessID > 0 {
+			var ap models.ArchProcess
+			if err := db.First(&ap, *in.ProcessID).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return nil, nil, errors.New("目标标准架构进程不存在")
+				}
+				return nil, nil, err
 			}
 		}
-		processID = in.ProcessID
+		archProcessID = in.ProcessID
 	}
 
 	after := before
@@ -737,39 +741,25 @@ func UpdateModule(db *gorm.DB, id uint64, in ModuleInput) (*models.Module, *mode
 	after.Code = actualCode
 	after.Name = actualName
 	after.OwnerID = in.OwnerID
-	after.ProcessID = processID
+	after.ArchProcessID = archProcessID
 	after.Description = in.Description
 	after.UpdatedBy = in.OperatorID
 
 	err := db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Model(&models.Module{}).Where("id = ?", id).Updates(map[string]interface{}{
-			"group_id":     groupID,
-			"subsystem_id": subsystemID,
-			"code":         actualCode,
-			"name":         actualName,
-			"owner_id":     in.OwnerID,
-			"process_id":   processID,
-			"description":  in.Description,
-			"updated_by":   in.OperatorID,
+			"group_id":        groupID,
+			"subsystem_id":    subsystemID,
+			"code":            actualCode,
+			"name":            actualName,
+			"owner_id":        in.OwnerID,
+			"arch_process_id": archProcessID,
+			"description":     in.Description,
+			"updated_by":      in.OperatorID,
 		}).Error; err != nil {
 			if strings.Contains(err.Error(), "duplicate") || strings.Contains(err.Error(), "23505") {
 				return ErrDuplicateCode
 			}
 			return err
-		}
-
-		if in.HasProcessID {
-			// 同步更新 traefik_process_modules
-			if before.ProcessID != nil {
-				_ = tx.Where("process_id = ? AND module_id = ?", *before.ProcessID, id).Delete(&models.ProcessModule{}).Error
-			}
-			if in.ProcessID != nil {
-				pm := &models.ProcessModule{
-					ProcessID: *in.ProcessID,
-					ModuleID:  id,
-				}
-				_ = tx.Create(pm).Error
-			}
 		}
 		return nil
 	})
@@ -806,16 +796,14 @@ func DeleteModule(db *gorm.DB, id uint64) (*models.Module, error) {
 		return nil, ErrModuleNotEmpty
 	}
 
-	var pmCount int64
-	if err := db.Model(&models.ProcessModule{}).Where("module_id = ?", id).Count(&pmCount).Error; err != nil {
-		return nil, err
-	}
-	if pmCount > 0 {
-		return nil, ErrModuleNotEmpty
-	}
-
-	if mod.ProcessID != nil {
-		return nil, ErrModuleNotEmpty
+	if mod.ArchProcessID != nil {
+		var procCount int64
+		if err := db.Model(&models.Process{}).Where("arch_process_id = ?", *mod.ArchProcessID).Count(&procCount).Error; err != nil {
+			return nil, err
+		}
+		if procCount > 0 {
+			return nil, ErrModuleNotEmpty
+		}
 	}
 
 	if err := db.Delete(&mod).Error; err != nil {

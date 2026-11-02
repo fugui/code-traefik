@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Layers } from 'lucide-react';
+import { Layers, Server } from 'lucide-react';
 import { Drawer } from '@code/common';
 import { useToast } from '../../utils/toast';
 import { useModuleUser } from '../../context/ModuleUserContext';
@@ -13,9 +13,15 @@ import type {
   ModuleService,
   ModuleDependency,
   Process,
+  ArchProcessGroup,
+  ArchProcess,
+  ArchProcessDetailDTO,
+  AutoPinnedOverride,
 } from '../../types';
 import { SubsystemGroupTreePanel } from './SubsystemGroupTreePanel';
 import { ModuleContractDetailPane } from './ModuleContractDetailPane';
+import { ArchProcessTreePanel } from './ArchProcessTreePanel';
+import { ArchProcessDetailPane } from './ArchProcessDetailPane';
 
 function findGroupInTree(
   nodes: FunctionalGroupTreeNode[],
@@ -82,6 +88,34 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
     process_id: '',
     group_id: '',
   });
+  // 视图模式: 逻辑架构 vs 物理进程 (URL 参数 ?tree=logical|physical)
+  const initialTree = searchParams.get('tree') === 'physical' ? 'physical' : 'logical';
+  const [treeView, setTreeView] = useState<'logical' | 'physical'>(initialTree);
+
+  // 物理进程蓝图数据状态
+  const urlProcessId = searchParams.get('process_id') || '';
+  const [archProcessGroups, setArchProcessGroups] = useState<ArchProcessGroup[]>([]);
+  const [selectedArchProcessId, setSelectedArchProcessId] = useState<string>(urlProcessId);
+  const [selectedArchProcessDetail, setSelectedArchProcessDetail] = useState<ArchProcessDetailDTO | null>(null);
+  const [autoPinnedOverrides, setAutoPinnedOverrides] = useState<AutoPinnedOverride[]>([]);
+
+  // 物理进程组抽屉
+  const [archGroupDrawerOpen, setArchGroupDrawerOpen] = useState(false);
+  const [editingArchGroup, setEditingArchGroup] = useState<ArchProcessGroup | null>(null);
+  const [archGroupForm, setArchGroupForm] = useState({ code: '', name: '', sort_order: 1, description: '' });
+
+  // 物理进程抽屉
+  const [archProcessDrawerOpen, setArchProcessDrawerOpen] = useState(false);
+  const [editingArchProcess, setEditingArchProcess] = useState<ArchProcess | null>(null);
+  const [archProcessForm, setArchProcessForm] = useState({
+    group_id: '',
+    code: '',
+    name: '',
+    default_listen_port: 8080,
+    default_cmd_pattern: '',
+    sort_order: 1,
+    description: '',
+  });
 
   // 更新 URL Search Params 辅助函数
   const updateParams = useCallback(
@@ -112,10 +146,14 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
     const subId = searchParams.get('subsystem_id') || '';
     const grpId = searchParams.get('group_id') || '';
     const modId = searchParams.get('module_id') || '';
+    const tree = searchParams.get('tree') === 'physical' ? 'physical' : 'logical';
+    const procId = searchParams.get('process_id') || '';
 
+    setTreeView((prev) => (prev !== tree ? tree : prev));
     if (subId) setSelectedSubsystemId((prev) => (String(prev) === String(subId) ? prev : String(subId)));
     if (grpId) setSelectedGroupId((prev) => (String(prev) === String(grpId) ? prev : String(grpId)));
     if (modId) setSelectedModuleId((prev) => (String(prev) === String(modId) ? prev : String(modId)));
+    if (procId) setSelectedArchProcessId((prev) => (String(prev) === String(procId) ? prev : String(procId)));
   }, [searchParams]);
 
   // 加载子系统列表
@@ -307,6 +345,176 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
       cancelled = true;
     };
   }, [selectedModuleId, toast]);
+
+  // 加载物理进程树
+  const loadArchProcessTree = useCallback(async () => {
+    try {
+      const res = await archApi.getArchProcessTree();
+      const items = res.items ?? [];
+      setArchProcessGroups(items);
+      if (items.length > 0) {
+        setSelectedArchProcessId((prev) => {
+          if (prev) {
+            for (const g of items) {
+              if (g.processes?.some((p) => String(p.id) === String(prev))) {
+                return prev;
+              }
+            }
+          }
+          for (const g of items) {
+            if (g.processes && g.processes.length > 0) {
+              return String(g.processes[0].id);
+            }
+          }
+          return '';
+        });
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '加载物理进程树失败');
+    }
+  }, [toast]);
+
+  useEffect(() => {
+    void loadArchProcessTree();
+  }, [loadArchProcessTree]);
+
+  // 当选中的架构进程变更时，加载其详细契约与挂载血缘
+  const loadArchProcessDetail = useCallback(async (id: string) => {
+    if (!id) {
+      setSelectedArchProcessDetail(null);
+      return;
+    }
+    try {
+      const res = await archApi.getArchProcess(id);
+      setSelectedArchProcessDetail(res);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '加载架构进程详情失败');
+    }
+  }, [toast]);
+
+  useEffect(() => {
+    if (selectedArchProcessId) {
+      void loadArchProcessDetail(selectedArchProcessId);
+    } else {
+      setSelectedArchProcessDetail(null);
+    }
+  }, [selectedArchProcessId, loadArchProcessDetail]);
+
+  // 物理进程组 CRUD
+  const handleSaveArchGroup = async () => {
+    try {
+      if (editingArchGroup) {
+        await archApi.updateArchProcessGroup(editingArchGroup.id, archGroupForm);
+        toast.success('物理进程组更新成功');
+      } else {
+        await archApi.createArchProcessGroup(archGroupForm);
+        toast.success('物理进程组创建成功');
+      }
+      setArchGroupDrawerOpen(false);
+      void loadArchProcessTree();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '保存物理进程组失败');
+    }
+  };
+
+  const handleDeleteArchGroup = async (groupId: string | number) => {
+    try {
+      await archApi.deleteArchProcessGroup(groupId);
+      toast.success('物理进程组已删除');
+      void loadArchProcessTree();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '删除物理进程组失败');
+    }
+  };
+
+  // 标准架构进程 CRUD
+  const handleSaveArchProcess = async () => {
+    try {
+      if (editingArchProcess) {
+        const res = await archApi.updateArchProcess(editingArchProcess.id, {
+          group_id: archProcessForm.group_id,
+          code: archProcessForm.code,
+          name: archProcessForm.name,
+          default_listen_port: archProcessForm.default_listen_port,
+          default_cmd_pattern: archProcessForm.default_cmd_pattern,
+          sort_order: archProcessForm.sort_order,
+          description: archProcessForm.description,
+        });
+        toast.success('架构物理进程更新成功');
+        if (res.auto_pinned_overrides && res.auto_pinned_overrides.length > 0) {
+          setAutoPinnedOverrides(res.auto_pinned_overrides);
+          toast.warning(`检测到端口冲突，已自动为 ${res.auto_pinned_overrides.length} 个实例固化覆盖端口`);
+        } else {
+          setAutoPinnedOverrides([]);
+        }
+      } else {
+        const res = await archApi.createArchProcess({
+          group_id: archProcessForm.group_id,
+          code: archProcessForm.code,
+          name: archProcessForm.name,
+          default_listen_port: archProcessForm.default_listen_port,
+          default_cmd_pattern: archProcessForm.default_cmd_pattern,
+          sort_order: archProcessForm.sort_order,
+          description: archProcessForm.description,
+        });
+        toast.success('架构物理进程创建成功');
+        setSelectedArchProcessId(String(res.id));
+        updateParams({ process_id: String(res.id) });
+      }
+      setArchProcessDrawerOpen(false);
+      void loadArchProcessTree();
+      if (selectedArchProcessId) {
+        void loadArchProcessDetail(selectedArchProcessId);
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '保存架构物理进程失败');
+    }
+  };
+
+  const handleDeleteArchProcess = async (procId: string | number) => {
+    try {
+      await archApi.deleteArchProcess(procId);
+      toast.success('架构物理进程已删除');
+      setSelectedArchProcessId('');
+      setSelectedArchProcessDetail(null);
+      void loadArchProcessTree();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '删除架构物理进程失败');
+    }
+  };
+
+  // 模块与架构进程关联/解除
+  const handleBindModuleToProcess = async (moduleId: string) => {
+    if (!selectedArchProcessId) return;
+    try {
+      const curModIds = (selectedArchProcessDetail?.modules || []).map((m) => m.id);
+      const newModIds = [...curModIds, moduleId];
+      await archApi.updateArchProcess(selectedArchProcessId, {
+        module_ids: newModIds,
+      });
+      toast.success('功能模块已成功关联至当前物理进程');
+      void loadArchProcessDetail(selectedArchProcessId);
+      void loadSubsystemModules();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '关联模块失败');
+    }
+  };
+
+  const handleUnbindModuleFromProcess = async (moduleId: string) => {
+    if (!selectedArchProcessId) return;
+    try {
+      const curModIds = (selectedArchProcessDetail?.modules || []).map((m) => String(m.id));
+      const newModIds = curModIds.filter((id) => id !== String(moduleId));
+      await archApi.updateArchProcess(selectedArchProcessId, {
+        module_ids: newModIds,
+      });
+      toast.success('功能模块已成功从物理进程中解除关联');
+      void loadArchProcessDetail(selectedArchProcessId);
+      void loadSubsystemModules();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '解除模块关联失败');
+    }
+  };
 
   // 子系统 CRUD
   const handleSaveSubsystem = async () => {
@@ -564,139 +772,189 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
 
   return (
     <div className="code-workbench-page code-arch-workbench" data-testid="architecture-workbench">
-      {/* 头部标题 */}
-      <div className="code-workbench-header">
+      {/* 头部标题与视图切换 */}
+      <div className="code-workbench-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div className="code-workbench-title-group">
-          <h2 className="code-workbench-title">三级逻辑架构台账</h2>
+          <h2 className="code-workbench-title">
+            {treeView === 'physical' ? '物理进程蓝图台账' : '三级逻辑架构台账'}
+          </h2>
           <span className="code-workbench-subtitle">
-            维护子系统、8 级功能组与模块契约 (PROVIDE / DEPEND)
+            {treeView === 'physical'
+              ? '维护标准物理进程定义、默认监听端口、特征命令行与多环境 Agent 探针挂载血缘'
+              : '维护子系统、8 级功能组与模块契约 (PROVIDE / DEPEND)'}
           </span>
+        </div>
+
+        {/* 逻辑架构 | 物理进程 双视图 Segmented Control 切换器 */}
+        <div className="code-arch-segmented" role="tablist" data-testid="arch-tree-view-segmented">
+          <button
+            type="button"
+            className={`code-arch-segmented__item ${treeView === 'logical' ? 'code-arch-segmented__item--active' : ''}`}
+            onClick={() => {
+              setTreeView('logical');
+              updateParams({ tree: 'logical' });
+            }}
+            data-testid="toggle-tree-logical"
+          >
+            三级逻辑架构
+          </button>
+          <button
+            type="button"
+            className={`code-arch-segmented__item ${treeView === 'physical' ? 'code-arch-segmented__item--active' : ''}`}
+            onClick={() => {
+              setTreeView('physical');
+              updateParams({ tree: 'physical' });
+            }}
+            data-testid="toggle-tree-physical"
+          >
+            物理进程蓝图
+          </button>
         </div>
       </div>
 
-      {/* 视图主体：纯双栏布局（左树 + 右模块契约详情） */}
+      {/* 视图主体：纯双栏布局（根据 treeView 切换） */}
       <div className="code-workbench-body">
-        <div className="code-arch-split-layout">
-          <SubsystemGroupTreePanel
-            subsystems={subsystems}
-            selectedSubsystemId={selectedSubsystemId}
-            onSelectSubsystem={(id) => {
-              const subId = String(id);
-              setSelectedSubsystemId(subId);
-              setSelectedGroupId('');
-              setSelectedModuleId('');
-              updateParams({ subsystem_id: subId, group_id: null, module_id: null });
-            }}
-            groupTree={groupTree}
-            groupTreeMap={groupTreeMap}
-            onLoadSubsystemTree={loadSubsystemTree}
-            selectedGroupId={selectedGroupId}
-            onSelectGroup={(groupId, targetSubsystemId) => {
-              const subId = targetSubsystemId ? String(targetSubsystemId) : selectedSubsystemId;
-              const grpId = String(groupId);
-              setSelectedSubsystemId(subId);
-              setSelectedGroupId(grpId);
-              setSelectedModuleId('');
-              updateParams({ subsystem_id: subId, group_id: grpId, module_id: null });
-            }}
-            modules={subsystemModules}
-            selectedModuleId={selectedModuleId}
-            onSelectModule={(modId) => {
-              const targetMod = subsystemModules.find((m) => String(m.id) === String(modId));
-              if (targetMod && targetMod.subsystem_id && targetMod.group_id) {
-                handleSelectModuleLeaf(targetMod.subsystem_id, targetMod.group_id, modId);
-              } else {
-                setSelectedModuleId(modId);
-                updateParams({ module_id: modId });
-              }
-            }}
-            onSelectModuleLeaf={handleSelectModuleLeaf}
-            onCreateModule={(groupId) => {
-              setEditingMod(null);
-              setModuleForm({ code: '', name: '', description: '', process_id: '', group_id: groupId });
-              setModuleDrawerOpen(true);
-            }}
-            onEditModule={(mod) => {
-              setEditingMod(mod);
-              setModuleForm({
-                code: mod.code,
-                name: mod.name,
-                description: mod.description || '',
-                process_id: mod.process_id || (mod.process?.id ?? ''),
-                group_id: mod.group_id,
-              });
-              setModuleDrawerOpen(true);
-            }}
-            onDeleteModule={(id) => void handleDeleteModule(id)}
-            isAdmin={isAdmin}
-            onCreateSubsystem={() => {
-              setEditingSubsystem(null);
-              setSubsystemForm({ code: '', name: '', description: '' });
-              setSubsystemDrawerOpen(true);
-            }}
-            onEditSubsystem={(sub) => {
-              setEditingSubsystem(sub);
-              setSubsystemForm({ code: sub.code, name: sub.name, description: sub.description || '' });
-              setSubsystemDrawerOpen(true);
-            }}
-            onDeleteSubsystem={(id) => void handleDeleteSubsystem(id)}
-            onCreateGroup={(parentId, targetSubsystemId) => {
-              if (targetSubsystemId && targetSubsystemId !== selectedSubsystemId) {
-                setSelectedSubsystemId(targetSubsystemId);
-                updateParams({ subsystem_id: targetSubsystemId });
-              }
-              setEditingGroup(null);
-              setGroupParentId(parentId ?? null);
-              setGroupForm({ code: '', name: '', description: '', sort_order: 1 });
-              setGroupDrawerOpen(true);
-            }}
-            onEditGroup={(grp) => {
-              setEditingGroup(grp);
-              setGroupForm({
-                code: grp.code,
-                name: grp.name,
-                description: grp.description || '',
-                sort_order: grp.sort_order || 1,
-              });
-              setGroupDrawerOpen(true);
-            }}
-            onMoveGroup={(grp) => {
-              setMovingGroup(grp);
-              setNewParentId('');
-              setMoveGroupDrawerOpen(true);
-            }}
-            onDeleteGroup={(id) => void handleDeleteGroup(id)}
-          />
-
-          {selectedModule ? (
-            <ModuleContractDetailPane
-              modules={modules}
-              selectedModuleId={selectedModuleId}
-              onSelectModule={(id) => {
-                const targetMod = subsystemModules.find((m) => String(m.id) === String(id));
-                if (targetMod && targetMod.subsystem_id && targetMod.group_id) {
-                  handleSelectModuleLeaf(targetMod.subsystem_id, targetMod.group_id, id);
-                } else {
-                  setSelectedModuleId(id);
-                  updateParams({ module_id: id });
-                }
+        {treeView === 'physical' ? (
+          <div className="code-arch-split-layout">
+            <ArchProcessTreePanel
+              groups={archProcessGroups}
+              selectedProcessId={selectedArchProcessId}
+              onSelectProcess={(id) => {
+                setSelectedArchProcessId(id);
+                updateParams({ process_id: id });
               }}
-              selectedModule={selectedModule}
-              services={services}
-              dependencies={dependencies}
-              allProcesses={processes}
               isAdmin={isAdmin}
-              currentSubsystem={subsystems.find((s) => s.id === selectedSubsystemId) || null}
-              currentGroup={selectedGroupId ? findGroupInTree(groupTree, selectedGroupId) : null}
-              onCreateModule={() => {
-                setEditingMod(null);
-                setModuleForm({
+              onCreateGroup={() => {
+                setEditingArchGroup(null);
+                setArchGroupForm({ code: '', name: '', sort_order: 1, description: '' });
+                setArchGroupDrawerOpen(true);
+              }}
+              onEditGroup={(g) => {
+                setEditingArchGroup(g);
+                setArchGroupForm({
+                  code: g.code,
+                  name: g.name,
+                  sort_order: g.sort_order || 1,
+                  description: g.description || '',
+                });
+                setArchGroupDrawerOpen(true);
+              }}
+              onDeleteGroup={(id) => void handleDeleteArchGroup(id)}
+              onCreateProcess={(groupId) => {
+                setEditingArchProcess(null);
+                setArchProcessForm({
+                  group_id: groupId
+                    ? String(groupId)
+                    : archProcessGroups[0]?.id
+                    ? String(archProcessGroups[0].id)
+                    : '',
                   code: '',
                   name: '',
+                  default_listen_port: 8080,
+                  default_cmd_pattern: '',
+                  sort_order: 1,
                   description: '',
-                  process_id: '',
-                  group_id: selectedGroupId,
                 });
+                setArchProcessDrawerOpen(true);
+              }}
+            />
+
+            {selectedArchProcessDetail ? (
+              <ArchProcessDetailPane
+                archProcess={selectedArchProcessDetail.arch_process}
+                modules={selectedArchProcessDetail.modules || []}
+                providedServices={selectedArchProcessDetail.provided_services || []}
+                dependencies={selectedArchProcessDetail.dependencies || []}
+                agentMounts={selectedArchProcessDetail.agent_mounts || []}
+                autoPinnedOverrides={autoPinnedOverrides}
+                allModules={subsystemModules}
+                isAdmin={isAdmin}
+                onEditProcess={() => {
+                  const p = selectedArchProcessDetail.arch_process;
+                  setEditingArchProcess(p);
+                  setArchProcessForm({
+                    group_id: String(p.group_id),
+                    code: p.code,
+                    name: p.name,
+                    default_listen_port: p.default_listen_port,
+                    default_cmd_pattern: p.default_cmd_pattern || '',
+                    sort_order: p.sort_order || 1,
+                    description: p.description || '',
+                  });
+                  setArchProcessDrawerOpen(true);
+                }}
+                onDeleteProcess={() =>
+                  void handleDeleteArchProcess(selectedArchProcessDetail.arch_process.id)
+                }
+                onUnbindModule={handleUnbindModuleFromProcess}
+                onBindModule={handleBindModuleToProcess}
+              />
+            ) : (
+              <div
+                className="code-module-pane code-empty-pane"
+                style={{
+                  flex: 1,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  padding: '4rem 2rem',
+                  textAlign: 'center',
+                  background: 'var(--color-bg-surface)',
+                  borderRadius: 'var(--radius-lg)',
+                  border: '1px solid var(--color-border-primary)',
+                }}
+                data-testid="arch-physical-empty-state"
+              >
+                <Server size={48} style={{ color: 'var(--color-text-muted)', marginBottom: '1rem' }} />
+                <h4 style={{ color: 'var(--color-text-primary)', marginBottom: '0.5rem', fontSize: '1.125rem' }}>
+                  请选择左侧标准架构进程
+                </h4>
+                <p style={{ color: 'var(--color-text-secondary)', fontSize: '0.875rem', maxWidth: '420px', lineHeight: 1.6 }}>
+                  在左侧物理进程蓝图树中展开分组，选择一个进程以查阅其承载的功能模块、全系统对外契约全貌与多环境 Agent 挂载溯源
+                </p>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="code-arch-split-layout">
+            <SubsystemGroupTreePanel
+              subsystems={subsystems}
+              selectedSubsystemId={selectedSubsystemId}
+              onSelectSubsystem={(id) => {
+                const subId = String(id);
+                setSelectedSubsystemId(subId);
+                setSelectedGroupId('');
+                setSelectedModuleId('');
+                updateParams({ subsystem_id: subId, group_id: null, module_id: null });
+              }}
+              groupTree={groupTree}
+              groupTreeMap={groupTreeMap}
+              onLoadSubsystemTree={loadSubsystemTree}
+              selectedGroupId={selectedGroupId}
+              onSelectGroup={(groupId, targetSubsystemId) => {
+                const subId = targetSubsystemId ? String(targetSubsystemId) : selectedSubsystemId;
+                const grpId = String(groupId);
+                setSelectedSubsystemId(subId);
+                setSelectedGroupId(grpId);
+                setSelectedModuleId('');
+                updateParams({ subsystem_id: subId, group_id: grpId, module_id: null });
+              }}
+              modules={subsystemModules}
+              selectedModuleId={selectedModuleId}
+              onSelectModule={(modId) => {
+                const targetMod = subsystemModules.find((m) => String(m.id) === String(modId));
+                if (targetMod && targetMod.subsystem_id && targetMod.group_id) {
+                  handleSelectModuleLeaf(targetMod.subsystem_id, targetMod.group_id, modId);
+                } else {
+                  setSelectedModuleId(modId);
+                  updateParams({ module_id: modId });
+                }
+              }}
+              onSelectModuleLeaf={handleSelectModuleLeaf}
+              onCreateModule={(groupId) => {
+                setEditingMod(null);
+                setModuleForm({ code: '', name: '', description: '', process_id: '', group_id: groupId });
                 setModuleDrawerOpen(true);
               }}
               onEditModule={(mod) => {
@@ -711,40 +969,129 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
                 setModuleDrawerOpen(true);
               }}
               onDeleteModule={(id) => void handleDeleteModule(id)}
-              onCreateService={handleCreateService}
-              onUpdateServiceIgnorePaths={handleUpdateServiceIgnorePaths}
-              onDeleteService={handleDeleteService}
-              onCreateDependency={handleCreateDependency}
-              onDeleteDependency={handleDeleteDependency}
-              onBindProcess={handleBindModuleProcess}
-            />
-          ) : (
-            <div
-              className="code-module-pane code-empty-pane"
-              style={{
-                flex: 1,
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                justifyContent: 'center',
-                padding: '4rem 2rem',
-                textAlign: 'center',
-                background: 'var(--color-bg-surface)',
-                borderRadius: 'var(--radius-lg)',
-                border: '1px solid var(--color-border-primary)',
+              isAdmin={isAdmin}
+              onCreateSubsystem={() => {
+                setEditingSubsystem(null);
+                setSubsystemForm({ code: '', name: '', description: '' });
+                setSubsystemDrawerOpen(true);
               }}
-              data-testid="arch-empty-state"
-            >
-              <Layers size={48} style={{ color: 'var(--color-text-muted)', marginBottom: '1rem' }} />
-              <h4 style={{ color: 'var(--color-text-primary)', marginBottom: '0.5rem', fontSize: '1.125rem' }}>
-                请选择左侧功能模块
-              </h4>
-              <p style={{ color: 'var(--color-text-secondary)', fontSize: '0.875rem', maxWidth: '420px', lineHeight: 1.6 }}>
-                在左侧架构树中展开子系统与功能组，选择一个模块以查阅其服务提供 (PROVIDE)、依赖消费 (DEPEND) 与装载进程
-              </p>
-            </div>
-          )}
-        </div>
+              onEditSubsystem={(sub) => {
+                setEditingSubsystem(sub);
+                setSubsystemForm({ code: sub.code, name: sub.name, description: sub.description || '' });
+                setSubsystemDrawerOpen(true);
+              }}
+              onDeleteSubsystem={(id) => void handleDeleteSubsystem(id)}
+              onCreateGroup={(parentId, targetSubsystemId) => {
+                if (targetSubsystemId && targetSubsystemId !== selectedSubsystemId) {
+                  setSelectedSubsystemId(targetSubsystemId);
+                  updateParams({ subsystem_id: targetSubsystemId });
+                }
+                setEditingGroup(null);
+                setGroupParentId(parentId ?? null);
+                setGroupForm({ code: '', name: '', description: '', sort_order: 1 });
+                setGroupDrawerOpen(true);
+              }}
+              onEditGroup={(grp) => {
+                setEditingGroup(grp);
+                setGroupForm({
+                  code: grp.code,
+                  name: grp.name,
+                  description: grp.description || '',
+                  sort_order: grp.sort_order || 1,
+                });
+                setGroupDrawerOpen(true);
+              }}
+              onMoveGroup={(grp) => {
+                setMovingGroup(grp);
+                setNewParentId('');
+                setMoveGroupDrawerOpen(true);
+              }}
+              onDeleteGroup={(id) => void handleDeleteGroup(id)}
+            />
+
+            {selectedModule ? (
+              <ModuleContractDetailPane
+                modules={modules}
+                selectedModuleId={selectedModuleId}
+                onSelectModule={(id) => {
+                  const targetMod = subsystemModules.find((m) => String(m.id) === String(id));
+                  if (targetMod && targetMod.subsystem_id && targetMod.group_id) {
+                    handleSelectModuleLeaf(targetMod.subsystem_id, targetMod.group_id, id);
+                  } else {
+                    setSelectedModuleId(id);
+                    updateParams({ module_id: id });
+                  }
+                }}
+                selectedModule={selectedModule}
+                services={services}
+                dependencies={dependencies}
+                allProcesses={processes}
+                isAdmin={isAdmin}
+                currentSubsystem={subsystems.find((s) => s.id === selectedSubsystemId) || null}
+                currentGroup={selectedGroupId ? findGroupInTree(groupTree, selectedGroupId) : null}
+                onCreateModule={() => {
+                  setEditingMod(null);
+                  setModuleForm({
+                    code: '',
+                    name: '',
+                    description: '',
+                    process_id: '',
+                    group_id: selectedGroupId,
+                  });
+                  setModuleDrawerOpen(true);
+                }}
+                onEditModule={(mod) => {
+                  setEditingMod(mod);
+                  setModuleForm({
+                    code: mod.code,
+                    name: mod.name,
+                    description: mod.description || '',
+                    process_id: mod.process_id || (mod.process?.id ?? ''),
+                    group_id: mod.group_id,
+                  });
+                  setModuleDrawerOpen(true);
+                }}
+                onDeleteModule={(id) => void handleDeleteModule(id)}
+                onViewArchProcess={(procId) => {
+                  setTreeView('physical');
+                  setSelectedArchProcessId(String(procId));
+                  updateParams({ tree: 'physical', process_id: String(procId) });
+                }}
+                onCreateService={handleCreateService}
+                onUpdateServiceIgnorePaths={handleUpdateServiceIgnorePaths}
+                onDeleteService={handleDeleteService}
+                onCreateDependency={handleCreateDependency}
+                onDeleteDependency={handleDeleteDependency}
+                onBindProcess={handleBindModuleProcess}
+              />
+            ) : (
+              <div
+                className="code-module-pane code-empty-pane"
+                style={{
+                  flex: 1,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  padding: '4rem 2rem',
+                  textAlign: 'center',
+                  background: 'var(--color-bg-surface)',
+                  borderRadius: 'var(--radius-lg)',
+                  border: '1px solid var(--color-border-primary)',
+                }}
+                data-testid="arch-empty-state"
+              >
+                <Layers size={48} style={{ color: 'var(--color-text-muted)', marginBottom: '1rem' }} />
+                <h4 style={{ color: 'var(--color-text-primary)', marginBottom: '0.5rem', fontSize: '1.125rem' }}>
+                  请选择左侧功能模块
+                </h4>
+                <p style={{ color: 'var(--color-text-secondary)', fontSize: '0.875rem', maxWidth: '420px', lineHeight: 1.6 }}>
+                  在左侧架构树中展开子系统与功能组，选择一个模块以查阅其服务提供 (PROVIDE)、依赖消费 (DEPEND) 与装载进程
+                </p>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* 1. 子系统侧边栏 (Drawer) */}
@@ -994,6 +1341,194 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
               className="code-textarea"
               value={moduleForm.description}
               onChange={(e) => setModuleForm({ ...moduleForm, description: e.target.value })}
+            />
+          </div>
+        </div>
+      </Drawer>
+
+      {/* 5. 物理进程组侧边栏 (Drawer) */}
+      <Drawer
+        open={archGroupDrawerOpen}
+        onClose={() => setArchGroupDrawerOpen(false)}
+        title={editingArchGroup ? '编辑物理进程组' : '新建物理进程组'}
+        subtitle="维护逻辑划分的物理进程分组 (如 CORE_SRV, GATEWAY)"
+        width="md"
+        footer={
+          <div className="code-drawer-footer">
+            <button
+              type="button"
+              className="code-btn code-btn--secondary"
+              onClick={() => setArchGroupDrawerOpen(false)}
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              className="code-btn code-btn--primary"
+              onClick={() => void handleSaveArchGroup()}
+            >
+              保存
+            </button>
+          </div>
+        }
+      >
+        <div className="code-form">
+          <div className="code-form-item">
+            <label className="code-form-label">物理进程组编码 (2..64 大写字母/数字/下划线/中划线):</label>
+            <input
+              type="text"
+              className="code-input"
+              value={archGroupForm.code}
+              onChange={(e) => setArchGroupForm({ ...archGroupForm, code: e.target.value.toUpperCase() })}
+              placeholder="如 CORE_SERVICES"
+            />
+          </div>
+          <div className="code-form-item">
+            <label className="code-form-label">物理进程组名称:</label>
+            <input
+              type="text"
+              className="code-input"
+              value={archGroupForm.name}
+              onChange={(e) => setArchGroupForm({ ...archGroupForm, name: e.target.value })}
+              placeholder="如 核心业务服务组"
+            />
+          </div>
+          <div className="code-form-item">
+            <label className="code-form-label">排序权重 (数字越小越靠前):</label>
+            <input
+              type="number"
+              className="code-input"
+              value={archGroupForm.sort_order}
+              onChange={(e) =>
+                setArchGroupForm({ ...archGroupForm, sort_order: parseInt(e.target.value, 10) || 1 })
+              }
+            />
+          </div>
+          <div className="code-form-item">
+            <label className="code-form-label">描述说明:</label>
+            <textarea
+              className="code-textarea"
+              value={archGroupForm.description}
+              onChange={(e) => setArchGroupForm({ ...archGroupForm, description: e.target.value })}
+              placeholder="说明物理进程组的分类定位"
+            />
+          </div>
+        </div>
+      </Drawer>
+
+      {/* 6. 标准架构物理进程侧边栏 (Drawer) */}
+      <Drawer
+        open={archProcessDrawerOpen}
+        onClose={() => setArchProcessDrawerOpen(false)}
+        title={editingArchProcess ? '编辑标准架构物理进程' : '新建标准架构物理进程'}
+        subtitle="定义跨多套环境 1:1 挂载映射的蓝图进程底座"
+        width="md"
+        footer={
+          <div className="code-drawer-footer">
+            <button
+              type="button"
+              className="code-btn code-btn--secondary"
+              onClick={() => setArchProcessDrawerOpen(false)}
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              className="code-btn code-btn--primary"
+              onClick={() => void handleSaveArchProcess()}
+            >
+              保存
+            </button>
+          </div>
+        }
+      >
+        <div className="code-form">
+          <div className="code-form-item">
+            <label className="code-form-label">所属物理进程组:</label>
+            <select
+              className="code-select"
+              value={archProcessForm.group_id}
+              onChange={(e) => setArchProcessForm({ ...archProcessForm, group_id: e.target.value })}
+            >
+              <option value="">-- 请选择进程组 --</option>
+              {archProcessGroups.map((g) => (
+                <option key={g.id} value={g.id}>
+                  {g.name} ({g.code})
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="code-form-item">
+            <label className="code-form-label">进程全局唯一编码 (code):</label>
+            <input
+              type="text"
+              className="code-input"
+              value={archProcessForm.code}
+              onChange={(e) => setArchProcessForm({ ...archProcessForm, code: e.target.value })}
+              placeholder="如 proc-account-service"
+            />
+          </div>
+          <div className="code-form-item">
+            <label className="code-form-label">进程名称:</label>
+            <input
+              type="text"
+              className="code-input"
+              value={archProcessForm.name}
+              onChange={(e) => setArchProcessForm({ ...archProcessForm, name: e.target.value })}
+              placeholder="如 账户账务中心进程"
+            />
+          </div>
+          <div className="code-form-item">
+            <label className="code-form-label">默认监听端口 (0 表示纯客户端):</label>
+            <input
+              type="number"
+              className="code-input"
+              value={archProcessForm.default_listen_port}
+              onChange={(e) =>
+                setArchProcessForm({
+                  ...archProcessForm,
+                  default_listen_port: parseInt(e.target.value, 10) || 0,
+                })
+              }
+              min={0}
+              max={65535}
+            />
+          </div>
+          <div className="code-form-item">
+            <label className="code-form-label">
+              默认命令行匹配特征 (纯客户端必填, 支持 re: 正则):
+            </label>
+            <input
+              type="text"
+              className="code-input"
+              value={archProcessForm.default_cmd_pattern}
+              onChange={(e) =>
+                setArchProcessForm({ ...archProcessForm, default_cmd_pattern: e.target.value })
+              }
+              placeholder="如 re:.*account-service.* 或 account-srv"
+            />
+          </div>
+          <div className="code-form-item">
+            <label className="code-form-label">排序权重 (数字越小越靠前):</label>
+            <input
+              type="number"
+              className="code-input"
+              value={archProcessForm.sort_order}
+              onChange={(e) =>
+                setArchProcessForm({
+                  ...archProcessForm,
+                  sort_order: parseInt(e.target.value, 10) || 1,
+                })
+              }
+            />
+          </div>
+          <div className="code-form-item">
+            <label className="code-form-label">描述说明:</label>
+            <textarea
+              className="code-textarea"
+              value={archProcessForm.description}
+              onChange={(e) => setArchProcessForm({ ...archProcessForm, description: e.target.value })}
+              placeholder="说明物理进程的职能与部署特征"
             />
           </div>
         </div>

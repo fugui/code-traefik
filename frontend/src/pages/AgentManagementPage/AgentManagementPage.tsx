@@ -7,7 +7,7 @@ import * as agentApi from '../../api/agent';
 import type { Agent, Process } from '../../types';
 import { AgentScopeTabs } from './AgentScopeTabs';
 import { AgentLeaseStatusBadge } from './AgentLeaseStatusBadge';
-import { ProcessModuleBinderModal } from './ProcessModuleBinderModal';
+import { AgentProcessMountDrawer } from './AgentProcessMountDrawer';
 
 export const AgentManagementPage: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -41,8 +41,7 @@ export const AgentManagementPage: React.FC = () => {
     description: '',
   });
 
-  const [binderModalOpen, setBinderModalOpen] = useState(false);
-  const [editingProcess, setEditingProcess] = useState<Process | null>(null);
+  const [mountDrawerOpen, setMountDrawerOpen] = useState(false);
 
   const [unlockModalOpen, setUnlockModalOpen] = useState(false);
   const [unlockAgentId, setUnlockAgentId] = useState<string>('');
@@ -105,16 +104,6 @@ export const AgentManagementPage: React.FC = () => {
       }
     })();
   }, [selectedAgentId, toast]);
-
-  // 提取现有进程组名称列表
-  const existingGroups = useMemo(() => {
-    const set = new Set<string>();
-    for (const p of processes) {
-      const grp = (p.group_name || '').trim();
-      if (grp) set.add(grp);
-    }
-    return Array.from(set);
-  }, [processes]);
 
   const handleScopeChange = (newScope: 'SHARED' | 'PRIVATE') => {
     setSearchParams((prev) => {
@@ -192,6 +181,159 @@ export const AgentManagementPage: React.FC = () => {
       }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '删除进程失败');
+    }
+  };
+
+  const handleDisarmAllProbes = async () => {
+    if (!selectedAgent) return;
+    try {
+      const res = await agentApi.disarmAllProbes(selectedAgent.id);
+      toast.success(`已下发卸载指令，成功卸载 ${res.disarmed_count} 个进程探针`);
+      const refreshed = await agentApi.getAgent(selectedAgent.id);
+      setProcesses(refreshed.processes ?? []);
+      setSelectedAgent(refreshed.agent);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '一键卸载探针失败');
+    }
+  };
+
+  const handleDisarmProcess = async (procId: string) => {
+    try {
+      await agentApi.disarmProcessProbe(procId);
+      toast.success('进程探针已卸载');
+      if (selectedAgent) {
+        const refreshed = await agentApi.getAgent(selectedAgent.id);
+        setProcesses(refreshed.processes ?? []);
+        setSelectedAgent(refreshed.agent);
+      }
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      if (errMsg.includes('409') || errMsg.includes('录制') || errMsg.includes('force')) {
+        try {
+          await agentApi.disarmProcessProbe(procId, true);
+          toast.success('已强制卸载进程探针');
+          if (selectedAgent) {
+            const refreshed = await agentApi.getAgent(selectedAgent.id);
+            setProcesses(refreshed.processes ?? []);
+            setSelectedAgent(refreshed.agent);
+          }
+        } catch (forceErr) {
+          toast.error(forceErr instanceof Error ? forceErr.message : '强制卸载探针失败');
+        }
+        return;
+      }
+      toast.error(errMsg || '卸载探针失败');
+    }
+  };
+
+  const renderProbeStatusBadge = (status?: string, reason?: string) => {
+    switch (status) {
+      case 'READY':
+        return (
+          <span
+            className="code-badge"
+            style={{
+              background: 'rgba(34, 197, 94, 0.15)',
+              color: 'var(--color-success)',
+              border: '1px solid var(--color-success)',
+            }}
+            title="探针就绪且心跳健康 (READY)"
+            data-testid="probe-badge-ready"
+          >
+            🟢 READY
+          </span>
+        );
+      case 'NEED_RECONNECT':
+        return (
+          <span
+            className="code-badge"
+            style={{
+              background: 'rgba(234, 179, 8, 0.15)',
+              color: 'var(--color-warning)',
+              border: '1px solid var(--color-warning)',
+            }}
+            title="需重连以截获长连接 (NEED_RECONNECT)"
+            data-testid="probe-badge-need-reconnect"
+          >
+            🟡 NEED_RECONNECT
+          </span>
+        );
+      case 'WAITING_PROC':
+        return (
+          <span
+            className="code-badge"
+            style={{
+              background: 'rgba(59, 130, 246, 0.15)',
+              color: 'var(--color-primary)',
+              border: '1px solid var(--color-primary)',
+            }}
+            title="等待宿主机目标进程启动 (WAITING_PROC)"
+            data-testid="probe-badge-waiting-proc"
+          >
+            🔵 WAITING_PROC
+          </span>
+        );
+      case 'MONITORING':
+        return (
+          <span
+            className="code-badge"
+            style={{
+              background: 'rgba(168, 85, 247, 0.15)',
+              color: '#a855f7',
+              border: '1px solid #a855f7',
+            }}
+            title="录制监控中 (MONITORING)"
+            data-testid="probe-badge-monitoring"
+          >
+            🟣 MONITORING
+          </span>
+        );
+      case 'DISARMED':
+        return (
+          <span
+            className="code-badge"
+            style={{
+              background: 'var(--color-bg-muted)',
+              color: 'var(--color-text-muted)',
+              border: '1px solid var(--color-border-primary)',
+            }}
+            title="探针未激活 (DISARMED)"
+            data-testid="probe-badge-disarmed"
+          >
+            ⚪ DISARMED
+          </span>
+        );
+      case 'OFFLINE':
+        return (
+          <span
+            className="code-badge"
+            style={{
+              background: 'var(--color-bg-muted)',
+              color: 'var(--color-text-muted)',
+              border: '1px solid var(--color-border-secondary)',
+            }}
+            title="Agent 宿主机离线 (OFFLINE)"
+            data-testid="probe-badge-offline"
+          >
+            ⚫ OFFLINE
+          </span>
+        );
+      case 'ERROR':
+      default:
+        return (
+          <span
+            className="code-badge"
+            style={{
+              background: 'rgba(239, 68, 68, 0.15)',
+              color: 'var(--color-danger)',
+              border: '1px solid var(--color-danger)',
+            }}
+            title={reason || '探针异常 (ERROR)'}
+            data-testid="probe-badge-error"
+          >
+            🔴 {status || 'ERROR'}
+          </span>
+        );
     }
   };
 
@@ -339,25 +481,55 @@ export const AgentManagementPage: React.FC = () => {
             <div>
               <div className="code-pane-header">
                 <div>
-                  <h3 className="code-pane-title">
-                    业务进程映射 - [{selectedAgent.name}]
-                  </h3>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem' }}>
+                    <h3 className="code-pane-title">
+                      业务进程映射 - [{selectedAgent.name}]
+                    </h3>
+                    <span
+                      className="code-badge code-badge--secondary"
+                      style={{ fontSize: '0.75rem', fontWeight: 600 }}
+                      data-testid="mounts-revision-badge"
+                    >
+                      v{selectedAgent.mounts_revision || 1}
+                    </span>
+                    {selectedAgent.fallback_agent_id && (
+                      <span
+                        className="code-badge"
+                        style={{
+                          fontSize: '0.75rem',
+                          background: 'rgba(59, 130, 246, 0.12)',
+                          color: 'var(--color-primary)',
+                        }}
+                        data-testid="fallback-agent-badge"
+                      >
+                        回退端点: Agent #{selectedAgent.fallback_agent_id}
+                      </span>
+                    )}
+                  </div>
                   <span className="code-color-muted code-text-sm">
                     所属端点: {selectedAgent.endpoint} | 租约状态: {selectedAgent.lease_type || '空闲'}
                   </span>
                 </div>
                 {canWriteSelectedAgent && (
-                  <button
-                    type="button"
-                    className="code-btn code-btn--primary code-btn--xs"
-                    data-testid="add-process-btn"
-                    onClick={() => {
-                      setEditingProcess(null);
-                      setBinderModalOpen(true);
-                    }}
-                  >
-                    + 挂载业务进程
-                  </button>
+                  <div style={{ display: 'flex', gap: '0.4rem' }}>
+                    <button
+                      type="button"
+                      className="code-btn code-btn--secondary code-btn--xs"
+                      data-testid="disarm-all-probes-btn"
+                      onClick={() => void handleDisarmAllProbes()}
+                      title="一键卸载此 Agent 上的所有已激活探针"
+                    >
+                      一键卸载全部探针
+                    </button>
+                    <button
+                      type="button"
+                      className="code-btn code-btn--primary code-btn--xs"
+                      data-testid="batch-mount-btn"
+                      onClick={() => setMountDrawerOpen(true)}
+                    >
+                      ⚡ 批量挂载架构进程
+                    </button>
+                  </div>
                 )}
               </div>
 
@@ -365,18 +537,22 @@ export const AgentManagementPage: React.FC = () => {
                 <table className="code-table">
                   <thead>
                     <tr>
-                      <th>进程分组</th>
-                      <th>进程名称</th>
-                      <th>监听端口</th>
+                      <th>架构物理进程</th>
+                      <th>生效端点 (Effective IP:Port)</th>
+                      <th>端口策略</th>
                       <th>命令行特征</th>
-                      <th>挂载公共模块 (ModuleIDs)</th>
-                      <th>说明</th>
+                      <th>探针就绪状态</th>
+                      <th>期望状态</th>
                       <th>操作</th>
                     </tr>
                   </thead>
                   <tbody>
                     {(processes ?? []).map((proc) => {
                       const isHighlighted = urlProcessId === proc.id;
+                      const effPort = proc.effective_listen_port ?? proc.listen_port;
+                      const hasOverride =
+                        proc.override_listen_port !== undefined && proc.override_listen_port !== null;
+
                       return (
                         <tr
                           key={proc.id}
@@ -389,28 +565,59 @@ export const AgentManagementPage: React.FC = () => {
                           }
                         >
                           <td>
-                            <span className="code-badge code-badge--secondary" data-testid={`proc-group-${proc.id}`}>
-                              {proc.group_name || '默认进程组'}
-                            </span>
-                          </td>
-                          <td className="code-font-mono code-color-primary">{proc.name}</td>
-                          <td className="code-font-mono">
-                            {proc.listen_port > 0 ? proc.listen_port : '0 (纯客户端)'}
-                          </td>
-                          <td className="code-font-mono code-text-xs code-color-muted">{proc.cmd_pattern || '-'}</td>
-                          <td>
-                            <div className="code-tag-group">
-                              {(proc.process_modules ?? []).map((pm) => (
-                                <span key={pm.module_id} className="code-tag code-tag--info">
-                                  {pm.module?.name || pm.module_id}
-                                </span>
-                              ))}
-                              {(!proc.process_modules || proc.process_modules.length === 0) && (
-                                <span className="code-color-muted code-text-xs">未绑定模块</span>
-                              )}
+                            <div style={{ display: 'flex', flexDirection: 'column' }}>
+                              <strong className="code-color-primary" data-testid={`proc-name-${proc.id}`}>
+                                {proc.arch_process?.name || proc.name}
+                              </strong>
+                              <span className="code-font-mono code-text-xs code-color-muted">
+                                {proc.arch_process?.code || proc.group_name || '默认进程组'}
+                              </span>
                             </div>
                           </td>
-                          <td>{proc.description || '-'}</td>
+                          <td className="code-font-mono" style={{ fontWeight: 600 }}>
+                            {effPort === 0 ? '0 (纯客户端)' : `${proc.advertise_ip || '127.0.0.1'}:${effPort}`}
+                          </td>
+                          <td>
+                            {hasOverride ? (
+                              <span
+                                className="code-font-mono"
+                                style={{
+                                  fontSize: '0.75rem',
+                                  color: 'var(--color-warning)',
+                                  background: 'rgba(234, 179, 8, 0.1)',
+                                  padding: '1px 6px',
+                                  borderRadius: 'var(--radius-sm)',
+                                }}
+                              >
+                                覆盖为 :{proc.override_listen_port}
+                              </span>
+                            ) : (
+                              <span className="code-color-muted code-text-xs">
+                                继承默认 ({proc.arch_process?.default_listen_port ?? proc.listen_port})
+                              </span>
+                            )}
+                          </td>
+                          <td className="code-font-mono code-text-xs code-color-muted">
+                            {proc.override_cmd_pattern || proc.cmd_pattern || proc.arch_process?.default_cmd_pattern || '-'}
+                          </td>
+                          <td>{renderProbeStatusBadge(proc.probe_status, proc.probe_status_reason)}</td>
+                          <td>
+                            <span
+                              className="code-badge"
+                              style={{
+                                background:
+                                  proc.probe_desired_state === 'ARMED'
+                                    ? 'rgba(34, 197, 94, 0.12)'
+                                    : 'var(--color-bg-muted)',
+                                color:
+                                  proc.probe_desired_state === 'ARMED'
+                                    ? 'var(--color-success)'
+                                    : 'var(--color-text-muted)',
+                              }}
+                            >
+                              {proc.probe_desired_state || 'ARMED'}
+                            </span>
+                          </td>
                           <td>
                             <div className="code-table-actions">
                               {canWriteSelectedAgent ? (
@@ -418,13 +625,11 @@ export const AgentManagementPage: React.FC = () => {
                                   <button
                                     type="button"
                                     className="code-btn code-btn--secondary code-btn--xs"
-                                    data-testid={`edit-process-${proc.id}`}
-                                    onClick={() => {
-                                      setEditingProcess(proc);
-                                      setBinderModalOpen(true);
-                                    }}
+                                    data-testid={`disarm-process-${proc.id}`}
+                                    onClick={() => void handleDisarmProcess(proc.id)}
+                                    title="卸载该进程的 eBPF 探针"
                                   >
-                                    修改
+                                    卸载探针
                                   </button>
                                   <button
                                     type="button"
@@ -448,7 +653,7 @@ export const AgentManagementPage: React.FC = () => {
                     {processes.length === 0 && (
                       <tr>
                         <td colSpan={7} className="code-table-empty">
-                          当前 Agent 尚未挂载任何业务进程
+                          当前 Agent 尚未挂载任何业务进程，请点击上方「⚡ 批量挂载架构进程」
                         </td>
                       </tr>
                     )}
@@ -523,18 +728,18 @@ export const AgentManagementPage: React.FC = () => {
         </div>
       </Modal>
 
-      {/* 进程挂载弹窗 */}
+      {/* 批量挂载架构进程抽屉 (680px) */}
       {selectedAgent && (
-        <ProcessModuleBinderModal
-          open={binderModalOpen}
-          onClose={() => setBinderModalOpen(false)}
+        <AgentProcessMountDrawer
+          open={mountDrawerOpen}
+          onClose={() => setMountDrawerOpen(false)}
           agent={selectedAgent}
-          editingProcess={editingProcess}
-          existingGroups={existingGroups}
+          existingProcesses={processes}
           onSuccess={() => {
             void (async () => {
               const res = await agentApi.getAgent(selectedAgent.id);
               setProcesses(res.processes ?? []);
+              setSelectedAgent(res.agent);
             })();
           }}
         />

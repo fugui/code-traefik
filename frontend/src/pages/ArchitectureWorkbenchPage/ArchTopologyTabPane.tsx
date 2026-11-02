@@ -4,6 +4,8 @@ import { Drawer } from '@code/common';
 import { useToast } from '../../utils/toast';
 import * as archApi from '../../api/arch';
 import * as trafficApi from '../../api/traffic';
+import * as agentApi from '../../api/agent';
+import type { Agent } from '../../types';
 import type {
   TopologyGraphDTO,
   GraphNode,
@@ -52,7 +54,12 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
   const [searchKeyword, setSearchKeyword] = useState<string>('');
   const [resetKey, setResetKey] = useState<number>(0);
 
-  // 2. 一致性比对录制批次
+  // 2. 物理拓扑环境叠加 (AC-M10-04)
+  const paramEnvAgentId = searchParams.get('env_agent_id');
+  const [envAgentId, setEnvAgentId] = useState<string | null>(paramEnvAgentId || null);
+  const [agents, setAgents] = useState<Agent[]>([]);
+
+  // 3. 一致性比对录制批次
   const paramSessionId = searchParams.get('session_id') || initialSessionId;
   const [sessions, setSessions] = useState<RecordingSession[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(paramSessionId || null);
@@ -67,6 +74,9 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
 
     const ps = searchParams.get('session_id') || initialSessionId || null;
     setSelectedSessionId((curr) => (curr !== ps ? ps : curr));
+
+    const pe = searchParams.get('env_agent_id') || null;
+    setEnvAgentId((curr) => (curr !== pe ? pe : curr));
   }, [searchParams, initialView, initialSessionId]);
 
   // 搜索关键字联动：当输入 searchKeyword 时，自动沿父链展开命中节点的容器
@@ -147,12 +157,12 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
     [onViewChange, updateUrlParams]
   );
 
-  // 加载全系统复合拓扑图
+  // 加载全系统复合拓扑图 (支持 env_agent_id 环境叠加)
   const loadGraph = useCallback(
-    async (targetView: 'LOGICAL' | 'PHYSICAL') => {
+    async (targetView: 'LOGICAL' | 'PHYSICAL', targetEnvAgentId?: string | null) => {
       setLoadingGraph(true);
       try {
-        const res = await archApi.getTopologyGraph(targetView);
+        const res = await archApi.getTopologyGraph(targetView, targetEnvAgentId);
         setGraphData(res);
       } catch (err) {
         toast.error(err instanceof Error ? err.message : '加载全系统架构拓扑图失败');
@@ -164,8 +174,34 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
   );
 
   useEffect(() => {
-    void loadGraph(view);
-  }, [view, loadGraph]);
+    void loadGraph(view, view === 'PHYSICAL' ? envAgentId : null);
+  }, [view, envAgentId, loadGraph]);
+
+  // 加载可用 Agent 宿主机列表 (供环境叠加选用)
+  useEffect(() => {
+    let mounted = true;
+    void (async () => {
+      try {
+        const res = await agentApi.listAgents({ page: 1, page_size: 100 });
+        if (mounted) {
+          setAgents(res.items ?? []);
+        }
+      } catch {
+        // 静默处理
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const handleSelectEnvAgentId = useCallback(
+    (agentId: string | null) => {
+      setEnvAgentId(agentId);
+      updateUrlParams({ env_agent_id: agentId });
+    },
+    [updateUrlParams]
+  );
 
   // 加载协同录制批次列表
   useEffect(() => {
@@ -336,6 +372,9 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
         sessions={sessions}
         selectedSessionId={selectedSessionId}
         onSelectSession={handleSelectSession}
+        agents={agents}
+        selectedEnvAgentId={envAgentId}
+        onSelectEnvAgentId={handleSelectEnvAgentId}
       />
 
       {/* 一致性报告摘要栏 */}

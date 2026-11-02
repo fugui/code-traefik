@@ -103,7 +103,7 @@ func (o *Orchestrator) StartSession(
 
 	// 1. 查询目标进程及其所属 Agent
 	var procs []models.Process
-	if err := o.db.WithContext(ctx).Preload("Agent").
+	if err := o.db.WithContext(ctx).Preload("Agent").Preload("ArchProcess.Modules").
 		Where("id IN ?", req.TargetProcessIDs).Find(&procs).Error; err != nil {
 		return nil, fmt.Errorf("查询目标进程失败: %w", err)
 	}
@@ -114,6 +114,7 @@ func (o *Orchestrator) StartSession(
 	// 2. 权限校验与收集 Agent
 	agentMap := make(map[uint64]*models.Agent)
 	for _, p := range procs {
+		p.FillFromArchProcess()
 		if p.Agent == nil {
 			return nil, fmt.Errorf("400 Bad Request: 进程 %s 未关联有效 Agent", p.Name)
 		}
@@ -133,7 +134,7 @@ func (o *Orchestrator) StartSession(
 	// 严格按升序加锁防死锁
 	sort.Slice(agentIDs, func(i, j int) bool { return agentIDs[i] < agentIDs[j] })
 
-	// 3. 初始生成会话记录 (状态 PENDING)
+	// 3. 初始生成会话记录 (状态 PENDING，固化 ProcessSnapshots)
 	maxDur := req.MaxDurationSec
 	if maxDur <= 0 {
 		maxDur = 1800 // 默认 30 分钟
@@ -146,6 +147,25 @@ func (o *Orchestrator) StartSession(
 	if maxBytes <= 0 {
 		maxBytes = 4194304 // 默认 4MB
 	}
+
+	snapshots := make([]models.ProcessSnapshotItem, 0, len(procs))
+	for _, p := range procs {
+		var modIDs []uint64
+		if p.ArchProcess != nil {
+			for _, m := range p.ArchProcess.Modules {
+				modIDs = append(modIDs, m.ID)
+			}
+		}
+		snapshots = append(snapshots, models.ProcessSnapshotItem{
+			ProcessID:     p.ID,
+			ArchProcessID: p.ArchProcessID,
+			Code:          p.Code,
+			Name:          p.Name,
+			ModuleIDs:     modIDs,
+			ListenPort:    p.EffectiveListenPort,
+		})
+	}
+	snapshotBytes, _ := json.Marshal(snapshots)
 
 	now := time.Now()
 	leasedBytes, _ := json.Marshal(agentIDs)
@@ -160,6 +180,7 @@ func (o *Orchestrator) StartSession(
 		Status:             models.SessionStatusPending,
 		LeasedAgentIDs:     datatypes.JSON(leasedBytes),
 		TargetProcessIDs:   datatypes.JSON(targetProcBytes),
+		ProcessSnapshots:   datatypes.JSON(snapshotBytes),
 		ProcessDiagnostics: datatypes.JSON([]byte("[]")),
 		MaxDurationSec:     maxDur,
 		MaxFrames:          maxFrames,
@@ -192,9 +213,10 @@ func (o *Orchestrator) StartSession(
 		for _, p := range procs {
 			if p.AgentID == agtID {
 				downstreams, _ := topology.CompileProcessDownstreams(o.db, p.ID, req.TargetProcessIDs, nil)
+				p.FillFromArchProcess()
 				specs = append(specs, agentproto.ProcessMonitorSpec{
 					ProcessID:   p.ID,
-					ListenPort:  uint16(p.ListenPort),
+					ListenPort:  uint16(p.EffectiveListenPort),
 					CmdPattern:  p.CmdPattern,
 					Downstreams: downstreams,
 				})

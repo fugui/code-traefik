@@ -52,24 +52,32 @@ func TestResolveSourceModuleThreeTierPriority(t *testing.T) {
 		t.Fatalf("创建 Agent 失败: %v", err)
 	}
 
+	pgrp := models.ArchProcessGroup{Code: "PGRP_TEST", Name: "测试组"}
+	db.Create(&pgrp)
+	archMulti := models.ArchProcess{
+		GroupID:           pgrp.ID,
+		Code:              "PROC_MULTI",
+		Name:              "proc-multi-service",
+		DefaultListenPort: 18001,
+		DefaultCmdPattern: "/opt/bin/multi_proc",
+	}
+	db.Create(&archMulti)
+
 	procMulti := models.Process{
-		AgentID:    agt.ID,
-		Name:       "proc-multi-service",
-		ListenPort: 18001,
-		CmdPattern: "/opt/bin/multi_proc",
-		CreatedBy:  1,
+		AgentID:             agt.ID,
+		ArchProcessID:       archMulti.ID,
+		EffectiveListenPort: 18001,
+		ProbeDesiredState:   models.ProbeDesiredStateArmed,
+		ProbeStatus:         models.ProbeStatusReady,
+		CreatedBy:           1,
 	}
 	if err := db.Create(&procMulti).Error; err != nil {
 		t.Fatalf("创建进程失败: %v", err)
 	}
 
-	// 绑定 Mod_A 与 Mod_B 到 procMulti
-	if err := db.Create(&models.ProcessModule{ProcessID: procMulti.ID, ModuleID: modA.ID}).Error; err != nil {
-		t.Fatalf("绑定 Mod_A 失败: %v", err)
-	}
-	if err := db.Create(&models.ProcessModule{ProcessID: procMulti.ID, ModuleID: modB.ID}).Error; err != nil {
-		t.Fatalf("绑定 Mod_B 失败: %v", err)
-	}
+	// 绑定 Mod_A 与 Mod_B 到 archMulti
+	db.Model(&modA).Update("arch_process_id", archMulti.ID)
+	db.Model(&modB).Update("arch_process_id", archMulti.ID)
 
 	// 3. 配置服务依赖契约：
 	// Mod_B 声明依赖外部或内部 ("dophi.stock-StockService")
@@ -191,25 +199,37 @@ func TestSC06_ArchitectureConsistencyVerification(t *testing.T) {
 	agt := models.Agent{Name: "agt-sc06", Endpoint: "http://127.0.0.1:9092", Scope: models.ScopeShared, Status: models.AgentStatusOnline, CreatedBy: 1}
 	db.Create(&agt)
 
+	pgrpSc := models.ArchProcessGroup{Code: "PGRP_SC", Name: "SC进程组"}
+	db.Create(&pgrpSc)
+
+	archA := models.ArchProcess{GroupID: pgrpSc.ID, Code: "PROC_A", Name: "proc-A", DefaultListenPort: 19001, DefaultCmdPattern: "proc-a"}
+	archB := models.ArchProcess{GroupID: pgrpSc.ID, Code: "PROC_B", Name: "proc-B", DefaultListenPort: 19002, DefaultCmdPattern: "proc-b"}
+	archC := models.ArchProcess{GroupID: pgrpSc.ID, Code: "PROC_C", Name: "proc-C", DefaultListenPort: 19003, DefaultCmdPattern: "proc-c"}
+	archUnmon := models.ArchProcess{GroupID: pgrpSc.ID, Code: "PROC_UNMON", Name: "proc-unmon", DefaultListenPort: 19004, DefaultCmdPattern: "proc-unmon"}
+	db.Create(&archA)
+	db.Create(&archB)
+	db.Create(&archC)
+	db.Create(&archUnmon)
+
 	// procA 承载 mod1 与 mod2 (多模块进程)
-	procA := models.Process{AgentID: agt.ID, Name: "proc-A", ListenPort: 19001, CmdPattern: "proc-a", CreatedBy: 1}
+	procA := models.Process{AgentID: agt.ID, ArchProcessID: archA.ID, EffectiveListenPort: 19001, ProbeDesiredState: models.ProbeDesiredStateArmed, ProbeStatus: models.ProbeStatusReady, CreatedBy: 1}
 	// procB 承载 mod3
-	procB := models.Process{AgentID: agt.ID, Name: "proc-B", ListenPort: 19002, CmdPattern: "proc-b", CreatedBy: 1}
+	procB := models.Process{AgentID: agt.ID, ArchProcessID: archB.ID, EffectiveListenPort: 19002, ProbeDesiredState: models.ProbeDesiredStateArmed, ProbeStatus: models.ProbeStatusReady, CreatedBy: 1}
 	// procC 承载 mod4
-	procC := models.Process{AgentID: agt.ID, Name: "proc-C", ListenPort: 19003, CmdPattern: "proc-c", CreatedBy: 1}
+	procC := models.Process{AgentID: agt.ID, ArchProcessID: archC.ID, EffectiveListenPort: 19003, ProbeDesiredState: models.ProbeDesiredStateArmed, ProbeStatus: models.ProbeStatusReady, CreatedBy: 1}
 	// procUnmon 承载 modUnmon (未加入本次录制监控)
-	procUnmon := models.Process{AgentID: agt.ID, Name: "proc-unmon", ListenPort: 19004, CmdPattern: "proc-unmon", CreatedBy: 1}
+	procUnmon := models.Process{AgentID: agt.ID, ArchProcessID: archUnmon.ID, EffectiveListenPort: 19004, ProbeDesiredState: models.ProbeDesiredStateArmed, ProbeStatus: models.ProbeStatusReady, CreatedBy: 1}
 
 	db.Create(&procA)
 	db.Create(&procB)
 	db.Create(&procC)
 	db.Create(&procUnmon)
 
-	db.Create(&models.ProcessModule{ProcessID: procA.ID, ModuleID: mod1.ID})
-	db.Create(&models.ProcessModule{ProcessID: procA.ID, ModuleID: mod2.ID})
-	db.Create(&models.ProcessModule{ProcessID: procB.ID, ModuleID: mod3.ID})
-	db.Create(&models.ProcessModule{ProcessID: procC.ID, ModuleID: mod4.ID})
-	db.Create(&models.ProcessModule{ProcessID: procUnmon.ID, ModuleID: modUnmon.ID})
+	db.Model(&mod1).Update("arch_process_id", archA.ID)
+	db.Model(&mod2).Update("arch_process_id", archA.ID)
+	db.Model(&mod3).Update("arch_process_id", archB.ID)
+	db.Model(&mod4).Update("arch_process_id", archC.ID)
+	db.Model(&modUnmon).Update("arch_process_id", archUnmon.ID)
 
 	// 3. 服务契约与依赖定义
 	// (1) mod3 PROVIDE dophi.b-ServiceB

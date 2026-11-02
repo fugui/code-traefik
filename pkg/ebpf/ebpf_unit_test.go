@@ -1,12 +1,21 @@
 package ebpf
 
 import (
+	"bytes"
+	"encoding/binary"
+	"fmt"
+	"io"
+	"net"
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"code-traefik/pkg/agentproto"
 	"code-traefik/pkg/crosrpc"
+	"code-traefik/pkg/replay"
 )
 
 // mockProcTree 在临时目录下构建伪造的 procfs 结构
@@ -244,5 +253,291 @@ func TestGapAwareIngressReaderAndBudgetPool(t *testing.T) {
 	}
 	if budgetPool.EvictCount() == 0 {
 		t.Errorf("expected evictions to have occurred")
+	}
+}
+
+// TestEgressProxy_ThreeModes_NonDisruptiveStopAndReplayZeroLeakage 测试 EgressProxy 三态转换、停录不断连与回放零外泄 (ADR-09, AC-M10-02)
+func TestEgressProxy_ThreeModes_NonDisruptiveStopAndReplayZeroLeakage(t *testing.T) {
+	// 1. 启动真实后端下游模拟服务
+	realBackendLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen real backend failed: %v", err)
+	}
+	defer realBackendLn.Close()
+	realBackendPort := uint16(realBackendLn.Addr().(*net.TCPAddr).Port)
+
+	var backendReceivedBytes int64
+	backendDone := make(chan struct{})
+
+	go func() {
+		for {
+			conn, err := realBackendLn.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				buf := make([]byte, 4096)
+				for {
+					n, err := c.Read(buf)
+					if n > 0 {
+						atomic.AddInt64(&backendReceivedBytes, int64(n))
+						// Echo 原样回包
+						_, _ = c.Write(buf[:n])
+					}
+					if err != nil {
+						return
+					}
+				}
+			}(conn)
+		}
+	}()
+	defer close(backendDone)
+
+	// 2. 构造 EgressProxy 实例
+	var capturedEnvelopes [][]byte
+	var capMu sync.Mutex
+
+	proxy, err := NewEgressProxy(
+		func(clientPort uint16) (uint64, uint32, net.IP, uint16, bool) {
+			return 100, 1234, net.IPv4(127, 0, 0, 1), realBackendPort, true
+		},
+		func(envBytes []byte) {
+			capMu.Lock()
+			capturedEnvelopes = append(capturedEnvelopes, envBytes)
+			capMu.Unlock()
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewEgressProxy failed: %v", err)
+	}
+	defer proxy.Close()
+
+	// 验证初始为 PASSTHROUGH 模式
+	if proxy.Mode() != ModePassthrough {
+		t.Fatalf("expected initial mode PASSTHROUGH, got %v", proxy.Mode())
+	}
+
+	// 3. 阶段一：PASSTHROUGH 待命模式下建立长连接并发送数据
+	proxyAddr := fmt.Sprintf("127.0.0.1:%d", proxy.ProxyPort())
+	clientConn, err := net.Dial("tcp", proxyAddr)
+	if err != nil {
+		t.Fatalf("dial proxy failed: %v", err)
+	}
+	defer clientConn.Close()
+
+	pingMsg := []byte("PASSTHROUGH_PING_MSG")
+	if _, err := clientConn.Write(pingMsg); err != nil {
+		t.Fatalf("write in passthrough failed: %v", err)
+	}
+	replyBuf := make([]byte, len(pingMsg))
+	if _, err := io.ReadFull(clientConn, replyBuf); err != nil {
+		t.Fatalf("read echo in passthrough failed: %v", err)
+	}
+	if !bytes.Equal(replyBuf, pingMsg) {
+		t.Fatalf("expected echo %s, got %s", pingMsg, replyBuf)
+	}
+
+	capMu.Lock()
+	if len(capturedEnvelopes) != 0 {
+		t.Fatalf("passthrough mode must not capture envelopes, got %d", len(capturedEnvelopes))
+	}
+	capMu.Unlock()
+
+	// 4. 阶段二：切换为 CAPTURING 录制模式 (在同一条长连接上复用)
+	proxy.SetMode(ModeCapturing)
+
+	// 构造标准 CROS RPC 请求帧
+	framePayload := []byte("test_cros_capture_payload")
+	headLen := uint16(160)
+	bodyLen := uint32(headLen) + uint32(len(framePayload))
+	totalLen := 24 + bodyLen
+
+	pkt := make([]byte, totalLen)
+	copy(pkt[0:7], []byte("CSE.TCP"))
+	pkt[7] = 1
+	pkt[20] = byte(headLen >> 8)
+	pkt[21] = byte(headLen)
+	pkt[16] = byte(bodyLen >> 24)
+	pkt[17] = byte(bodyLen >> 16)
+	pkt[18] = byte(bodyLen >> 8)
+	pkt[19] = byte(bodyLen)
+	pkt[22] = crosrpc.MsgTypeReq
+	pkt[23] = 1
+	copy(pkt[24+8:24+72], []byte("com.test.OrderService"))
+	copy(pkt[24+72:24+136], []byte("CreateOrder"))
+	pkt[24+136] = crosrpc.ReqTypeSync
+	copy(pkt[24+headLen:], framePayload)
+
+	if _, err := clientConn.Write(pkt); err != nil {
+		t.Fatalf("write in capturing failed: %v", err)
+	}
+	rspBuf := make([]byte, totalLen)
+	if _, err := io.ReadFull(clientConn, rspBuf); err != nil {
+		t.Fatalf("read echo in capturing failed: %v", err)
+	}
+
+	// 等待帧捕获并排空
+	time.Sleep(50 * time.Millisecond)
+	capMu.Lock()
+	if len(capturedEnvelopes) == 0 {
+		t.Fatalf("expected captured envelopes in CAPTURING mode, got 0")
+	}
+	capMu.Unlock()
+
+	// 5. 阶段三：停止录制，调用 DrainAndSetPassthrough 切回待命模式 (停录不断连不变性)
+	proxy.DrainAndSetPassthrough(50 * time.Millisecond)
+	if proxy.Mode() != ModePassthrough {
+		t.Fatalf("expected mode PASSTHROUGH after drain, got %v", proxy.Mode())
+	}
+
+	// 核心断言：在完全不重连同一 clientConn 的情况下，连接依旧存活并能正常收发流量！
+	afterStopMsg := []byte("AFTER_STOP_NON_DISRUPTIVE_MSG")
+	if _, err := clientConn.Write(afterStopMsg); err != nil {
+		t.Fatalf("long connection broken after stop: %v", err)
+	}
+	afterStopRsp := make([]byte, len(afterStopMsg))
+	if _, err := io.ReadFull(clientConn, afterStopRsp); err != nil {
+		t.Fatalf("read long connection echo failed: %v", err)
+	}
+	if !bytes.Equal(afterStopRsp, afterStopMsg) {
+		t.Fatalf("expected echo %s, got %s", afterStopMsg, afterStopRsp)
+	}
+	_ = clientConn.Close()
+
+	// 6. 阶段四：REPLAY_MOCK 模式与 0 字节外泄阻断验证
+	atomic.StoreInt64(&backendReceivedBytes, 0) // 重置真实后端流量计数器
+
+	// 构造标准 V01 格式 (156B 会话头) Mock 匹配器与 Mock 响应帧
+	matcher := replay.NewScopedMockMatcher()
+	mockRspRaw := make([]byte, 156)
+	binary.BigEndian.PutUint16(mockRspRaw[0:2], 1)
+	binary.BigEndian.PutUint16(mockRspRaw[2:4], 156)
+	copy(mockRspRaw[24:88], []byte("com.test.OrderService"))
+	copy(mockRspRaw[88:152], []byte("CreateOrder"))
+
+	mockComm := make([]byte, 24)
+	copy(mockComm[0:7], []byte("CSE.TCP"))
+	mockComm[7] = 1
+	mockBodyLen := uint32(156 + len(framePayload))
+	mockComm[16] = byte(mockBodyLen >> 24)
+	mockComm[17] = byte(mockBodyLen >> 16)
+	mockComm[18] = byte(mockBodyLen >> 8)
+	mockComm[19] = byte(mockBodyLen)
+	mockComm[20] = byte(156 >> 8)
+	mockComm[21] = byte(156)
+	mockComm[22] = crosrpc.MsgTypeRsp
+	mockComm[23] = 1
+
+	var mockRsp []byte
+	mockRsp = append(mockRsp, mockComm...)
+	mockRsp = append(mockRsp, mockRspRaw...)
+	mockRsp = append(mockRsp, framePayload...)
+
+	matcher.AddGlobalFallback("com.test.OrderService", "CreateOrder", framePayload, [][]byte{mockRsp})
+
+	proxy.SetMockMatcher(matcher, []agentproto.DownstreamEndpoint{
+		{IP: "127.0.0.1", Port: realBackendPort},
+	})
+	proxy.SetMode(ModeReplayMock)
+
+	// 新客户端发起回放流量
+	replayConn, err := net.Dial("tcp", proxyAddr)
+	if err != nil {
+		t.Fatalf("dial replay conn failed: %v", err)
+	}
+	defer replayConn.Close()
+
+	if _, err := replayConn.Write(pkt); err != nil {
+		t.Fatalf("write replay request failed: %v", err)
+	}
+	replayRspBuf := make([]byte, len(mockRsp))
+	if _, err := io.ReadFull(replayConn, replayRspBuf); err != nil {
+		t.Fatalf("read mock response failed: %v", err)
+	}
+	if replayRspBuf[22] != crosrpc.MsgTypeRsp {
+		t.Fatalf("expected MsgTypeRsp (3), got %d", replayRspBuf[22])
+	}
+
+	// 核心红线验证：真实后端接收到的字节数必须严格为 0！0 字节泄漏到被 Mock 的下游服务！
+	realLeaked := atomic.LoadInt64(&backendReceivedBytes)
+	if realLeaked != 0 {
+		t.Fatalf("REPLAY_MOCK mode leaked %d bytes to real target backend! Expected strictly 0", realLeaked)
+	}
+
+	// 7. 优雅排空验证 (GracefulDrain)
+	_ = replayConn.Close()
+	if err := proxy.GracefulDrain(500 * time.Millisecond); err != nil {
+		t.Fatalf("GracefulDrain failed: %v", err)
+	}
+	// 验证排空后新连接被拒绝
+	_, err = net.DialTimeout("tcp", proxyAddr, 100*time.Millisecond)
+	if err == nil {
+		t.Fatalf("expected dial to fail after GracefulDrain")
+	}
+}
+
+// BenchmarkEgressProxy_ArmedPassthrough 待命模式下透明转发单核性能基准测试 (内存申请 0 B/op)
+func BenchmarkEgressProxy_ArmedPassthrough(b *testing.B) {
+	echoLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		b.Fatalf("listen echo failed: %v", err)
+	}
+	defer echoLn.Close()
+	echoPort := uint16(echoLn.Addr().(*net.TCPAddr).Port)
+
+	go func() {
+		for {
+			c, err := echoLn.Accept()
+			if err != nil {
+				return
+			}
+			go func(conn net.Conn) {
+				defer conn.Close()
+				buf := make([]byte, 8192)
+				for {
+					n, err := conn.Read(buf)
+					if n > 0 {
+						_, _ = conn.Write(buf[:n])
+					}
+					if err != nil {
+						return
+					}
+				}
+			}(c)
+		}
+	}()
+
+	proxy, err := NewEgressProxy(
+		func(clientPort uint16) (uint64, uint32, net.IP, uint16, bool) {
+			return 1, 100, net.IPv4(127, 0, 0, 1), echoPort, true
+		},
+		nil,
+	)
+	if err != nil {
+		b.Fatalf("NewEgressProxy failed: %v", err)
+	}
+	defer proxy.Close()
+
+	proxyAddr := fmt.Sprintf("127.0.0.1:%d", proxy.ProxyPort())
+	client, err := net.Dial("tcp", proxyAddr)
+	if err != nil {
+		b.Fatalf("dial failed: %v", err)
+	}
+	defer client.Close()
+
+	req := make([]byte, 1024)
+	rsp := make([]byte, 1024)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		if _, err := client.Write(req); err != nil {
+			b.Fatalf("write failed: %v", err)
+		}
+		if _, err := io.ReadFull(client, rsp); err != nil {
+			b.Fatalf("read failed: %v", err)
+		}
 	}
 }

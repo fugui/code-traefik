@@ -31,14 +31,8 @@ func setupTestDB(t *testing.T) *gorm.DB {
 		t.Skip("TEST_DB_DSN 未配置，跳过 Hub 隔离数据库集成测试")
 	}
 	db := testdb.SetupIsolatedDB(t, "traefik_hub_test")
-	if err := db.AutoMigrate(
-		&models.Agent{},
-		&models.Process{},
-		&models.ProcessModule{},
-		&models.RecordingSession{},
-		&models.ReplayTask{},
-	); err != nil {
-		t.Fatalf("自动迁移失败: %v", err)
+	if err := models.SetupWithDB(db); err != nil {
+		t.Fatalf("初始化数据库结构失败: %v", err)
 	}
 	return db
 }
@@ -429,11 +423,26 @@ func TestAcquireAgentLeasesMutexAndHeartbeatReconcile(t *testing.T) {
 		bootIDAtomic.Store("boot-uuid-rebooted-999")
 
 		// 重新给 Agent 绑定一个重放任务与租约
+		archGroup := &models.ArchProcessGroup{
+			Code:      "DEFAULT_GRP",
+			Name:      "默认进程组",
+			SortOrder: 1,
+		}
+		_ = db.Create(archGroup).Error
+		archProc := &models.ArchProcess{
+			GroupID:           archGroup.ID,
+			Code:              "proc-test-hub",
+			Name:              "测试进程",
+			DefaultListenPort: 8080,
+		}
+		_ = db.Create(archProc).Error
+
 		replayTask := &models.ReplayTask{
 			TaskNo:            "REP-TEST-001",
 			Name:              "Active-Replay-Task",
 			OwnerID:           userA.ID,
 			SessionID:         session.ID,
+			ArchProcessID:     archProc.ID,
 			AgentID:           agent1.ID,
 			LifecycleState:    "RUNNING",
 			SelectedRecordIDs: []byte("[]"),
@@ -477,4 +486,151 @@ func TestAcquireAgentLeasesMutexAndHeartbeatReconcile(t *testing.T) {
 			t.Fatalf("Agent 重启后关联重放任务未置为 FAILED，实际: %s", freshReplayTask.LifecycleState)
 		}
 	})
+}
+
+// TestAgentHub_SingleFlightRearm_BackoffAndOptimisticLock 测试 Single-Flight 预挂待命对账、指数退避与状态流转 (ADR-09, AC-M10-02)
+func TestAgentHub_SingleFlightRearm_BackoffAndOptimisticLock(t *testing.T) {
+	db := setupTestDB(t)
+
+	// 1. 创建测试架构进程组与架构进程
+	pgrp := models.ArchProcessGroup{Code: "PGRP_TEST", Name: "测试进程组"}
+	if err := db.Create(&pgrp).Error; err != nil {
+		t.Fatalf("创建进程组失败: %v", err)
+	}
+	archProc := models.ArchProcess{
+		GroupID:           pgrp.ID,
+		Code:              "ARCH_PROC_ORDER",
+		Name:              "订单服务进程",
+		DefaultListenPort: 18080,
+		DefaultCmdPattern: "order-svc",
+	}
+	if err := db.Create(&archProc).Error; err != nil {
+		t.Fatalf("创建架构进程失败: %v", err)
+	}
+
+	// 2. 模拟 Agent HTTP 服务端
+	var armRequestCount int32
+	var shouldFailArm int32
+	agentServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/agent/v1/health" {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(agentproto.HandshakeResp{
+				AgentVersion:    "1.0.0",
+				ProtocolVersion: "1.0",
+				BootID:          "test-boot-123",
+				HasEbpfCap:      true,
+				ActiveLeaseType: "",
+			})
+			return
+		}
+		if r.URL.Path == "/agent/v1/monitors/arm" {
+			atomic.AddInt32(&armRequestCount, 1)
+			if atomic.LoadInt32(&shouldFailArm) == 1 {
+				http.Error(w, "internal arm failure", http.StatusInternalServerError)
+				return
+			}
+			var req agentproto.ArmStandbyReq
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			digest := agentproto.ComputeArmedDigest(req.Processes)
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(agentproto.ArmStandbyResp{
+				Revision:    req.Revision,
+				ArmedDigest: digest,
+				Diagnostics: []agentproto.ProcessDiagStatus{
+					{
+						ProcessID:        1,
+						Status:           "MONITORING",
+						ResolvedPID:      12345,
+						EstablishedConns: 0,
+						NeedReconnect:    false,
+					},
+				},
+			})
+			return
+		}
+	}))
+	defer agentServer.Close()
+
+	// 3. 数据库创建 Agent 与 Process
+	agent := models.Agent{
+		Name:           "DevAgent-1",
+		Endpoint:       agentServer.URL,
+		Scope:          models.ScopeShared,
+		Status:         models.AgentStatusOnline,
+		MountsRevision: 1,
+	}
+	if err := db.Create(&agent).Error; err != nil {
+		t.Fatalf("创建 Agent 失败: %v", err)
+	}
+
+	proc := models.Process{
+		AgentID:             agent.ID,
+		ArchProcessID:       archProc.ID,
+		EffectiveListenPort: 18080,
+		ProbeDesiredState:   models.ProbeDesiredStateArmed,
+		ProbeStatus:         models.ProbeStatusDisarmed,
+	}
+	if err := db.Create(&proc).Error; err != nil {
+		t.Fatalf("创建 Process 失败: %v", err)
+	}
+
+	mgr := hub.NewManager(db, &config.Config{})
+
+	// 4. 测试 Single-Flight 并发防重暴风锁：并发触发 10 次 AutoRearmAgent
+	var wg sync.WaitGroup
+	errCh := make(chan error, 10)
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := mgr.AutoRearmAgent(context.Background(), agent.ID)
+			if err != nil {
+				errCh <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(errCh)
+
+	for err := range errCh {
+		t.Fatalf("AutoRearmAgent 并发执行异常: %v", err)
+	}
+
+	// 核心断言：10 次并发请求，Agent HTTP 端点仅收到恰好 1 次 /monitors/arm 请求！
+	reqCount := atomic.LoadInt32(&armRequestCount)
+	if reqCount != 1 {
+		t.Fatalf("Single-Flight 并发控制失败，期望 arm 请求 1 次，实际收到: %d", reqCount)
+	}
+
+	// 验证进程状态已晋级为 READY
+	var freshProc models.Process
+	if err := db.First(&freshProc, proc.ID).Error; err != nil {
+		t.Fatalf("查询 Process 失败: %v", err)
+	}
+	if freshProc.ProbeStatus != models.ProbeStatusReady {
+		t.Fatalf("对账后进程状态期望 READY，实际: %s", freshProc.ProbeStatus)
+	}
+
+	// 5. 测试指数退避机制：开启失败注入
+	atomic.StoreInt32(&shouldFailArm, 1)
+	atomic.StoreInt32(&armRequestCount, 0)
+
+	_, failErr := mgr.AutoRearmAgent(context.Background(), agent.ID)
+	if failErr == nil {
+		t.Fatalf("期望对账失败，但返回 nil")
+	}
+
+	// 再次立即重试，应当命中退避拦截
+	_, backoffErr := mgr.AutoRearmAgent(context.Background(), agent.ID)
+	if backoffErr == nil || !strings.Contains(backoffErr.Error(), "退避中") {
+		t.Fatalf("期望命中退避拦截，实际返回: %v", backoffErr)
+	}
+
+	// 检查数据库中进程状态标记为 ERROR
+	if err := db.First(&freshProc, proc.ID).Error; err != nil {
+		t.Fatalf("查询 Process 失败: %v", err)
+	}
+	if freshProc.ProbeStatus != models.ProbeStatusError {
+		t.Fatalf("对账失败后进程状态期望 ERROR，实际: %s", freshProc.ProbeStatus)
+	}
 }

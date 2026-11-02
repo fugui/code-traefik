@@ -7,7 +7,17 @@ import (
 	"gorm.io/datatypes"
 )
 
-// 10. RecordingSession 任务级多进程协同录制批次表 (traefik_recording_sessions)
+// ProcessSnapshotItem 录制时刻挂载进程的架构蓝图与模块快照，解耦后续卸载挂载实例
+type ProcessSnapshotItem struct {
+	ProcessID     uint64   `json:"process_id"`
+	ArchProcessID uint64   `json:"arch_process_id"`
+	Code          string   `json:"code"`
+	Name          string   `json:"name"`
+	ModuleIDs     []uint64 `json:"module_ids"`
+	ListenPort    int      `json:"listen_port"`
+}
+
+// 12. RecordingSession 任务级多进程协同录制批次表 (traefik_recording_sessions)
 type RecordingSession struct {
 	ID                    uint64         `gorm:"primaryKey;autoIncrement" json:"id"`
 	SessionNo             string         `gorm:"size:64;not null;uniqueIndex:uk_traefik_rec_session_no" json:"session_no"`
@@ -18,6 +28,7 @@ type RecordingSession struct {
 	Status                string         `gorm:"size:32;not null;default:'PENDING';index:idx_traefik_rec_status" json:"status"`
 	LeasedAgentIDs        datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"leased_agent_ids"`
 	TargetProcessIDs      datatypes.JSON `gorm:"type:jsonb;not null" json:"target_process_ids"`
+	ProcessSnapshots      datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"process_snapshots"` // []ProcessSnapshotItem 录制时刻快照，解耦后续卸载挂载实例
 	ProcessDiagnostics    datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"process_diagnostics"`
 	MaxDurationSec        int            `gorm:"not null;default:1800" json:"max_duration_sec"`
 	MaxFrames             int            `gorm:"not null;default:100000" json:"max_frames"`

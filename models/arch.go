@@ -44,29 +44,66 @@ type FunctionalGroup struct {
 
 func (FunctionalGroup) TableName() string { return config.TablePrefix + "functional_groups" }
 
-// 3. Module 最小接口契约功能模块表 (traefik_modules)
+// 3. ArchProcessGroup 全局架构物理进程组蓝图表 (traefik_arch_process_groups)
+type ArchProcessGroup struct {
+	ID          uint64        `gorm:"primaryKey;autoIncrement" json:"id"`
+	Code        string        `gorm:"size:64;not null;uniqueIndex:uk_traefik_arch_pgrp_code" json:"code"` // 全局唯一大写编码，如 "CORE_TRADE"
+	Name        string        `gorm:"size:128;not null;uniqueIndex:uk_traefik_arch_pgrp_name" json:"name"`
+	SortOrder   int           `gorm:"not null;default:0" json:"sort_order"`
+	Description string        `gorm:"type:text" json:"description"`
+	Processes   []ArchProcess `gorm:"foreignKey:GroupID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"processes,omitempty"`
+	CreatedBy   uint          `gorm:"not null;default:0" json:"created_by"`
+	UpdatedBy   uint          `gorm:"not null;default:0" json:"updated_by"`
+	CreatedAt   time.Time     `json:"created_at"`
+	UpdatedAt   time.Time     `json:"updated_at"`
+}
+
+func (ArchProcessGroup) TableName() string { return config.TablePrefix + "arch_process_groups" }
+
+// 4. ArchProcess 全局架构标准业务进程蓝图表 (traefik_arch_processes)
+type ArchProcess struct {
+	ID                      uint64            `gorm:"primaryKey;autoIncrement" json:"id"`
+	GroupID                 uint64            `gorm:"not null;index:idx_traefik_arch_proc_group" json:"group_id"`
+	Group                   *ArchProcessGroup `gorm:"foreignKey:GroupID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"group,omitempty"`
+	Code                    string            `gorm:"size:64;not null;uniqueIndex:uk_traefik_arch_proc_code" json:"code"` // 全局唯一标准进程编码，如 "sut-order"
+	Name                    string            `gorm:"size:128;not null;index:idx_traefik_arch_proc_name" json:"name"`
+	DefaultListenPort       int               `gorm:"not null;default:0;check:chk_traefik_arch_proc_port,default_listen_port >= 0 AND default_listen_port <= 65535" json:"default_listen_port"` // 0 表示纯客户端进程；1..65535 为默认监听端口
+	DefaultCmdPattern       string            `gorm:"size:512;not null;default:''" json:"default_cmd_pattern"`                                                                                  // 默认 /proc/<pid>/cmdline 匹配特征
+	DefaultExtraDownstreams datatypes.JSON    `gorm:"type:jsonb;not null;default:'[]'" json:"default_extra_downstreams"`                                                                        // 默认补充下游 ["IP:Port"]
+	SortOrder               int               `gorm:"not null;default:0" json:"sort_order"`
+	Description             string            `gorm:"type:text" json:"description"`
+	Modules                 []Module          `gorm:"foreignKey:ArchProcessID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"modules,omitempty"` // 组装承载的 FM 功能模块集合 (1:N)
+	CreatedBy               uint              `gorm:"not null;default:0" json:"created_by"`
+	UpdatedBy               uint              `gorm:"not null;default:0" json:"updated_by"`
+	CreatedAt               time.Time         `json:"created_at"`
+	UpdatedAt               time.Time         `json:"updated_at"`
+}
+
+func (ArchProcess) TableName() string { return config.TablePrefix + "arch_processes" }
+
+// 5. Module 最小接口契约功能模块表 (traefik_modules)
 type Module struct {
-	ID          uint64           `gorm:"primaryKey;autoIncrement" json:"id"`
-	SubsystemID uint64           `gorm:"not null;index:idx_traefik_modules_subsystem" json:"subsystem_id"` // 冗余所属子系统加速检索
-	Subsystem   *Subsystem       `gorm:"foreignKey:SubsystemID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"subsystem,omitempty"`
-	GroupID     uint64           `gorm:"not null;index:idx_traefik_modules_group" json:"group_id"` // 可挂载于任意层级功能组
-	Group       *FunctionalGroup `gorm:"foreignKey:GroupID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"group,omitempty"`
-	ProcessID   *uint64          `gorm:"index:idx_traefik_modules_process" json:"process_id"` // 指向公共 SHARED 环境绑定的唯一基线进程
-	Process     *Process         `gorm:"foreignKey:ProcessID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"process,omitempty"`
-	Code        string           `gorm:"size:64;not null;uniqueIndex:uk_traefik_modules_code" json:"code"` // 全局唯一编码
-	Name        string           `gorm:"size:128;not null;index:idx_traefik_modules_name" json:"name"`
-	OwnerID     *uint            `gorm:"index:idx_traefik_modules_owner" json:"owner_id"`
-	Owner       *User            `gorm:"foreignKey:OwnerID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"owner,omitempty"`
-	Description string           `gorm:"type:text" json:"description"`
-	CreatedBy   uint             `gorm:"not null;default:0" json:"created_by"`
-	UpdatedBy   uint             `gorm:"not null;default:0" json:"updated_by"`
-	CreatedAt   time.Time        `json:"created_at"`
-	UpdatedAt   time.Time        `json:"updated_at"`
+	ID            uint64           `gorm:"primaryKey;autoIncrement" json:"id"`
+	SubsystemID   uint64           `gorm:"not null;index:idx_traefik_modules_subsystem" json:"subsystem_id"` // 冗余所属子系统加速检索
+	Subsystem     *Subsystem       `gorm:"foreignKey:SubsystemID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"subsystem,omitempty"`
+	GroupID       uint64           `gorm:"not null;index:idx_traefik_modules_group" json:"group_id"` // 可挂载于任意层级功能组
+	Group         *FunctionalGroup `gorm:"foreignKey:GroupID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"group,omitempty"`
+	ArchProcessID *uint64          `gorm:"index:idx_traefik_modules_arch_proc" json:"arch_process_id"` // 指向全局架构标准进程蓝图 (A-03 单模块至多归属 1 个标准进程)
+	ArchProcess   *ArchProcess     `gorm:"foreignKey:ArchProcessID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"arch_process,omitempty"`
+	Code          string           `gorm:"size:64;not null;uniqueIndex:uk_traefik_modules_code" json:"code"` // 全局唯一编码
+	Name          string           `gorm:"size:128;not null;index:idx_traefik_modules_name" json:"name"`
+	OwnerID       *uint            `gorm:"index:idx_traefik_modules_owner" json:"owner_id"`
+	Owner         *User            `gorm:"foreignKey:OwnerID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"owner,omitempty"`
+	Description   string           `gorm:"type:text" json:"description"`
+	CreatedBy     uint             `gorm:"not null;default:0" json:"created_by"`
+	UpdatedBy     uint             `gorm:"not null;default:0" json:"updated_by"`
+	CreatedAt     time.Time        `json:"created_at"`
+	UpdatedAt     time.Time        `json:"updated_at"`
 }
 
 func (Module) TableName() string { return config.TablePrefix + "modules" }
 
-// 4. ModuleService 模块级对外供给服务契约表 (traefik_module_services)
+// 6. ModuleService 模块级对外供给服务契约表 (traefik_module_services)
 type ModuleService struct {
 	ID                uint64         `gorm:"primaryKey;autoIncrement" json:"id"`
 	ModuleID          uint64         `gorm:"not null;index:idx_traefik_mod_svc_mod" json:"module_id"`
@@ -83,7 +120,7 @@ type ModuleService struct {
 
 func (ModuleService) TableName() string { return config.TablePrefix + "module_services" }
 
-// 5. ModuleDependency 模块间服务依赖关系表 (traefik_module_dependencies)
+// 7. ModuleDependency 模块间服务依赖关系表 (traefik_module_dependencies)
 type ModuleDependency struct {
 	ID               uint64         `gorm:"primaryKey;autoIncrement" json:"id"`
 	ConsumerModuleID uint64         `gorm:"not null;uniqueIndex:uk_traefik_dep_tuple,priority:1;index:idx_traefik_dep_consumer" json:"consumer_module_id"`

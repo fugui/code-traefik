@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -13,19 +14,24 @@ import (
 	"code-traefik/models"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 // ProcessReq 进程创建/修改请求体
 type ProcessReq struct {
-	AgentID          FlexUint64      `json:"agent_id"`
-	GroupName        string          `json:"group_name"`
-	Name             string          `json:"name"`
-	ListenPort       int             `json:"listen_port"`
-	AdvertiseIP      string          `json:"advertise_ip"`
-	CmdPattern       string          `json:"cmd_pattern"`
-	ModuleIDs        FlexUint64Slice `json:"module_ids"`
-	ExtraDownstreams []string        `json:"extra_downstreams"`
-	Description      string          `json:"description"`
+	AgentID            FlexUint64      `json:"agent_id"`
+	ArchProcessID      FlexUint64      `json:"arch_process_id"`
+	GroupName          string          `json:"group_name"`
+	Name               string          `json:"name"`
+	ListenPort         int             `json:"listen_port"`
+	OverrideListenPort *int            `json:"override_listen_port"`
+	OverrideCmdPattern string          `json:"override_cmd_pattern"`
+	AdvertiseIP        string          `json:"advertise_ip"`
+	CmdPattern         string          `json:"cmd_pattern"`
+	ModuleIDs          FlexUint64Slice `json:"module_ids"`
+	ExtraDownstreams   []string        `json:"extra_downstreams"`
+	ProbeDesiredState  string          `json:"probe_desired_state"`
+	Description        string          `json:"description"`
 }
 
 // ListProcesses GET /api/processes
@@ -37,7 +43,7 @@ func ListProcesses(c *gin.Context) {
 	moduleIDStr := c.Query("module_id")
 	search := strings.TrimSpace(c.Query("search"))
 
-	query := models.DB.Model(&models.Process{}).Preload("Agent").Preload("ProcessModules.Module")
+	query := models.DB.Model(&models.Process{}).Preload("Agent.Owner").Preload("ArchProcess.Group")
 
 	// ScopeReadGuard: 普通用户仅能看到挂载在 SHARED Agent 或本人 PRIVATE Agent 下的进程
 	if !isAdmin {
@@ -53,13 +59,16 @@ func ListProcesses(c *gin.Context) {
 	}
 	if moduleIDStr != "" {
 		if mid, err := strconv.ParseUint(moduleIDStr, 10, 64); err == nil {
-			query = query.Joins("JOIN traefik_process_modules ON traefik_process_modules.process_id = traefik_processes.id").
-				Where("traefik_process_modules.module_id = ?", mid)
+			var mod models.Module
+			if err := models.DB.First(&mod, mid).Error; err == nil && mod.ArchProcessID != nil {
+				query = query.Where("traefik_processes.arch_process_id = ?", *mod.ArchProcessID)
+			}
 		}
 	}
 	if search != "" {
 		s := "%" + search + "%"
-		query = query.Where("traefik_processes.name ILIKE ?", s)
+		query = query.Joins("LEFT JOIN traefik_arch_processes ON traefik_arch_processes.id = traefik_processes.arch_process_id").
+			Where("traefik_arch_processes.name ILIKE ? OR traefik_arch_processes.code ILIKE ? OR traefik_processes.advertise_ip ILIKE ?", s, s, s)
 	}
 
 	var total int64
@@ -76,6 +85,7 @@ func ListProcesses(c *gin.Context) {
 	}
 
 	for i := range items {
+		items[i].FillFromArchProcess()
 		if items[i].Agent != nil && items[i].Agent.Owner != nil {
 			items[i].Agent.Owner.Email = ""
 		}
@@ -100,10 +110,11 @@ func GetProcess(c *gin.Context) {
 	}
 
 	var proc models.Process
-	if err := models.DB.Preload("Agent").Preload("ProcessModules.Module").First(&proc, id).Error; err != nil {
+	if err := models.DB.Preload("Agent.Owner").Preload("ArchProcess.Group").First(&proc, id).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "进程映射不存在"})
 		return
 	}
+	proc.FillFromArchProcess()
 
 	// ScopeReadGuard
 	if !isAdmin && proc.Agent != nil && proc.Agent.Scope == models.ScopePrivate && (proc.Agent.OwnerID == nil || *proc.Agent.OwnerID != uc.UserID) {
@@ -156,16 +167,20 @@ func CreateProcess(c *gin.Context) {
 	}
 
 	proc, err := topology.CreateProcess(models.DB, topology.ProcessInput{
-		AgentID:          agentID,
-		GroupName:        req.GroupName,
-		Name:             req.Name,
-		ListenPort:       req.ListenPort,
-		AdvertiseIP:      req.AdvertiseIP,
-		CmdPattern:       req.CmdPattern,
-		ModuleIDs:        []uint64(req.ModuleIDs),
-		ExtraDownstreams: req.ExtraDownstreams,
-		Description:      req.Description,
-		OperatorID:       uc.UserID,
+		AgentID:            agentID,
+		ArchProcessID:      req.ArchProcessID.Uint64(),
+		GroupName:          req.GroupName,
+		Name:               req.Name,
+		ListenPort:         req.ListenPort,
+		OverrideListenPort: req.OverrideListenPort,
+		OverrideCmdPattern: req.OverrideCmdPattern,
+		AdvertiseIP:        req.AdvertiseIP,
+		CmdPattern:         req.CmdPattern,
+		ModuleIDs:          []uint64(req.ModuleIDs),
+		ExtraDownstreams:   req.ExtraDownstreams,
+		ProbeDesiredState:  req.ProbeDesiredState,
+		Description:        req.Description,
+		OperatorID:         uc.UserID,
 	})
 	if err != nil {
 		if errors.Is(err, topology.ErrDuplicateProcessPort) || errors.Is(err, topology.ErrDuplicateProcessName) ||
@@ -227,16 +242,20 @@ func UpdateProcess(c *gin.Context) {
 	}
 
 	before, after, err := topology.UpdateProcess(models.DB, id, topology.ProcessInput{
-		AgentID:          existing.AgentID,
-		GroupName:        req.GroupName,
-		Name:             req.Name,
-		ListenPort:       req.ListenPort,
-		AdvertiseIP:      req.AdvertiseIP,
-		CmdPattern:       req.CmdPattern,
-		ModuleIDs:        []uint64(req.ModuleIDs),
-		ExtraDownstreams: req.ExtraDownstreams,
-		Description:      req.Description,
-		OperatorID:       uc.UserID,
+		AgentID:            existing.AgentID,
+		ArchProcessID:      req.ArchProcessID.Uint64(),
+		GroupName:          req.GroupName,
+		Name:               req.Name,
+		ListenPort:         req.ListenPort,
+		OverrideListenPort: req.OverrideListenPort,
+		OverrideCmdPattern: req.OverrideCmdPattern,
+		AdvertiseIP:        req.AdvertiseIP,
+		CmdPattern:         req.CmdPattern,
+		ModuleIDs:          []uint64(req.ModuleIDs),
+		ExtraDownstreams:   req.ExtraDownstreams,
+		ProbeDesiredState:  req.ProbeDesiredState,
+		Description:        req.Description,
+		OperatorID:         uc.UserID,
 	})
 	if err != nil {
 		if errors.Is(err, topology.ErrProcessNotFound) {
@@ -324,4 +343,77 @@ func GetProcessDownstreams(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"downstreams": downstreams})
+}
+
+// DisarmProcessProbe POST /api/processes/:id/disarm
+// 单进程探针卸载，支持 ?force=true 强制卸载（哪怕有正在录制/回放的会话）
+func DisarmProcessProbe(c *gin.Context) {
+	uc := commonAuth.GetUserContext(c)
+	isAdmin := isCurrentUserAdmin(uc)
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "非法的进程 ID"})
+		return
+	}
+
+	var proc models.Process
+	if err := models.DB.Preload("Agent").Preload("ArchProcess").First(&proc, id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "进程映射不存在"})
+		return
+	}
+
+	if proc.Agent != nil {
+		if proc.Agent.Scope == models.ScopeShared && !isAdmin {
+			c.JSON(http.StatusForbidden, gin.H{"error": "普通用户无权操作公共 SHARED 进程"})
+			return
+		}
+		if proc.Agent.Scope == models.ScopePrivate && !isAdmin && (proc.Agent.OwnerID == nil || *proc.Agent.OwnerID != uc.UserID) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "无权操作他人私有进程"})
+			return
+		}
+	}
+
+	force := c.Query("force") == "true"
+	if !force {
+		// 检查是否参与正在进行的录制会话
+		var activeRecordingCount int64
+		models.DB.Model(&models.RecordingSession{}).
+			Where("status = ? AND target_process_ids::jsonb @> ?", models.SessionStatusRecording, fmt.Sprintf("[%d]", id)).
+			Count(&activeRecordingCount)
+		if activeRecordingCount > 0 {
+			c.JSON(http.StatusConflict, gin.H{"error": "该进程正在录制会话中，禁止卸载探针；如确需卸载请携带 ?force=true 强制卸载"})
+			return
+		}
+
+		// 检查是否参与正在运行的回放任务
+		var activeReplayCount int64
+		models.DB.Model(&models.ReplayTask{}).
+			Where("(source_process_id = ? OR target_process_id = ?) AND lifecycle_state = 'RUNNING'", id, id).
+			Count(&activeReplayCount)
+		if activeReplayCount > 0 {
+			c.JSON(http.StatusConflict, gin.H{"error": "该进程正在回放任务中，禁止卸载探针；如确需卸载请携带 ?force=true 强制卸载"})
+			return
+		}
+	}
+
+	before := proc
+	proc.ProbeDesiredState = models.ProbeDesiredStateDisarmed
+	proc.ProbeStatus = models.ProbeStatusDisarmed
+	proc.DiagMessage = "已手动卸载探针"
+	proc.UpdatedBy = uc.UserID
+
+	if err := models.DB.Save(&proc).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "更新进程状态失败: " + err.Error()})
+		return
+	}
+
+	// 推进 Agent MountsRevision 并触发对账
+	_ = models.DB.Model(&models.Agent{}).Where("id = ?", proc.AgentID).Update("mounts_revision", gorm.Expr("mounts_revision + 1")).Error
+	go func(aid uint64) {
+		_, _ = GetHubManager().AutoRearmAgent(context.Background(), aid)
+	}(proc.AgentID)
+
+	proc.FillFromArchProcess()
+	recordAudit(c, "disarm_probe", commonModels.AuditLevelP2, fmt.Sprintf("卸载进程 [%s] 探针", proc.Name), "process", proc.ID, proc.Name, before, proc)
+	c.JSON(http.StatusOK, proc)
 }

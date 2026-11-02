@@ -94,6 +94,19 @@ func RegisterAPIRoutes(r *gin.Engine) {
 		protected.GET("/arch/services/available", ListAvailableServices)
 		protected.GET("/arch/proto-services/claimable", ListClaimableProtoServices)
 
+		// 4.1 物理进程蓝图域 (ADR-09, M10)
+		protected.GET("/arch/process-groups", ListArchProcessGroups)
+		protected.POST("/arch/process-groups", requireAdmin, CreateArchProcessGroup)
+		protected.PUT("/arch/process-groups/:id", requireAdmin, UpdateArchProcessGroup)
+		protected.DELETE("/arch/process-groups/:id", requireAdmin, DeleteArchProcessGroup)
+
+		protected.GET("/arch/processes/tree", GetArchProcessTree)
+		protected.GET("/arch/processes", ListArchProcesses)
+		protected.GET("/arch/processes/:id", GetArchProcess)
+		protected.POST("/arch/processes", requireAdmin, CreateArchProcess)
+		protected.PUT("/arch/processes/:id", requireAdmin, UpdateArchProcess)
+		protected.DELETE("/arch/processes/:id", requireAdmin, DeleteArchProcess)
+
 		protected.GET("/arch/topology/graph", GetTopologyGraph)
 		protected.GET("/arch/topology/static", GetStaticTopology)
 
@@ -117,6 +130,8 @@ func RegisterAPIRoutes(r *gin.Engine) {
 		protected.POST("/agents/:id/handshake", HandshakeAgent)
 		protected.GET("/agents/:id/discover-processes", DiscoverAgentProcesses)
 		protected.POST("/agents/:id/lease/force-unlock", requireAdmin, ForceUnlockAgentLease)
+		protected.PUT("/agents/:id/process-mounts", BatchUpdateProcessMounts)
+		protected.POST("/agents/:id/probes/disarm-all", DisarmAllProbes)
 
 		// 7. 业务进程部署映射域 (F-02)
 		protected.GET("/processes", ListProcesses)
@@ -125,6 +140,7 @@ func RegisterAPIRoutes(r *gin.Engine) {
 		protected.PUT("/processes/:id", UpdateProcess)
 		protected.DELETE("/processes/:id", DeleteProcess)
 		protected.GET("/processes/:id/downstreams", GetProcessDownstreams)
+		protected.POST("/processes/:id/disarm", DisarmProcessProbe)
 
 		// 8. 协同录制与架构拓扑域 (F-05, F-11, F-16)
 		protected.GET("/recording-sessions", ListRecordingSessions)

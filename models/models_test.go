@@ -27,12 +27,13 @@ func TestAll14ModelsTablePrefixAndMigration(t *testing.T) {
 	modelsList := []tabler{
 		Subsystem{},
 		FunctionalGroup{},
+		ArchProcessGroup{},
+		ArchProcess{},
 		Module{},
 		ModuleService{},
 		ModuleDependency{},
 		Agent{},
 		Process{},
-		ProcessModule{},
 		ProtoSchema{},
 		ProtoOperation{},
 		RecordingSession{},
@@ -42,8 +43,8 @@ func TestAll14ModelsTablePrefixAndMigration(t *testing.T) {
 		TraefikSetting{},
 	}
 
-	if len(modelsList) != 15 {
-		t.Fatalf("模型清单数量期望为 15 (14 张业务模型 + TraefikSetting)，实际为: %d", len(modelsList))
+	if len(modelsList) != 16 {
+		t.Fatalf("模型清单数量期望为 16 (15 张业务模型 + TraefikSetting)，实际为: %d", len(modelsList))
 	}
 
 	for _, m := range modelsList {
@@ -413,5 +414,174 @@ WHERE p.relname = 'traefik_traffic_records' AND c.relname = ?;
 	}
 	if futureCount != 10 {
 		t.Fatalf("未来分区记录数期望为 10，实际为 %d", futureCount)
+	}
+}
+
+func TestCleanRebuild15Tables_MultiSharedEnvAndPortPartialUnique(t *testing.T) {
+	db := testdb.SetupIsolatedDB(t, config.ServiceName)
+
+	// 1. 模拟遗留旧 traefik_process_modules 表
+	if err := db.Exec(`CREATE TABLE traefik_process_modules (id serial primary key, process_id bigint, module_id bigint)`).Error; err != nil {
+		t.Fatalf("模拟创建旧表失败: %v", err)
+	}
+
+	// 2. 执行 SetupWithDB，触发清库直接重建
+	if err := SetupWithDB(db); err != nil {
+		t.Fatalf("SetupWithDB 失败: %v", err)
+	}
+
+	// 验证旧表已被干净清理且 15 张核心业务表重建
+	if db.Migrator().HasTable("traefik_process_modules") {
+		t.Fatalf("旧表 traefik_process_modules 应当已被清理销毁，但依然存在！")
+	}
+
+	coreTables := []string{
+		"traefik_subsystems",
+		"traefik_functional_groups",
+		"traefik_arch_process_groups",
+		"traefik_arch_processes",
+		"traefik_modules",
+		"traefik_module_services",
+		"traefik_module_dependencies",
+		"traefik_agents",
+		"traefik_processes",
+		"traefik_proto_schemas",
+		"traefik_proto_operations",
+		"traefik_recording_sessions",
+		"traefik_traffic_records",
+		"traefik_replay_tasks",
+		"traefik_replay_items",
+	}
+	for _, tbl := range coreTables {
+		if !db.Migrator().HasTable(tbl) {
+			t.Fatalf("核心表 [%s] 未成功创建", tbl)
+		}
+	}
+
+	// 验证 TraefikSetting 默认预挂策略已初始化
+	var sShared, sPrivate TraefikSetting
+	if err := db.Where("setting_key = ?", "default_probe_desired_state_shared").First(&sShared).Error; err != nil || sShared.SettingVal != "ARMED" {
+		t.Fatalf("默认预挂策略 default_probe_desired_state_shared 未初始化为 ARMED: %v, val: %s", err, sShared.SettingVal)
+	}
+	if err := db.Where("setting_key = ?", "default_probe_desired_state_private").First(&sPrivate).Error; err != nil || sPrivate.SettingVal != "ARMED" {
+		t.Fatalf("默认预挂策略 default_probe_desired_state_private 未初始化为 ARMED: %v, val: %s", err, sPrivate.SettingVal)
+	}
+
+	// 3. 创建标准架构进程组与标准业务进程 P1(:18080), P2(:0), P3(:0)
+	grp := ArchProcessGroup{
+		Code: "GRP_CORE",
+		Name: "核心服务组",
+	}
+	if err := db.Create(&grp).Error; err != nil {
+		t.Fatalf("创建 ArchProcessGroup 失败: %v", err)
+	}
+
+	p1 := ArchProcess{
+		GroupID:           grp.ID,
+		Code:              "order-srv",
+		Name:              "订单服务",
+		DefaultListenPort: 18080,
+	}
+	p2 := ArchProcess{
+		GroupID:           grp.ID,
+		Code:              "client-a",
+		Name:              "纯客户端A",
+		DefaultListenPort: 0,
+		DefaultCmdPattern: "./bin/client-a",
+	}
+	p3 := ArchProcess{
+		GroupID:           grp.ID,
+		Code:              "client-b",
+		Name:              "纯客户端B",
+		DefaultListenPort: 0,
+		DefaultCmdPattern: "./bin/client-b",
+	}
+	if err := db.Create(&p1).Error; err != nil {
+		t.Fatalf("创建 P1 失败: %v", err)
+	}
+	if err := db.Create(&p2).Error; err != nil {
+		t.Fatalf("创建 P2 失败: %v", err)
+	}
+	if err := db.Create(&p3).Error; err != nil {
+		t.Fatalf("创建 P3 失败: %v", err)
+	}
+
+	// 4. 创建两套公共测试环境 Agent-SIT 与 Agent-UAT
+	agentSIT := Agent{
+		Name:     "Agent-SIT",
+		Endpoint: "192.168.1.101:8090",
+		Scope:    ScopeShared,
+		Status:   "ONLINE",
+	}
+	agentUAT := Agent{
+		Name:     "Agent-UAT",
+		Endpoint: "192.168.1.102:8090",
+		Scope:    ScopeShared,
+		Status:   "ONLINE",
+	}
+	if err := db.Create(&agentSIT).Error; err != nil {
+		t.Fatalf("创建 Agent-SIT 失败: %v", err)
+	}
+	if err := db.Create(&agentUAT).Error; err != nil {
+		t.Fatalf("创建 Agent-UAT 失败: %v", err)
+	}
+
+	// 5. 验证多套 SHARED 环境各自 1:1 挂载同一 ArchProcess P1 全部成功
+	mountSIT1 := Process{
+		AgentID:             agentSIT.ID,
+		ArchProcessID:       p1.ID,
+		EffectiveListenPort: 18080,
+		ProbeDesiredState:   "ARMED",
+	}
+	if err := db.Create(&mountSIT1).Error; err != nil {
+		t.Fatalf("Agent-SIT 挂载 P1 失败: %v", err)
+	}
+
+	mountUAT1 := Process{
+		AgentID:             agentUAT.ID,
+		ArchProcessID:       p1.ID,
+		EffectiveListenPort: 18080,
+		ProbeDesiredState:   "ARMED",
+	}
+	if err := db.Create(&mountUAT1).Error; err != nil {
+		t.Fatalf("Agent-UAT 挂载 P1 失败（多套公共环境 1:1 挂载冲突）: %v", err)
+	}
+
+	// 6. 同一 Agent-SIT 重复挂载 P1 触发 uk_traefik_proc_agent_arch 唯一约束拦截
+	mountSIT1Dup := Process{
+		AgentID:             agentSIT.ID,
+		ArchProcessID:       p1.ID,
+		EffectiveListenPort: 18080,
+		ProbeDesiredState:   "ARMED",
+	}
+	if err := db.Create(&mountSIT1Dup).Error; err == nil {
+		t.Fatalf("同一 Agent 重复挂载同一 ArchProcess 期望被 uk_traefik_proc_agent_arch 拦截，但成功插入了！")
+	}
+
+	// 7. 同一 Agent 同时挂载 P2(port=0) 与 P3(port=0) 成功通过（允许多个纯客户端进程并存）
+	mountSIT2 := Process{
+		AgentID:             agentSIT.ID,
+		ArchProcessID:       p2.ID,
+		EffectiveListenPort: 0,
+		ProbeDesiredState:   "ARMED",
+	}
+	if err := db.Create(&mountSIT2).Error; err != nil {
+		t.Fatalf("Agent-SIT 挂载纯客户端 P2 失败: %v", err)
+	}
+
+	mountSIT3 := Process{
+		AgentID:             agentSIT.ID,
+		ArchProcessID:       p3.ID,
+		EffectiveListenPort: 0,
+		ProbeDesiredState:   "ARMED",
+	}
+	if err := db.Create(&mountSIT3).Error; err != nil {
+		t.Fatalf("Agent-SIT 挂载纯客户端 P3 失败: %v", err)
+	}
+
+	// 8. 将 P2 的有效端口修改为 18080 与同机 P1 冲突，触发 uk_traefik_proc_agent_port 部分唯一索引拦截
+	errConflict := db.Model(&mountSIT2).Update("effective_listen_port", 18080).Error
+	if errConflict == nil {
+		t.Fatalf("同一 Agent 端口冲突修改期望被 uk_traefik_proc_agent_port 拦截，但成功执行了！")
 	}
 }

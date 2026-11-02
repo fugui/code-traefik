@@ -13,7 +13,6 @@ import (
 	"code-traefik/models"
 
 	"github.com/gin-gonic/gin"
-	"gorm.io/gorm"
 )
 
 // SubsystemReq 创建/更新子系统请求体
@@ -42,12 +41,13 @@ type MoveFunctionalGroupReq struct {
 
 // ModuleReq 创建/更新功能模块请求体
 type ModuleReq struct {
-	GroupID     FlexUint64  `json:"group_id"`
-	Code        string      `json:"code"`
-	Name        string      `json:"name"`
-	OwnerID     *uint       `json:"owner_id"`
-	ProcessID   *FlexUint64 `json:"process_id"`
-	Description string      `json:"description"`
+	GroupID       FlexUint64  `json:"group_id"`
+	Code          string      `json:"code"`
+	Name          string      `json:"name"`
+	OwnerID       *uint       `json:"owner_id"`
+	ArchProcessID *FlexUint64 `json:"arch_process_id"`
+	ProcessID     *FlexUint64 `json:"process_id"`
+	Description   string      `json:"description"`
 }
 
 // ModuleServiceReq 创建供给服务请求体
@@ -74,7 +74,8 @@ type ModuleDependencyReq struct {
 
 // ProcessBindingReq 模块进程装载/绑定请求体
 type ProcessBindingReq struct {
-	ProcessID *FlexUint64 `json:"process_id"`
+	ArchProcessID *FlexUint64 `json:"arch_process_id"`
+	ProcessID     *FlexUint64 `json:"process_id"`
 }
 
 // normalizePageSize 通用分页归一化 (15/25/50/100，默认 25)
@@ -488,7 +489,7 @@ func GetModule(c *gin.Context) {
 	}
 
 	var mod models.Module
-	if err := models.DB.Preload("Group").Preload("Subsystem").Preload("Process.Agent").Preload("Owner").First(&mod, id).Error; err != nil {
+	if err := models.DB.Preload("Group").Preload("Subsystem").Preload("ArchProcess.Group").Preload("Owner").First(&mod, id).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "功能模块不存在"})
 		return
 	}
@@ -515,15 +516,20 @@ func CreateModule(c *gin.Context) {
 		return
 	}
 
+	archProcID := req.ArchProcessID.Uint64Ptr()
+	if archProcID == nil {
+		archProcID = req.ProcessID.Uint64Ptr()
+	}
+
 	item, err := topology.CreateModule(models.DB, topology.ModuleInput{
-		GroupID:      req.GroupID.Uint64(),
-		Code:         req.Code,
-		Name:         req.Name,
-		OwnerID:      req.OwnerID,
-		ProcessID:    req.ProcessID.Uint64Ptr(),
-		HasProcessID: req.ProcessID != nil && req.ProcessID.Uint64Ptr() != nil,
-		Description:  req.Description,
-		OperatorID:   uc.UserID,
+		GroupID:          req.GroupID.Uint64(),
+		Code:             req.Code,
+		Name:             req.Name,
+		OwnerID:          req.OwnerID,
+		ArchProcessID:    archProcID,
+		HasArchProcessID: archProcID != nil,
+		Description:      req.Description,
+		OperatorID:       uc.UserID,
 	})
 	if err != nil {
 		if errors.Is(err, topology.ErrDuplicateCode) {
@@ -562,15 +568,22 @@ func UpdateModule(c *gin.Context) {
 		return
 	}
 
+	archProcID := req.ArchProcessID.Uint64Ptr()
+	hasArch := req.ArchProcessID != nil
+	if archProcID == nil && req.ProcessID != nil {
+		archProcID = req.ProcessID.Uint64Ptr()
+		hasArch = true
+	}
+
 	before, after, err := topology.UpdateModule(models.DB, id, topology.ModuleInput{
-		GroupID:      req.GroupID.Uint64(),
-		Code:         req.Code,
-		Name:         req.Name,
-		OwnerID:      req.OwnerID,
-		ProcessID:    req.ProcessID.Uint64Ptr(),
-		HasProcessID: true,
-		Description:  req.Description,
-		OperatorID:   uc.UserID,
+		GroupID:          req.GroupID.Uint64(),
+		Code:             req.Code,
+		Name:             req.Name,
+		OwnerID:          req.OwnerID,
+		ArchProcessID:    archProcID,
+		HasArchProcessID: hasArch,
+		Description:      req.Description,
+		OperatorID:       uc.UserID,
 	})
 	if err != nil {
 		if errors.Is(err, topology.ErrModuleNotFound) || errors.Is(err, topology.ErrGroupNotFound) || errors.Is(err, topology.ErrProcessNotFound) {
@@ -632,7 +645,7 @@ func BindModuleProcess(c *gin.Context) {
 
 	var req ProcessBindingReq
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数不合法"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数不合法: " + err.Error()})
 		return
 	}
 
@@ -642,45 +655,33 @@ func BindModuleProcess(c *gin.Context) {
 		return
 	}
 
-	oldPID := mod.ProcessID
-	pid := req.ProcessID.Uint64Ptr()
-	if pid != nil && *pid > 0 {
-		var proc models.Process
-		if err := models.DB.Preload("Agent").First(&proc, *pid).Error; err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "目标进程不存在"})
-			return
-		}
-		if proc.Agent != nil && proc.Agent.Scope == models.ScopePrivate {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "公共功能模块不能绑定个人私有 Agent 下的进程作为基线"})
-			return
-		}
-
-		mod.ProcessID = pid
-		if err := models.DB.Save(&mod).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "保存模块进程绑定失败"})
-			return
-		}
-
-		// 确保 traefik_process_modules 映射存在
-		var pm models.ProcessModule
-		if err := models.DB.Where("process_id = ? AND module_id = ?", *pid, id).First(&pm).Error; errors.Is(err, gorm.ErrRecordNotFound) {
-			models.DB.Create(&models.ProcessModule{ProcessID: *pid, ModuleID: id})
-		}
-		// 若此前绑过其他旧进程，清理旧进程模块挂载
-		if oldPID != nil && *oldPID != *pid {
-			models.DB.Where("process_id = ? AND module_id = ?", *oldPID, id).Delete(&models.ProcessModule{})
-		}
-	} else {
-		// 解绑公共基线进程
-		mod.ProcessID = nil
-		models.DB.Model(&mod).Update("process_id", nil)
-		if oldPID != nil {
-			models.DB.Where("process_id = ? AND module_id = ?", *oldPID, id).Delete(&models.ProcessModule{})
-		}
+	var targetArchProcID *uint64
+	if req.ArchProcessID != nil && req.ArchProcessID.Uint64() > 0 {
+		pid := req.ArchProcessID.Uint64()
+		targetArchProcID = &pid
+	} else if req.ProcessID != nil && req.ProcessID.Uint64() > 0 {
+		pid := req.ProcessID.Uint64()
+		targetArchProcID = &pid
 	}
 
-	_ = models.DB.Preload("Group").Preload("Subsystem").Preload("Process.Agent").Preload("Owner").First(&mod, id)
-	recordAudit(c, "update", commonModels.AuditLevelP2, fmt.Sprintf("变更模块 [%s] 进程绑定", mod.Name), "module", mod.ID, mod.Name, nil, mod)
+	if targetArchProcID != nil {
+		var ap models.ArchProcess
+		if err := models.DB.First(&ap, *targetArchProcID).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "目标标准架构进程不存在"})
+			return
+		}
+		mod.ArchProcessID = targetArchProcID
+	} else {
+		mod.ArchProcessID = nil
+	}
+
+	if err := models.DB.Model(&mod).Update("arch_process_id", mod.ArchProcessID).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存模块架构进程绑定失败: " + err.Error()})
+		return
+	}
+
+	_ = models.DB.Preload("Group").Preload("Subsystem").Preload("ArchProcess.Group").Preload("Owner").First(&mod, id)
+	recordAudit(c, "update", commonModels.AuditLevelP2, fmt.Sprintf("变更模块 [%s] 标准架构进程绑定", mod.Name), "module", mod.ID, mod.Name, nil, mod)
 	c.JSON(http.StatusOK, mod)
 }
 
@@ -913,7 +914,29 @@ func GetTopologyGraph(c *gin.Context) {
 		return
 	}
 
-	res, err := topology.BuildTopologyGraph(models.DB, view)
+	var envAgentID uint64
+	if envAgentIDStr := c.Query("env_agent_id"); envAgentIDStr != "" {
+		parsed, err := strconv.ParseUint(envAgentIDStr, 10, 64)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "非法的 env_agent_id"})
+			return
+		}
+		// ScopeReadGuard: 普通用户仅能叠加 SHARED Agent 或本人 PRIVATE Agent
+		uc := commonAuth.GetUserContext(c)
+		isAdmin := isCurrentUserAdmin(uc)
+		var agent models.Agent
+		if err := models.DB.First(&agent, parsed).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "指定的叠加环境 Agent 不存在"})
+			return
+		}
+		if !isAdmin && agent.Scope == models.ScopePrivate && (agent.OwnerID == nil || *agent.OwnerID != uc.UserID) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "无权访问他人的私有 Agent 环境"})
+			return
+		}
+		envAgentID = parsed
+	}
+
+	res, err := topology.BuildTopologyGraph(models.DB, view, envAgentID)
 	if err != nil {
 		if errors.Is(err, topology.ErrInvalidTopologyView) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})

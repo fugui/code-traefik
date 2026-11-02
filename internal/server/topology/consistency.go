@@ -82,33 +82,35 @@ func VerifySessionTopology(ctx context.Context, db *gorm.DB, sessionID uint64, r
 		isMonitoredProc[pid] = true
 	}
 
-	// 2. 加载全部进程承载模块映射及公共模块默认进程
-	var allProcMods []models.ProcessModule
-	if err := db.WithContext(ctx).Find(&allProcMods).Error; err != nil {
+	// 2. 加载全部进程承载模块映射及公共模块默认进程 (基于 ArchProcessID)
+	var allProcs []models.Process
+	if err := db.WithContext(ctx).Find(&allProcs).Error; err != nil {
 		return nil, err
 	}
-	moduleProcessMap := make(map[uint64]uint64)
-	procModulesMap := make(map[uint64][]uint64)
-	for _, pm := range allProcMods {
-		procModulesMap[pm.ProcessID] = append(procModulesMap[pm.ProcessID], pm.ModuleID)
-		// 如果是本次纳管进程，以本次纳管进程为优先映射
-		if isMonitoredProc[pm.ProcessID] {
-			moduleProcessMap[pm.ModuleID] = pm.ProcessID
-		} else if _, exists := moduleProcessMap[pm.ModuleID]; !exists {
-			moduleProcessMap[pm.ModuleID] = pm.ProcessID
-		}
-	}
-
-	// 补充全局模块基线 process_id
 	var allModules []models.Module
 	if err := db.WithContext(ctx).Find(&allModules).Error; err != nil {
 		return nil, err
 	}
+	archModulesMap := make(map[uint64][]uint64)
 	moduleNameMap := make(map[uint64]string, len(allModules))
 	for _, m := range allModules {
 		moduleNameMap[m.ID] = m.Name
-		if _, ok := moduleProcessMap[m.ID]; !ok && m.ProcessID != nil && *m.ProcessID > 0 {
-			moduleProcessMap[m.ID] = *m.ProcessID
+		if m.ArchProcessID != nil {
+			archModulesMap[*m.ArchProcessID] = append(archModulesMap[*m.ArchProcessID], m.ID)
+		}
+	}
+	moduleProcessMap := make(map[uint64]uint64)
+	procModulesMap := make(map[uint64][]uint64)
+	for _, p := range allProcs {
+		if mods, ok := archModulesMap[p.ArchProcessID]; ok {
+			procModulesMap[p.ID] = mods
+			for _, mid := range mods {
+				if isMonitoredProc[p.ID] {
+					moduleProcessMap[mid] = p.ID
+				} else if _, exists := moduleProcessMap[mid]; !exists {
+					moduleProcessMap[mid] = p.ID
+				}
+			}
 		}
 	}
 

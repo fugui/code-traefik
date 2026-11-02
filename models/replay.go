@@ -7,7 +7,7 @@ import (
 	"gorm.io/datatypes"
 )
 
-// 12. ReplayTask 跨 Agent 同构离线自愈重放任务头表 (traefik_replay_tasks)
+// 14. ReplayTask 跨 Agent 同构离线自愈重放任务头表 (traefik_replay_tasks)
 type ReplayTask struct {
 	ID                uint64            `gorm:"primaryKey;autoIncrement" json:"id"`
 	TaskNo            string            `gorm:"size:64;not null;uniqueIndex:uk_traefik_replay_task_no" json:"task_no"`
@@ -16,10 +16,12 @@ type ReplayTask struct {
 	Owner             *User             `gorm:"foreignKey:OwnerID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"owner,omitempty"`
 	SessionID         uint64            `gorm:"not null;index:idx_traefik_replay_session" json:"session_id"`
 	Session           *RecordingSession `gorm:"foreignKey:SessionID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"session,omitempty"`
-	SourceProcessID   uint64            `gorm:"not null;index:idx_traefik_replay_src_proc" json:"source_process_id"` // 录制源进程
-	SourceProcess     *Process          `gorm:"foreignKey:SourceProcessID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"source_process,omitempty"`
-	TargetProcessID   uint64            `gorm:"not null;index:idx_traefik_replay_tgt_proc" json:"target_process_id"` // 实际执行同构目标进程
-	TargetProcess     *Process          `gorm:"foreignKey:TargetProcessID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"target_process,omitempty"`
+	ArchProcessID     uint64            `gorm:"not null;index:idx_traefik_replay_arch_proc" json:"arch_process_id"` // 重放目标对应的标准架构进程蓝图 ID
+	ArchProcess       *ArchProcess      `gorm:"foreignKey:ArchProcessID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"arch_process,omitempty"`
+	SourceProcessID   *uint64           `gorm:"index:idx_traefik_replay_src_proc" json:"source_process_id,omitempty"` // 录制源挂载实例（卸载后置 NULL，由 Session.ProcessSnapshots 保底）
+	SourceProcess     *Process          `gorm:"foreignKey:SourceProcessID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"source_process,omitempty"`
+	TargetProcessID   *uint64           `gorm:"index:idx_traefik_replay_tgt_proc" json:"target_process_id,omitempty"` // 实际执行同构目标挂载实例（卸载后置 NULL）
+	TargetProcess     *Process          `gorm:"foreignKey:TargetProcessID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"target_process,omitempty"`
 	AgentID           uint64            `gorm:"not null;index:idx_traefik_replay_agent" json:"agent_id"` // TargetProcess 所属 Agent
 	Agent             *Agent            `gorm:"foreignKey:AgentID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"agent,omitempty"`
 	SelectedRecordIDs datatypes.JSON    `gorm:"type:jsonb;not null" json:"selected_record_ids"`             // []uint64

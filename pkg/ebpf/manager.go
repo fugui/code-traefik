@@ -16,6 +16,7 @@ import (
 
 	"code-traefik/pkg/agentproto"
 	"code-traefik/pkg/crosrpc"
+	"code-traefik/pkg/replay"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
@@ -124,6 +125,7 @@ type Manager struct {
 	egressProxy   *EgressProxy
 	objs          *cros_probeObjects
 	links         []link.Link
+	rwLinks       []link.Link
 	ringbufReader *ringbuf.Reader
 	attached      bool
 	stopChan      chan struct{}
@@ -262,6 +264,12 @@ func (m *Manager) SyncMonitors(sessionID uint64, specs []agentproto.ProcessMonit
 		}
 	}
 
+	// 录制阶段：动态按需挂载读写 Tracepoints，并将 EgressProxy 置为 CAPTURING 模式
+	m.attachCaptureTracepointsLocked()
+	if m.egressProxy != nil {
+		m.egressProxy.SetMode(ModeCapturing)
+	}
+
 	// 2. 逐一诊断并登记目标进程
 	var diags []agentproto.ProcessDiagStatus
 	activeProcMap := make(map[uint64]*MonitoredProc)
@@ -344,6 +352,158 @@ func (m *Manager) SyncMonitors(sessionID uint64, specs []agentproto.ProcessMonit
 	return diags, nil
 }
 
+// ArmStandby 预挂载并进入 ARMED 待命状态 (零大流量 Tracepoint 损耗)
+func (m *Manager) ArmStandby(specs []agentproto.ProcessMonitorSpec) ([]agentproto.ProcessDiagStatus, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	hasCaps, missing, detail := m.capChecker.CheckCapabilities()
+	if !hasCaps {
+		var diags []agentproto.ProcessDiagStatus
+		for _, sp := range specs {
+			diags = append(diags, agentproto.ProcessDiagStatus{
+				ProcessID: sp.ProcessID,
+				Status:    "CAP_DENIED",
+				Message:   fmt.Sprintf("缺少特权: %s (%s)", strings.Join(missing, ", "), detail),
+			})
+		}
+		return diags, errors.New("缺少必要的 eBPF 特权")
+	}
+
+	if !m.attached {
+		if err := m.attachLocked(); err != nil {
+			return nil, fmt.Errorf("挂载 eBPF 探针失败: %w", err)
+		}
+	}
+
+	// 待命状态脱落大流量 Tracepoints，并置为 PASSTHROUGH 模式
+	m.detachCaptureTracepointsLocked()
+	if m.egressProxy != nil {
+		m.egressProxy.SetMode(ModePassthrough)
+	}
+
+	var diags []agentproto.ProcessDiagStatus
+	activeProcMap := make(map[uint64]*MonitoredProc)
+
+	for _, spec := range specs {
+		pid, err := m.scanner.FindPIDByPortAndCmd(spec.ListenPort, spec.CmdPattern)
+		status := "MONITORING"
+		msg := ""
+		estConns := 0
+		needRec := false
+
+		if err != nil || pid == 0 {
+			status = "NOT_FOUND"
+			if spec.ListenPort == 0 {
+				msg = fmt.Sprintf("未在特征 [%s] 下检测到运行中的客户端进程", spec.CmdPattern)
+			} else {
+				msg = fmt.Sprintf("未在端口 %d 检测到符合特征的业务进程", spec.ListenPort)
+			}
+		} else {
+			estConns, needRec, _ = m.scanner.DiagnoseEstablishedConns(pid, spec.Downstreams)
+			if needRec {
+				msg = fmt.Sprintf("检测到 %d 条存量已建立长连接，需重启业务进程生效 (A-01)", estConns)
+			}
+
+			// 预设 BPF Map
+			if m.objs != nil {
+				tp := cros_probeTargetProc{
+					SessionId:  0,
+					ProcessId:  spec.ProcessID,
+					ListenPort: spec.ListenPort,
+					Mode:       0,
+				}
+				_ = m.objs.TargetPidsMap.Put(pid, tp)
+
+				proxyPort := uint16(0)
+				if m.egressProxy != nil {
+					proxyPort = m.egressProxy.ProxyPort()
+				}
+				for _, ds := range spec.Downstreams {
+					ipParsed := net.ParseIP(ds.IP).To4()
+					if ipParsed == nil {
+						ipParsed = net.IPv4(127, 0, 0, 1)
+					}
+					ipUint := binary.BigEndian.Uint32(ipParsed)
+					key := cros_probeDsKey{
+						ProcessId: spec.ProcessID,
+						DstIp:     ipUint,
+						DstPort:   ds.Port,
+					}
+					target := cros_probeDsTarget{
+						RedirectPort: proxyPort,
+						IsReplay:     0,
+					}
+					_ = m.objs.DownstreamRulesMap.Put(key, target)
+				}
+			}
+		}
+
+		diag := agentproto.ProcessDiagStatus{
+			ProcessID:        spec.ProcessID,
+			Status:           status,
+			ResolvedPID:      pid,
+			EstablishedConns: estConns,
+			NeedReconnect:    needRec,
+			Message:          msg,
+		}
+		diags = append(diags, diag)
+
+		activeProcMap[spec.ProcessID] = &MonitoredProc{
+			Spec:             spec,
+			CurrentPID:       pid,
+			DiagStatus:       status,
+			EstablishedConns: estConns,
+			NeedReconnect:    needRec,
+		}
+	}
+
+	m.monitoredProcs = activeProcMap
+	return diags, nil
+}
+
+// StopCapture 平滑停止录制：排空在途数据并解绑大流量 Tracepoint，但保留长连接与待命状态
+func (m *Manager) StopCapture() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.egressProxy != nil {
+		m.egressProxy.DrainAndSetPassthrough(200 * time.Millisecond)
+	}
+	m.detachCaptureTracepointsLocked()
+	m.sessionID = 0
+}
+
+// SetReplayMock 设置回放 Mock 拦截模式
+func (m *Manager) SetReplayMock(taskID uint64, matcher *replay.ScopedMockMatcher, mockEndpoints []agentproto.DownstreamEndpoint) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.detachCaptureTracepointsLocked()
+	if m.egressProxy != nil {
+		m.egressProxy.SetMockMatcher(matcher, mockEndpoints)
+		m.egressProxy.SetMode(ModeReplayMock)
+	}
+}
+
+// EgressProxy 返回出站代理实例
+func (m *Manager) EgressProxy() *EgressProxy {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.egressProxy
+}
+
+// MonitoredProcs 返回当前监控进程快照
+func (m *Manager) MonitoredProcs() map[uint64]*MonitoredProc {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cp := make(map[uint64]*MonitoredProc, len(m.monitoredProcs))
+	for k, v := range m.monitoredProcs {
+		cp[k] = v
+	}
+	return cp
+}
+
 // RemoveProcessMonitor 单独移除指定进程的监控
 func (m *Manager) RemoveProcessMonitor(processID uint64) (remaining int, err error) {
 	m.mu.Lock()
@@ -391,6 +551,8 @@ func (m *Manager) PurgeAllMonitors() {
 }
 
 func (m *Manager) purgeLocked() {
+	m.detachCaptureTracepointsLocked()
+
 	// 1. 关闭 RingBuf Reader
 	if m.ringbufReader != nil {
 		_ = m.ringbufReader.Close()
@@ -465,7 +627,7 @@ func (m *Manager) attachLocked() error {
 	}
 	_ = objs.AgentCfgMap.Put(uint32(0), cfg)
 
-	// 挂载 cgroup/connect4 钩子
+	// 挂载 ARMED 待命常驻钩子 (connect4, sock_ops, sched_process_exec)，零读写 tracepoint 损耗
 	var links []link.Link
 	cgroupLink, err := link.AttachCgroup(link.CgroupOptions{
 		Path:    m.cfg.CgroupPath,
@@ -478,7 +640,6 @@ func (m *Manager) attachLocked() error {
 		log.Printf("[eBPF] AttachCgroup connect4 警告: %v", err)
 	}
 
-	// 挂载 sock_ops 钩子
 	sockopsLink, err := link.AttachCgroup(link.CgroupOptions{
 		Path:    m.cfg.CgroupPath,
 		Attach:  ebpf.AttachCGroupSockOps,
@@ -490,59 +651,6 @@ func (m *Manager) attachLocked() error {
 		log.Printf("[eBPF] AttachCgroup sock_ops 警告: %v", err)
 	}
 
-	// 挂载 syscall tracepoints
-	tpReadEnter, err := link.Tracepoint("syscalls", "sys_enter_read", objs.TraceSysEnterRead, nil)
-	if err == nil {
-		links = append(links, tpReadEnter)
-	} else {
-		log.Printf("[eBPF] Tracepoint sys_enter_read 警告: %v", err)
-	}
-	tpReadExit, err := link.Tracepoint("syscalls", "sys_exit_read", objs.TraceSysExitRead, nil)
-	if err == nil {
-		links = append(links, tpReadExit)
-	} else {
-		log.Printf("[eBPF] Tracepoint sys_exit_read 警告: %v", err)
-	}
-
-	tpWriteEnter, err := link.Tracepoint("syscalls", "sys_enter_write", objs.TraceSysEnterWrite, nil)
-	if err == nil {
-		links = append(links, tpWriteEnter)
-	} else {
-		log.Printf("[eBPF] Tracepoint sys_enter_write 警告: %v", err)
-	}
-	tpWriteExit, err := link.Tracepoint("syscalls", "sys_exit_write", objs.TraceSysExitWrite, nil)
-	if err == nil {
-		links = append(links, tpWriteExit)
-	} else {
-		log.Printf("[eBPF] Tracepoint sys_exit_write 警告: %v", err)
-	}
-
-	tpRecvEnter, err := link.Tracepoint("syscalls", "sys_enter_recvfrom", objs.TraceSysEnterRecvfrom, nil)
-	if err == nil {
-		links = append(links, tpRecvEnter)
-	} else {
-		log.Printf("[eBPF] Tracepoint sys_enter_recvfrom 警告: %v", err)
-	}
-	tpRecvExit, err := link.Tracepoint("syscalls", "sys_exit_recvfrom", objs.TraceSysExitRecvfrom, nil)
-	if err == nil {
-		links = append(links, tpRecvExit)
-	} else {
-		log.Printf("[eBPF] Tracepoint sys_exit_recvfrom 警告: %v", err)
-	}
-
-	tpSendEnter, err := link.Tracepoint("syscalls", "sys_enter_sendto", objs.TraceSysEnterSendto, nil)
-	if err == nil {
-		links = append(links, tpSendEnter)
-	} else {
-		log.Printf("[eBPF] Tracepoint sys_enter_sendto 警告: %v", err)
-	}
-	tpSendExit, err := link.Tracepoint("syscalls", "sys_exit_sendto", objs.TraceSysExitSendto, nil)
-	if err == nil {
-		links = append(links, tpSendExit)
-	} else {
-		log.Printf("[eBPF] Tracepoint sys_exit_sendto 警告: %v", err)
-	}
-
 	// 挂载 sched_process_exec
 	tpSchedExec, err := link.Tracepoint("sched", "sched_process_exec", objs.CrosSchedExec, nil)
 	if err == nil {
@@ -552,7 +660,7 @@ func (m *Manager) attachLocked() error {
 	}
 
 	m.links = links
-	log.Printf("[eBPF] 探针挂载完成，共挂载 %d 个内核链接", len(links))
+	log.Printf("[eBPF] 探针待命钩子挂载完成，共挂载 %d 个常驻内核链接", len(links))
 
 	// 启动 RingBuf Reader
 	rb, err := ringbuf.NewReader(objs.IngRingbuf)
@@ -567,6 +675,45 @@ func (m *Manager) attachLocked() error {
 	go m.backgroundProcessWatcher()
 
 	return nil
+}
+
+// attachCaptureTracepointsLocked 录制阶段动态挂载大流量读写 Tracepoint
+func (m *Manager) attachCaptureTracepointsLocked() {
+	if m.objs == nil || len(m.rwLinks) > 0 {
+		return
+	}
+	var rwLinks []link.Link
+	attachTP := func(group, name string, prog *ebpf.Program) {
+		l, err := link.Tracepoint(group, name, prog, nil)
+		if err == nil {
+			rwLinks = append(rwLinks, l)
+		} else {
+			log.Printf("[eBPF] Tracepoint %s/%s 警告: %v", group, name, err)
+		}
+	}
+
+	attachTP("syscalls", "sys_enter_read", m.objs.TraceSysEnterRead)
+	attachTP("syscalls", "sys_exit_read", m.objs.TraceSysExitRead)
+	attachTP("syscalls", "sys_enter_write", m.objs.TraceSysEnterWrite)
+	attachTP("syscalls", "sys_exit_write", m.objs.TraceSysExitWrite)
+	attachTP("syscalls", "sys_enter_recvfrom", m.objs.TraceSysEnterRecvfrom)
+	attachTP("syscalls", "sys_exit_recvfrom", m.objs.TraceSysExitRecvfrom)
+	attachTP("syscalls", "sys_enter_sendto", m.objs.TraceSysEnterSendto)
+	attachTP("syscalls", "sys_exit_sendto", m.objs.TraceSysExitSendto)
+	attachTP("syscalls", "sys_exit_accept4", m.objs.TraceSysExitAccept4)
+	attachTP("syscalls", "sys_exit_accept", m.objs.TraceSysExitAccept)
+	attachTP("syscalls", "sys_enter_close", m.objs.TraceSysEnterClose)
+
+	m.rwLinks = rwLinks
+	log.Printf("[eBPF] 录制阶段动态挂载 %d 个大流量 tracepoints", len(rwLinks))
+}
+
+// detachCaptureTracepointsLocked 停录阶段立即卸载大流量读写 Tracepoint (恢复 0 CPU 损耗)
+func (m *Manager) detachCaptureTracepointsLocked() {
+	for _, l := range m.rwLinks {
+		_ = l.Close()
+	}
+	m.rwLinks = nil
 }
 
 func (m *Manager) backgroundProcessWatcher() {

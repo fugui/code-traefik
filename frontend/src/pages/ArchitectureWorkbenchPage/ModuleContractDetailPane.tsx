@@ -43,6 +43,7 @@ export interface ModuleContractDetailPaneProps {
   onEditModule: (mod: Module) => void;
   onDeleteModule: (id: string) => void;
   onViewProcess?: (processId: string) => void;
+  onViewArchProcess?: (archProcessId: string | number) => void;
   onCreateService: (data: {
     service_name: string;
     diff_ignore_paths?: string[];
@@ -75,6 +76,7 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
   onEditModule,
   onDeleteModule,
   onViewProcess,
+  onViewArchProcess,
   onCreateService,
   onUpdateServiceIgnorePaths,
   onDeleteService,
@@ -434,6 +436,38 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
                 </div>
 
                 <div className="code-module-form-field-list">
+                  <div className="code-module-form-field">
+                    <span className="code-module-form-field__label">标准架构进程:</span>
+                    <span className="code-module-form-field__val">
+                      {selectedModule.arch_process ? (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                          <span className="code-font-mono" style={{ fontWeight: 600, color: 'var(--color-primary)' }}>
+                            {selectedModule.arch_process.name} ({selectedModule.arch_process.code})
+                          </span>
+                          <span className="code-badge code-badge--secondary" style={{ fontSize: '0.7rem' }}>
+                            {selectedModule.arch_process.default_listen_port === 0
+                              ? '纯客户端'
+                              : `:${selectedModule.arch_process.default_listen_port}`}
+                          </span>
+                          <button
+                            type="button"
+                            className="code-btn code-btn--secondary code-btn--xs"
+                            onClick={() =>
+                              onViewArchProcess?.(
+                                selectedModule.arch_process?.id || selectedModule.arch_process_id!
+                              )
+                            }
+                            data-testid="goto-arch-process-btn"
+                            title="切换至物理进程树并定位此架构进程"
+                          >
+                            查看物理进程树
+                          </button>
+                        </div>
+                      ) : (
+                        <span className="code-color-muted">未关联标准架构进程</span>
+                      )}
+                    </span>
+                  </div>
                   <div className="code-module-form-field">
                     <span className="code-module-form-field__label">承载进程:</span>
                     <span className="code-module-form-field__val">

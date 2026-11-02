@@ -1,5 +1,12 @@
 import { apiRequest } from './client';
-import type { Agent, Process, DiscoveredProcess, HandshakeResp, PaginatedResponse } from '../types';
+import type {
+  Agent,
+  Process,
+  DiscoveredProcess,
+  HandshakeResp,
+  PaginatedResponse,
+  BatchProcessMountReq,
+} from '../types';
 
 export async function listAgents(params?: {
   scope?: 'SHARED' | 'PRIVATE';
@@ -128,4 +135,39 @@ export async function deleteProcess(id: string) {
   return apiRequest<{ message: string }>(`/processes/${id}`, {
     method: 'DELETE',
   });
+}
+
+export async function batchUpdateProcessMounts(
+  agentId: string | number,
+  req: BatchProcessMountReq
+) {
+  return apiRequest<{ message: string; mounts_count: number; mounts_revision: number }>(
+    `/agents/${agentId}/process-mounts`,
+    {
+      method: 'PUT',
+      body: JSON.stringify(req),
+    }
+  );
+}
+
+export async function disarmAllProbes(agentId: string | number) {
+  return apiRequest<{ message: string; disarmed_count: number }>(
+    `/agents/${agentId}/probes/disarm-all`,
+    {
+      method: 'POST',
+    }
+  );
+}
+
+export async function disarmProcessProbe(
+  processId: string | number,
+  force?: boolean
+) {
+  const qs = force ? '?force=true' : '';
+  return apiRequest<{ message: string; process_id: number; probe_status: string }>(
+    `/processes/${processId}/disarm${qs}`,
+    {
+      method: 'POST',
+    }
+  );
 }

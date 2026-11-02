@@ -1,3 +1,5 @@
+import type { Process } from './agent';
+
 export interface Subsystem {
   id: string;
   code: string;
@@ -97,6 +99,8 @@ export interface Module {
   owner_id?: string;
   owner_name?: string;
   process_id?: string | null;
+  arch_process_id?: string | number | null;
+  arch_process?: ArchProcess;
   description?: string;
   subsystem?: Subsystem;
   group?: FunctionalGroup;
@@ -120,6 +124,49 @@ export interface Module {
   dependencies?: ModuleDependency[];
   created_at?: string;
   updated_at?: string;
+}
+
+export interface ArchProcessGroup {
+  id: string | number;
+  code: string;
+  name: string;
+  sort_order: number;
+  description?: string;
+  process_count?: number;
+  processes?: ArchProcess[];
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface ArchProcess {
+  id: string | number;
+  group_id: string | number;
+  code: string;
+  name: string;
+  default_listen_port: number;
+  default_cmd_pattern: string;
+  default_extra_downstreams?: string[];
+  sort_order: number;
+  description?: string;
+  group?: ArchProcessGroup;
+  modules?: Module[];
+  mount_count?: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface AutoPinnedOverride {
+  process_id: number;
+  agent_id: number;
+  override_listen_port: number;
+}
+
+export interface ArchProcessDetailDTO {
+  arch_process: ArchProcess;
+  modules: Module[];
+  provided_services: ModuleService[];
+  dependencies: ModuleDependency[];
+  agent_mounts: Process[];
 }
 
 export interface StaticTopologyNode {

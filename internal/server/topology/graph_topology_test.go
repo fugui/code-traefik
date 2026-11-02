@@ -231,172 +231,175 @@ func TestBuildTopologyGraph_Logical(t *testing.T) {
 	}
 }
 
-func TestBuildTopologyGraph_Physical_NoAgentAndEffectiveIP(t *testing.T) {
+func TestBuildTopologyGraph_Physical_ZeroAgents_EnvOverlayAndFallbackDownstreams(t *testing.T) {
 	db := setupIsolatedTopologyDB(t)
 
-	// 1. 构造公共 SHARED Agent，宿主端点为 http://192.168.56.20:8090
-	agent := models.Agent{
-		Name:     "agent-host-1",
-		Endpoint: "http://192.168.56.20:8090",
-		Scope:    models.ScopeShared,
-		Status:   models.AgentStatusOnline,
+	// 1. 构造架构进程蓝图与模块
+	pgrpCore := models.ArchProcessGroup{Code: "PGRP_CORE", Name: "交易核心组", SortOrder: 1}
+	pgrpGW := models.ArchProcessGroup{Code: "PGRP_GW", Name: "接入网关组", SortOrder: 2}
+	if err := db.Create(&pgrpCore).Error; err != nil {
+		t.Fatalf("创建核心组失败: %v", err)
 	}
-	if err := db.Create(&agent).Error; err != nil {
-		t.Fatalf("创建 Agent 失败: %v", err)
-	}
-
-	// 2. 构造进程 1: 留空 AdvertiseIP，期望回退为 192.168.56.20:9001
-	p1 := models.Process{
-		AgentID:     agent.ID,
-		Name:        "order-process",
-		GroupName:   "交易核心组",
-		ListenPort:  9001,
-		AdvertiseIP: "", // 留空
-		CmdPattern:  "./order-server",
-	}
-	if err := db.Create(&p1).Error; err != nil {
-		t.Fatalf("创建进程 p1 失败: %v", err)
+	if err := db.Create(&pgrpGW).Error; err != nil {
+		t.Fatalf("创建网关组失败: %v", err)
 	}
 
-	// 3. 构造进程 2: 显式 AdvertiseIP = 10.0.0.1，带 ExtraDownstreams
 	extraDownstreams, _ := json.Marshal([]string{"10.0.0.8:3306"})
-	p2 := models.Process{
-		AgentID:          agent.ID,
-		Name:             "gateway-process",
-		GroupName:        "接入网关组",
-		ListenPort:       8080,
-		AdvertiseIP:      "10.0.0.1",
-		CmdPattern:       "./gateway",
-		ExtraDownstreams: datatypes.JSON(extraDownstreams),
+	p1 := models.ArchProcess{
+		GroupID:           pgrpCore.ID,
+		Code:              "PROC_ORDER",
+		Name:              "order-process",
+		DefaultListenPort: 9001,
+		DefaultCmdPattern: "./order-server",
 	}
-	if err := db.Create(&p2).Error; err != nil {
-		t.Fatalf("创建进程 p2 失败: %v", err)
+	p2 := models.ArchProcess{
+		GroupID:                 pgrpGW.ID,
+		Code:                    "PROC_GW",
+		Name:                    "gateway-process",
+		DefaultListenPort:       8080,
+		DefaultCmdPattern:       "./gateway",
+		DefaultExtraDownstreams: datatypes.JSON(extraDownstreams),
+	}
+	p3 := models.ArchProcess{
+		GroupID:           pgrpCore.ID,
+		Code:              "PROC_STOCK",
+		Name:              "stock-process",
+		DefaultListenPort: 9003,
+		DefaultCmdPattern: "./stock-server",
+	}
+	db.Create(&p1)
+	db.Create(&p2)
+	db.Create(&p3)
+
+	// 构造功能组与模块
+	sub, _ := CreateSubsystem(db, SubsystemInput{Code: "SUB_DEMO", Name: "演示系统"})
+	grp, _ := CreateFunctionalGroup(db, FunctionalGroupInput{SubsystemID: sub.ID, Code: "GRP_DEMO", Name: "演示组"})
+
+	m1, _ := CreateModule(db, ModuleInput{GroupID: grp.ID, Code: "MOD_P1", Name: "订单服务", ArchProcessID: &p1.ID})
+	m2, _ := CreateModule(db, ModuleInput{GroupID: grp.ID, Code: "MOD_P2", Name: "网关服务", ArchProcessID: &p2.ID})
+	m3, _ := CreateModule(db, ModuleInput{GroupID: grp.ID, Code: "MOD_P3", Name: "库存服务", ArchProcessID: &p3.ID})
+	mIso, _ := CreateModule(db, ModuleInput{GroupID: grp.ID, Code: "MOD_ISO", Name: "未部署孤立服务"})
+
+	// 服务契约与依赖: m3 提供 stock-service, m1 依赖 stock-service
+	svcStock, _ := CreateModuleService(db, ModuleServiceInput{ModuleID: m3.ID, ServiceName: "stock-service"})
+	_, _ = CreateModuleDependency(db, ModuleDependencyInput{ConsumerModuleID: m1.ID, ServiceID: &svcStock.ID})
+
+	// === 测试 1: 0 台 Agent 时 PHYSICAL 拓扑完整出图 (零 Agent 依赖) ===
+	graphZero, err := BuildTopologyGraph(db, TopologyViewPhysical)
+	if err != nil {
+		t.Fatalf("0 台 Agent 时 BuildTopologyGraph 失败: %v", err)
+	}
+	zeroNodeMap := make(map[string]GraphNode)
+	for _, n := range graphZero.Nodes {
+		zeroNodeMap[n.ID] = n
 	}
 
-	// 4. 构造子系统与功能组
-	sub, err := CreateSubsystem(db, SubsystemInput{Code: "SUB_DEMO", Name: "演示系统"})
-	if err != nil {
-		t.Fatalf("创建子系统失败: %v", err)
+	p1Zero, ok := zeroNodeMap[fmt.Sprintf("proc_%d", p1.ID)]
+	if !ok {
+		t.Fatalf("0 台 Agent 时缺失 p1 进程节点")
 	}
-	grp, err := CreateFunctionalGroup(db, FunctionalGroupInput{
-		SubsystemID: sub.ID,
-		Code:        "GRP_DEMO",
-		Name:        "演示组",
-	})
-	if err != nil {
-		t.Fatalf("创建功能组失败: %v", err)
+	if ep, ok := p1Zero.Meta["endpoint"].(string); !ok || ep != ":9001" {
+		t.Fatalf("0 台 Agent 期望输出纯架构蓝图端点 :9001，实际为 %v", p1Zero.Meta["endpoint"])
 	}
-
-	// 5. 构造 3 个模块: 2 个绑定公共进程，1 个未部署孤立模块
-	hasProc := true
-	m1, err := CreateModule(db, ModuleInput{
-		GroupID:      grp.ID,
-		Code:         "MOD_P1",
-		Name:         "订单服务",
-		ProcessID:    &p1.ID,
-		HasProcessID: hasProc,
-	})
-	if err != nil {
-		t.Fatalf("创建 m1 失败: %v", err)
+	if cnt, ok := p1Zero.Meta["mounted_shared_env_count"].(int); !ok || cnt != 0 {
+		t.Fatalf("0 台 Agent 期望 mounted_shared_env_count 为 0，实际为 %v", p1Zero.Meta["mounted_shared_env_count"])
+	}
+	if isM, ok := p1Zero.Meta["is_mounted"].(bool); !ok || isM {
+		t.Fatalf("0 台 Agent 期望 is_mounted 为 false")
 	}
 
-	m2, err := CreateModule(db, ModuleInput{
-		GroupID:      grp.ID,
-		Code:         "MOD_P2",
-		Name:         "网关服务",
-		ProcessID:    &p2.ID,
-		HasProcessID: hasProc,
-	})
-	if err != nil {
-		t.Fatalf("创建 m2 失败: %v", err)
+	// 孤立模块进入 undeployed_container
+	isoNode, ok := zeroNodeMap[fmt.Sprintf("mod_%d", mIso.ID)]
+	if !ok || isoNode.ParentID != "undeployed_container" {
+		t.Fatalf("孤立模块期望归入 undeployed_container")
 	}
 
-	mIso, err := CreateModule(db, ModuleInput{
-		GroupID: grp.ID,
-		Code:    "MOD_ISO",
-		Name:    "未部署孤立服务",
-	})
-	if err != nil {
-		t.Fatalf("创建孤立模块 mIso 失败: %v", err)
+	// === 测试 2: 创建 SIT 和 UAT 两台 SHARED Agent 并 1:1 挂载 ===
+	agentSIT := models.Agent{Name: "agent-sit", Endpoint: "http://192.168.56.20:8090", Scope: models.ScopeShared, Status: models.AgentStatusOnline}
+	agentUAT := models.Agent{Name: "agent-uat", Endpoint: "http://192.168.56.30:8090", Scope: models.ScopeShared, Status: models.AgentStatusOnline}
+	db.Create(&agentSIT)
+	db.Create(&agentUAT)
+
+	// SIT 挂载 P1, P2(显式 IP), P3
+	procSIT1 := models.Process{AgentID: agentSIT.ID, ArchProcessID: p1.ID, EffectiveListenPort: 9001, ProbeStatus: models.ProbeStatusReady}
+	procSIT2 := models.Process{AgentID: agentSIT.ID, ArchProcessID: p2.ID, EffectiveListenPort: 8080, AdvertiseIP: "10.0.0.1", ProbeStatus: models.ProbeStatusReady}
+	procSIT3 := models.Process{AgentID: agentSIT.ID, ArchProcessID: p3.ID, EffectiveListenPort: 9003, ProbeStatus: models.ProbeStatusReady}
+	db.Create(&procSIT1)
+	db.Create(&procSIT2)
+	db.Create(&procSIT3)
+
+	// UAT 挂载 P1 (本地覆盖 19001), P3
+	ovPort := 19001
+	procUAT1 := models.Process{AgentID: agentUAT.ID, ArchProcessID: p1.ID, OverrideListenPort: &ovPort, EffectiveListenPort: 19001, ProbeStatus: models.ProbeStatusReady}
+	procUAT3 := models.Process{AgentID: agentUAT.ID, ArchProcessID: p3.ID, EffectiveListenPort: 9003, ProbeStatus: models.ProbeStatusReady}
+	db.Create(&procUAT1)
+	db.Create(&procUAT3)
+
+	// 再次查纯蓝图 (未传 env_agent_id): p1.mounted_shared_env_count 应为 2
+	graphShared, _ := BuildTopologyGraph(db, TopologyViewPhysical)
+	for _, n := range graphShared.Nodes {
+		if n.ID == fmt.Sprintf("proc_%d", p1.ID) {
+			if cnt := n.Meta["mounted_shared_env_count"].(int); cnt != 2 {
+				t.Fatalf("期望 P1 mounted_shared_env_count 为 2，实际为 %d", cnt)
+			}
+		}
 	}
-	_ = m1
+
+	// 叠加 SIT 环境 (env_agent_id = agentSIT.ID)
+	graphOverlaySIT, err := BuildTopologyGraph(db, TopologyViewPhysical, agentSIT.ID)
+	if err != nil {
+		t.Fatalf("叠加 SIT 环境拓扑构建失败: %v", err)
+	}
+	sitNodeMap := make(map[string]GraphNode)
+	for _, n := range graphOverlaySIT.Nodes {
+		sitNodeMap[n.ID] = n
+	}
+	p1SIT := sitNodeMap[fmt.Sprintf("proc_%d", p1.ID)]
+	if p1SIT.Meta["endpoint"] != "192.168.56.20:9001" || p1SIT.Meta["is_mounted"] != true {
+		t.Fatalf("SIT 叠加期望端点为 192.168.56.20:9001 且已挂载，实际为 %v", p1SIT.Meta)
+	}
+	p2SIT := sitNodeMap[fmt.Sprintf("proc_%d", p2.ID)]
+	if p2SIT.Meta["endpoint"] != "10.0.0.1:8080" {
+		t.Fatalf("SIT 叠加 P2 显式 IP 期望端点为 10.0.0.1:8080，实际为 %v", p2SIT.Meta["endpoint"])
+	}
+
+	// === 测试 3: 创建 PRIVATE Agent 并绑定 FallbackAgentID = agentSIT.ID ===
+	agentPriv := models.Agent{
+		Name:            "agent-priv-alice",
+		Endpoint:        "http://192.168.56.99:8090",
+		Scope:           models.ScopePrivate,
+		FallbackAgentID: &agentSIT.ID,
+		Status:          models.AgentStatusOnline,
+	}
+	db.Create(&agentPriv)
+
+	// 私有 Agent 仅挂载 P1 (不挂载 P3)
+	procPriv1 := models.Process{AgentID: agentPriv.ID, ArchProcessID: p1.ID, EffectiveListenPort: 9001, ProbeStatus: models.ProbeStatusReady}
+	db.Create(&procPriv1)
+
+	// 编译 procPriv1 下游:
+	// m1 依赖 stock-service (P3 提供)；由于同机未挂载 P3，自动通过 FallbackAgentID (SIT) 兜底解析为 192.168.56.20:9003
+	// 严格排除 UAT 端点 (192.168.56.30:9003)
+	downstreams, err := CompileProcessDownstreams(db, procPriv1.ID, nil, nil)
+	if err != nil {
+		t.Fatalf("CompileProcessDownstreams 失败: %v", err)
+	}
+
+	foundSITStock := false
+	foundUATStock := false
+	for _, ds := range downstreams {
+		if ds.IP == "192.168.56.20" && ds.Port == 9003 {
+			foundSITStock = true
+		}
+		if ds.IP == "192.168.56.30" {
+			foundUATStock = true
+		}
+	}
+	if !foundSITStock {
+		t.Fatalf("期望从 FallbackAgentID(SIT) 获得 192.168.56.20:9003，但未找到: %+v", downstreams)
+	}
+	if foundUATStock {
+		t.Fatalf("严禁混入非绑定环境 UAT 的端点！实际包含: %+v", downstreams)
+	}
 	_ = m2
-	_ = mIso
-
-	// 执行 BuildTopologyGraph (PHYSICAL)
-	graph, err := BuildTopologyGraph(db, TopologyViewPhysical)
-	if err != nil {
-		t.Fatalf("BuildTopologyGraph PHYSICAL 失败: %v", err)
-	}
-
-	// 断言 1: 物理图节点仅含 PROCESS_GROUP、PROCESS、MODULE、UNDEPLOYED_CONTAINER、EXTERNAL_*
-	// 绝对不存在 AGENT 节点且 meta 不含 agent_id
-	for _, n := range graph.Nodes {
-		if n.Type == "AGENT" {
-			t.Fatalf("物理图中严禁出现 AGENT 节点类型: %+v", n)
-		}
-		if _, exists := n.Meta["agent_id"]; exists {
-			t.Fatalf("物理图节点 %s meta 严禁包含 agent_id", n.ID)
-		}
-	}
-
-	nodeMap := make(map[string]GraphNode)
-	for _, n := range graph.Nodes {
-		nodeMap[n.ID] = n
-	}
-
-	// 断言 2: 留空 AdvertiseIP 的进程正确回退推导为 "192.168.56.20:9001"
-	p1Node, ok := nodeMap[fmt.Sprintf("proc_%d", p1.ID)]
-	if !ok {
-		t.Fatalf("找不到 p1 进程节点")
-	}
-	if endpoint, ok := p1Node.Meta["endpoint"].(string); !ok || endpoint != "192.168.56.20:9001" {
-		t.Fatalf("p1 期望 EffectiveIP endpoint 为 192.168.56.20:9001，实际为 %v", p1Node.Meta["endpoint"])
-	}
-
-	// 显式 AdvertiseIP 的进程 2 必须为 "10.0.0.1:8080"
-	p2Node, ok := nodeMap[fmt.Sprintf("proc_%d", p2.ID)]
-	if !ok {
-		t.Fatalf("找不到 p2 进程节点")
-	}
-	if endpoint, ok := p2Node.Meta["endpoint"].(string); !ok || endpoint != "10.0.0.1:8080" {
-		t.Fatalf("p2 期望 endpoint 为 10.0.0.1:8080，实际为 %v", p2Node.Meta["endpoint"])
-	}
-
-	// 断言 3: 未绑定公共进程的孤立模块归入 UNDEPLOYED_CONTAINER
-	undeployedContainer, ok := nodeMap["undeployed_container"]
-	if !ok {
-		t.Fatalf("缺少 undeployed_container 根容器")
-	}
-	if undeployedContainer.Type != NodeTypeUndeployedContainer || undeployedContainer.Depth != 0 {
-		t.Fatalf("undeployed_container 属性错误: %+v", undeployedContainer)
-	}
-
-	mIsoNode, ok := nodeMap[fmt.Sprintf("mod_%d", mIso.ID)]
-	if !ok {
-		t.Fatalf("找不到孤立模块节点")
-	}
-	if mIsoNode.ParentID != "undeployed_container" || mIsoNode.Depth != 1 {
-		t.Fatalf("孤立模块必须挂载在 undeployed_container 下，实际 parentID=%s depth=%d", mIsoNode.ParentID, mIsoNode.Depth)
-	}
-
-	// 断言 4: ExtraDownstreams 生成 EXTERNAL_ENDPOINT 节点和边
-	extEpNode, ok := nodeMap["ext_ep_10.0.0.8:3306"]
-	if !ok {
-		t.Fatalf("未找到 Process ExtraDownstreams 生成的 ext_ep_10.0.0.8:3306 节点")
-	}
-	if extEpNode.Type != NodeTypeExternalEndpoint || extEpNode.ParentID != "ext_container" {
-		t.Fatalf("外部端点节点属性错误: %+v", extEpNode)
-	}
-
-	foundExtraEdge := false
-	for _, e := range graph.Edges {
-		if e.SourceNodeID == fmt.Sprintf("proc_%d", p2.ID) && e.TargetNodeID == "ext_ep_10.0.0.8:3306" {
-			foundExtraEdge = true
-			break
-		}
-	}
-	if !foundExtraEdge {
-		t.Fatalf("未找到从 proc_2 到 ext_ep_10.0.0.8:3306 的外部端点边")
-	}
 }

@@ -202,6 +202,19 @@ func RegisterRoutesForTest(r *gin.Engine) {
 		protected.GET("/arch/services/available", handlers.ListAvailableServices)
 		protected.GET("/arch/proto-services/claimable", handlers.ListClaimableProtoServices)
 
+		// 4.1 物理进程蓝图域 (ADR-09, M10)
+		protected.GET("/arch/process-groups", handlers.ListArchProcessGroups)
+		protected.POST("/arch/process-groups", requireAdmin, handlers.CreateArchProcessGroup)
+		protected.PUT("/arch/process-groups/:id", requireAdmin, handlers.UpdateArchProcessGroup)
+		protected.DELETE("/arch/process-groups/:id", requireAdmin, handlers.DeleteArchProcessGroup)
+
+		protected.GET("/arch/processes/tree", handlers.GetArchProcessTree)
+		protected.GET("/arch/processes", handlers.ListArchProcesses)
+		protected.GET("/arch/processes/:id", handlers.GetArchProcess)
+		protected.POST("/arch/processes", requireAdmin, handlers.CreateArchProcess)
+		protected.PUT("/arch/processes/:id", requireAdmin, handlers.UpdateArchProcess)
+		protected.DELETE("/arch/processes/:id", requireAdmin, handlers.DeleteArchProcess)
+
 		protected.GET("/arch/topology/graph", handlers.GetTopologyGraph)
 		protected.GET("/arch/topology/static", handlers.GetStaticTopology)
 
@@ -225,6 +238,8 @@ func RegisterRoutesForTest(r *gin.Engine) {
 		protected.POST("/agents/:id/handshake", handlers.HandshakeAgent)
 		protected.GET("/agents/:id/discover-processes", handlers.DiscoverAgentProcesses)
 		protected.POST("/agents/:id/lease/force-unlock", requireAdmin, handlers.ForceUnlockAgentLease)
+		protected.PUT("/agents/:id/process-mounts", handlers.BatchUpdateProcessMounts)
+		protected.POST("/agents/:id/probes/disarm-all", handlers.DisarmAllProbes)
 
 		// 进程
 		protected.GET("/processes", handlers.ListProcesses)
@@ -233,6 +248,7 @@ func RegisterRoutesForTest(r *gin.Engine) {
 		protected.PUT("/processes/:id", handlers.UpdateProcess)
 		protected.DELETE("/processes/:id", handlers.DeleteProcess)
 		protected.GET("/processes/:id/downstreams", handlers.GetProcessDownstreams)
+		protected.POST("/processes/:id/disarm", handlers.DisarmProcessProbe)
 
 		// 8. 协同录制与架构拓扑域 (F-05, F-11, F-16)
 		protected.GET("/recording-sessions", handlers.ListRecordingSessions)
@@ -827,11 +843,11 @@ func TestSC03_ProcessBindingAndLeaseGuards(t *testing.T) {
 	var proc1 models.Process
 	_ = json.Unmarshal(w.Body.Bytes(), &proc1)
 
-	// 验证 SHARED 进程同步回写 Module.ProcessID
+	// 验证 SHARED 进程同步回写 Module.ArchProcessID
 	var refModA models.Module
 	_ = db.First(&refModA, modA.ID).Error
-	if refModA.ProcessID == nil || *refModA.ProcessID != proc1.ID {
-		t.Fatalf("模块 A 的 ProcessID 未同步为 Proc_1: %+v", refModA)
+	if refModA.ArchProcessID == nil || *refModA.ArchProcessID != proc1.ArchProcessID {
+		t.Fatalf("模块 A 的 ArchProcessID 未同步为 Proc_1.ArchProcessID: %+v", refModA)
 	}
 
 	// 2. 尝试创建同端口进程 -> 409 Conflict
@@ -1345,6 +1361,336 @@ func TestProtoSchemaSummary_BloodlineAndOrphanServices(t *testing.T) {
 			if s.IsClaimed {
 				t.Errorf("demo.OrphanService 期望为未认领孤儿契约，实际: %+v", s)
 			}
+		}
+	}
+}
+
+// TestArchProcessCRUD_AutoPinPortConflict_RegexValidateAndAntiIDOR 验证架构进程蓝图 CRUD、默认端口变更冲突自动固化与 Anti-IDOR 挂载血缘过滤 (F-02, ADR-09)
+func TestArchProcessCRUD_AutoPinPortConflict_RegexValidateAndAntiIDOR(t *testing.T) {
+	r, db := setupRouterAndDB(t)
+
+	// 1. 初始化测试用户
+	admin := createTestUserInDB(t, db, "admin_arch", "traefik_admin")
+	userA := createTestUserInDB(t, db, "user_a", "operator")
+	userB := createTestUserInDB(t, db, "user_b", "operator")
+
+	adminToken := generateTestJWT(t, admin)
+	userAToken := generateTestJWT(t, userA)
+	userBToken := generateTestJWT(t, userB)
+
+	// 2. 管理员创建架构进程组
+	grpPayload, _ := json.Marshal(map[string]interface{}{
+		"code":        "PGRP_CORE_TEST",
+		"name":        "核心服务组",
+		"sort_order":  1,
+		"description": "核心业务进程组",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/arch/process-groups", bytes.NewReader(grpPayload))
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("创建进程组失败: %d (body: %s)", w.Code, w.Body.String())
+	}
+	var grp models.ArchProcessGroup
+	_ = json.Unmarshal(w.Body.Bytes(), &grp)
+
+	// 3. 管理员创建标准进程 P1(:9001) 与 P2(:9002)
+	p1Payload, _ := json.Marshal(map[string]interface{}{
+		"group_id":            grp.ID,
+		"code":                "PROC_P1",
+		"name":                "进程P1",
+		"default_listen_port": 9001,
+		"default_cmd_pattern": "./bin/p1",
+	})
+	req = httptest.NewRequest(http.MethodPost, "/api/arch/processes", bytes.NewReader(p1Payload))
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("创建 P1 失败: %d (body: %s)", w.Code, w.Body.String())
+	}
+	var p1 models.ArchProcess
+	_ = json.Unmarshal(w.Body.Bytes(), &p1)
+
+	p2Payload, _ := json.Marshal(map[string]interface{}{
+		"group_id":            grp.ID,
+		"code":                "PROC_P2",
+		"name":                "进程P2",
+		"default_listen_port": 9002,
+		"default_cmd_pattern": "./bin/p2",
+	})
+	req = httptest.NewRequest(http.MethodPost, "/api/arch/processes", bytes.NewReader(p2Payload))
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("创建 P2 失败: %d (body: %s)", w.Code, w.Body.String())
+	}
+	var p2 models.ArchProcess
+	_ = json.Unmarshal(w.Body.Bytes(), &p2)
+
+	// 4. 用户 A 创建私有 Agent (Agent-Dev)，并挂载 P1 (继承 :9001) 与 P2 (覆盖为 :19001)
+	agentDev := models.Agent{
+		Name:      "agent-dev-a",
+		Endpoint:  "http://192.168.56.99:8090",
+		Scope:     models.ScopePrivate,
+		OwnerID:   &userA.ID,
+		Status:    models.AgentStatusOnline,
+		CreatedBy: userA.ID,
+	}
+	db.Create(&agentDev)
+
+	procP1 := models.Process{
+		AgentID:             agentDev.ID,
+		ArchProcessID:       p1.ID,
+		EffectiveListenPort: 9001,
+		ProbeStatus:         models.ProbeStatusReady,
+		CreatedBy:           userA.ID,
+	}
+	ovPort := 19001
+	procP2 := models.Process{
+		AgentID:             agentDev.ID,
+		ArchProcessID:       p2.ID,
+		OverrideListenPort:  &ovPort,
+		EffectiveListenPort: 19001,
+		ProbeStatus:         models.ProbeStatusReady,
+		CreatedBy:           userA.ID,
+	}
+	db.Create(&procP1)
+	db.Create(&procP2)
+
+	// 5. 校验非法正则表达式: "re:[unclosed" -> 400 Bad Request
+	badRegexPayload, _ := json.Marshal(map[string]interface{}{
+		"group_id":            grp.ID,
+		"code":                "PROC_P1",
+		"name":                "进程P1",
+		"default_listen_port": 9001,
+		"default_cmd_pattern": "re:[unclosed",
+	})
+	req = httptest.NewRequest(http.MethodPut, fmt.Sprintf("/api/arch/processes/%d", p1.ID), bytes.NewReader(badRegexPayload))
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("提交非法正则期望返回 400 Bad Request，实际: %d (body: %s)", w.Code, w.Body.String())
+	}
+
+	// 6. 管理员调用 PUT /api/arch/processes/:p1 将 P1 默认端口改为 19001 (与 Agent-Dev 上的 P2 冲突)
+	// 期望: 成功返回 200 (不返 409 死锁)，自动将 Agent-Dev 上的 P1 固化 override_listen_port = 9001 并返回 auto_pinned_overrides
+	changePortPayload, _ := json.Marshal(map[string]interface{}{
+		"group_id":            grp.ID,
+		"code":                "PROC_P1",
+		"name":                "进程P1",
+		"default_listen_port": 19001,
+		"default_cmd_pattern": "./bin/p1",
+	})
+	req = httptest.NewRequest(http.MethodPut, fmt.Sprintf("/api/arch/processes/%d", p1.ID), bytes.NewReader(changePortPayload))
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("修改 P1 端口期望返回 200，实际: %d (body: %s)", w.Code, w.Body.String())
+	}
+	var updateResp struct {
+		Process             models.ArchProcess               `json:"process"`
+		AutoPinnedOverrides []handlers.AutoPinnedOverrideDTO `json:"auto_pinned_overrides"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &updateResp); err != nil {
+		t.Fatalf("反序列化更新响应失败: %v", err)
+	}
+	if len(updateResp.AutoPinnedOverrides) != 1 {
+		t.Fatalf("期望 auto_pinned_overrides 包含 1 条固化记录，实际: %d", len(updateResp.AutoPinnedOverrides))
+	}
+	if updateResp.AutoPinnedOverrides[0].AgentID != agentDev.ID || updateResp.AutoPinnedOverrides[0].OverrideListenPort != 9001 {
+		t.Fatalf("固化记录内容错误: %+v", updateResp.AutoPinnedOverrides[0])
+	}
+
+	// 验证 DB 中 procP1 已经固化 override_listen_port = 9001
+	var dbProcP1 models.Process
+	_ = db.First(&dbProcP1, procP1.ID)
+	if dbProcP1.OverrideListenPort == nil || *dbProcP1.OverrideListenPort != 9001 || dbProcP1.EffectiveListenPort != 9001 {
+		t.Fatalf("DB 中 procP1 期望固化 override_listen_port = 9001, 实际: %+v", dbProcP1)
+	}
+
+	// 7. Anti-IDOR: 普通用户 B 查询 GET /api/arch/processes/:p1
+	// 期望: 绝不泄露用户 A 的私有 Agent 挂载记录 (agent_mounts 为空)
+	req = httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/arch/processes/%d", p1.ID), nil)
+	req.Header.Set("Authorization", "Bearer "+userBToken)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("用户 B 查询 P1 详情失败: %d", w.Code)
+	}
+	var userBDetail handlers.ArchProcessDetailDTO
+	_ = json.Unmarshal(w.Body.Bytes(), &userBDetail)
+	if len(userBDetail.AgentMounts) != 0 {
+		t.Fatalf("普通用户 B 查询绝不能泄露用户 A 的私有 Agent 挂载记录，实际返回: %+v", userBDetail.AgentMounts)
+	}
+
+	// 用户 A 查询可以查到自己的挂载记录
+	req = httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/arch/processes/%d", p1.ID), nil)
+	req.Header.Set("Authorization", "Bearer "+userAToken)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("用户 A 查询 P1 详情失败: %d", w.Code)
+	}
+	var userADetail handlers.ArchProcessDetailDTO
+	_ = json.Unmarshal(w.Body.Bytes(), &userADetail)
+	if len(userADetail.AgentMounts) != 1 || userADetail.AgentMounts[0].AgentID != agentDev.ID {
+		t.Fatalf("用户 A 查询应包含本人私有 Agent 挂载记录，实际返回: %+v", userADetail.AgentMounts)
+	}
+}
+
+// TestBatchProcessMounts_OptimisticLock_AndDisarm 测试批量全量挂载乐观锁、冲突防卫与一键/单进程卸载探针 (ADR-09, AC-M10-02)
+func TestBatchProcessMounts_OptimisticLock_AndDisarm(t *testing.T) {
+	r, db := setupRouterAndDB(t)
+
+	admin := createTestUserInDB(t, db, "admin_mount", "traefik_admin")
+	adminToken := generateTestJWT(t, admin)
+
+	// 1. 创建架构进程
+	pgrp := models.ArchProcessGroup{Code: "PGRP_MOUNT", Name: "挂载测试组"}
+	_ = db.Create(&pgrp).Error
+
+	p1 := models.ArchProcess{GroupID: pgrp.ID, Code: "ARCH_P1", Name: "标准进程1", DefaultListenPort: 18001}
+	p2 := models.ArchProcess{GroupID: pgrp.ID, Code: "ARCH_P2", Name: "标准进程2", DefaultListenPort: 18002}
+	_ = db.Create(&p1).Error
+	_ = db.Create(&p2).Error
+
+	// 2. 创建 Agent
+	agent := models.Agent{
+		Name:           "Agent-Mount-Test",
+		Endpoint:       "http://127.0.0.1:28099",
+		Scope:          models.ScopeShared,
+		Status:         models.AgentStatusOnline,
+		MountsRevision: 5,
+	}
+	_ = db.Create(&agent).Error
+
+	// 3. 乐观锁冲突测试：带入错误的 expected_revision = 4
+	mountPayloadWrongRev := map[string]interface{}{
+		"expected_revision": 4,
+		"mounts": []map[string]interface{}{
+			{"arch_process_id": p1.ID},
+		},
+	}
+	bodyBytes, _ := json.Marshal(mountPayloadWrongRev)
+	req := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/api/agents/%d/process-mounts", agent.ID), bytes.NewReader(bodyBytes))
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409 Conflict on revision mismatch, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// 4. 端口冲突防卫测试：批次内两个进程配置相同非零端口
+	portConflict := 19999
+	mountPayloadPortConflict := map[string]interface{}{
+		"expected_revision": 5,
+		"mounts": []map[string]interface{}{
+			{"arch_process_id": p1.ID, "override_listen_port": portConflict},
+			{"arch_process_id": p2.ID, "override_listen_port": portConflict},
+		},
+	}
+	bodyBytes, _ = json.Marshal(mountPayloadPortConflict)
+	req = httptest.NewRequest(http.MethodPut, fmt.Sprintf("/api/agents/%d/process-mounts", agent.ID), bytes.NewReader(bodyBytes))
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409 Conflict on port conflict, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// 5. 成功批量全量挂载 (expected_revision = 5)
+	mountPayloadSuccess := map[string]interface{}{
+		"expected_revision": 5,
+		"mounts": []map[string]interface{}{
+			{"arch_process_id": p1.ID, "override_listen_port": 18001, "probe_desired_state": "ARMED"},
+			{"arch_process_id": p2.ID, "override_listen_port": 18002, "probe_desired_state": "ARMED"},
+		},
+	}
+	bodyBytes, _ = json.Marshal(mountPayloadSuccess)
+	req = httptest.NewRequest(http.MethodPut, fmt.Sprintf("/api/agents/%d/process-mounts", agent.ID), bytes.NewReader(bodyBytes))
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("batch process mounts failed: %d, %s", w.Code, w.Body.String())
+	}
+
+	// 检查 MountsRevision 递增至 6
+	var freshAgent models.Agent
+	_ = db.First(&freshAgent, agent.ID).Error
+	if freshAgent.MountsRevision != 6 {
+		t.Fatalf("expected MountsRevision 6, got %d", freshAgent.MountsRevision)
+	}
+
+	var procs []models.Process
+	_ = db.Where("agent_id = ?", agent.ID).Order("id ASC").Find(&procs).Error
+	if len(procs) != 2 {
+		t.Fatalf("expected 2 mounted processes, got %d", len(procs))
+	}
+	proc1ID := procs[0].ID
+
+	// 6. 测试单进程卸载探针 POST /api/processes/:id/disarm
+	// 构造活跃录制会话占用该进程
+	sess := models.RecordingSession{
+		SessionNo:        "REC_MOUNT_BUSY",
+		Name:             "录制会话进行中",
+		Scope:            models.ScopeShared,
+		Status:           models.SessionStatusRecording,
+		TargetProcessIDs: datatypes.JSON(fmt.Sprintf("[%d]", proc1ID)),
+	}
+	_ = db.Create(&sess).Error
+
+	// 未传 force=true 拦截 409
+	req = httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/processes/%d/disarm", proc1ID), nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409 Conflict without force on active session, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// 携带 force=true 强制卸载成功
+	req = httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/processes/%d/disarm?force=true", proc1ID), nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK with force=true, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var freshProc1 models.Process
+	_ = db.First(&freshProc1, proc1ID).Error
+	if freshProc1.ProbeDesiredState != models.ProbeDesiredStateDisarmed || freshProc1.ProbeStatus != models.ProbeStatusDisarmed {
+		t.Fatalf("expected DISARMED states on proc1, got %s / %s", freshProc1.ProbeDesiredState, freshProc1.ProbeStatus)
+	}
+
+	// 7. 测试一键卸载全部探针 POST /api/agents/:id/probes/disarm-all
+	req = httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/agents/%d/probes/disarm-all", agent.ID), nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on disarm-all, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var allProcsAfter []models.Process
+	_ = db.Where("agent_id = ?", agent.ID).Find(&allProcsAfter).Error
+	for _, p := range allProcsAfter {
+		if p.ProbeDesiredState != models.ProbeDesiredStateDisarmed || p.ProbeStatus != models.ProbeStatusDisarmed {
+			t.Fatalf("expected all procs DISARMED after disarm-all, got %s / %s", p.ProbeDesiredState, p.ProbeStatus)
 		}
 	}
 }

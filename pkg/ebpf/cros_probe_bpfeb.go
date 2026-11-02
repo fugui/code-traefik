@@ -132,10 +132,13 @@ const (
 	cros_probeProgCrosConnect4          = "cros_connect4"
 	cros_probeProgCrosSchedExec         = "cros_sched_exec"
 	cros_probeProgCrosSockOps           = "cros_sock_ops"
+	cros_probeProgTraceSysEnterClose    = "trace_sys_enter_close"
 	cros_probeProgTraceSysEnterRead     = "trace_sys_enter_read"
 	cros_probeProgTraceSysEnterRecvfrom = "trace_sys_enter_recvfrom"
 	cros_probeProgTraceSysEnterSendto   = "trace_sys_enter_sendto"
 	cros_probeProgTraceSysEnterWrite    = "trace_sys_enter_write"
+	cros_probeProgTraceSysExitAccept    = "trace_sys_exit_accept"
+	cros_probeProgTraceSysExitAccept4   = "trace_sys_exit_accept4"
 	cros_probeProgTraceSysExitRead      = "trace_sys_exit_read"
 	cros_probeProgTraceSysExitRecvfrom  = "trace_sys_exit_recvfrom"
 	cros_probeProgTraceSysExitSendto    = "trace_sys_exit_sendto"
@@ -189,10 +192,13 @@ type cros_probeProgramSpecs struct {
 	CrosConnect4          *ebpf.ProgramSpec `ebpf:"cros_connect4"`
 	CrosSchedExec         *ebpf.ProgramSpec `ebpf:"cros_sched_exec"`
 	CrosSockOps           *ebpf.ProgramSpec `ebpf:"cros_sock_ops"`
+	TraceSysEnterClose    *ebpf.ProgramSpec `ebpf:"trace_sys_enter_close"`
 	TraceSysEnterRead     *ebpf.ProgramSpec `ebpf:"trace_sys_enter_read"`
 	TraceSysEnterRecvfrom *ebpf.ProgramSpec `ebpf:"trace_sys_enter_recvfrom"`
 	TraceSysEnterSendto   *ebpf.ProgramSpec `ebpf:"trace_sys_enter_sendto"`
 	TraceSysEnterWrite    *ebpf.ProgramSpec `ebpf:"trace_sys_enter_write"`
+	TraceSysExitAccept    *ebpf.ProgramSpec `ebpf:"trace_sys_exit_accept"`
+	TraceSysExitAccept4   *ebpf.ProgramSpec `ebpf:"trace_sys_exit_accept4"`
 	TraceSysExitRead      *ebpf.ProgramSpec `ebpf:"trace_sys_exit_read"`
 	TraceSysExitRecvfrom  *ebpf.ProgramSpec `ebpf:"trace_sys_exit_recvfrom"`
 	TraceSysExitSendto    *ebpf.ProgramSpec `ebpf:"trace_sys_exit_sendto"`
@@ -285,10 +291,13 @@ type cros_probePrograms struct {
 	CrosConnect4          *ebpf.Program `ebpf:"cros_connect4"`
 	CrosSchedExec         *ebpf.Program `ebpf:"cros_sched_exec"`
 	CrosSockOps           *ebpf.Program `ebpf:"cros_sock_ops"`
+	TraceSysEnterClose    *ebpf.Program `ebpf:"trace_sys_enter_close"`
 	TraceSysEnterRead     *ebpf.Program `ebpf:"trace_sys_enter_read"`
 	TraceSysEnterRecvfrom *ebpf.Program `ebpf:"trace_sys_enter_recvfrom"`
 	TraceSysEnterSendto   *ebpf.Program `ebpf:"trace_sys_enter_sendto"`
 	TraceSysEnterWrite    *ebpf.Program `ebpf:"trace_sys_enter_write"`
+	TraceSysExitAccept    *ebpf.Program `ebpf:"trace_sys_exit_accept"`
+	TraceSysExitAccept4   *ebpf.Program `ebpf:"trace_sys_exit_accept4"`
 	TraceSysExitRead      *ebpf.Program `ebpf:"trace_sys_exit_read"`
 	TraceSysExitRecvfrom  *ebpf.Program `ebpf:"trace_sys_exit_recvfrom"`
 	TraceSysExitSendto    *ebpf.Program `ebpf:"trace_sys_exit_sendto"`
@@ -300,10 +309,13 @@ func (p *cros_probePrograms) Close() error {
 		p.CrosConnect4,
 		p.CrosSchedExec,
 		p.CrosSockOps,
+		p.TraceSysEnterClose,
 		p.TraceSysEnterRead,
 		p.TraceSysEnterRecvfrom,
 		p.TraceSysEnterSendto,
 		p.TraceSysEnterWrite,
+		p.TraceSysExitAccept,
+		p.TraceSysExitAccept4,
 		p.TraceSysExitRead,
 		p.TraceSysExitRecvfrom,
 		p.TraceSysExitSendto,
