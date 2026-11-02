@@ -73,6 +73,8 @@ export interface ModuleDependency {
       name: string;
       listen_port: number;
     };
+    arch_process_id?: string | number | null;
+    arch_process?: ArchProcess;
   };
   description?: string;
   created_at?: string;

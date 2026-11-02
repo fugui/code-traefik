@@ -735,7 +735,13 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
                     const providerSubsystemName = dep.is_external
                       ? `外部第三方 (${dep.external_system})`
                       : providerMod?.subsystem?.name || '-';
-                    const proc = providerMod?.process;
+                    const archProc = providerMod?.arch_process;
+                    const proc = archProc || providerMod?.process;
+                    const procPort = archProc
+                      ? archProc.default_listen_port
+                      : proc && 'listen_port' in proc
+                      ? proc.listen_port
+                      : 0;
 
                     return (
                       <tr key={dep.id}>
@@ -773,12 +779,22 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
                             <span
                               className="code-process-link"
                               onClick={() => {
-                                if (onViewProcess && proc.id) onViewProcess(proc.id);
+                                if (archProc && onViewArchProcess) {
+                                  onViewArchProcess(archProc.id);
+                                } else if (onViewProcess && 'id' in proc && proc.id) {
+                                  onViewProcess(String(proc.id));
+                                }
                               }}
-                              title={onViewProcess ? '在物理架构树中定位此承载进程' : undefined}
+                              title={
+                                archProc && onViewArchProcess
+                                  ? '在物理进程树中定位此架构进程'
+                                  : onViewProcess
+                                  ? '在物理架构树中定位此承载进程'
+                                  : undefined
+                              }
                             >
                               <Server size={13} />
-                              {proc.name} {proc.listen_port > 0 ? `(Port: ${proc.listen_port})` : '(纯客户端)'}
+                              {proc.name} {procPort > 0 ? `(Port: ${procPort})` : '(纯客户端)'}
                             </span>
                           ) : (
                             <span className="code-color-muted code-text-xs">未装配进程</span>

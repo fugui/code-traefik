@@ -412,7 +412,11 @@ func GetArchProcess(c *gin.Context) {
 	dependencies := make([]models.ModuleDependency, 0)
 	if len(moduleIDs) > 0 {
 		_ = models.DB.Preload("Module").Where("module_id IN ?", moduleIDs).Find(&providedServices).Error
-		_ = models.DB.Preload("ConsumerModule").Preload("Service").Preload("ProviderModule").
+		_ = models.DB.Preload("ConsumerModule").
+			Preload("Service").
+			Preload("ProviderModule").
+			Preload("ProviderModule.Subsystem").
+			Preload("ProviderModule.ArchProcess").
 			Where("consumer_module_id IN ?", moduleIDs).Find(&dependencies).Error
 	}
 

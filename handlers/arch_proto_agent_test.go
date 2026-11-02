@@ -770,6 +770,22 @@ func TestSC02_ArchProtoAndTopologyFlows(t *testing.T) {
 		t.Fatalf("添加外部服务依赖失败: %d (body: %s)", w.Code, w.Body.String())
 	}
 
+	// 5.3 查询 MOD_PAY 的所有下游依赖清单 (防 Process: unsupported relations for schema Module 回归)
+	req = httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/arch/modules/%d/dependencies", mod1.ID), nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("查询模块下游依赖清单失败: %d (body: %s)", w.Code, w.Body.String())
+	}
+	var depsResp struct {
+		Items []models.ModuleDependency `json:"items"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &depsResp)
+	if len(depsResp.Items) != 2 {
+		t.Fatalf("预期返回 2 条依赖，实际返回: %d", len(depsResp.Items))
+	}
+
 	// 6. 上传 Protobuf 描述集
 	pbBytes := buildTestFDS("dophi.risk.v1", "RiskService", "VerifyRisk")
 	upReq, err := createMultipartUploadReq("/api/proto-schemas", map[string]string{

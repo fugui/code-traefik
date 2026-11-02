@@ -405,6 +405,21 @@ func TestModuleDependenciesAndExternalSystem(t *testing.T) {
 		t.Fatalf("内部依赖创建失败: %v", err)
 	}
 
+	// 2.1 查询下游依赖清单验证 (包括 ProviderModule, ArchProcess 与 Subsystem 预加载，防 Process 关联报错回归)
+	deps, err := ListModuleDependencies(db, mod2.ID)
+	if err != nil {
+		t.Fatalf("ListModuleDependencies 失败: %v", err)
+	}
+	if len(deps) != 1 {
+		t.Fatalf("预期 1 条依赖，实际: %d", len(deps))
+	}
+	if deps[0].ProviderModule == nil || deps[0].ProviderModule.ID != mod1.ID {
+		t.Fatalf("预期 ProviderModule 正确预加载，实际: %+v", deps[0].ProviderModule)
+	}
+	if deps[0].ProviderModule.Subsystem == nil || deps[0].ProviderModule.Subsystem.ID != sub.ID {
+		t.Fatalf("预期 ProviderModule.Subsystem 正确预加载，实际: %+v", deps[0].ProviderModule.Subsystem)
+	}
+
 	// 3. 重复依赖拦截
 	if _, err := CreateModuleDependency(db, ModuleDependencyInput{
 		ConsumerModuleID: mod2.ID,

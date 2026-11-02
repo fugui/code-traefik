@@ -361,7 +361,10 @@ func DeleteModuleDependency(db *gorm.DB, depID uint64) (*models.ModuleDependency
 // ListModuleDependencies 获取指定模块的所有下游依赖
 func ListModuleDependencies(db *gorm.DB, moduleID uint64) ([]models.ModuleDependency, error) {
 	var deps []models.ModuleDependency
-	if err := db.Preload("Service").Preload("ProviderModule").Preload("ProviderModule.Process").
+	if err := db.Preload("Service").
+		Preload("ProviderModule").
+		Preload("ProviderModule.Subsystem").
+		Preload("ProviderModule.ArchProcess").
 		Where("consumer_module_id = ?", moduleID).
 		Order("id ASC").Find(&deps).Error; err != nil {
 		return nil, err
