@@ -16,7 +16,7 @@ COMMON_SRCS     := $(shell find $(COMMON_DIR) -type f 2>/dev/null)
 FRONTEND_SRCS   := $(shell find $(FRONTEND_DIR) -type f -not -path "*/node_modules/*" -not -path "*/dist/*" 2>/dev/null) $(COMMON_SRCS)
 BACKEND_SRCS    := $(shell find . -type f \( -name "*.go" -o -name "go.mod" -o -name "go.sum" \) -not -path "*/$(FRONTEND_DIR)/*" -not -path "*/.git/*")
 
-.PHONY: all build install frontend backend agent clean run test lint
+.PHONY: all build install frontend backend agent clean run test lint seed
 
 # 默认运行目标
 all: build
@@ -75,3 +75,7 @@ run: build
 # 执行前端静态代码检查与类型校验
 lint: $(NODE_MODULES)
 	cd $(FRONTEND_DIR) && npm run lint
+
+# 重置并根据 Demo 微服务拓扑重构数据
+seed:
+	go run ./cmd/seed
