@@ -1,11 +1,11 @@
 # 业务流量监控与重放 (`code-traefik`) 管理面服务、微前端控制台与回归断言设计
 
 - **文档编号**：`04-control-plane-and-web-console.md`
-- **文档版本**：v1.4.0
-- **更新日期**：2026-11-01
+- **文档版本**：v1.5.0
+- **更新日期**：2026-11-02
 - **归属阶段**：阶段二：系统架构与数据模型设计 (`02-design`)
-- **状态**：定稿待审 (Ready for Review)
-- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.8.0)、[`01-system-architecture.md`](./01-system-architecture.md)、[`02-data-plane-and-cros-rpc-engine.md`](./02-data-plane-and-cros-rpc-engine.md)、[`03-architecture-elements-and-topology.md`](./03-architecture-elements-and-topology.md)、[`07-console-ia-restructuring-and-workflow-workbench-adr.md`](../05-adr/07-console-ia-restructuring-and-workflow-workbench-adr.md) (ADR-07)
+- **状态**：已冻结 (Frozen)
+- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.9.0)、[`01-system-architecture.md`](./01-system-architecture.md)、[`02-data-plane-and-cros-rpc-engine.md`](./02-data-plane-and-cros-rpc-engine.md)、[`03-architecture-elements-and-topology.md`](./03-architecture-elements-and-topology.md)、[`07-console-ia-restructuring-and-workflow-workbench-adr.md`](../05-adr/07-console-ia-restructuring-and-workflow-workbench-adr.md) (ADR-07)、[`08-recording-drawer-and-process-tree-selection-adr.md`](../05-adr/08-recording-drawer-and-process-tree-selection-adr.md) (ADR-08)、[`09-arch-process-ssot-and-ebpf-premount-standby-adr.md`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md) (ADR-09)
 
 ---
 
@@ -80,18 +80,20 @@ flowchart LR
     BatchDB -. "补推 traffic.persisted 绑定正式 record_id" .-> SSEBus
 ```
 
-1. **周期心跳、离线熔断与悬空租约自愈**：
-   - 后台协程按 `10s` 间隔并发探活所有已登记 Agent（`GET /agent/v1/handshake`，超时 `3s`），刷新 `status = 'ONLINE'`、`last_heartbeat_at` 并核对 `ActiveLeaseType / ActiveRefID`；
+1. **周期心跳、自动预挂补齐 (`Auto-Rearm`)、离线熔断与悬空租约自愈**：
+   - 后台协程按 `10s` 间隔并发探活所有已登记 Agent（`GET /agent/v1/handshake`，超时 `3s`），刷新 `status = 'ONLINE'`、`last_heartbeat_at`，核对 `ActiveLeaseType / ActiveRefID` 与预挂载摘要 `ArmedDigest`；
+   - **默认自动预挂对账**：当在线且空闲（`lease_type == ''`）的 Agent 返回的 `ArmedDigest` 与数据库中 `probe_desired_state = 'ARMED'` 的挂载规格不一致（例如 Agent 首次上线、重启 `BootID` 刷新或架构进程默认端口变更）时，`hub.Manager` 自动调用 `PUT /agent/v1/monitors/arm` 补齐待命探针并更新 `traefik_processes` 就绪诊断列；
    - 连续 **3 个周期（30s）** 探活失败则将数据库状态切换为 `OFFLINE`，**自动释放该 Agent 上残留的排他租约**并将关联录制批次或重放任务置为异常终止，防止团队共享 Agent 发生死锁挂死。
 2. **Track A 快轨（前端 SSE 实时预览推送）**：
    - 为每个已认证订阅者分配容量为 `128` 的缓冲 Channel；推送前严格校验订阅者对目标 `session_id` 的访问权（`PRIVATE` 批次仅推送给 `owner_id` 本人及 `traefik_admin`）；
    - Channel 瞬时满载时仅跳过实时预览通知，绝不反向阻塞 WebSocket 读取协程与 Track B 落盘管道，确保端到端呈现延迟 `<= 1s`。
 
-### 1.2 排他租约录制编排与无损+结构化双模落盘流水线 (`recorder.Orchestrator`)
+### 1.2 预挂就绪零重启录制编排与无损+结构化双模落盘流水线 (`recorder.Orchestrator`)
 
-1. **多进程排他租约获取与协同下发**：
+1. **多进程排他租约获取、零重启采集闸门与停录不断连**：
    - 校验发起人对所选 `target_process_ids` 所属 Agent 的访问权（普通用户可组合本人 `PRIVATE` Agent 与当前空闲的 `SHARED` Agent），按 `agent_id` 升序调用 `AcquireAgentLeases` 原子加锁（冲突立即返回 `409 Conflict` 及持锁人信息）；
-   - 并发调用各 Agent `PUT /agent/v1/monitors/sync` 下发 `[]ProcessMonitorSpec`，汇总存量长连接诊断结果写入 `traefik_recording_sessions.process_diagnostics`；录制正常结束、触发上限或启动失败时，在统一收尾函数中原子释放全部 Agent 租约。
+   - 并发调用各 Agent `PUT /agent/v1/monitors/sync` 下发 `[]ProcessMonitorSpec`：对已处于 `ARMED` 预挂待命态的进程直接 **0ms 原子置 `session_id = S` 开启采集闸门（零进程重启）**，对处于 `DISARMED` 的进程自动兜底临时挂载，汇总诊断结果写入 `traefik_recording_sessions.process_diagnostics`；
+   - 录制正常结束或触发上限时，调用 `POST /agent/v1/monitors/:sessionId/stop` 将 `session_id` 拨回 `0` **无损回退至 `ARMED` 待命（不断开 `EgressProxy` 业务长连接）**，并在统一收尾函数中原子释放全部 Agent 租约。
 2. **双阈值自动停录守卫**：
    - 内存原子维护当前批次 `capturedFrames` 与启动定时器 `time.AfterFunc(MaxDuration)`（默认 `30 分钟` / `100,000 帧`）；任一阈值触发时自动向全部参与 Agent 发送 `/stop`、刷空配对窗口并释放租约，状态落盘为 **`COMPLETED_BY_LIMIT`**。
 3. **Track B 慢轨：连接内 `ullSNO` 往返配对与双模归档 (`ExchangeAssembler`)**：
@@ -238,13 +240,13 @@ type FieldDiff struct {
 
 | 菜单分组 | 菜单名称 | 子路由路径 (`MODULE_BASE_PATH = '/traefik'`) | 页面组件 | 可见角色 | URL Search Params 状态同步项 |
 | :--- | :--- | :--- | :--- | :---: | :--- |
-| **流量作业** *(置顶高频)* | **流量录制** *(默认首页)* | `/record` | `RecordingWorkbenchPage` | 全体登录用户 | `scope` (`SHARED` \| `PRIVATE`), `status`, `search`, `page`, `page_size` |
+| **流量作业** *(置顶高频)* | **流量录制** *(默认首页)* | `/record` | `RecordingWorkbenchPage` | 全体登录用户 | `scope` (`SHARED` \| `PRIVATE`), `status`, `search`, `auto_start` (`1`), `agent_id`, `page`, `page_size` |
 | **流量作业** | **流量调试** | `/debug` | `TrafficDebugWorkbenchPage` | 全体登录用户 | `session_id`, `live` (`1`), `direction`, `exchange_type`, `service_name`, `operation`, `sno`, `trace_id`, `has_error` (`true`), `is_replayable`, `keyword`, `page`, `page_size` |
 | **流量作业** | **流量重放** | `/replay` | `ReplayWorkbenchPage` | 全体登录用户 | `session_id`, `auto_create` (`1`), `target_process_id`, `status`, `page`, `page_size` |
 | **架构与契约** *(静态基线)* | **架构拓扑** | `/topology` | `TopologyWorkbenchPage` | 全体登录用户 | `view` (`LOGICAL` \| `PHYSICAL`), `depth`, `session_id`, `focus` |
-| **架构与契约** | **架构元素** | `/architecture` | `ArchitectureWorkbenchPage` | 全体登录用户 | `subsystem_id`, `group_id`, `module_id` |
+| **架构与契约** | **架构元素** | `/architecture` | `ArchitectureWorkbenchPage` | 全体登录用户 | `tree` (`logical` \| `physical`), `subsystem_id`, `group_id`, `module_id`, `proc_group_id`, `arch_process_id` |
 | **架构与契约** | **Proto 契约** | `/schemas` | `ProtoSchemaWorkbenchPage` | 全体登录用户 | `schema_id`, `active_only`, `search`, `page`, `page_size` |
-| **环境与治理** *(沉底低频)* | **Agent 与进程** | `/agents` | `AgentManagementPage` | 全体登录用户 | `scope` (`SHARED` \| `PRIVATE`), `agent_id`, `process_id`, `lease_state`, `status`, `page`, `page_size` |
+| **环境与治理** *(沉底低频)* | **Agent 与进程** | `/agents` | `AgentManagementPage` | 全体登录用户 | `scope` (`SHARED` \| `PRIVATE`), `agent_id`, `process_id`, `open_mount` (`1`), `lease_state`, `status`, `page`, `page_size` |
 | **环境与治理** | **模块参数配置** | `/admin/settings` | `AdminSettingsPage` | `traefik_admin` (`adminOnly`) | - |
 
 * **历史深链平滑重定向契约（100% 无损保留 Query 参数）**：
@@ -289,7 +291,7 @@ src/
 ├── pages/
 │   ├── RecordingWorkbenchPage/             # 1. [流量作业] 流量录制工作台 (/record - 默认落地页)
 │   │   ├── ActiveRecordingBanner.tsx       # 活跃录制状态卡: 实时帧计数、A-01 存量长连接重连告警、一键停录与【实时跟流调试】
-│   │   ├── RecordingStartModal.tsx         # 发起协同录制弹窗: 公私域作用域、进程勾选(租约占用置灰提示)与双阈值配置
+│   │   ├── RecordingStartDrawer.tsx        # 发起协同录制抽屉(680px Drawer): 卡片式作用域、Agent 在线/租约防呆与预挂就绪分组进程树
 │   │   └── RecordingSessionTable.tsx       # 录制素材分页台账表: 展示进程/帧数/归属，内置 [去调试] [发起重放] [架构验证] [发布共享] [删除]
 │   ├── TrafficDebugWorkbenchPage/          # 2. [流量作业] 流量调试工作台 (/debug - 兼容 /traffic 重定向)
 │   │   ├── DebugSessionContextBar.tsx      # 调试上下文顶栏: 录制批次切换、活跃批次脉冲提示与 SSE 实时跟流暂停/继续控制
@@ -302,9 +304,11 @@ src/
 │   │   └── ReplayReportDrawer/             # 双层回归 Diff 报告抽屉 (HeaderAssertionCard + ProtoFieldDiffTable + MockHitMissTimeline)
 │   ├── TopologyWorkbenchPage/              # 4. [架构与契约] 架构拓扑工作台 (/topology - 全屏独立画布)
 │   │   └── TopologyWorkbenchPage.tsx       # 零外层胶囊 Tab，全视口高度承载逻辑/物理复合拓扑画布与录制批次一致性比对叠加层
-│   ├── ArchitectureWorkbenchPage/          # 5. [架构与契约] 架构元素工作台 (/architecture - 纯逻辑架构台账瘦身)
-│   │   ├── SubsystemGroupTreePanel.tsx     # 纯逻辑架构树: 子系统 ➔ 8级功能组 ➔ 功能模块叶子定位与跨层搜索
-│   │   └── ModuleContractDetailPane.tsx    # 模块元数据、进程装载血缘(深链跳 /agents)与 PROVIDE/DEPEND 双表(深链跳 /schemas)
+│   ├── ArchitectureWorkbenchPage/          # 5. [架构与契约] 架构元素工作台 (/architecture - 左树顶部 [逻辑架构 | 物理进程] 双视图 SSOT)
+│   │   ├── SubsystemGroupTreePanel.tsx     # [逻辑架构 ?tree=logical]: 子系统 ➔ 8级功能组 ➔ 功能模块叶子定位与跨层搜索
+│   │   ├── ModuleContractDetailPane.tsx    # 模块元数据、归属标准架构进程(跳 ?tree=physical)、挂载血缘(跳 /agents)与 PROVIDE/DEPEND 双表(跳 /schemas)
+│   │   ├── ArchProcessTreePanel.tsx        # [物理进程 ?tree=physical]: 标准进程组 (ArchProcessGroup) ➔ 标准业务进程 (ArchProcess) 树与搜索/CRUD
+│   │   └── ArchProcessDetailPane.tsx       # 标准架构进程详情: 默认端口(含0纯客户端)/启动特征、组装承载的 FM 模块、汇总服务契约与宿主机挂载就绪血缘
 │   ├── ProtoSchemaWorkbenchPage/           # 6. [架构与契约] Proto 契约工作台 (/schemas)
 │   │   ├── SchemaUploadModal.tsx           # .pb 上传弹窗（<=4MB 预检、版本备注、自动激活开关）
 │   │   ├── SchemaVersionList.tsx           # 描述集资产制品列表（原文件下载导出、包含 Proto 文件透视、架构认领血缘概览）
@@ -313,10 +317,11 @@ src/
 │   │   ├── OperationDocDrawer.tsx          # 契约详情与消息体参数定义抽屉 (双栏/Tab 切换查看 Req/Rsp Message)
 │   │   ├── MessageSchemaInspectorTree.tsx  # 消息体参数定义字典树组件 (多层递归展开、Tag、类型高亮、注释透视)
 │   │   └── DiffIgnoreFieldToggle.tsx       # 字段级 Diff 忽略复选框与路径自动生成控制器
-│   ├── AgentManagementPage/                # 7. [环境与治理] Agent 与进程工作台 (/agents - 物理进程唯一收口处)
+│   ├── AgentManagementPage/                # 7. [环境与治理] Agent 与进程工作台 (/agents - 1:1 架构进程挂载、本地覆盖与预挂就绪看板)
 │   │   ├── AgentScopeTabs.tsx              # 切换「团队公共 Agent (SHARED)」与「我的私有 Agent (PRIVATE)」
 │   │   ├── AgentLeaseStatusBadge.tsx       # 实时展示空闲 / 录制占用 / 重放占用，管理员支持强制解锁
-│   │   └── ProcessModuleBinderModal.tsx    # 宿主机进程在线探查、所属进程组(group_name 下拉与快捷新建)、端口(含0纯客户端)与公共模块挂载
+│   │   ├── AgentMountedProcessTree.tsx     # 右栏分组进程挂载与就绪树台账: 四色探针就绪灯、[本地已覆盖] 标记、组级/整机暂停恢复与 [前往发起录制 ->]
+│   │   └── AgentProcessMountDrawer.tsx     # 挂载架构进程抽屉(680px Drawer): 架构进程树 1:1 勾选、⚡自动扫描宿主机匹配、内联本地覆盖与跳回 /architecture 引导
 │   └── AdminSettingsPage.tsx               # 8. [环境与治理] 模块参数配置 (/admin/settings - adminOnly)
 ```
 
@@ -490,22 +495,93 @@ export interface ServiceContractGroupDTO {
 }
 ```
 
-### 4.5 跨工作台流转动线与单包快速重放调试交互契约 (`F-15.1`~`F-15.3`)
+### 4.5 架构物理进程蓝图、Agent `1:1` 挂载就绪与跨工作台流转契约 (`F-15.1`~`F-15.5`, `ADR-09`)
 
-1. **「录制 ➔ 调试 ➔ 重放 / 架构验证」高频作业闭环动线**：
-   - **从 `流量录制` (`/record`) 出发**：
-     - 活跃录制进行中时，点击顶部状态卡【实时跟流调试】$\rightarrow$ 跳转 `/debug?session_id=<id>&live=1`，自动开启 SSE `traffic.persisted` 实时订阅；
-     - 在录制素材台账表任一行点击 `[去调试]` $\rightarrow$ 跳转 `/debug?session_id=<id>`；
-     - 点击 `[发起重放]` $\rightarrow$ 跳转 `/replay?session_id=<id>&auto_create=1`，`ReplayWorkbenchPage` 自动唤起 `ReplayTaskCreatorModal` 并预选该来源批次；
-     - 点击 `[架构验证]` $\rightarrow$ 跳转 `/topology?session_id=<id>`，`TopologyWorkbenchPage` 自动叠加该批次的六分类架构一致性报告。
-   - **在 `流量调试` (`/debug`) 执行单包快速重放调试 (`SinglePacketReplayDrawer`)**：
-     - **触发条件**：仅当 `record.direction === 'INGRESS'` 且 `record.is_replayable === true` 时，在表格操作列与 `PacketAnatomyDrawer` 顶栏激活【单包重放调试】按钮；
-     - **同构进程智能匹配**：根据该报文命中的目标模块 `dst_module_id`（或源进程挂载的公共模块集合），从当前用户可见的 `Process` 列表中自动筛选承载相同模块且监听端口 `> 0` 的同构目标进程（优先推荐本人在线空闲的 `PRIVATE` Agent 进程，亦支持空闲 `SHARED` Agent 进程），支持用户可选填写本次临时 `extra_ignore_paths`；
-     - **零新协议原地闭环**：点击【立即发包调试】直接调用既有 `POST /api/replay-tasks`（传入 `selected_record_ids: [record.id]`，`name: "单包调试_" + service + "_" + operation + "_" + sno`），随后通过 SSE `replay.completed` 事件（及轻量 `GET /api/replay-tasks/:id` 兜底轮询）等待单条执行完毕，立即在同一抽屉内复用 `HeaderAssertionCard`、`ProtoFieldDiffTable` 与 `MockHitMissTimeline` 渲染 Expected vs Actual 对比结果，并提供「跳转至重放任务台账查看完整报告」深链。
+#### (1) 架构物理进程蓝图与 Agent 挂载就绪 TypeScript DTO 契约（零 `any`）
+```typescript
+// frontend/src/types/arch.ts & frontend/src/types/agent.ts
 
-2. **「架构拓扑 $\leftrightarrow$ 架构元素 $\leftrightarrow$ Proto 契约 $\leftrightarrow$ Agent 与进程」静态基线双向血缘深链**：
-   - `架构元素` (`/architecture`) 模块详情中：点击任一 `PROVIDE` / `DEPEND` 服务契约的【查看 Proto 契约】$\rightarrow$ 跳转 `/schemas?active_only=true&search=<service_name>`（自动穿透展开该服务的方法子表）；点击进程装载信息 $\rightarrow$ 跳转 `/agents?scope=<scope>&agent_id=<agent_id>&process_id=<process_id>`；
-   - `Proto 契约` (`/schemas`) 服务聚合行中：点击已认领模块徽章 $\rightarrow$ 跳转 `/architecture?subsystem_id=<sid>&group_id=<gid>&module_id=<mid>` 精准展开并选中该模块叶子节点。
+export type ProbeDesiredState = 'ARMED' | 'DISARMED';
+
+export type ProbeReadinessStatus =
+  | 'READY'          // 🟢 eBPF 已预挂 + PID 已定位 + 存量直连连接数 == 0 (随时 0ms 零重启开录)
+  | 'NEED_RECONNECT' // 🟡 eBPF 已预挂 + PID 已定位 + 存在预挂前存量直连 (空闲期重连一次即可永久就绪)
+  | 'WAITING_PROC'   // 🔵 eBPF 已预挂 + sched_process_exec 待命等待目标进程启动
+  | 'MONITORING'     // 🟣 当前正处于活跃录制/重放采集中
+  | 'CAP_DENIED'     // 🔴 Agent 缺少 CAP_BPF / CAP_NET_ADMIN 权限
+  | 'ERROR'          // 🔴 探针挂载或规则同步异常
+  | 'DISARMED';      // ⚪ 用户手动暂停探针或 Agent 离线
+
+export interface ArchProcessGroupDTO {
+  id: number;
+  code: string;
+  name: string;
+  sort_order: number;
+  description: string;
+  processes?: ArchProcessDTO[];
+}
+
+export interface ArchProcessDTO {
+  id: number;
+  group_id: number;
+  group?: ArchProcessGroupDTO;
+  code: string;                        // 全局唯一标准进程编码，如 "sut-order"
+  name: string;                        // 展示名称，如 "订单核心服务进程"
+  default_listen_port: number;         // 0..65535 (0 表示纯客户端无监听端口)
+  default_cmd_pattern: string;         // 默认 /proc/<pid>/cmdline 匹配特征
+  default_extra_downstreams: string[]; // 默认补充下游 ["IP:Port"]
+  sort_order: number;
+  description: string;
+  modules?: ArchModuleSummaryDTO[];    // 架构层唯一组装承载的 FM 功能模块集合 (1:N)
+  mount_count?: number;                // 已被宿主机 Agent 挂载的实例数
+}
+
+export interface AgentProcessMountDTO {
+  id: number;                          // traefik_processes.id
+  agent_id: number;
+  arch_process_id: number;             // UNIQUE(agent_id, arch_process_id) 单机严格 1:1
+  arch_process?: ArchProcessDTO;
+  // 有效继承值（方便三工作台分组进程树统一渲染）
+  group_id: number;
+  group_name: string;
+  code: string;
+  name: string;
+  listen_port: number;                 // EffectiveListenPort = override_listen_port ?? default_listen_port
+  cmd_pattern: string;                 // EffectiveCmdPattern = override_cmd_pattern || default_cmd_pattern
+  // 本地覆盖配置（为空/null 表示完全继承架构蓝图默认基线）
+  has_override: boolean;
+  override_listen_port: number | null;
+  override_cmd_pattern: string;
+  advertise_ip: string;
+  extra_downstreams: string[];
+  description: string;
+  // eBPF 默认自动预挂与实时就绪诊断快照
+  probe_desired_state: ProbeDesiredState;
+  probe_status: ProbeReadinessStatus;
+  resolved_pid: number;
+  established_conns: number;
+  need_reconnect: boolean;
+  diag_message: string;
+  last_diag_at?: string;
+}
+```
+
+#### (2) 「架构进程定义 ➔ Agent 挂载与自动预挂就绪 ➔ 秒级零重启录制」三台同构树动线
+- **`架构元素` (`/architecture?tree=physical`) 定义蓝图**：左栏顶部分段开关切换 `[逻辑架构 | 物理进程]`；在 `物理进程` 树中由 `traefik_admin` 统一维护 `ArchProcessGroup ➔ ArchProcess`、默认端口/启动特征及 `FM` 模块组装；点击任一组装模块可切回 `?tree=logical&module_id=M`，点击服务契约跳 `/schemas?active_only=true&search=<service_name>`，点击下方宿主机挂载血缘跳 `/agents?scope=<scope>&agent_id=<aid>&process_id=<pid>`；
+- **`Agent 与进程` (`/agents`) `1:1` 挂载与预挂就绪**：
+  - 右栏以同构的 **`ArchProcessGroup ➔ 挂载进程` 分组就绪树 (`AgentMountedProcessTree`)** 取代旧平铺表，实时展示四色探针就绪灯、`[本地已覆盖]` 标记与按进程/组/整机 `暂停探针 / 恢复预挂`；
+  - 点击 `[+ 挂载架构进程]` 滑出 **`AgentProcessMountDrawer` (`680px` Drawer)**：呈现完整架构进程树复选框，点击顶部 **`[⚡ 自动扫描宿主机进程并匹配架构树]`** 调用 `/proc` 探查自动匹配点亮 `✨ 本机已探测 (PID · :Port)` 并一键勾选，节点内联支持折叠展开 `⚙ 本地覆盖配置`；若架构树中缺少所需进程，底部横幅直接深链引导至 `/architecture?tree=physical`；保存后在线 Agent 自动触发 `/agent/v1/monitors/arm` 预挂待命；
+  - 就绪后点击右栏顶部的 **`[前往发起录制 ->]`** 一键跳转 `/record?auto_start=1&agent_id=<id>` 自动滑出录制抽屉并预选该 Agent；
+- **`流量录制` (`/record`) `RecordingStartDrawer` 秒级零重启录制**：复用同一棵分组进程树，实时回显各挂载进程的预挂就绪徽章并自动预勾选已就绪进程；全部 `🟢 READY` 时点击启动即 **0ms 零重启开启采集闸门**。
+
+#### (3) 「录制 ➔ 调试 ➔ 重放 / 架构验证」高频作业闭环动线
+- **从 `流量录制` (`/record`) 出发**：
+  - 活跃录制进行中时，点击顶部状态卡【实时跟流调试】$\rightarrow$ 跳转 `/debug?session_id=<id>&live=1`，自动开启 SSE `traffic.persisted` 实时订阅；
+  - 在录制素材台账表任一行点击 `[去调试]` $\rightarrow$ 跳转 `/debug?session_id=<id>`；点击 `[发起重放]` $\rightarrow$ 跳转 `/replay?session_id=<id>&auto_create=1` 自动唤起 `ReplayTaskCreatorModal`；点击 `[架构验证]` $\rightarrow$ 跳转 `/topology?session_id=<id>` 自动叠加六分类架构一致性报告。
+- **在 `流量调试` (`/debug`) 执行单包快速重放调试 (`SinglePacketReplayDrawer`)**：
+  - **触发条件**：仅当 `record.direction === 'INGRESS'` 且 `record.is_replayable === true` 时，在表格操作列与 `PacketAnatomyDrawer` 顶栏激活【单包重放调试】按钮；
+  - **同构进程智能匹配**：根据该报文来源进程的 `arch_process_id` 或目标模块 `dst_module_id`，从当前用户可见的 `Process` 挂载列表中自动筛选挂载相同 `ArchProcess`（或承载相同公共模块）且有效 `listen_port > 0` 的同构目标进程（优先推荐本人在线空闲 `PRIVATE` Agent 进程，亦支持空闲 `SHARED` Agent 进程）；
+  - **零新协议原地闭环**：直接复用 `POST /api/replay-tasks`（`selected_record_ids: [record.id]`），执行完毕后在同一抽屉内原地渲染 `HeaderAssertionCard`、`ProtoFieldDiffTable` 与 `MockHitMissTimeline`。
 
 ---
 
@@ -518,12 +594,12 @@ export interface ServiceContractGroupDTO {
 | 业务资源与操作动作 | 免密访客 | 普通认证用户 (JWT) | 模块管理员 (`traefik_admin` / `super_admin`) |
 | :--- | :---: | :---: | :---: |
 | 健康检查 (`/api/health`) 与认证配置 (`/api/auth/*`) | 允许 | 允许 | 允许 |
-| 查看公共三级架构元素、模块契约、静态拓扑与 `.pb` 映射列表 | `401` | **允许** | **允许** |
-| 新增 / 修改 / 移动 / 删除公共架构元素、`.pb` 描述集管理 | `401` | `403` | **允许** |
-| 查看公共 `SHARED` Agent 及实时租约状态；创建并全权管理**本人 `PRIVATE` Agent** 与名下进程（挂载公共模块） | `401` | **允许**（访问他人 `PRIVATE` Agent 返 `403`） | **允许**（全团队 `SHARED` 与各用户 `PRIVATE` Agent 均可见；负责创建/管理 `SHARED` 及强制释放异常租约） |
+| 查看公共三级逻辑架构、**物理进程蓝图 (`ArchProcessGroup / ArchProcess`)**、模块契约、静态拓扑与 `.pb` 映射 | `401` | **允许** | **允许** |
+| 新增 / 修改 / 移动 / 删除公共逻辑架构元素、**物理进程组与标准架构进程蓝图**、`.pb` 描述集管理 | `401` | `403` | **允许** |
+| 查看公共 `SHARED` Agent、挂载进程就绪灯态并刷新就绪诊断；创建并全权管理**本人 `PRIVATE` Agent**（`1:1` 勾选挂载架构进程、本地覆盖、预挂/暂停探针） | `401` | **允许**（访问或开关他人 `PRIVATE` Agent 探针返 `403`；修改 `SHARED` Agent 挂载配置返 `403`） | **允许**（全团队 `SHARED` 与各用户 `PRIVATE` Agent 均可见；负责管理 `SHARED` Agent 挂载/探针及强制释放异常租约） |
 | 租用空闲的 `SHARED` Agent 或本人的 `PRIVATE` Agent **启动/停止录制** | `401` | **允许**（若目标 Agent 已被占用返 `409 Conflict`） | **允许**（同样遵守动态排他租约 `409` 互斥） |
 | 查看 `SHARED` 录制素材及**本人的 `PRIVATE` 录制素材**；将本人 `PRIVATE` 素材发布为 `SHARED` 或删除本人 `PRIVATE` 素材 | `401` | **允许**（访问或删除他人 `PRIVATE` 素材返 `403`；删除公共 `SHARED` 素材返 `403`） | **允许**（全团队 `SHARED` 与所有用户的 `PRIVATE` 录制素材均可见与审计；可治理并删除无引用的素材） |
-| **跨 Agent 同构离线重放**：选用有权限的 `SHARED` 或本人 `PRIVATE` 素材，投递至空闲 `SHARED` 或本人 `PRIVATE` Agent 的同模块进程 | `401` | **允许**（支持投递至本人私有或空闲共享环境，模块不匹配返 `400`，Agent 被占用返 `409`） | **允许**（具备跨公私域同构调度与故障恢复特权） |
+| **跨 Agent 同构离线重放**：选用有权限的 `SHARED` 或本人 `PRIVATE` 素材，投递至空闲 `SHARED` 或本人 `PRIVATE` Agent 的同构挂载进程 | `401` | **允许**（支持投递至本人私有或空闲共享环境，架构进程/模块不匹配返 `400`，Agent 被占用返 `409`） | **允许**（具备跨公私域同构调度与故障恢复特权） |
 | 修改模块全局治理参数 (`/api/admin/settings`) | `401` | `403` | **允许** |
 
 ### 5.2 `commonAudit` 字段级 Diff 与操作事件审计埋点字典
@@ -532,9 +608,9 @@ export interface ServiceContractGroupDTO {
 
 | 审计子模块 (`module`) | 动作标识 (`action`) | 风险等级 | `before` / `after` 快照策略与必含上下文 |
 | :--- | :--- | :---: | :--- |
-| `traefik_arch` | `create` / `update` / `move` / `delete` | `P1` (删除) / `P2` | 传入变更前后的 `Subsystem` / `FunctionalGroup` / `Module` / `ModuleInterface` 结构体快照 |
-| `traefik_agent` | `create` / `update` / `delete` / `force_unlock_lease` | `P1` | 传入 `Agent`（含 `scope`、`owner_id`、`endpoint`）或 `Process`（含 `listen_port`、`module_ids`）快照；管理员强制解锁记录原持锁人及原因 |
-| `traefik_schema` | `upload` / `activate` / `delete` | `P1` | 记录描述集 `name`、`version`、`file_sha256` 及 `is_active` 切换前后版本对比（剔除大体积 `descriptor_bytes` 二进制字段避免膨胀审计表） |
+| `traefik_arch` | `create` / `update` / `move` / `delete` | `P1` (删除) / `P2` | 传入变更前后的 `Subsystem` / `FunctionalGroup` / `Module` / `ModuleService` / `ModuleDependency` / `ArchProcessGroup` / `ArchProcess` 结构体快照 |
+| `traefik_agent` | `create` / `update` / `delete` / `sync_mounts` / `toggle_probe` / `force_unlock_lease` | `P1` | 传入 `Agent`（含 `scope`、`owner_id`、`endpoint`）或 `Process` 挂载实例（含 `arch_process_id`、`override_listen_port`、`override_cmd_pattern`、`probe_desired_state`）快照；管理员强制解锁记录原持锁人及原因 |
+| `traefik_schema` | `upload` / `activate` / `delete` / `update_op_ignores` | `P1` | 记录描述集 `name`、`version`、`file_sha256`、`is_active` 切换前后版本对比及方法级 `diff_ignore_paths` 变更（剔除大体积 `descriptor_bytes` 二进制字段） |
 | `traefik_record` | `start_session` / `stop_session` / `publish_session` / `delete_session` | `P1` | 操作事件审计：记录操作人、`session_no`、`scope`（`SHARED`/`PRIVATE`）、加锁的 `agent_id` 与 `process_id` 列表、停止原因 |
 | `traefik_replay` | `execute_replay` / `cancel_replay` | `P2` | 操作事件审计：记录操作人、`task_no`、来源 `(session_id, source_process_id)`、目标 `(agent_id, target_process_id)` 与 `extra_ignore_paths` |
 | `traefik_system` | `retention_cleanup` | `P2` | 后台定时任务直接调用 `commonAudit.Push` 记录清理过期批次数量与释放流量行数 |

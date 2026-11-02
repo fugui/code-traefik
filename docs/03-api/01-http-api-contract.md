@@ -1,11 +1,11 @@
 # 业务流量监控与重放 (`code-traefik`) HTTP / SSE 与主从通信接口契约规范
 
 - **文档编号**：`01-http-api-contract.md`
-- **文档版本**：v1.1.0
-- **更新日期**：2026-11-01
+- **文档版本**：v1.2.0
+- **更新日期**：2026-11-02
 - **归属阶段**：阶段三：接口与数据契约冻结 (`03-api`)
 - **状态**：已冻结 (Frozen)
-- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (`F-01`~`F-16`、`SC-01`~`SC-08`)、[`01-system-architecture.md`](../02-design/01-system-architecture.md)、[`04-control-plane-and-web-console.md`](../02-design/04-control-plane-and-web-console.md)、[`05-database-schema.md`](../02-design/05-database-schema.md)
+- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.9.0, `F-01`~`F-16`、`SC-01`~`SC-08`)、[`01-system-architecture.md`](../02-design/01-system-architecture.md)、[`04-control-plane-and-web-console.md`](../02-design/04-control-plane-and-web-console.md)、[`05-database-schema.md`](../02-design/05-database-schema.md)、[`09-arch-process-ssot-and-ebpf-premount-standby-adr.md`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md) (ADR-09)
 
 ---
 
@@ -79,9 +79,9 @@
 
 ---
 
-### 2.2 三级架构元素、模块接口契约与静态拓扑域 (`F-01`, `F-02`, `F-04`, `SC-02`)
+### 2.2 三级逻辑架构、架构物理进程蓝图、模块服务契约与静态拓扑域 (`F-01`, `F-02`, `F-04`, `SC-02`)
 
-> 实体结构与树形算法参见 [`03-architecture-elements-and-topology.md` §1~§4](../02-design/03-architecture-elements-and-topology.md) 及 [`05-database-schema.md` §3.1~§3.2](../02-design/05-database-schema.md)。
+> 实体结构、树形算法与两层正交物理建模参见 [`03-architecture-elements-and-topology.md` §1~§4](../02-design/03-architecture-elements-and-topology.md) 及 [`05-database-schema.md` §3.1~§3.3](../02-design/05-database-schema.md)。
 
 | 方法 | 路由路径 | 守卫要求 | Query / Body 核心参数 | 响应 JSON 结构与状态码 | `AuditAction` (`module:action`) |
 | :---: | :--- | :---: | :--- | :--- | :--- |
@@ -94,21 +94,31 @@
 | `PUT` | `/api/arch/functional-groups/:id` | `AdminOnly` | Body: `{code?, name, sort_order?, description?}` | `200`: `FunctionalGroup`<br>`400/403/404`；`409`: 同子系统内 `code` 冲突 | `traefik_arch:update` |
 | `PATCH` | `/api/arch/functional-groups/:id/move` | `AdminOnly` | Body: `{new_parent_id: uint64 \| null, sort_order?: int}`（执行 `MoveFunctionalGroup` 咨询锁级联更新） | `200`: `{"group":FunctionalGroup,"updated_descendants":int}`<br>`400`: 移至自身、移至子孙成环、跨子系统或子树总深 `> 8`；`403/404` | `traefik_arch:move` |
 | `DELETE` | `/api/arch/functional-groups/:id` | `AdminOnly` | Path: `id` | `200`: `{"message":"功能组已删除"}`<br>`403/404`；`409`: 存在子功能组或挂载模块禁止删除 | `traefik_arch:delete` |
-| `GET` | `/api/arch/modules` | `JWT` | Query: `subsystem_id?, group_id?, include_descendants?, process_id?, search?, page?, page_size?` | `200`: 标准分页 `items: []Module`（含 `group`, `subsystem`, 公共基线 `process` 及接口计数） | - |
-| `GET` | `/api/arch/modules/:id` | `JWT` | Path: `id` | `200`: `{module: Module, services: []ModuleService, dependencies: []ModuleDependency}`<br>`404`: 模块不存在（含完整装载进程 `process` 及其 `agent` 节点信息） | - |
-| `POST` | `/api/arch/modules` | `AdminOnly` | Body: `{group_id, code, name, owner_id?, process_id?, description?}`（冗余写入所属 `subsystem_id`） | `201`: `Module`<br>`400`: 格式非法或绑定私有进程为公共基线；`403/404`；`409`: `code` 全局重复 | `traefik_arch:create` |
-| `PUT` | `/api/arch/modules/:id` | `AdminOnly` | Body: `{group_id, code?, name, owner_id?, process_id?, description?}` | `200`: `Module`<br>`400/403/404`；`409`: `code` 冲突 | `traefik_arch:update` |
-| `POST` | `/api/arch/modules/:id/process-binding` | `AdminOnly` | Body: `{process_id: uint64 \| null}` | `200`: `Module` (绑定或解绑公共基线进程，同步更新 `traefik_process_modules`)<br>`400/403/404` | `traefik_arch:update` |
-| `DELETE` | `/api/arch/modules/:id` | `AdminOnly` | Path: `id` | `200`: `{"message":"功能模块已删除"}`<br>`403/404`；`409`: 存在被其他 FM 依赖的服务或仍被进程挂载 | `traefik_arch:delete` |
+| `GET` | `/api/arch/modules` | `JWT` | Query: `subsystem_id?, group_id?, include_descendants?, arch_process_id?, unassigned_only?, search?, page?, page_size?` | `200`: 标准分页 `items: []Module`（含 `group`, `subsystem`, 归属标准架构进程 `arch_process` 及接口计数） | - |
+| `GET` | `/api/arch/modules/:id` | `JWT` | Path: `id` | `200`: `{module: Module, services: []ModuleService, dependencies: []ModuleDependency, agent_mounts: []ProcessMountSummary}`（`agent_mounts` 按 `ScopeReadGuard` 过滤可见挂载实例）<br>`404`: 模块不存在 | - |
+| `POST` | `/api/arch/modules` | `AdminOnly` | Body: `{group_id, code, name, owner_id?, arch_process_id?, description?}`（冗余写入所属 `subsystem_id`） | `201`: `Module`<br>`400`: 格式非法；`403/404`；`409`: `code` 全局重复 | `traefik_arch:create` |
+| `PUT` | `/api/arch/modules/:id` | `AdminOnly` | Body: `{group_id, code?, name, owner_id?, arch_process_id?, description?}` | `200`: `Module`<br>`400/403/404`；`409`: `code` 冲突 | `traefik_arch:update` |
+| `POST` | `/api/arch/modules/:id/process-binding` | `AdminOnly` | Body: `{arch_process_id: uint64 \| null}` | `200`: `Module` (绑定或解绑所属标准架构进程蓝图 `ArchProcess`)<br>`400/403/404` | `traefik_arch:update` |
+| `DELETE` | `/api/arch/modules/:id` | `AdminOnly` | Path: `id` | `200`: `{"message":"功能模块已删除"}`<br>`403/404`；`409`: 存在被其他 FM 依赖的服务或仍装载于 `ArchProcess` | `traefik_arch:delete` |
+| `GET` | `/api/arch/process-groups` | `JWT` | Query: `search?` | `200`: `{"items": []ArchProcessGroup}`（按 `sort_order, id` 排序，含 `process_count`） | - |
+| `POST` | `/api/arch/process-groups` | `AdminOnly` | Body: `{code, name, sort_order?, description?}`（`code` 自动转大写，`^[A-Z0-9_-]{2,64}$`） | `201`: `ArchProcessGroup`<br>`400`: 格式非法；`403`: 非管理员；`409`: `code` 或 `name` 重复 | `traefik_arch:create` |
+| `PUT` | `/api/arch/process-groups/:id` | `AdminOnly` | Body: `{code?, name, sort_order?, description?}` | `200`: `ArchProcessGroup`<br>`400/403/404`；`409`: `code` 或 `name` 冲突 | `traefik_arch:update` |
+| `DELETE` | `/api/arch/process-groups/:id` | `AdminOnly` | Path: `id` | `200`: `{"message":"物理进程组已删除"}`<br>`403/404`；`409`: 组下仍存在标准架构进程禁止删除 | `traefik_arch:delete` |
+| `GET` | `/api/arch/processes/tree` | `JWT` | Query: `search?` | `200`: `{"tree": []ArchProcessGroupDTO}`（完整 `ArchProcessGroup -> ArchProcess -> Modules` 树及挂载计数，供 `/architecture?tree=physical` 与 `AgentProcessMountDrawer` 单次拉取） | - |
+| `GET` | `/api/arch/processes` | `JWT` | Query: `group_id?, module_id?, search?, page?, page_size?` | `200`: 标准分页 `items: []ArchProcess`（预加载 `group` 与 `modules`） | - |
+| `GET` | `/api/arch/processes/:id` | `JWT` | Path: `id` | `200`: `{arch_process: ArchProcess, modules: []Module, provided_services: []ModuleService, dependencies: []ModuleDependency, agent_mounts: []Process}`（`agent_mounts` 强制经 `ScopeReadGuard` 过滤，普通用户绝不泄露他人 `PRIVATE` Agent 信息）<br>`404`: 不存在 | - |
+| `POST` | `/api/arch/processes` | `AdminOnly` | Body: `{group_id, code, name, default_listen_port, default_cmd_pattern?, default_extra_downstreams?: string[], module_ids?: uint64[], sort_order?, description?}`（`default_listen_port` 范围 `0..65535`，`0` 为纯客户端） | `201`: `ArchProcess`<br>`400`: 端口越界或纯客户端缺少 `default_cmd_pattern`；`403/404`；`409`: `code` 重复或任一 `module_id` 已被分配给其他标准架构进程 (`A-03`) | `traefik_arch:create` |
+| `PUT` | `/api/arch/processes/:id` | `AdminOnly` | Body: `{group_id, code?, name, default_listen_port, default_cmd_pattern?, default_extra_downstreams?: string[], module_ids?: uint64[], sort_order?, description?}` | `200`: `ArchProcess`（事务内同步更新未设置 `override_listen_port` 挂载实例的 `effective_listen_port`，并对空闲在线 Agent 异步刷新 `/monitors/arm` 待命规格）<br>`400/403/404`；`409`: `code`/模块归属冲突，或新默认端口与某已挂载 Agent 同机其他进程端口冲突 | `traefik_arch:update` |
+| `DELETE` | `/api/arch/processes/:id` | `AdminOnly` | Path: `id` | `200`: `{"message":"标准架构进程已删除"}`<br>`403/404`；`409`: 已被任何宿主机 Agent 挂载实例化（`traefik_processes` 存在引用）禁止删除 | `traefik_arch:delete` |
 | `GET` | `/api/arch/modules/:id/services` | `JWT` | Path: `id` | `200`: `{"items": []ModuleService}`（含被依赖下游模块摘要统计）<br>`404`: 模块不存在 | - |
 | `POST` | `/api/arch/modules/:id/services` | `AdminOnly` | Body: `{service_name, diff_ignore_paths?: string[], description?}` | `201`: `ModuleService`<br>`400`: `service_name` 不合法；`403/404`；`409`: `service_name` 已被其他模块声明提供 (A-05) | `traefik_arch:create` |
 | `PUT` | `/api/arch/module-services/:serviceId` | `AdminOnly` | Body: `{diff_ignore_paths: string[], description?}` | `200`: `ModuleService`<br>`400/403/404` | `traefik_arch:update` |
 | `DELETE` | `/api/arch/module-services/:serviceId` | `AdminOnly` | Path: `serviceId` | `200`: `{"message":"供给服务契约已删除"}`<br>`403/404`；`409`: 仍有内部模块依赖此服务 | `traefik_arch:delete` |
-| `GET` | `/api/arch/modules/:id/dependencies` | `JWT` | Path: `id` | `200`: `{"items": []ModuleDependency}`（展开关联提供方 FM 及宿主进程信息）<br>`404`: 模块不存在 | - |
+| `GET` | `/api/arch/modules/:id/dependencies` | `JWT` | Path: `id` | `200`: `{"items": []ModuleDependency}`（展开关联提供方 FM 及标准架构进程信息）<br>`404`: 模块不存在 | - |
 | `POST` | `/api/arch/modules/:id/dependencies` | `AdminOnly` | Body: `{is_external: boolean, service_id?: uint64, external_system?: string, external_service?: string, description?: string}` | `201`: `ModuleDependency`<br>`400`: 自身循环依赖或必填项缺失；`403/404`；`409`: 重复依赖相同服务 | `traefik_arch:create` |
 | `DELETE` | `/api/arch/module-dependencies/:depId` | `AdminOnly` | Path: `depId` | `200`: `{"message":"服务依赖关系已解除"}`<br>`403/404` | `traefik_arch:delete` |
 | `GET` | `/api/arch/services/available` | `JWT` | - | `200`: `{"items": []}`（按子系统与 FM 分组列出全系统已声明的 PROVIDE Service，用于添加依赖弹窗下拉） | - |
-| `GET` | `/api/arch/topology/graph` | `JWT` | Query: `view` (`LOGICAL` \| `PHYSICAL`，默认 `LOGICAL`)，支持请求头 `If-None-Match` | `200`: `TopologyGraphDTO`（全系统分层复合拓扑图，含 `nodes: []GraphNode`, `edges: []GraphEdge`, `model_version: string`（基于规范化 `nodes+edges` 计算的 `SHA-256` 强内容指纹，100% 感知硬删除）；物理视角严格按 `PROCESS_GROUP` -> `PROCESS` 组织并去 Agent 化，响应头携带 `ETag` 与 `Cache-Control: private, no-cache`）<br>`304`: 架构模型未发生变更（空包体，前端由专用 `ETag` 内存缓存客户端命中恢复）<br>`400`: `view` 参数非法 | - |
+| `GET` | `/api/arch/topology/graph` | `JWT` | Query: `view` (`LOGICAL` \| `PHYSICAL`，默认 `LOGICAL`)，支持请求头 `If-None-Match` | `200`: `TopologyGraphDTO`（全系统分层复合拓扑图，含 `nodes: []GraphNode`, `edges: []GraphEdge`, `model_version: string`；物理视角 100% 由 `ArchProcessGroup -> ArchProcess -> Module` 推导并彻底去 Agent 化，无 Agent 注册时亦完整出图，已挂载 `SHARED` Agent 时自动富化端点；携带 `ETag` 与 `Cache-Control: private, no-cache`）<br>`304`: 架构模型未发生变更<br>`400`: `view` 参数非法 | - |
 | `GET` | `/api/arch/topology/static` | `JWT` | *(已废弃/向后兼容)* Query: `view`, `subsystem_id?` | `200`: `{"view":string,"nodes":[],"edges":[]}`（旧版单子系统扁平拓扑，建议迁移至 `/api/arch/topology/graph`） | - |
 
 ---
@@ -131,38 +141,44 @@
 
 ---
 
-### 2.4 公私域 Agent 纳管、排他租约与进程部署域 (`F-02`, `F-06`, `F-08`, `SC-03`)
+### 2.4 公私域 Agent 纳管、排他租约、1:1 架构进程挂载与 eBPF 预挂待命域 (`F-02`, `F-06`, `F-08`, `F-09`, `F-15.5`, `SC-03`)
 
-> 租约状态机、SSRF 防护与 `ClaimCode` 认领机制参见 [`01-system-architecture.md` §3 & §4.1](../02-design/01-system-architecture.md) 及 [`05-database-schema.md` §3.3](../02-design/05-database-schema.md)。
+> 租约状态机、SSRF 防护、`1:1` 架构进程挂载继承以及 eBPF 三态预挂待命（`DISARMED / ARMED / CAPTURING`）机制参见 [`01-system-architecture.md` §3 & §4](../02-design/01-system-architecture.md)、[`03-architecture-elements-and-topology.md` §3](../02-design/03-architecture-elements-and-topology.md) 及 [`05-database-schema.md` §3.4](../02-design/05-database-schema.md)。
 
 | 方法 | 路由路径 | 守卫要求 | Query / Body 核心参数 | 响应 JSON 结构与状态码 | `AuditAction` (`module:action`) |
 | :---: | :--- | :---: | :--- | :--- | :--- |
-| `GET` | `/api/agents` | `ScopeReadGuard` | Query: `scope?` (`SHARED` \| `PRIVATE`), `status?` (`ONLINE` \| `OFFLINE`), `lease_state?` (`IDLE` \| `LEASED`), `search?`, `page?`, `page_size?` | `200`: 标准分页 `items: []Agent`（普通用户仅返回 `SHARED` 与本人 `PRIVATE`；`traefik_admin` 可穿透查看全量） | - |
-| `GET` | `/api/agents/:id` | `ScopeReadGuard` | Path: `id` | `200`: `{agent: Agent, processes: []Process}`<br>`403`: 普通用户访问他人 `PRIVATE` Agent；`404`: 不存在 | - |
+| `GET` | `/api/agents` | `ScopeReadGuard` | Query: `scope?` (`SHARED` \| `PRIVATE`), `status?` (`ONLINE` \| `OFFLINE`), `lease_state?` (`IDLE` \| `LEASED`), `search?`, `page?`, `page_size?` | `200`: 标准分页 `items: []Agent`（含 `armed_digest` 与挂载就绪摘要；普通用户仅返回 `SHARED` 与本人 `PRIVATE`；`traefik_admin` 可穿透查看全量） | - |
+| `GET` | `/api/agents/:id` | `ScopeReadGuard` | Path: `id` | `200`: `{agent: Agent, processes: []Process}`（预加载 `arch_process.group`、`arch_process.modules` 及预挂就绪快照列）<br>`403`: 普通用户访问他人 `PRIVATE` Agent；`404`: 不存在 | - |
 | `POST` | `/api/agents` | `ScopeWriteGuard` | Body: `{name, endpoint, scope: "SHARED"\|"PRIVATE", claim_code?, description?}` | `201`: `Agent`（同步完成首次 `/agent/v1/handshake` 能力与版本校验）<br>`400`: SSRF 拦截（回环/云元数据/非法端口）或主版本 `!= "1.0"`；`403`: 普通用户尝试创建 `SHARED` Agent 或 `PRIVATE` `claim_code` 校验不匹配；`409`: `name` 或 `endpoint` 重复 | `traefik_agent:create` |
 | `PUT` | `/api/agents/:id` | `ScopeWriteGuard` | Body: `{name, endpoint, claim_code?, description?}` | `200`: `Agent`<br>`400/403/404`；`409`: 名称/地址冲突或当前持有活跃租约禁止修改端点 | `traefik_agent:update` |
-| `DELETE` | `/api/agents/:id` | `ScopeWriteGuard` | Path: `id` | `200`: `{"message":"Agent 已移除"}`<br>`403/404`；`409`: 仍纳管 `Process` 或持有活跃租约 (`lease_type != ''`) | `traefik_agent:delete` |
-| `POST` | `/api/agents/:id/handshake` | `ScopeReadGuard` | Path: `id`（立即触发一次探活与双向租约对账） | `200`: `{agent: Agent, handshake: HandshakeResp}`<br>`403/404`；`503`: Agent 离线或连接超时 | - |
-| `GET` | `/api/agents/:id/discover-processes` | `ScopeReadGuard` | Path: `id`（`SHARED` Agent 仅 `AdminOnly` 可调用；`PRIVATE` 仅本人或管理员可调用） | `200`: `{"items": []DiscoveredProcess}`（含 `pid, listen_port, cmdline, exe_name`）<br>`403/404/503` | - |
-| `POST` | `/api/agents/:id/lease/force-unlock` | `AdminOnly` | Path: `id`；Body: `{reason: string}`（强制清空 DB 租约、终止关联未决任务并调用 Agent `/agent/v1/purge`） | `200`: `{"message":"排他租约已强制释放","agent":Agent}`<br>`400`: `reason` 为空；`403`: 非管理员；`404`: 不存在 | `traefik_agent:force_unlock_lease` |
-| `GET` | `/api/processes` | `ScopeReadGuard` | Query: `agent_id?, scope?, module_id?, search?, page?, page_size?` | `200`: 标准分页 `items: []Process`（含 `group_name`，预加载 `agent` 与 `process_modules.module`） | - |
-| `POST` | `/api/processes` | `ScopeWriteGuard` | Body: `{agent_id, group_name?, name, listen_port, advertise_ip?, cmd_pattern, module_ids?: uint64[], extra_downstreams?: string[], description?}`（`listen_port` 允许 `0..65535`，`0` 表示纯客户端无监听端口；`group_name` 缺省为 `"默认进程组"`） | `201`: `Process`（持久化 `traefik_process_modules`；`SHARED` 进程同步维护 `Module.ProcessID`，`PRIVATE` 进程不改写公共基线）<br>`400`: 端口越界或名称格式非法；`403`: 无目标 Agent 写权限；`404`: Agent/Module 不存在；`409`: 同 Agent 下非零 `listen_port`/`name` 重复，或同部署域内同一 `Module` 重复挂载到多个进程 (A-03) | `traefik_agent:create` |
-| `PUT` | `/api/processes/:id` | `ScopeWriteGuard` | Body: `{group_name?, name, listen_port, advertise_ip?, cmd_pattern, module_ids?: uint64[], extra_downstreams?: string[], description?}` | `200`: `Process`<br>`400/403/404`；`409`: 端口/模块挂载冲突，或所属 Agent 处于录制/重放租约中 | `traefik_agent:update` |
-| `DELETE` | `/api/processes/:id` | `ScopeWriteGuard` | Path: `id` | `200`: `{"message":"进程映射已删除"}`<br>`403/404`；`409`: 所属 Agent 持有活跃租约或被 `ReplayTask` 引用 | `traefik_agent:delete` |
+| `DELETE` | `/api/agents/:id` | `ScopeWriteGuard` | Path: `id` | `200`: `{"message":"Agent 已移除"}`<br>`403/404`；`409`: 仍挂载 `Process` 或持有活跃租约 (`lease_type != ''`) | `traefik_agent:delete` |
+| `POST` | `/api/agents/:id/handshake` | `ScopeReadGuard` | Path: `id`（立即触发探活、双向租约对账及 `ArmedDigest` 自动补挂对账） | `200`: `{agent: Agent, handshake: HandshakeResp}`<br>`403/404`；`503`: Agent 离线或连接超时 | - |
+| `GET` | `/api/agents/:id/discover-processes` | `ScopeReadGuard` | Path: `id`（`SHARED` Agent 仅 `AdminOnly` 可调用；`PRIVATE` 仅本人或管理员可调用，供 `AgentProcessMountDrawer` 扫描匹配宿主机 `/proc` 进程） | `200`: `{"items": []DiscoveredProcess}`（含 `pid, listen_port, cmdline, exe_name`）<br>`403/404/503` | - |
+| `PUT` | `/api/agents/:id/process-mounts` | `ScopeWriteGuard` | Path: `id`；Body: `{mounts: [{arch_process_id: uint64, probe_desired_state?: "ARMED"\|"DISARMED", override_listen_port?: uint16\|null, override_cmd_pattern?: string\|null, advertise_ip?: string, extra_downstreams?: string[], description?: string}]}`（批量全量同步该 Agent 的 `1:1` 架构进程挂载清单） | `200`: `{items: []Process, armed_digest: string, diagnostics: []ProcessDiagStatus}`（事务校验 `UNIQUE(agent_id, arch_process_id)`、同机非零 `effective_listen_port` 唯一及 `SHARED` 域同一 `ArchProcess` 单实例规则；当 Agent `ONLINE` 且 `IDLE` 时默认自动下发 `/agent/v1/monitors/arm` 完成预挂待命并回写就绪快照）<br>`400`: 端口越界或列表包含重复 `arch_process_id`；`403`: 无目标 Agent 写权限；`404`: Agent/`ArchProcess` 不存在；`409`: 端口冲突、`SHARED` 域重复挂载、所属 Agent 处于活跃租约中或被移除挂载项仍被 `ReplayTask` 引用 | `traefik_agent:sync_mounts` |
+| `POST` | `/api/agents/:id/probes/diagnose` | `ScopeReadGuard` | Path: `id`（立即向在线 Agent 请求已挂载架构进程的 PID/存量长连接就绪体检，刷新 DB 快照并推送 `agent.probes_updated`） | `200`: `{armed_digest: string, diagnostics: []ProcessDiagStatus}`<br>`403/404`；`503`: Agent 离线 | - |
+| `POST` | `/api/agents/:id/probes/arm-all` | `ScopeWriteGuard` | Path: `id`；Body: `{group_id?: uint64}`（整机或按 `ArchProcessGroup` 批量设为 `ARMED` 并同步 Agent 预挂） | `200`: `{armed_digest: string, diagnostics: []ProcessDiagStatus}`<br>`403/404`；`409`: Agent 当前持有活跃录制/重放租约 | `traefik_agent:toggle_probe` |
+| `POST` | `/api/agents/:id/probes/disarm-all` | `ScopeWriteGuard` | Path: `id`；Body: `{group_id?: uint64}`（整机或按 `ArchProcessGroup` 批量设为 `DISARMED` 手动卸挂） | `200`: `{armed_digest: string, diagnostics: []ProcessDiagStatus}`<br>`403/404`；`409`: Agent 当前持有活跃录制/重放租约 | `traefik_agent:toggle_probe` |
+| `POST` | `/api/agents/:id/lease/force-unlock` | `AdminOnly` | Path: `id`；Body: `{reason: string}`（强制清空 DB 租约、终止关联未决任务并调用 Agent `/agent/v1/purge`；随后下一次心跳将按 `probe_desired_state` 自动恢复 `ARMED` 待命） | `200`: `{"message":"排他租约已强制释放","agent":Agent}`<br>`400`: `reason` 为空；`403`: 非管理员；`404`: 不存在 | `traefik_agent:force_unlock_lease` |
+| `GET` | `/api/processes` | `ScopeReadGuard` | Query: `agent_id?, scope?, arch_process_id?, group_id?, module_id?, probe_status?, search?, page?, page_size?` | `200`: 标准分页 `items: []Process`（预加载 `agent`、`arch_process.group`、`arch_process.modules` 及有效端口/命令/预挂就绪状态） | - |
+| `POST` | `/api/processes` | `ScopeWriteGuard` | Body: `{agent_id, arch_process_id, probe_desired_state?: "ARMED"\|"DISARMED", override_listen_port?: uint16\|null, override_cmd_pattern?: string\|null, advertise_ip?, extra_downstreams?: string[], description?}`（单条挂载架构标准进程；`probe_desired_state` 缺省 `"ARMED"`） | `201`: `Process`（在线空闲 Agent 自动触发 `/agent/v1/monitors/arm` 预挂）<br>`400`: 覆盖端口越界；`403`: 无目标 Agent 写权限；`404`: Agent/`ArchProcess` 不存在；`409`: 该 Agent 已挂载同一 `arch_process_id`（`1:1` 唯一约束）、同机非零 `effective_listen_port` 冲突、`SHARED` 域另一公共 Agent 已挂载该 `arch_process_id`，或所属 Agent 处于活跃租约中 | `traefik_agent:create` |
+| `PUT` | `/api/processes/:id` | `ScopeWriteGuard` | Body: `{override_listen_port?: uint16\|null, override_cmd_pattern?: string\|null, advertise_ip?, extra_downstreams?: string[], description?}`（更新本机差异化覆盖项，传 `null` 恢复继承 `ArchProcess` 默认值） | `200`: `Process`（重算 `effective_listen_port` 并在空闲在线态自动刷新 `/agent/v1/monitors/arm`）<br>`400/403/404`；`409`: 同机非零有效端口冲突或所属 Agent 处于活跃租约中 | `traefik_agent:update` |
+| `POST` | `/api/processes/:id/arm` | `ScopeWriteGuard` | Path: `id`（将单挂载实例设为 `probe_desired_state = "ARMED"` 并同步 Agent 预挂） | `200`: `{process: Process, diagnostic?: ProcessDiagStatus}`<br>`403/404`；`409`: 所属 Agent 持有活跃租约 | `traefik_agent:toggle_probe` |
+| `POST` | `/api/processes/:id/disarm` | `ScopeWriteGuard` | Path: `id`（将单挂载实例设为 `probe_desired_state = "DISARMED"` 并从 Agent 卸挂） | `200`: `{process: Process}`<br>`403/404`；`409`: 所属 Agent 持有活跃租约 | `traefik_agent:toggle_probe` |
+| `DELETE` | `/api/processes/:id` | `ScopeWriteGuard` | Path: `id`（解除该 Agent 对标准架构进程的挂载并同步卸挂探针） | `200`: `{"message":"进程挂载已移除"}`<br>`403/404`；`409`: 所属 Agent 持有活跃租约或被 `ReplayTask` 引用 | `traefik_agent:delete` |
 
 ---
 
-### 2.5 多进程协同录制、架构一致性验证与流量解剖域 (`F-05`, `F-10`, `F-11`, `SC-04`~`SC-06`)
+### 2.5 多进程协同录制、架构一致性验证与流量解剖域 (`F-05`, `F-10`, `F-11`, `F-15.4`, `SC-04`~`SC-06`)
 
-> 录制编排、双模分区归档与四段解剖 DTO 参见 [`03-architecture-elements-and-topology.md` §5](../02-design/03-architecture-elements-and-topology.md) 及 [`04-control-plane-and-web-console.md` §1.2 & §4.3](../02-design/04-control-plane-and-web-console.md)。
+> 录制编排、零重启采集闸门激活、双模分区归档与四段解剖 DTO 参见 [`02-data-plane-and-cros-rpc-engine.md` §2](../02-design/02-data-plane-and-cros-rpc-engine.md)、[`03-architecture-elements-and-topology.md` §5](../02-design/03-architecture-elements-and-topology.md) 及 [`04-control-plane-and-web-console.md` §1.2 & §4.3](../02-design/04-control-plane-and-web-console.md)。
 
 | 方法 | 路由路径 | 守卫要求 | Query / Body 核心参数 | 响应 JSON 结构与状态码 | `AuditAction` (`module:action`) |
 | :---: | :--- | :---: | :--- | :--- | :--- |
-| `GET` | `/api/recording-sessions` | `ScopeReadGuard` | Query: `scope?` (`SHARED` \| `PRIVATE`), `status?`, `process_id?`, `search?`, `page?`, `page_size?` | `200`: 标准分页 `items: []RecordingSession` | - |
+| `GET` | `/api/recording-sessions` | `ScopeReadGuard` | Query: `scope?` (`SHARED` \| `PRIVATE`), `status?`, `process_id?`, `search?`, `page?, page_size?` | `200`: 标准分页 `items: []RecordingSession` | - |
 | `GET` | `/api/recording-sessions/:id` | `ScopeReadGuard` | Path: `id` | `200`: `RecordingSession`（含 `process_diagnostics` 与 `leased_agent_ids`）<br>`403`: 访问他人 `PRIVATE` 批次；`404`: 不存在 | - |
-| `POST` | `/api/recording-sessions` | `JWT` | Body: `{name, scope: "SHARED"\|"PRIVATE", target_process_ids: uint64[], max_duration_sec?: int, max_frames?: int, max_frame_bytes?: int, description?}` | `201`: `RecordingSession`（原子升序锁定涉及的全部 Agent `RECORDING` 租约，下发 `/monitors/sync` 并返回存量连接诊断 `need_reconnect`）<br>`400`: 进程列表为空或 Agent 离线/无 eBPF 权限；`403`: 含他人 `PRIVATE` Agent 进程；`409`: 任一目标 Agent 已被其他任务租用（返回持锁人详情） | `traefik_record:start_session` |
-| `POST` | `/api/recording-sessions/:id/stop` | `ScopeWriteGuard` | Path: `id`（发起人本人或 `traefik_admin` 可调用） | `200`: `RecordingSession`（停止采集、等待 `EVENT_SESSION_DRAINED`、执行离线归属对账并释放全部 Agent 租约）<br>`403/404`；`409`: 批次已处于终态 | `traefik_record:stop_session` |
-| `DELETE` | `/api/recording-sessions/:id/processes/:processId` | `ScopeWriteGuard` | Path: `id, processId`（录制中单独热移除某进程监控，F-08.4） | `200`: `{"message":"进程监控已移除","session":RecordingSession}`<br>`403/404/409` | `traefik_record:stop_session` |
+| `POST` | `/api/recording-sessions` | `JWT` | Body: `{name, scope: "SHARED"\|"PRIVATE", target_process_ids: uint64[], max_duration_sec?: int, max_frames?: int, max_frame_bytes?: int, description?}` | `201`: `RecordingSession`（原子升序锁定涉及的全部 Agent `RECORDING` 排他租约，下发 `/monitors/sync`：对已 `ARMED` 预挂进程执行 `0ms` 零重启热翻牌 `session_id = S` 开启采集闸门，对 `DISARMED` 进程自动即时补挂，并返回最新连接诊断 `need_reconnect`）<br>`400`: 进程列表为空或 Agent 离线/无 eBPF 权限；`403`: 含他人 `PRIVATE` Agent 进程；`409`: 任一目标 Agent 已被其他任务租用（返回持锁人详情） | `traefik_record:start_session` |
+| `POST` | `/api/recording-sessions/:id/stop` | `ScopeWriteGuard` | Path: `id`（发起人本人或 `traefik_admin` 可调用） | `200`: `RecordingSession`（下发 `/monitors/:sessionId/stop` 将 `session_id` 热回退为 `0` 恢复 `ARMED` 纯透传待命且**不断开 `EgressProxy` 长连接**，等待 `EVENT_SESSION_DRAINED`、执行离线归属对账并释放全部 Agent 排他租约）<br>`403/404`；`409`: 批次已处于终态 | `traefik_record:stop_session` |
+| `DELETE` | `/api/recording-sessions/:id/processes/:processId` | `ScopeWriteGuard` | Path: `id, processId`（录制中单独热移除某进程采集，F-08.4） | `200`: `{"message":"进程监控已移除","session":RecordingSession}`<br>`403/404/409` | `traefik_record:stop_session` |
 | `PATCH` | `/api/recording-sessions/:id/publish` | `ScopeWriteGuard` | Path: `id`（将本人合格的 `PRIVATE` 录制批次发布为团队 `SHARED` 素材） | `200`: `RecordingSession`（`scope` 更新为 `"SHARED"`）<br>`400`: 批次未完成；`403/404` | `traefik_record:publish_session` |
 | `DELETE` | `/api/recording-sessions/:id` | `ScopeWriteGuard` | Path: `id`（`PRIVATE` 创建人或管理员可删；`SHARED` 仅管理员可删） | `200`: `{"message":"录制批次已删除"}`<br>`403/404`；`409`: 正在录制中或仍被 `ReplayTask` 引用 | `traefik_record:delete_session` |
 | `GET` | `/api/recording-sessions/:id/consistency-report` | `ScopeReadGuard` | Path: `id`；Query: `refresh?` (`bool`) | `200`: `ConsistencyReportDTO`（含 `VERIFIED / VIOLATION / UNCOVERED / NOT_MONITORED / NOT_OBSERVABLE / UNATTRIBUTED` 六分类统计与边列表，见 [`03-architecture-elements-and-topology.md` §5.3](../02-design/03-architecture-elements-and-topology.md)）<br>`403/404` | - |
@@ -180,9 +196,9 @@
 | :---: | :--- | :---: | :--- | :--- | :--- |
 | `GET` | `/api/replay-tasks` | `ScopeReadGuard` | Query: `session_id?, target_process_id?, agent_id?, lifecycle_state?, result_status?, page?, page_size?` | `200`: 标准分页 `items: []ReplayTask` | - |
 | `GET` | `/api/replay-tasks/:id` | `ScopeReadGuard` | Path: `id` | `200`: `ReplayTask`（含汇总计数与 `mock_events`）<br>`403/404` | - |
-| `POST` | `/api/replay-tasks` | `JWT` | Body: `{name, session_id, source_process_id, target_process_id, selected_record_ids: uint64[], extra_ignore_paths?: string[], timeout_ms?: int}` | `201`: `ReplayTask`（校验素材可见性 + 目标 Agent 权限 + `ValidateReplayProcessCompatibility` 模块同构性 + 锁定目标 Agent `REPLAY` 排他租约并下发二进制重放包）<br>`400`: 目标进程未承载源请求所需公共模块、含不可重放截断帧或 Agent 无特权；`403`: 他人 `PRIVATE` 素材或他人 `PRIVATE` Agent；`404`: 资源不存在；`409`: 目标 Agent 正被其他录制/重放任务占用 | `traefik_replay:execute_replay` |
+| `POST` | `/api/replay-tasks` | `JWT` | Body: `{name, session_id, source_process_id, target_process_id, selected_record_ids: uint64[], extra_ignore_paths?: string[], timeout_ms?: int}` | `201`: `ReplayTask`（校验素材可见性 + 目标 Agent 权限 + `ValidateReplayProcessCompatibility` 基于 `ArchProcess` 的模块同构性 + 锁定目标 Agent `REPLAY` 排他租约并下发二进制重放包）<br>`400`: 目标进程未承载源请求所需公共模块、含不可重放截断帧或 Agent 无特权；`403`: 他人 `PRIVATE` 素材或他人 `PRIVATE` Agent；`404`: 资源不存在；`409`: 目标 Agent 正被其他录制/重放任务占用 | `traefik_replay:execute_replay` |
 | `POST` | `/api/replay-tasks/:id/cancel` | `ScopeWriteGuard` | Path: `id`（任务发起人或 `traefik_admin`） | `200`: `ReplayTask`（调用 Agent `/replays/:taskId/cancel` 并释放 DB 排他租约）<br>`403/404`；`409`: 任务已结束 | `traefik_replay:cancel_replay` |
-| `GET` | `/api/replay-tasks/:id/items` | `ScopeReadGuard` | Path: `id`；Query: `result_status?` (`PASS`\|`FAILED`\|`MOCK_MISS`\|`TIMEOUT`\|`ERROR`), `service_name?`, `operation?`, `page?`, `page_size?` | `200`: 标准分页 `items: []ReplayItem`（独立行存储，含 `field_diffs` 与 `mock_trace`）<br>`403/404` | - |
+| `GET` | `/api/replay-tasks/:id/items` | `ScopeReadGuard` | Path: `id`；Query: `result_status?` (`PASS`\|`FAILED`\|`MOCK_MISS`\|`TIMEOUT`\|`ERROR`), `service_name?`, `operation?`, `page?, page_size?` | `200`: 标准分页 `items: []ReplayItem`（独立行存储，含 `field_diffs` 与 `mock_trace`）<br>`403/404` | - |
 | `GET` | `/api/replay-tasks/:id/items/:itemId` | `ScopeReadGuard` | Path: `id, itemId` | `200`: `{item: ReplayItem, baseline_rsp_anatomy: FrameSideAnatomyDTO, actual_rsp_anatomy?: FrameSideAnatomyDTO}`<br>`403/404` | - |
 | `POST` | `/api/replay-tasks/:id/rediff` | `ScopeWriteGuard` | Path: `id`；Body: `{extra_ignore_paths: string[]}`（基于已保存的 `raw_actual_packet` 离线重算双层 Diff 并更新状态聚合） | `200`: `ReplayTask`<br>`400/403/404` | `traefik_replay:execute_replay` |
 
@@ -198,7 +214,8 @@
   3. `session.lifecycle`：录制批次状态流转、进程 PID 重启热更新（`PROCESS_RESTARTED`）、存量连接诊断或达到时长/帧数上限自动停录（`COMPLETED_BY_LIMIT`）；
   4. `agent.lease_changed`：Agent 在线状态或排他租约变更通知（`{agent_id, status, lease_type, lease_holder_name, lease_expires_at}`）；
   5. `replay.item_done`：单条重放请求执行与断言完成通知（`{task_id, item_id, record_id, result_status, latency_us}`）；
-  6. `replay.completed`：重放任务整包完成汇总（`{task_id, lifecycle_state, result_status, total_requests, passed_requests, mock_hit_count, mock_miss_count}`）。
+  6. `replay.completed`：重放任务整包完成汇总（`{task_id, lifecycle_state, result_status, total_requests, passed_requests, mock_hit_count, mock_miss_count}`）；
+  7. `agent.probes_updated`：Agent 预挂探针就绪快照更新通知（`{agent_id, armed_digest, diagnostics: []ProcessDiagStatus}`，仅向对该 Agent 具备 `ScopeReadGuard` 可见性的订阅客户端广播）。
 
 ---
 
@@ -208,13 +225,15 @@
 
 | 方向 | 协议 / 方法 | Agent 路由路径 | 请求头 / 载荷契约 | 状态码与响应契约 |
 | :---: | :---: | :--- | :--- | :--- |
-| `Server -> Agent` | `GET` | `/agent/v1/handshake` | Header: `X-Claim-Code?` (纳管 `PRIVATE` Agent 时必传), `X-Expected-Lease-Type` (`""\|"RECORDING"\|"REPLAY"`), `X-Expected-Lease-Ref` (`uint64`) | `200`: `HandshakeResp`（若期望租约为 `""` 而本地持锁则触发自洁）<br>`403`: 源 IP 不在白名单或 `X-Claim-Code` 不匹配 |
+| `Server -> Agent` | `GET` | `/agent/v1/handshake` | Header: `X-Claim-Code?` (纳管 `PRIVATE` Agent 时必传), `X-Expected-Lease-Type` (`""\|"RECORDING"\|"REPLAY"`), `X-Expected-Lease-Ref` (`uint64`) | `200`: `HandshakeResp`（含 `BootID, ArmedProcessCount, ArmedDigest`；若期望租约为 `""` 而本地持有孤儿录制/重放租约，则自动关闭活跃采集/重放并回退至 `ARMED` 预挂待命或全量清理）<br>`403`: 源 IP 不在白名单或 `X-Claim-Code` 不匹配 |
 | `Server -> Agent` | `GET` | `/agent/v1/processes/discover` | 无 | `200`: `{"items": []DiscoveredProcess}` |
-| `Server -> Agent` | `PUT` | `/agent/v1/monitors/sync` | Body: `SyncMonitorReq{SessionID, MaxFrameBytes, MaxBufferBytes, Processes: []ProcessMonitorSpec}` | `200`: `{"diagnostics": []ProcessDiagStatus}`<br>`409`: 与 Agent 当前内存 `activeLease` 冲突 (`SingleTenantGuard`)<br>`503`: 缺少 `CAP_BPF` / `CAP_NET_ADMIN` 特权 |
-| `Server -> Agent` | `DELETE` | `/agent/v1/monitors/:sessionId/processes/:processId` | Path: `sessionId, processId` | `200`: `{"removed":true,"remaining_processes":int}`（若剩余为 0 自动卸载探针并释放本地租约） |
-| `Server -> Agent` | `POST` | `/agent/v1/monitors/:sessionId/stop` | Path: `sessionId` | `200`: `StopMonitorResp{CapturedFrames, DroppedFrames, BypassedSelfCount}`（触发异步排空后发 `EVENT_SESSION_DRAINED`） |
-| `Server -> Agent` | `POST` | `/agent/v1/replays/execute` | Body: `ExecuteReplayReq{TaskID, ProcessSpec, TimeoutMs, IngressRequests, EgressMocks, MngMocks}`（纯二进制切片，零 `.pb`） | `200`: `{"status":"ARMED","diagnostics":ProcessDiagStatus}`<br>`409`: 本地租约冲突；`503`: 缺少 eBPF 特权 |
+| `Server -> Agent` | `PUT` | `/agent/v1/monitors/arm` | Body: `ArmStandbyReq{Processes: []ProcessMonitorSpec}`（幂等同步 `session_id = 0` 的 eBPF 预挂待命集合与 `EgressProxy` 纯透传监听，**不占用 `activeLease` 排他租约**） | `200`: `{"armed_digest": string, "diagnostics": []ProcessDiagStatus}`<br>`409`: Agent 当前持有活跃 `RECORDING` 或 `REPLAY` 租约禁止覆盖待命表<br>`503`: 缺少 `CAP_BPF` / `CAP_NET_ADMIN` 特权（自动降级返回 `CAP_DENIED` 诊断） |
+| `Server -> Agent` | `GET` | `/agent/v1/monitors/diagnose` | 无（不改变探针状态，实时复扫已挂载进程的 `/proc` PID 与存量 TCP 长连接重连需求） | `200`: `{"armed_digest": string, "diagnostics": []ProcessDiagStatus}` |
+| `Server -> Agent` | `PUT` | `/agent/v1/monitors/sync` | Body: `SyncMonitorReq{SessionID, MaxFrameBytes, MaxBufferBytes, Processes: []ProcessMonitorSpec}`（锁定本地 `RECORDING` 租约；对已 `ARMED` 进程执行 `0ms` 热翻牌 `session_id = SessionID` 并开启 `EgressProxy` 旁路镜像，对未预挂进程即时补挂） | `200`: `{"diagnostics": []ProcessDiagStatus}`<br>`409`: 与 Agent 当前内存 `activeLease` 冲突 (`SingleTenantGuard`)<br>`503`: 缺少 `CAP_BPF` / `CAP_NET_ADMIN` 特权 |
+| `Server -> Agent` | `DELETE` | `/agent/v1/monitors/:sessionId/processes/:processId` | Path: `sessionId, processId` | `200`: `{"removed":true,"remaining_processes":int}`（将该进程 `session_id` 置回 `0` 退回 `ARMED` 待命；若活跃采集进程剩余为 0 则释放本地 `RECORDING` 租约） |
+| `Server -> Agent` | `POST` | `/agent/v1/monitors/:sessionId/stop` | Path: `sessionId` | `200`: `StopMonitorResp{CapturedFrames, DroppedFrames, BypassedSelfCount}`（将目标进程 `session_id` 置回 `0` 并切换 `EgressProxy.StopCapture` 恢复纯字节透传且**不断开已有业务 TCP 长连接**；排空 WS 缓冲后发 `EVENT_SESSION_DRAINED` 并释放本地 `RECORDING` 租约） |
+| `Server -> Agent` | `POST` | `/agent/v1/replays/execute` | Body: `ExecuteReplayReq{TaskID, ProcessSpec, TimeoutMs, IngressRequests, EgressMocks, MngMocks}`（纯二进制切片，零 `.pb`；临时接管 `connect4` 重放规则并在结束后恢复原 `ARMED` 待命映射） | `200`: `{"status":"ARMED","diagnostics":ProcessDiagStatus}`<br>`409`: 本地租约冲突；`503`: 缺少 eBPF 特权 |
 | `Server -> Agent` | `GET` | `/agent/v1/replays/:taskId/result` | Path: `taskId` | `200`: `ReplayTaskResultResp`；`404`: 任务不存在 |
-| `Server -> Agent` | `POST` | `/agent/v1/replays/:taskId/cancel` | Path: `taskId` | `200`: `{"cancelled":true}`（立即断开注入连接、卸载重定向规则并释放本地租约） |
-| `Server -> Agent` | `POST` | `/agent/v1/purge` | 无（主控启动恢复或管理员强制解锁调用） | `200`: `{"purged":true}`（幂等关闭代理/Mock 端口、`link.Close()` 卸载全部 eBPF 探针、清空 Maps、重置本地租约） |
+| `Server -> Agent` | `POST` | `/agent/v1/replays/:taskId/cancel` | Path: `taskId` | `200`: `{"cancelled":true}`（立即断开注入连接、释放本地 `REPLAY` 租约并恢复原 `ARMED` 预挂待命映射） |
+| `Server -> Agent` | `POST` | `/agent/v1/purge` | 无（主控启动恢复、管理员强制解锁或主控失联 `>= 5m` 自洁调用） | `200`: `{"purged":true}`（幂等关闭全部代理/Mock 端口、`link.Close()` 卸载全部 eBPF 探针、清空 Maps 与 `armedSpecs`、重置本地租约） |
 | `Agent -> Server` | `WS (Binary)` | `/agent/v1/stream` | WebSocket 二进制帧：56B 大端 `EnvelopeHeader` (`Magic=0x4354 "CT"`, `ProtoVer=1`, `EventType=0x01..0x07`) + 变长载荷 | `101 Switching Protocols`（单帧读取上限 `MaxFrameBytes + 56 + 1024`） |

@@ -3,7 +3,7 @@
 - **文档编号**：`07-console-ia-restructuring-and-workflow-workbench-adr.md`
 - **文档版本**：v1.0.0
 - **日期**：2026-11-01
-- **状态**：已采纳 (Accepted)
+- **状态**：已采纳 (Accepted) — *注：决策项 #5（物理进程建模边界）已由 [`ADR-09`](./09-arch-process-ssot-and-ebpf-premount-standby-adr.md) 演进升级为「架构物理进程蓝图 SSOT (`/architecture?tree=physical`) + Agent 1:1 挂载覆盖与默认自动预挂待命 (`/agents`)」*
 - **关联特性**：`F-02`（进程部署映射与模块服务契约依赖）、`F-04`（分层复合架构拓扑与一致性画布）、`F-11`（任务级多进程协同录制）、`F-12`（跨进程同构重放编排）、`F-15`（一体化微前端控制台）、`F-15.1`（录制素材资产台账与跨页流转）、`F-15.2`（独立流量调试台与单包快速重放调试）、`F-15.3`（架构静态基线解耦与物理进程单点收口）
 - **关联设计**：[`docs/02-design/04-control-plane-and-web-console.md` §4](../02-design/04-control-plane-and-web-console.md)、[`docs/03-api/01-http-api-contract.md` §2.4~§2.6](../03-api/01-http-api-contract.md)
 - **关联作战卡**：[`docs/04-tasks/09-m8-console-ia-restructuring-and-debug-workflow.md`](../04-tasks/09-m8-console-ia-restructuring-and-debug-workflow.md) (M8)

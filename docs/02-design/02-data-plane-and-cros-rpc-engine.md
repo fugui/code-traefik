@@ -1,11 +1,11 @@
 # 业务流量监控与重放 (`code-traefik`) 数据面引擎与 CROS RPC 协议栈设计
 
 - **文档编号**：`02-data-plane-and-cros-rpc-engine.md`
-- **文档版本**：v1.2.0
-- **更新日期**：2026-10-29
+- **文档版本**：v1.3.0
+- **更新日期**：2026-11-02
 - **归属阶段**：阶段二：系统架构与数据模型设计 (`02-design`)
-- **状态**：定稿待审 (Ready for Review)
-- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.6.0)、[`01-cros-rpc-protocol-spec.md`](../07-references/01-cros-rpc-protocol-spec.md) (v1.0.0)、[`01-system-architecture.md`](./01-system-architecture.md)
+- **状态**：已冻结 (Frozen)
+- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.9.0)、[`01-cros-rpc-protocol-spec.md`](../07-references/01-cros-rpc-protocol-spec.md) (v1.0.0)、[`01-system-architecture.md`](./01-system-architecture.md)、[`09-arch-process-ssot-and-ebpf-premount-standby-adr.md`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md) (ADR-09)
 
 ---
 
@@ -186,7 +186,7 @@ Agent 在进程内通过 `github.com/cilium/ebpf` 加载预编译的 CO-RE BPF �
 | BPF Map 名称 | Map 类型 | Key 结构 | Value 结构 | 容量上限 | 核心用途 |
 | :--- | :--- | :--- | :--- | :---: | :--- |
 | `agent_cfg_map` | `ARRAY` | `uint32 (0)` | `struct agent_cfg { uint32 agent_pid; uint16 proxy_port; uint16 mock_port; }` | `1` | 存储 Agent 自身 PID（自环豁免）与本地代理/Mock 端口 |
-| `target_pids_map` | `HASH` | `uint32 pid` | `struct target_proc { uint64 session_id; uint64 process_id; uint16 listen_port; uint8 mode; }` | `1024` | `O(1)` 判定当前进程是否为被监控目标进程及监听端口 |
+| `target_pids_map` | `HASH` | `uint32 pid` | `struct target_proc { uint64 session_id; uint64 process_id; uint16 listen_port; uint8 mode; }` | `1024` | `O(1)` 判定目标进程与采集闸门：`session_id == 0` 为 **`ARMED` 预挂待命（零拷贝短路）**，`session_id > 0` 为 **`CAPTURING` 活跃采集** |
 | `active_rw_args_map` | `HASH` | `uint64 tgid_pid` | `struct rw_args { void *buf; int32 fd; uint8 is_read; }` | `16384` | 系统调用 `sys_enter_*` 暂存用户空间缓冲区指针与文件描述符 |
 | `ing_conn_map` | `LRU_HASH` | `struct pid_fd { uint32 pid; int32 fd; }` | `struct conn_tuple { uint32 src_ip; uint32 dst_ip; uint16 src_port; uint16 dst_port; uint32 conn_seq; uint64 stream_off_rx; uint64 stream_off_tx; }` | `65536` | 记录目标进程监听端口 `accept` 的入站连接 FD 四元组与流内累计字节偏移 |
 | `downstream_rules_map` | `HASH` | `struct ds_key { uint64 process_id; uint32 dst_ip; uint16 dst_port; uint16 pad; }` | `struct ds_target { uint16 redirect_port; uint8 is_replay; uint8 pad; }` | `4096` | `O(1)` 匹配目标进程允许重定向的下游 `IP:Port`（录制转代理，重放转 Mock） |
@@ -196,30 +196,30 @@ Agent 在进程内通过 `github.com/cilium/ebpf` 加载预编译的 CO-RE BPF �
 | `connect_observe_ringbuf` | `RINGBUF` | - | `struct conn_observe_event { uint32 pid; uint32 dst_ip; uint16 dst_port; }` | `1 MB` | 内核向用户态投递目标进程发起的未声明出站连接事件（支撑 `VIOLATION` 检测） |
 | `ebpf_stats_map` | `PERCPU_ARRAY` | `uint32 stat_idx` | `uint64 counter` | `8` | 统计 `stat_bypassed_self`、`stat_ringbuf_drops`、`stat_redirected` |
 
-### 2.2 入站被动旁路复制机制 (`INGRESS Passive Copy`)
+### 2.2 入站被动旁路复制机制 (`INGRESS Passive Copy`) 与 `ARMED` 待命 `<20ns` 短路
 
 入站采集**完全不经过用户态代理**，对业务 TCP 链路零修改、零附加网络跳数：
 
-1. **入站连接 FD 建表与存量预热**：
-   - **增量连接**：挂载 `kretprobe/inet_csk_accept` 与 `tracepoint/syscalls/sys_exit_accept4` / `sys_exit_accept`，当 `pid` 命中 `target_pids_map` 且新建立的 IPv4 Socket 本地端口 `skc_num == target_proc.listen_port` 时，将 `(pid, ret_fd) -> conn_tuple` 写入 `ing_conn_map`。
-   - **存量入站连接预热**：下发监控瞬间，Agent 在用户态扫描 `/proc/<pid>/fd` 与 `/proc/<pid>/net/tcp`，将已处于 `ESTABLISHED` 且本地端口等于 `listen_port` 的 `(pid, fd)` 预写入 `ing_conn_map`。
-2. **收发字节旁路复制与暂存关联**：
+1. **入站连接 FD 建表与预挂期存量预热**：
+   - **增量连接**：挂载 `kretprobe/inet_csk_accept` 与 `tracepoint/syscalls/sys_exit_accept4` / `sys_exit_accept`，当 `pid` 命中 `target_pids_map` 且新建立的 IPv4 Socket 本地端口 `skc_num == target_proc.listen_port` 时（无论处于 `ARMED` 待命 `session_id == 0` 还是 `CAPTURING` `session_id > 0`），均将 `(pid, ret_fd) -> conn_tuple` 写入 `ing_conn_map`。
+   - **存量入站连接预热**：执行 `ArmStandby`（或兜底 `SyncMonitor`）瞬间，Agent 在用户态扫描 `/proc/<pid>/fd` 与 `/proc/<pid>/net/tcp`，将已处于 `ESTABLISHED` 且本地端口等于 `listen_port` 的 `(pid, fd)` 预写入 `ing_conn_map`，确保随时开启采集闸门均无需上游重连。
+2. **收发字节旁路复制与 `session_id == 0` 零拷贝短路**：
    - 挂载系统调用跟踪点：`sys_enter/exit_read`、`sys_enter/exit_recvfrom`、`sys_enter/exit_recvmsg`、`sys_enter/exit_readv`（入站请求 `INGRESS REQ`）与 `sys_enter/exit_write`、`sys_enter/exit_sendto`、`sys_enter/exit_sendmsg`、`sys_enter/exit_writev`（入站应答 `INGRESS RSP`）。
-   - **进入钩子 (`sys_enter_*`)**：提取 `tgid_pid = bpf_get_current_pid_tgid()`，快速判定 `pid` 是否在 `target_pids_map` 且 `fd` 在 `ing_conn_map` 中；命中则将缓冲区指针或 `iovec` 结构写入 `active_rw_args_map[tgid_pid]`。
+   - **进入钩子 (`sys_enter_*`) 采集闸门短路**：提取 `tgid_pid = bpf_get_current_pid_tgid()`，查询 `tp = bpf_map_lookup_elem(&target_pids_map, &pid)`；**若 `!tp || tp->session_id == 0`（处于 `ARMED` 预挂待命态），在 `< 20ns` 内立即 `return 0`**（零 `active_rw_args_map` 写入、零 `bpf_probe_read_user`、零 `ing_ringbuf` 拷贝！）；仅当 `tp->session_id > 0` 且 `fd` 命中 `ing_conn_map` 时，才将缓冲区指针或 `iovec` 结构写入 `active_rw_args_map[tgid_pid]`。
    - **退出钩子 (`sys_exit_*`)**：从 `active_rw_args_map` 取出暂存参数并清理条目；若返回值 `ret_bytes > 0`，提取流内累计偏移 `stream_off`（原子加 `ret_bytes`），按最大 `32KB` 块调用 `bpf_probe_read_user` 拷贝数据并写入 `ing_ringbuf`。
 3. **丢包感知与分帧重组 (`Gap-Aware StreamFramer`)**：
    - `struct ing_data_event` 明确包含字段 `uint64 stream_off` 与 `uint32 data_len`；
-   - 用户态 `ebpf.IngressReader` 按 `(pid, conn_seq, stream_dir)` 维护期待接收偏移 `expected_off`；若 `stream_off != expected_off`，表明 ringbuf 满载丢包导致字节断流，分帧器立即标记 `HAS_GAP` 并清空当前半包缓存、重新扫描 `CSE.TCP` 魔术字对齐；该连接当前未完成的往返记录落盘标记 `is_replayable = false`，杜绝内容错乱报文污染重放资产。
-   - 挂载 `sys_enter_close`：连接关闭时从 `ing_conn_map` 删除 `(pid, fd)`，并向用户态发送 `EVENT_CONN_CLOSED`。
+   - 用户态 `ebpf.IngressReader` 按 `(pid, conn_seq, stream_dir)` 维护期待接收偏移 `expected_off`；若 `stream_off != expected_off`（含从 `ARMED` 切换开启 `CAPTURING` 后的首片数据），分帧器自动对齐 `expected_off` 或在发生断流丢包时标记 `HAS_GAP`、清空当前半包缓存并重新扫描 `CSE.TCP` 魔术字对齐；断流连接当前未完成的往返记录落盘标记 `is_replayable = false`，杜绝内容错乱报文污染重放资产。
+   - 挂载 `sys_enter_close`：连接关闭时从 `ing_conn_map` 删除 `(pid, fd)`，若当前 `tp->session_id > 0` 则向用户态发送 `EVENT_CONN_CLOSED`。
 
-### 2.3 出站透明重定向、自环豁免与未声明连接物理检出 (`EGRESS Redirect & Violation Detection`)
+### 2.3 出站透明重定向、待命零解析透传与停录不断连机制 (`EGRESS Redirect & Non-Disruptive Gate`)
 
 ```mermaid
 flowchart LR
     subgraph SameHost["同机双进程互调无死锁链路 (PID_A -> PID_B)"]
         ProcA["目标进程 PID_A (Module_A)"]
         Hook["cgroup/connect4 钩子"]
-        Proxy["Agent 本地出站代理 (agent_pid)"]
+        Proxy["Agent 本地出站代理 (agent_pid)<br/>[ARMED: 纯字节透传 | CAPTURING: 分帧+上报]"]
         ProcB["目标进程 PID_B (:9002 监听)"]
         IngCopy["Ingress RingBuf 旁路复制"]
         ObsRing["Connect 观测 RingBuf"]
@@ -227,10 +227,10 @@ flowchart LR
 
     ProcA -- "1. connect(HostIP:9002)" --> Hook
     Hook -- "2a. 命中 downstream_rules_map 规则 -> 重定向 127.0.0.1:ProxyPort" --> Proxy
-    Hook -- "2b. 未在声明规则内 -> 写入 Connect 观测事件 (VIOLATION 物理铁证)" --> ObsRing
+    Hook -- "2b. 未在声明规则内 (仅 session_id>0) -> 写入 Connect 观测事件" --> ObsRing
     Proxy -- "3. 查 nat_tuple_map 获知原目的 HostIP:9002；以 agent_pid 身份 connect(HostIP:9002)" --> Hook
     Hook -- "4. 识别 pid == agent_pid! stat_bypassed_self++ 原样放行" --> ProcB
-    ProcB -. "5. 被动复制 PID_B 入站收发字节 (反查对端源端口关联 PID_A)" .-> IngCopy
+    ProcB -. "5. session_id>0 时被动复制 PID_B 入站收发字节 (反查对端源端口关联 PID_A)" .-> IngCopy
 ```
 
 1. **内核态重定向与重放 Fail-Closed 算法（BPF C 核心逻辑）**：
@@ -265,12 +265,14 @@ flowchart LR
            if (tp->mode == MODE_REPLAY) {
                return 0; // 返回 0 (EPERM)，内核强制阻断连接
            }
-           // 录制模式下：若访问已知业务端口或 CROS RPC 候选端口，投递观测事件以检出架构漂移 (VIOLATION)
-           struct conn_observe_event obs = {
-               .process_id = tp->process_id, .pid = pid,
-               .dst_ip = ctx->user_ip4, .dst_port = ctx->user_port,
-           };
-           bpf_ringbuf_output(&connect_observe_ringbuf, &obs, sizeof(obs), 0);
+           // 仅在活跃录制期 (tp->session_id != 0) 投递未声明连接观测事件，ARMED 待命态零 RingBuf 输出
+           if (tp->session_id != 0) {
+               struct conn_observe_event obs = {
+                   .process_id = tp->process_id, .pid = pid,
+                   .dst_ip = ctx->user_ip4, .dst_port = ctx->user_port,
+               };
+               bpf_ringbuf_output(&connect_observe_ringbuf, &obs, sizeof(obs), 0);
+           }
            return 1; // 原样放行
        }
 
@@ -287,20 +289,25 @@ flowchart LR
        return 1;
    }
    ```
-2. **原始目的地址还原与同机 INGRESS 对端反查**：
+2. **`EgressProxy` 待命纯透传与活跃采集无缝热切换（停录不断连保证，[`ADR-09`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md)）**：
+   - **`ARMED` 待命期（`session_id == 0`）**：目标进程新建的下游 CROS RPC 长连接接入 `EgressProxy` 后，代理建立到真实下游 `orig_dst` 的连接并维护连接登记表 `activeConns[connID]`。只要当前 `capturingSessionID == 0`（或该连接所属 `process_id` 未被纳入当前录制批次），转发协程直接执行**纯字节块透传（零 `StreamFramer` 分配、零头部解析、零 WebSocket 信封构造）**；
+   - **`StartCapture` 开启录制闸门（`0 -> S`）**：原子标记所选 `process_id` 进入采集态并更新 `target_pids_map[pid].session_id = S`；`EgressProxy` 在既有长连接的读写循环上动态挂载 `StreamFramer`（依靠 `SyncMagic` `"CSE.TCP"` 滑窗自动对齐下一帧边界），实现 **0ms 零重启开录**；
+   - **`StopCapture` 关闭录制闸门（`S -> 0`）**：排空会话队列并将 `session_id` 拨回 `0`，从 `EgressProxy` 连接上卸下 `StreamFramer` 归还预算池，**底层客户端与真实下游之间的 TCP 长连接保持不断开继续纯字节透传**，从而使业务进程在后续第 $2 \dots N$ 次录制时永远保持 `🟢 READY`！
+3. **原始目的地址还原与同机 INGRESS 对端反查**：
    - 客户端建立连接时，在 `BPF_SOCK_OPS_ACTIVE_ESTABLISHED_CB` 取出 `orig_dst` 写入 `nat_tuple_map[{local_ip, local_port}]`；
    - **同机跨进程入站反查机制**：当目标进程 `B` 收到入站连接时，其客户端 IP 为本机 IP（或 `127.0.0.1`）；Agent 用户态读取宿主机 `/proc/net/tcp`，凭对端客户端临时端口查询对应 Socket inode，反查出所属进程 PID。若属于同机纳管进程 `A`，则精确绑定 `SrcProcessID = A.ID`，彻底解决未声明调用被误判为 `EXTERNAL_CALLER` 的盲区问题。
 
-### 2.4 内核事件热监听、探针生命周期卫生与内存预算
+### 2.4 内核事件热监听、预挂自洁边界与内存预算
 
-1. **进程重启同步热更新 (`sched_process_exec`)**：
-   - 为消除业务进程重启到 2s 巡检之间的长连接建连盲区，Agent 挂载 `tracepoint/sched/sched_process_exec`；
-   - 当检测到执行的二进制路径或进程名命中被监控进程特征时，内核态**同步微秒级**将新 `PID` 写入 `target_pids_map`，使得业务进程初始化时发起的下游长连接能够 100% 被 `cgroup/connect4` 拦截；2s 间隔的 `ProcWatcher` 作为用户态辅助对账。
-2. **完整特权集与内核探针卫生保证**：
+1. **进程启动/重启同步热更新 (`sched_process_exec`)**：
+   - 为消除业务进程启动或重启到 2s 巡检之间的长连接建连盲区，Agent 在 `ARMED` 待命及 `CAPTURING` 录制期间全程挂载 `tracepoint/sched/sched_process_exec`；
+   - 当检测到新启动进程命中已预挂进程的二进制路径或命令行特征时，微秒级同步将新 `PID` 写入 `target_pids_map`（`session_id` 继承当前待命 `0` 或活跃 `S`），使得**后于 Agent 启动的业务进程在初始化阶段发起的首条下游长连接即 100% 接入 `EgressProxy`，天然达成 `established_conns == 0` (`🟢 READY`)**；2s 间隔的 `ProcWatcher` 作为用户态辅助对账。
+2. **完整特权集、手动暂停 (`DISARMED`) 与内核探针自洁底线**：
    - Agent 启动时校验 Effective Capability 集合必须同时包含：**`CAP_BPF`、`CAP_NET_ADMIN`、`CAP_PERFMON` 与 `CAP_SYS_PTRACE`**（用于读取宿主机各目标进程 `/proc/<pid>/fd`）；
-   - **基于 `bpf_link` 的零残留保证**：所有 cgroup 与 tracepoint 钩子必须通过 `cilium/ebpf/link` 挂载，**严禁将 Map 或 Program pin 到 bpffs**。当 Agent 正常退出、被 `SIGTERM` 或发生异常崩溃/OOM 时，操作系统自动回收进程持有的 link 文件描述符，所有内核探针瞬间自动脱落，绝不在宿主机留下悬挂钩子。
+   - **手动暂停与按需卸载**：当用户将某进程的 `probe_desired_state` 置为 `DISARMED` 时，Agent 从 `target_pids_map` 与 `downstream_rules_map` 热移除该进程规则；当整台 Agent 已无任何 `ARMED` 进程且无活跃租约时，自动关闭 `EgressProxy` 并卸载全部 `bpf_link`；
+   - **5 分钟失联自洁与 `bpf_link` 零残留保证**：主控失联超过 `5 分钟` 宽限期、收到 `POST /agent/v1/purge` 或收到 `SIGINT/SIGTERM` 退出信号时，Agent 强制执行 `PurgeAllMonitors()` 关闭代理端口并调用 `link.Close()` 卸载全部钩子；严禁将 Map 或 Program pin 到 bpffs，确保即使进程崩溃/OOM 内核亦自动回收全部探针 FD。
 3. **Framer 全局内存预算池 (`GlobalFramerBudgetPool`)**：
-   - Agent 单机所有被监控连接的 `StreamFramer` 共享一个最大为 `64MB` 的内存预算池；
+   - Agent 单机所有活跃采集连接的 `StreamFramer` 共享一个最大为 `64MB` 的内存预算池（`ARMED` 待命态连接不占用此池）；
    - 当遇到上千条长连接且并发分帧时，若全局使用量超过上限，按照 LRU 策略淘汰长时间无数据传输连接的分帧缓存，绝不突破 Agent 物理内存红线。
 
 ---
@@ -421,5 +428,3 @@ func HealSingleResponseFrame(liveReq []byte, mockRsp []byte) ([]byte, error) {
 ```
 
 * **多段分片应答 (`RSP_SEG`) 连续切片自愈保障**：当一次下游调用录制有 $K$ 个响应片段（如 `RSP_SEG #0`, `RSP_SEG #1`, `RSP #2`）时，`HealResponseFrames` 按 `usRspMsgNo` 录制原序遍历全部 $K$ 个片段，逐片调用 `HealSingleResponseFrame(liveReq, seg_k)` 后依次写入 Mock Socket，确保分片流在客户端侧无缝重组。
-
-* **多段分片应答 (`RSP_SEG`) 自愈保障**：当一次下游调用录制有 $K$ 个响应片段（如 `RSP_SEG #0`, `RSP_SEG #1`, `RSP #2`）时，`HealResponseFrames` 按 `usRspMsgNo` 录制原序遍历全部 $K$ 个片段，逐片调用 `HealSingleResponseFrame(liveReq, seg_k)` 后依次写入 Mock Socket，确保分片流在客户端侧无缝重组。

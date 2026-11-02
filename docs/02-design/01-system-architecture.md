@@ -1,11 +1,11 @@
 # 业务流量监控与重放 (`code-traefik`) 系统总体架构与主从协同设计
 
 - **文档编号**：`01-system-architecture.md`
-- **文档版本**：v1.2.0
-- **更新日期**：2026-10-29
+- **文档版本**：v1.3.0
+- **更新日期**：2026-11-02
 - **归属阶段**：阶段二：系统架构与数据模型设计 (`02-design`)
-- **状态**：定稿待审 (Ready for Review)
-- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.6.0)、[`01-cros-rpc-protocol-spec.md`](../07-references/01-cros-rpc-protocol-spec.md) (v1.0.0)、[`02-ebpf-hook-and-dual-subsystem-adr.md`](../05-adr/02-ebpf-hook-and-dual-subsystem-adr.md)、[`03-control-plane-state-recovery-and-lease-reconciliation.md`](../05-adr/03-control-plane-state-recovery-and-lease-reconciliation.md)
+- **状态**：已冻结 (Frozen)
+- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.9.0)、[`01-cros-rpc-protocol-spec.md`](../07-references/01-cros-rpc-protocol-spec.md) (v1.0.0)、[`02-ebpf-hook-and-dual-subsystem-adr.md`](../05-adr/02-ebpf-hook-and-dual-subsystem-adr.md)、[`03-control-plane-state-recovery-and-lease-reconciliation.md`](../05-adr/03-control-plane-state-recovery-and-lease-reconciliation.md)、[`09-arch-process-ssot-and-ebpf-premount-standby-adr.md`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md) (ADR-09)
 
 ---
 
@@ -71,7 +71,7 @@ flowchart LR
 | :--- | :--- | :--- |
 | **部署拓扑与规模** | 集中式无特权部署（对接 CodeBench 网关与共享 PostgreSQL） | 每台受控业务宿主机部署 1 个守护进程（`1 Agent : N 目标进程`） |
 | **操作系统特权** | 普通非特权用户运行，**零内核钩子、零业务宿主机 `/proc` 访问** | 需具备 `CAP_BPF` + `CAP_NET_ADMIN`（挂载 eBPF 与读取本机 `/proc`） |
-| **持久化与状态** | 有状态：唯一连接 PostgreSQL（读写 11 张 `traefik_*` 表及共享表） | **完全无数据库**：不连任何 DB、不持有数据库凭据，仅维护运行期内存态 |
+| **持久化与状态** | 有状态：唯一连接 PostgreSQL（读写 15 张核心 `traefik_*` 业务表、`traefik_settings` 及共享表） | **完全无数据库**：不连任何 DB、不持有数据库凭据，仅维护运行期内存态 |
 | **Protobuf 依赖** | 引入 `google.golang.org/protobuf/types/dynamicpb` 动态反序列化与语义 Diff | **零 `.pb` 依赖**：编译依赖图严禁出现 `dynamicpb` / `protoregistry` / `gorm` |
 | **协议解析深度** | 调用 `pkg/crosrpc` 解析头 + 调用 `internal/server/decoder` 解码 Payload | 仅调用 `pkg/crosrpc` 解析 `24 + usHeadLen` 之前的协议头，Payload 视为不透明字节切片 |
 | **录制与重放职责** | 批次协同编排、落盘归档、模块穿透定位、架构一致性验证、双层回归 Diff 报告 | 入站旁路复制、出站透明代理、重放连接注入、二进制 Mock 匹配与头部偏移自愈 |
@@ -96,7 +96,7 @@ code-traefik/
 │       ├── topology/                # 三级架构树治理、静态拓扑推导、报文穿透定位与架构一致性验证引擎
 │       └── diff/                    # 协议头级 + Protobuf 语义字段级双层回归 Diff 断言与重放调度器
 ├── config/                          # Server 与 Agent 各自的配置结构体与安全默认值加载
-├── models/                          # 11 张 traefik_* GORM 实体模型、索引迁移与级联校验辅助函数
+├── models/                          # 15 张核心 traefik_* GORM 实体模型、索引迁移与级联校验辅助函数
 ├── handlers/                        # Server HTTP/SSE 控制器、参数白名单校验、RBAC 守卫与 commonAudit 接入
 └── frontend/                        # React 18 + TypeScript + Vite 5 微前端控制台工程
 ```
@@ -114,13 +114,16 @@ code-traefik/
 
 | 资源类别 | 公共级 (`SHARED`) | 个人级 (`PRIVATE`) | 跨环境关联与安全边界 |
 | :--- | :--- | :--- | :--- |
-| **三级架构元素与 `.pb`** | **全局唯一公共 SSOT**（`traefik_admin` 维护，全体只读） | *不设私有架构元素* | 个人私有 Agent 上的测试进程直接挂载并复用公共功能模块（`Module`）与接口契约 |
-| **数据面实例 (`Agent`)** | `traefik_admin` 登记管理；全团队可见，空闲时任意认证用户可申请排他租约进行录制或重放 | **普通用户可自建、编辑、删除本人的私有 Agent**；**创建人本人及 `traefik_admin` 可见**；普通用户之间严格防横向越权 | 他人普通用户尝试查看、修改或租用某用户的 `PRIVATE` Agent 拦截返回 `403 Forbidden`；管理员 (`traefik_admin`) 具备全团队可见、审计与故障解锁特权 |
-| **录制流量素材 (`RecordingSession`)** | 全团队可见并可作为重放输入资产（支持将合格个人素材发布为 `SHARED`） | **仅录制发起人本人及 `traefik_admin` 可见**、管理与用于重放；普通用户之间严格隔离 | 只要用户对某录制素材有访问权（公共素材或本人素材），即可将其投递到任何有权限且**承载相同公共架构模块**的进程（含本人 `PRIVATE` Agent 进程，以及当前空闲的团队 `SHARED` 进程）上执行隔离重放 |
+| **三级逻辑架构、物理进程蓝图 (`ArchProcess`) 与 `.pb`** | **全局唯一公共 SSOT**（`traefik_admin` 维护，全体只读） | *不设私有架构元素与野生进程* | 公共与个人 Agent 统一从已定义的 `ArchProcess` 树中 `1:1` 勾选挂载进程，继承 `FM` 模块组装关系并支持本地覆盖端口/启动特征 |
+| **数据面实例 (`Agent`) 与挂载实例 (`Process`)** | `traefik_admin` 登记管理；全团队可见，空闲时（包括已处于 `ARMED` 预挂待命态）任意认证用户可申请排他租约进行录制或重放 | **普通用户可自建、编辑、删除本人的私有 Agent 及挂载配置**；**创建人本人及 `traefik_admin` 可见**；普通用户之间严格防横向越权 | 他人普通用户尝试查看、修改、探针开关或租用某用户的 `PRIVATE` Agent 拦截返回 `403 Forbidden`；管理员 (`traefik_admin`) 具备全团队可见、审计与故障解锁特权 |
+| **录制流量素材 (`RecordingSession`)** | 全团队可见并可作为重放输入资产（支持将合格个人素材发布为 `SHARED`） | **仅录制发起人本人及 `traefik_admin` 可见**、管理与用于重放；普通用户之间严格隔离 | 只要用户对某录制素材有访问权（公共素材或本人素材），即可将其投递到任何有权限且**挂载同构架构进程/模块**的进程（含本人 `PRIVATE` Agent 进程，以及当前空闲的团队 `SHARED` 进程）上执行隔离重放 |
 
-### 3.2 Agent 动态排他租约状态机 (`Agent Mutex Lease`)
+### 3.2 Agent 动态排他租约状态机 (`Agent Mutex Lease`) 与 `ARMED` 预挂待命的正交性
 
-由于录制与重放均需动态改写宿主机内核 eBPF `downstream_rules_map` 并可能引导目标进程重连（A-01），**同一台 Agent 在同一时刻严格限制只能由 1 名用户执行 1 项活跃操作（1 个录制批次 或 1 个重放任务）**。单次多进程协同录制允许同一名用户同时锁定该批次涉及的 1..M 台 Agent 及其上的多个进程。团队共享的 `SHARED` 环境同样支持执行离线重放，但在执行期间整机 Agent 同样被重放任务独占锁定，杜绝多人并发规则串扰。
+由于活跃录制与离线重放分别需要独占会话有界缓冲（64MB）或将宿主机内核 `downstream_rules_map` 切向隔离 `MockServer`，**同一台 Agent 在同一时刻严格限制只能由 1 名用户执行 1 项活跃作业（1 个录制批次 `RECORDING` 或 1 个重放任务 `REPLAY`）**。
+
+> [!NOTE]
+> **`ARMED` 预挂载待命不占用排他租约（[`ADR-09`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md)）**：当 Agent 处于空闲状态（`lease_type = ''`）且挂载了 `probe_desired_state = 'ARMED'` 的架构进程时，Agent 内核探针与 `EgressProxy` 以 `session_id = 0`（零分帧、零上报、纯字节透传）常驻待命。待命态**不持有 `Mutex Lease`**，任何有权限的用户随时可对该 Agent 申请 `RECORDING`（毫秒级打开采集闸门）或 `REPLAY` 排他租约。
 
 ```mermaid
 stateDiagram-v2
@@ -173,15 +176,17 @@ stateDiagram-v2
 
 | 方法 | Agent 路由路径 | 调用时机与职责 | 核心请求 / 响应载荷 (`pkg/agentproto`) |
 | :---: | :--- | :--- | :--- |
-| `GET` | `/agent/v1/handshake` | 纳管校验、版本握手与每 10s 周期租约双向对账 | 请求头携带 `X-Expected-Lease-Type`、`X-Expected-Lease-Ref`；返回 `HandshakeResp`（含 `BootID`、`StartedAt`、`ActiveLeaseType`、`ActiveRefID`） |
-| `GET` | `/agent/v1/processes/discover` | 用户/管理员探查候选业务进程 | 返回宿主机当前持有 IPv4 TCP `LISTEN` 端口的进程清单 `[]DiscoveredProcess{PID, ListenPort, Cmdline, ExeName}`（共享 Agent 仅管理员可查） |
-| `PUT` | `/agent/v1/monitors/sync` | 持排他租约声明式下发或更新监控进程规格 | 请求 `SyncMonitorReq{SessionID, MaxFrameBytes, MaxBufferBytes, Processes: []ProcessMonitorSpec}`；若与当前内存活跃租约冲突返回 `409` |
-| `DELETE` | `/agent/v1/monitors/:sessionId/processes/:processId` | 单独移除某进程的监控（不影响同机其他进程） | 从 BPF Map 热移除该进程的 PID 与下游规则；若已无任何活跃监控则自动卸载探针 |
-| `POST` | `/agent/v1/monitors/:sessionId/stop` | 录制批次正常结束或触发上限停止 | 刷空该会话缓冲剩余帧，返回累计统计 `StopMonitorResp{CapturedFrames, DroppedFrames, BypassedSelfCount}` |
+| `GET` | `/agent/v1/handshake` | 纳管校验、版本握手与每 10s 周期租约/预挂双向对账 | 请求头携带 `X-Expected-Lease-Type`、`X-Expected-Lease-Ref`；返回 `HandshakeResp`（含 `BootID`、`ActiveLeaseType`、`ActiveRefID`、`ArmedProcessCount`、`ArmedDigest`） |
+| `GET` | `/agent/v1/processes/discover` | 用户/管理员探查宿主机候选监听业务进程 | 返回宿主机当前持有 IPv4 TCP `LISTEN` 端口的进程清单 `[]DiscoveredProcess{PID, ListenPort, Cmdline, ExeName}`（共享 Agent 仅管理员可查） |
+| `PUT` | `/agent/v1/monitors/arm` | **默认自动预挂待命同步**（不锁定排他租约） | 请求 `ArmStandbyReq{Processes: []ProcessMonitorSpec}`；挂载 eBPF 并将 `session_id` 设为 `0`（纯字节透传），返回 `ArmStandbyResp{ArmedDigest, Diagnostics}`；若 `Processes` 为空则卸载全部待命探针；若当前持有活跃录制/重放租约返回 `409` |
+| `GET` | `/agent/v1/monitors/diagnose` | 按需重新扫描已预挂进程的实时 PID 与存量连接 | 返回 `ArmStandbyResp{ArmedDigest, Diagnostics: []ProcessDiagStatus}` |
+| `PUT` | `/agent/v1/monitors/sync` | 持 `RECORDING` 排他租约开启采集闸门（或兜底临时挂载） | 请求 `SyncMonitorReq{SessionID, MaxFrameBytes, MaxBufferBytes, Processes: []ProcessMonitorSpec}`；对已 `ARMED` 进程原子置 `session_id = SessionID`（0ms 不断连开启分帧采集）；若与当前内存活跃租约冲突返回 `409` |
+| `DELETE` | `/agent/v1/monitors/:sessionId/processes/:processId` | 录制中单独停止某进程的采集（不影响同机其他进程） | 将该进程从活跃录制集移除（若原为 `ARMED` 则回退 `session_id=0` 待命，若为临时挂载则移除规则） |
+| `POST` | `/agent/v1/monitors/:sessionId/stop` | 录制批次正常结束或触发上限停止 | 刷空该会话缓冲剩余帧，将已选进程 `session_id` 拨回 `0` **无损回退至 `ARMED` 待命（不断开 `EgressProxy` 长连接）**并释放本地租约；返回 `StopMonitorResp{CapturedFrames, DroppedFrames, BypassedSelfCount}` |
 | `POST` | `/agent/v1/replays/execute` | 下发单进程离线隔离重放任务 | 请求 `ExecuteReplayReq{TaskID, ProcessSpec, TimeoutMs, IngressRequests, EgressMocks, MngMocks}`（纯二进制流切片传输，零 `.pb`） |
 | `GET` | `/agent/v1/replays/:taskId/result` | 幂等轮询或重放完成后拉取任务最终汇总明细 | 返回 `ReplayTaskResultResp{TaskID, Status, TotalRequests, PassedRequests, MockHitCount, MockMissCount, Details}` |
-| `POST` | `/agent/v1/replays/:taskId/cancel` | 用户手动中止正在执行的重放任务 | 立即关闭注入连接、卸载该重放任务的下游重定向规则并释放本地 Mock 监听器 |
-| `POST` | `/agent/v1/purge` | 主控启动恢复、管理员强制解锁或租约失调自洁 | 幂等停录/停重放，关闭代理监听，调用 `link.Close()` 卸载全部探针，清空 BPF Maps 并置 `ActiveLease=NONE` |
+| `POST` | `/agent/v1/replays/:taskId/cancel` | 用户手动中止正在执行的重放任务 | 立即关闭注入连接、释放本地 Mock 监听器，恢复 `ARMED` 待命下游规则并释放本地租约 |
+| `POST` | `/agent/v1/purge` | 主控启动恢复、管理员强制解锁或紧急全卸载 | 幂等停录/停重放，关闭代理与 Mock 监听，调用 `link.Close()` 卸载全部探针，清空 BPF Maps 并置 `ActiveLease=NONE`、`ArmedDigest=""` |
 
 核心管控结构体与心跳响应契约定义：
 
@@ -190,16 +195,18 @@ package agentproto
 
 // HandshakeResp 握手与心跳双向对账数据载荷
 type HandshakeResp struct {
-	AgentVersion    string    `json:"agent_version"`    // Agent 构建版本号
-	ProtocolVersion string    `json:"protocol_version"` // 主协议版本，如 "1.0"
-	BootID          string    `json:"boot_id"`          // Agent 实例重启 UUID，随进程生命周期刷新
-	StartedAt       time.Time `json:"started_at"`       // 启动时刻
-	KernelVersion   string    `json:"kernel_version"`   // 宿主机内核版本
-	HasEbpfCap      bool      `json:"has_ebpf_cap"`     // 是否具备完整 eBPF 运行权限
-	CapDetail       string    `json:"cap_detail"`       // 权限详情说明
-	ActiveLeaseType string    `json:"active_lease_type"`// 当前内存持有的租约类型: "" | "RECORDING" | "REPLAY"
-	ActiveRefID     uint64    `json:"active_ref_id"`    // 当前内存持有的 SessionID 或 TaskID
-	UptimeSec       uint64    `json:"uptime_sec"`       // 运行秒数
+	AgentVersion      string    `json:"agent_version"`       // Agent 构建版本号
+	ProtocolVersion   string    `json:"protocol_version"`    // 主协议版本，如 "1.0"
+	BootID            string    `json:"boot_id"`             // Agent 实例重启 UUID，随进程生命周期刷新
+	StartedAt         time.Time `json:"started_at"`          // 启动时刻
+	KernelVersion     string    `json:"kernel_version"`      // 宿主机内核版本
+	HasEbpfCap        bool      `json:"has_ebpf_cap"`        // 是否具备完整 eBPF 运行权限
+	CapDetail         string    `json:"cap_detail"`          // 权限详情说明
+	ActiveLeaseType   string    `json:"active_lease_type"`   // 当前内存持有的租约类型: "" | "RECORDING" | "REPLAY"
+	ActiveRefID       uint64    `json:"active_ref_id"`       // 当前内存持有的 SessionID 或 TaskID
+	ArmedProcessCount int       `json:"armed_process_count"` // 当前处于 ARMED 预挂载待命态的进程数
+	ArmedDigest       string    `json:"armed_digest"`        // 已预挂 ProcessMonitorSpec 集合的规范化 SHA-256 摘要，供主控心跳对账补挂
+	UptimeSec         uint64    `json:"uptime_sec"`          // 运行秒数
 }
 
 // DownstreamEndpoint 描述目标进程允许访问并需被透明拦截的下游 CROS RPC 地址
@@ -211,18 +218,23 @@ type DownstreamEndpoint struct {
 // ProcessMonitorSpec 单进程监控元信息（零 .pb Schema 依赖）
 type ProcessMonitorSpec struct {
 	ProcessID   uint64               `json:"process_id"`   // 主控 traefik_processes.id
-	ListenPort  uint16               `json:"listen_port"`  // 唯一监听端口 (A-02)
-	CmdPattern  string               `json:"cmd_pattern"`  // /proc/<pid>/cmdline 匹配表达式
-	Downstreams []DownstreamEndpoint `json:"downstreams"`  // 静态拓扑推导 + 本批次纳管监听端点 + 显式登记端点
+	ListenPort  uint16               `json:"listen_port"`  // 唯一有效监听端口 (0 表示纯客户端，A-02)
+	CmdPattern  string               `json:"cmd_pattern"`  // /proc/<pid>/cmdline 有效匹配表达式
+	Downstreams []DownstreamEndpoint `json:"downstreams"`  // 混合拓扑推导(本机优先+SHARED兜底) + 同机/批次协同端口 + 补充端点
 }
 
-// ProcessDiagStatus 下发监控后的实时定位与存量长连接诊断结果
+// ArmStandbyReq 声明式同步 Agent 预挂载待命规格（不占排他租约）
+type ArmStandbyReq struct {
+	Processes []ProcessMonitorSpec `json:"processes"`
+}
+
+// ProcessDiagStatus 预挂载待命或活跃采集下的实时定位与存量长连接就绪诊断结果
 type ProcessDiagStatus struct {
 	ProcessID        uint64 `json:"process_id"`
-	Status           string `json:"status"`            // "MONITORING" | "NOT_FOUND" | "CAP_DENIED" | "ERROR"
+	Status           string `json:"status"`            // "READY" | "NEED_RECONNECT" | "WAITING_PROC" | "MONITORING" | "CAP_DENIED" | "ERROR" | "DISARMED"
 	ResolvedPID      uint32 `json:"resolved_pid"`      // 实时定位到的 OS PID（未找到为 0）
-	EstablishedConns int    `json:"established_conns"` // 指向已登记下游的存量 TCP_ESTABLISHED 连接数 (A-01)
-	NeedReconnect    bool   `json:"need_reconnect"`    // EstablishedConns > 0 时为 true，提示重启或触发重连
+	EstablishedConns int    `json:"established_conns"` // 指向已登记下游的预挂前存量直连 TCP_ESTABLISHED 连接数 (A-01)
+	NeedReconnect    bool   `json:"need_reconnect"`    // EstablishedConns > 0 时为 true，提示在空闲准备期重启或触发重连一次
 	Message          string `json:"message"`
 }
 ```
@@ -280,47 +292,52 @@ type ProcessDiagStatus struct {
   * `0x06 (EVENT_CONN_CLOSED)`：被监控连接正常或异常关闭事件，携带 `ConnKey`，驱动慢轨配对器立即刷出挂起的单向请求；
   * `0x07 (EVENT_SESSION_DRAINED)`：会话停止指令后所有内存积压帧已全部发送完毕的终结信号，主控收到后方可标记批次定稿并释放租约。
 
-### 4.4 背压缓冲、断线重连、租约对账与探针安全自洁
+### 4.4 预挂载待命、背压缓冲、双向对账补挂与探针安全自洁
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Idle: Agent 启动 (未挂载 eBPF, ActiveLease=NONE)
-    Idle --> ActiveConnected: 收到监控/重放指令 & WS 已连接 (锁定本地租约)
+    [*] --> Idle: Agent 启动 (未挂载 eBPF, ActiveLease=NONE, ArmedCount=0)
+    Idle --> ArmedStandby: PUT /agent/v1/monitors/arm (默认自动预挂, session_id=0 纯字节透传, ActiveLease=NONE)
+    ArmedStandby --> Idle: 全部进程设为 DISARMED (关闭代理监听并卸载 eBPF)
+    ArmedStandby --> ActiveConnected: 收到录制/重放指令 & WS 已连接 (锁定本地租约, 0ms 打开采集闸门 session_id=S)
+    Idle --> ActiveConnected: 仅勾选了 DISARMED 进程发起录制/重放 (兜底临时挂载 & 锁定租约)
     ActiveConnected --> ActiveBuffering: WS 连接闪断 / 主控消费阻塞 (有界缓冲暂存)
     ActiveBuffering --> ActiveConnected: 5分钟宽限期内主控重连成功 (排空有界缓冲)
-    ActiveBuffering --> SelfCleaning: 失联超时 (>= 5m) 或收到 SIGTERM/SIGINT
-    ActiveConnected --> SelfCleaning: 全部会话停止 / 收到 Purge 指令 / 心跳租约失调
-    SelfCleaning --> Idle: 关闭代理端口 -> Detach eBPF Links -> 清空 Maps (ActiveLease=NONE)
+    ActiveConnected --> ArmedStandby: 录制正常停止 / 重放结束或取消 / 租约失调对账回退 (置 session_id=0 释放租约, 不断开 EgressProxy 长连接!)
+    ActiveBuffering --> SelfCleaning: 主控失联超时 (>= 5m) 或收到 SIGTERM/SIGINT
+    ArmedStandby --> SelfCleaning: 主控失联超时 (>= 5m) / 收到 Purge 指令 / 收到 SIGTERM/SIGINT
+    ActiveConnected --> SelfCleaning: 收到管理员强制 Purge 指令 / 收到 SIGTERM/SIGINT
+    SelfCleaning --> Idle: 关闭代理/Mock端口 -> Detach eBPF Links -> 清空 Maps (ActiveLease=NONE, ArmedCount=0)
 ```
 
 1. **有界会话字节预算缓冲 (`BoundedSessionBuffer`)**：
-   - Agent 为每个活跃录制批次分配独立的有界环形字节队列，容量上限默认 `64MB`（`--max-session-buffer-bytes=67108864`）。
+   - Agent 仅在活跃录制批次（`session_id > 0`）期间分配独立的有界环形字节队列，容量上限默认 `64MB`（`--max-session-buffer-bytes=67108864`）；`ARMED` 待命态（`session_id == 0`）不分配会话缓冲，常驻内存恒定。
    - 当 WebSocket 发送阻塞或闪断导致当前会话已驻留字节数 `usedBytes + frameLen > maxBytes` 时，采集协程执行 **非阻塞丢弃新帧 (`Drop-Newest`)**，原子递增 `session.droppedFrames.Add(1)`，绝不阻塞业务系统调用，也绝不突破 Agent 内存红线。
 2. **主控指数退避自动重连**：
    - `AgentHub` 检测到 WebSocket 断开后立即启动重连循环（退避间隔 `500ms -> 1s -> 2s -> 5s` 封顶），重连成功后立即消费缓冲中积压的信封帧并同步最新 `dropped_frames`。
-3. **心跳双向租约对账看门狗 (`DualLeaseReconcileWatchdog`)**：
+3. **心跳双向租约与预挂状态对账看门狗 (`DualLeaseAndArmReconcileWatchdog`)**：
    - 主控在每 10s 发起的探活心跳中带上主控数据库记录的期望租约状态（`X-Expected-Lease-Type` 与 `X-Expected-Lease-Ref`）；
-   - Agent 收到后比对本地内存 `activeLease`：
-     - 若主控下发期望为 `NONE` 但 Agent 处于活跃状态，说明主控已判定任务终止或发生故障恢复，Agent **立即触发 `PurgeAllMonitors()`** 卸载探针恢复业务裸连；
-     - 若 Agent 返回的 `BootID` 与主控记录的不一致（Agent 发生了静默重启），主控感知后立即将正在执行的任务标记为异常失败，并回滚释放租约。
+   - Agent 收到后比对本地内存 `activeLease` 并返回 `ArmedDigest`：
+     - **孤儿租约无损回退**：若主控下发期望租约为 `NONE` 但 Agent 处于活跃 `RECORDING`/`REPLAY` 状态，Agent **立即中止孤儿采集/重放闸门并回退至 `ArmedStandby`（若 `ArmedProcessCount == 0` 则彻底卸载探针）**，释放本地租约的同时避免误杀正常待命业务长连接；
+     - **Agent 重启感知与自动补挂 (`Auto-Rearm`)**：若 Agent 返回的 `BootID` 与主控记录的不一致（Agent 发生了重启），主控立即将正在执行的活跃任务标记为异常失败并清理残留租约；同时，只要空闲在线 Agent 返回的 `ArmedDigest` 与主控数据库中 `probe_desired_state = 'ARMED'` 的挂载规格摘要不一致（含 Agent 刚启动上线或重连恢复），`AgentHub` **自动补推 `PUT /agent/v1/monitors/arm` 恢复预挂待命并回写最新 `ProcessDiagStatus`**！
 4. **主控单实例部署假设与启动恢复序列 (`ServerRecoveryPipeline`)**：
    - 本系统控制面采用**单实例部署**（保证内存 Hub、分片 Worker 与 SSE 广播池的权威一致性；多实例需另行接入集中式分布式锁）；
    - 主控进程启动时，在数据库事务内扫描处于 `RECORDING`、`STOPPING` 或 `REPLAYING` 状态的历史残留任务：
-     - 并发向涉及的 Agent 下发 `POST /agent/v1/purge` 清理远端残余规则；
-     - 将关联任务统一置为 `FAILED(SERVER_RESTART)` 终态，并清空所有 Agent 表上的排他租约列，杜绝因控制面重启导致的死锁挂死。
+     - 将关联任务统一置为 `FAILED(SERVER_RESTART)` 终态，并清空所有 Agent 表上的排他租约列；
+     - 并发向在线 Agent 执行租约清理与 `PUT /agent/v1/monitors/arm` 对账同步，使各受控机器平滑收敛回期望的 `ARMED` 待命（或 `DISARMED` 空闲）基线态。
 
 ---
 
 ## 5. 三大核心业务全链路时序图 (End-to-End Sequence Diagrams)
 
-### 5.1 场景一：公私域 Agent 纳管、能力握手、心跳探活与失联自洁时序
+### 5.1 场景一：公私域 Agent 纳管、架构进程 `1:1` 自动预挂、心跳补挂与失联自洁时序
 
 ```mermaid
 sequenceDiagram
     autonumber
     actor User as 用户 (普通用户自建 PRIVATE / 管理员建 SHARED)
     participant Server as code-traefik-server (AgentHub)
-    participant DB as PostgreSQL (traefik_agents)
+    participant DB as PostgreSQL (traefik_agents / traefik_processes)
     participant Agent as code-traefik-agent
     participant Kernel as Linux Kernel (BPF Subsystem)
 
@@ -329,77 +346,81 @@ sequenceDiagram
     Server->>Agent: GET /agent/v1/handshake (附带 Claim-Code 校验头与 X-Expected-Lease: NONE/0)
     Agent->>Kernel: Capget 校验 CAP_BPF + CAP_NET_ADMIN + CAP_PERFMON + CAP_SYS_PTRACE & 读取 uname
     Kernel-->>Agent: 返回权限位图与内核版本
-    Agent-->>Server: 200 OK (ProtocolVersion="1.0", BootID="...", HasEbpfCap=true, ActiveLease="")
-    Server->>Server: 校验协议主版本 == "1"
+    Agent-->>Server: 200 OK (ProtocolVersion="1.0", BootID="...", HasEbpfCap=true, ActiveLease="", ArmedDigest="")
     Server->>DB: INSERT traefik_agents (status='ONLINE', lease_type='', boot_id='...', last_heartbeat_at=NOW())
     Server-->>User: 201 Created (写入 commonAudit 审计日志)
 
-    loop 每 10s 周期探活与租约健康对账
+    User->>Server: PUT /api/agents/:id/process-mounts (勾选架构标准进程 ArchProcess_A/B + 可选本地覆盖)
+    Server->>DB: UPSERT traefik_processes (UNIQUE(agent_id, arch_process_id), probe_desired_state='ARMED')
+    Server->>Agent: PUT /agent/v1/monitors/arm ([Spec_A, Spec_B], session_id=0 不占租约)
+    Agent->>Kernel: 挂载 eBPF 探针 + 启动 EgressProxy 纯字节透传 + 扫描 /proc 定位 PID 与存量直连
+    Agent-->>Server: 200 OK (ArmedDigest="sha256...", Diagnostics: READY / NEED_RECONNECT / WAITING_PROC)
+    Server->>DB: 回写 traefik_processes 就绪诊断快照并返回前端渲染四色就绪灯
+
+    loop 每 10s 周期探活、租约对账与自动补挂 (Auto-Rearm)
         Server->>Agent: GET /agent/v1/handshake (携带 Header: X-Expected-Lease-Type 与 X-Expected-Lease-Ref)
-        alt 探活正常且租约一致
-            Agent-->>Server: 200 OK (刷新 lastControlContactAt, 返回当前 BootID 与 ActiveLease)
-            Server->>DB: UPDATE last_heartbeat_at = NOW(), status = 'ONLINE' (若处于活跃录制/重放则滑动延长 lease_expires_at)
-        else 发现 Agent 重启 (BootID 变更)
-            Server->>DB: 标记关联活跃任务异常失败，清理残留租约
-        else 租约状态失调 (Agent 处于活跃但主控期望为 NONE)
-            Agent->>Agent: Agent 触发 PurgeAllMonitors() 自洁探针并重置本地租约
+        alt 探活正常且租约、ArmedDigest 均一致
+            Agent-->>Server: 200 OK (刷新 lastControlContactAt, 返回 BootID / ActiveLease / ArmedDigest)
+            Server->>DB: UPDATE last_heartbeat_at = NOW(), status = 'ONLINE'
+        else 发现 Agent 重启或刚上线 (BootID 变更 或 空闲态 ArmedDigest 不一致)
+            Server->>DB: 若有残留活跃任务则标记异常失败并释放租约
+            Server->>Agent: 自动补推 PUT /agent/v1/monitors/arm 恢复预挂载待命并刷新就绪诊断
+        else 租约状态失调 (Agent 处于活跃录制/重放但主控期望为 NONE)
+            Agent->>Agent: 中止孤儿采集/重放闸门，无损回退至 ArmedStandby 并重置本地租约
         else 连续 3 次探活超时/拒绝 (30s)
             Server->>DB: UPDATE status = 'OFFLINE', 清空悬空排他租约并终止关联活跃任务
         end
     end
 
-    Note over Server,Agent: 异常分支：主控与 Agent 网络完全中断超过 5 分钟宽限期
+    Note over Server,Agent: 异常分支：主控与 Agent 网络完全中断超过 5 分钟宽限期 (或收到 SIGINT/SIGTERM)
     Agent->>Agent: GracePeriodWatchdog 触发 (>= 5m 无心跳且无 WS 连接)
-    Agent->>Kernel: 关闭代理监听 + link.Close() 卸载全部 eBPF 探针 + 清空 BPF Maps + 重置本地租约
+    Agent->>Kernel: 关闭代理监听 + link.Close() 卸载全部 eBPF 探针 + 清空 BPF Maps + 重置本地状态
     Note right of Agent: 确保宿主机业务进程网络恢复纯直连零残留
 ```
 
-### 5.2 场景二：排他租约协同录制、双轨分发与双模落盘全链路时序
+### 5.2 场景二：预挂就绪零重启协同录制、停录不断连回退与双模落盘全链路时序
 
 ```mermaid
 sequenceDiagram
     autonumber
     actor User as 认证用户 (租用本人 PRIVATE 或空闲 SHARED Agent)
-    participant UI as 微前端流量监控台
+    participant UI as 微前端 (/agents -> /record)
     participant Server as code-traefik-server
     participant Agent as code-traefik-agent
     participant Kernel as eBPF (Ingress Copy + cgroup/connect4)
-    participant ProcA as 目标进程 A (Module_A)
-    participant ProcB as 目标进程 B (Module_B)
+    participant ProcA as 目标进程 A (ArchProcess_A)
+    participant ProcB as 目标进程 B (ArchProcess_B)
 
-    User->>UI: 选择 Process_A 与 Process_B 并指定素材作用域 (SHARED/PRIVATE) 启动录制
-    UI->>Server: POST /api/recording-sessions
-    Server->>Server: 按 agent_id 升序 SELECT FOR UPDATE 原子锁定排他租约 (若已被占用立即返 409)
+    Note over Agent,ProcB: 前置待命态 (ARMED, session_id=0)：探针已预挂；若曾提示 NEED_RECONNECT，用户在空闲期已重连一次，长连接常驻 EgressProxy 纯透传 (🟢 READY)
+
+    User->>UI: 在 RecordingStartDrawer 看到 ProcA/ProcB 均为 🟢 探针已就绪，点击「立即启动录制」
+    UI->>Server: POST /api/recording-sessions (scope=SHARED/PRIVATE, target_process_ids=[A, B])
+    Server->>Server: 按 agent_id 升序 SELECT FOR UPDATE 原子锁定 RECORDING 排他租约 (冲突立即返 409)
     Server->>Agent: WS Connect /agent/v1/stream (建立二进制事件流)
-    Server->>Agent: PUT /agent/v1/monitors/sync ([Spec_A, Spec_B])
-    Agent->>Agent: 锁定本地单租约 -> 扫描 /proc 定位 PID_A、PID_B 并诊断存量连接
-    Agent->>Kernel: 挂载探针 + 写入 agent_pid(自环豁免)、target_pids_map、downstream_rules_map
-    Agent-->>Server: 返回定位成功 & NeedReconnect=true (若存在存量连接)
-    Server-->>UI: 提示 A-01 引导信息「请重启目标进程或触发长连接重连」
+    Server->>Agent: PUT /agent/v1/monitors/sync (SessionID=S, [Spec_A, Spec_B])
+    Agent->>Kernel: 锁定本地单租约 -> 原子更新 target_pids_map[pid].session_id = S (0ms 打开采集闸门，零进程重启!)
+    Agent-->>Server: 返回定位成功 & NeedReconnect=false (已全部 READY)
 
-    User->>ProcA: 触发重连或重启进程 (Agent 2s 巡检自动热更新 PID 并上报 PROCESS_RESTARTED)
-    Note over ProcA,ProcB: 外部上游发起真实业务请求 -> ProcA -> ProcB
+    Note over ProcA,ProcB: 外部上游直接发起真实业务请求 -> ProcA -> ProcB (复用既有代理长连接)
 
     ProcA->>ProcA: 监听端口收到上游请求 (INGRESS REQ)
-    Kernel-->>Agent: 入站旁路复制收字节至 RingBuf (零代理零延迟)
-    Agent-->>Server: WS Binary 信封帧 [SessionID, Proc=A, Dir=INGRESS, CaptureTime, Raw REQ]
+    Kernel-->>Agent: sys_enter/exit_read 见 session_id==S -> 旁路复制收字节至 RingBuf
+    Agent-->>Server: WS Binary 信封帧 [SessionID=S, Proc=A, Dir=INGRESS, CaptureTime, Raw REQ]
 
-    ProcA->>Kernel: connect(IP_B:Port_B) 发起下游调用
-    Kernel->>Agent: cgroup/connect4 透明重定向至 Agent 本地代理 (记录 socket_cookie 原始目的地址)
-    Agent->>Kernel: Agent 代理主动 connect(IP_B:Port_B)
-    Kernel->>ProcB: 命中 agent_pid 自环豁免 (stat_bypassed_self++)，直连 ProcB 监听端口
-    ProcA->>Agent: 发送下游请求字节流 (EGRESS REQ)
-    Agent->>ProcB: 原样透传字节流
+    ProcA->>Agent: 经既有重定向长连接发送下游请求字节流 (EGRESS REQ)
+    Agent->>ProcB: EgressProxy 原样透传至 ProcB (agent_pid 自环豁免) 并经 StreamFramer 切帧
     Agent-->>Server: WS Binary 信封帧 [Proc=A, Dir=EGRESS, Raw REQ] & [Proc=B, Dir=INGRESS, Raw REQ]
 
     ProcB-->>Agent: 返回下游应答 -> 透传回 ProcA -> ProcA 返回上游最终应答
     Agent-->>Server: 推送各自 RSP 原始二进制信封帧
 
-    Server->>Server: 双轨分发 Track A (快轨)：按批次可见性鉴权后经 SSE 实时推送前端预览
-    Server->>Server: 双轨分发 Track B (慢轨)：连接分片 Worker 按 ullSNO 配对 + dynamicpb 解码 + 模块穿透
+    Server->>Server: 双轨分发 Track A (快轨 SSE 预览) + Track B (慢轨 ullSNO 配对 + dynamicpb 解码 + 模块穿透)
     Server->>Server: 双模批量落盘 traefik_traffic_records (raw_req_packet + raw_rsp_packet + payload_json)
+
     User->>Server: POST /api/recording-sessions/:id/stop (或触发上限自动停止)
-    Server->>Agent: POST /monitors/:sessionId/stop -> 释放数据库与 Agent 排他租约
+    Server->>Agent: POST /agent/v1/monitors/:sessionId/stop
+    Agent->>Kernel: 排空缓冲发送 EVENT_SESSION_DRAINED -> 置 session_id = 0 回退 ARMED 待命 (不断开 EgressProxy 长连接!)
+    Server->>Server: 释放数据库与 Agent 排他租约 (后续第 2..N 次录制仍保持 🟢 READY 零重启!)
 ```
 
 ### 5.3 场景三：跨 Agent 同构进程隔离重放与双层 Diff 全链路时序

@@ -1,20 +1,21 @@
 # 业务流量监控与重放 (`code-traefik`) 数据库物理模型与 GORM 建模字典
 
 - **文档编号**：`05-database-schema.md`
-- **文档版本**：v1.2.0
-- **更新日期**：2026-10-29
+- **文档版本**：v1.3.0
+- **更新日期**：2026-11-02
 - **归属阶段**：阶段二：系统架构与数据模型设计 (`02-design`)
-- **状态**：定稿待审 (Ready for Review)
-- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.6.0)、[`01-system-architecture.md`](./01-system-architecture.md)、[`04-traffic-storage-partitioning-and-relational-normalization.md`](../05-adr/04-traffic-storage-partitioning-and-relational-normalization.md)
+- **状态**：已冻结 (Frozen)
+- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.9.0)、[`01-system-architecture.md`](./01-system-architecture.md)、[`04-traffic-storage-partitioning-and-relational-normalization.md`](../05-adr/04-traffic-storage-partitioning-and-relational-normalization.md)、[`09-arch-process-ssot-and-ebpf-premount-standby-adr.md`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md) (ADR-09)
 
 ---
 
 ## 1. 数据库共享隔离原则、分区规范与类型安全约定
 
-1. **共享库表名前缀强制隔离**：`code-traefik-server` 与宿主门户 `code-bench` 共享同一 PostgreSQL 实例，直接复用 `code-common/backend/models` 中的 `users`、`departments`、`audit_logs` 公共表；本子系统全部 **13 张核心业务实体与关联表**（及平台治理参数表 `traefik_settings`）必须显式实现 `TableName() string` 并冠以 `config.TablePrefix`（**`traefik_`**）前缀。
-2. **关系规范化解耦（新增关联表与重放条目表）**：
-   - 彻底解除用 JSONB 存储业务核心关系的权宜设计：新增 **`traefik_process_modules`** 物理关联表，以数据库强唯一索引（`UNIQUE(module_id) WHERE scope='SHARED'` 与 `UNIQUE(agent_id, module_id)`）保障公私域单实例不变量（A-03）；
-   - 新增 **`traefik_replay_items`** 物理条目表，每条被测请求独立一行持久化 `actual_rsp_packet`（`bytea`）与 `field_diffs`（`jsonb`），支持标准服务端分页查询与历史多次 Diff 重跑。
+1. **共享库表名前缀强制隔离**：`code-traefik-server` 与宿主门户 `code-bench` 共享同一 PostgreSQL 实例，直接复用 `code-common/backend/models` 中的 `users`、`departments`、`audit_logs` 公共表；本子系统全部 **15 张核心业务实体表**（及平台治理参数表 `traefik_settings`）必须显式实现 `TableName() string` 并冠以 `config.TablePrefix`（**`traefik_`**）前缀。
+2. **架构物理进程蓝图解耦与关系规范化（[`ADR-09`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md)）**：
+   - 将全局架构物理进程蓝图独立建模为 **`traefik_arch_process_groups`** 与 **`traefik_arch_processes`**，通过 `traefik_modules.arch_process_id` 唯一表达 `1 ArchProcess : N Module` 组装关系（守护 `A-03` 单模块单进程归属）；
+   - 将 **`traefik_processes`** 收敛为宿主机 Agent `1:1` 挂载实例表，通过强唯一索引 **`UNIQUE(agent_id, arch_process_id)`** 保障单机单实例约束、通过部分唯一索引 **`UNIQUE(agent_id, effective_listen_port) WHERE effective_listen_port > 0`** 保障非零监听端口互斥（`A-02`）并兼容多纯客户端进程（端口 `0`），同时内置本地覆盖列与 `probe_desired_state`（默认 `'ARMED'`）预挂就绪快照列；
+   - **`traefik_replay_items`** 物理条目表为每条被测请求独立一行持久化 `raw_actual_packet`（`bytea`）与 `field_diffs`（`jsonb`），支持标准服务端分页查询与历史多次 Diff 重跑。
 3. **海量流量时间范围物理分区 (`Range Partitioning`)**：
    - 核心流量往返表 **`traefik_traffic_records`** 采用 PostgreSQL 原生 **`PARTITION BY RANGE (created_at)`** 按日（或按周）自动建表；
    - 30 天保留期清理流水线从原先高成本、锁表严重的 `DELETE ... LIMIT 5000` 切换为轻量级 **`DROP TABLE traefik_traffic_records_yYYYYmMMdDD`**，实现磁盘空间毫秒级无锁释放。
@@ -40,30 +41,34 @@ erDiagram
     TRAEFIK_FUNCTIONAL_GROUPS ||--o{ TRAEFIK_FUNCTIONAL_GROUPS : "parent_id (RESTRICT, <=8级)"
     TRAEFIK_SUBSYSTEMS ||--o{ TRAEFIK_MODULES : "subsystem_id (冗余加速查询)"
     TRAEFIK_FUNCTIONAL_GROUPS ||--o{ TRAEFIK_MODULES : "group_id (RESTRICT)"
-    TRAEFIK_MODULES ||--o{ TRAEFIK_MODULE_INTERFACES : "module_id (RESTRICT)"
+    TRAEFIK_MODULES ||--o{ TRAEFIK_MODULE_SERVICES : "module_id (CASCADE)"
+    TRAEFIK_MODULES ||--o{ TRAEFIK_MODULE_DEPENDENCIES : "consumer/provider_module_id"
+    TRAEFIK_MODULE_SERVICES ||--o{ TRAEFIK_MODULE_DEPENDENCIES : "service_id (RESTRICT)"
 
-    TRAEFIK_AGENTS ||--o{ TRAEFIK_PROCESSES : "agent_id (CASCADE)"
-    TRAEFIK_PROCESSES ||--o{ TRAEFIK_PROCESS_MODULES : "process_id (CASCADE)"
-    TRAEFIK_MODULES ||--o{ TRAEFIK_PROCESS_MODULES : "module_id (RESTRICT)"
+    TRAEFIK_ARCH_PROCESS_GROUPS ||--o{ TRAEFIK_ARCH_PROCESSES : "group_id (RESTRICT)"
+    TRAEFIK_ARCH_PROCESSES ||--o{ TRAEFIK_MODULES : "arch_process_id (SET NULL, 1:N 组装)"
+
+    TRAEFIK_AGENTS ||--o{ TRAEFIK_PROCESSES : "agent_id (RESTRICT)"
+    TRAEFIK_ARCH_PROCESSES ||--o{ TRAEFIK_PROCESSES : "arch_process_id (RESTRICT, 单机 1:1)"
 
     TRAEFIK_PROTO_SCHEMAS ||--o{ TRAEFIK_PROTO_OPERATIONS : "schema_id (CASCADE)"
 
-    TRAEFIK_RECORDING_SESSIONS ||--o{ TRAEFIK_TRAFFIC_RECORDS : "session_id (CASCADE)"
-    TRAEFIK_PROCESSES ||--o{ TRAEFIK_TRAFFIC_RECORDS : "process_id (SET NULL)"
-    TRAEFIK_PROTO_SCHEMAS ||--o{ TRAEFIK_TRAFFIC_RECORDS : "schema_id (SET NULL)"
+    TRAEFIK_RECORDING_SESSIONS ||--o{ TRAEFIK_TRAFFIC_RECORDS : "session_id (分区逻辑关联)"
+    TRAEFIK_PROCESSES ||--o{ TRAEFIK_TRAFFIC_RECORDS : "process_id (分区逻辑关联)"
+    TRAEFIK_PROTO_SCHEMAS ||--o{ TRAEFIK_TRAFFIC_RECORDS : "schema_id (分区逻辑关联)"
 
     TRAEFIK_RECORDING_SESSIONS ||--o{ TRAEFIK_REPLAY_TASKS : "session_id (RESTRICT)"
     TRAEFIK_PROCESSES ||--o{ TRAEFIK_REPLAY_TASKS : "source/target_process_id (RESTRICT)"
     TRAEFIK_AGENTS ||--o{ TRAEFIK_REPLAY_TASKS : "agent_id (RESTRICT)"
     TRAEFIK_REPLAY_TASKS ||--o{ TRAEFIK_REPLAY_ITEMS : "task_id (CASCADE)"
-    TRAEFIK_TRAFFIC_RECORDS ||--o{ TRAEFIK_REPLAY_ITEMS : "traffic_record_id (SET NULL)"
+    TRAEFIK_TRAFFIC_RECORDS ||--o{ TRAEFIK_REPLAY_ITEMS : "record_id (逻辑关联)"
 ```
 
 ---
 
-## 3. 11 张 `traefik_*` 核心业务表完整 GORM 模型定义
+## 3. 15 张 `traefik_*` 核心业务表完整 GORM 模型定义
 
-### 3.1 架构元素领域表（表 1 ~ 表 3）
+### 3.1 逻辑架构元素领域表（表 1 ~ 表 3）
 
 ```go
 package models
@@ -119,33 +124,33 @@ func (FunctionalGroup) TableName() string { return config.TablePrefix + "functio
 
 // 3. Module 最小接口契约功能模块表 (traefik_modules)
 type Module struct {
-	ID          uint64           `gorm:"primaryKey;autoIncrement" json:"id"`
-	SubsystemID uint64           `gorm:"not null;index:idx_traefik_modules_subsystem" json:"subsystem_id"` // 冗余所属子系统加速检索
-	Subsystem   *Subsystem       `gorm:"foreignKey:SubsystemID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"subsystem,omitempty"`
-	GroupID     uint64           `gorm:"not null;index:idx_traefik_modules_group" json:"group_id"` // 可挂载于任意层级功能组
-	Group       *FunctionalGroup `gorm:"foreignKey:GroupID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"group,omitempty"`
-	ProcessID   *uint64          `gorm:"index:idx_traefik_modules_process" json:"process_id"` // 指向公共 SHARED 环境绑定的唯一基线进程 (A-03)；私有 Agent 进程经 Process.ModuleIDs 复用本模块
-	Process     *Process         `gorm:"foreignKey:ProcessID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"process,omitempty"`
-	Code        string           `gorm:"size:64;not null;uniqueIndex:uk_traefik_modules_code" json:"code"` // 全局唯一编码
-	Name        string           `gorm:"size:128;not null;index:idx_traefik_modules_name" json:"name"`
-	OwnerID     *uint            `gorm:"index:idx_traefik_modules_owner" json:"owner_id"`
-	Owner       *User            `gorm:"foreignKey:OwnerID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"owner,omitempty"`
-	Description string           `gorm:"type:text" json:"description"`
-	CreatedBy   uint             `gorm:"not null;default:0" json:"created_by"`
-	UpdatedBy   uint             `gorm:"not null;default:0" json:"updated_by"`
-	CreatedAt   time.Time        `json:"created_at"`
-	UpdatedAt   time.Time        `json:"updated_at"`
+	ID            uint64           `gorm:"primaryKey;autoIncrement" json:"id"`
+	SubsystemID   uint64           `gorm:"not null;index:idx_traefik_modules_subsystem" json:"subsystem_id"` // 冗余所属子系统加速检索
+	Subsystem     *Subsystem       `gorm:"foreignKey:SubsystemID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"subsystem,omitempty"`
+	GroupID       uint64           `gorm:"not null;index:idx_traefik_modules_group" json:"group_id"` // 可挂载于任意层级功能组
+	Group         *FunctionalGroup `gorm:"foreignKey:GroupID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"group,omitempty"`
+	ArchProcessID *uint64          `gorm:"index:idx_traefik_modules_arch_proc" json:"arch_process_id"` // 指向全局架构标准进程蓝图 (A-03 单模块至多归属 1 个标准进程)
+	ArchProcess   *ArchProcess     `gorm:"foreignKey:ArchProcessID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"arch_process,omitempty"`
+	Code          string           `gorm:"size:64;not null;uniqueIndex:uk_traefik_modules_code" json:"code"` // 全局唯一编码
+	Name          string           `gorm:"size:128;not null;index:idx_traefik_modules_name" json:"name"`
+	OwnerID       *uint            `gorm:"index:idx_traefik_modules_owner" json:"owner_id"`
+	Owner         *User            `gorm:"foreignKey:OwnerID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"owner,omitempty"`
+	Description   string           `gorm:"type:text" json:"description"`
+	CreatedBy     uint             `gorm:"not null;default:0" json:"created_by"`
+	UpdatedBy     uint             `gorm:"not null;default:0" json:"updated_by"`
+	CreatedAt     time.Time        `json:"created_at"`
+	UpdatedAt     time.Time        `json:"updated_at"`
 }
 
 func (Module) TableName() string { return config.TablePrefix + "modules" }
 ```
 
-### 3.2 模块服务契约与依赖关系表（表 4-1 与 表 4-2）
+### 3.2 模块服务契约与依赖关系表（表 4 ~ 表 5）
 
 契约全面收敛至 Service 级别，废弃旧有的 Operation 冗余声明；并将供给（PROVIDE）与依赖（DEPEND）正交建模为实体服务表与依赖关系表，依赖显式关联提供方 FM 或外部系统。
 
 ```go
-// 4-1. ModuleService 模块级对外供给服务契约表 (traefik_module_services)
+// 4. ModuleService 模块级对外供给服务契约表 (traefik_module_services)
 type ModuleService struct {
 	ID              uint64         `gorm:"primaryKey;autoIncrement" json:"id"`
 	ModuleID        uint64         `gorm:"not null;index:idx_traefik_mod_svc_mod" json:"module_id"`
@@ -160,7 +165,7 @@ type ModuleService struct {
 
 func (ModuleService) TableName() string { return config.TablePrefix + "module_services" }
 
-// 4-2. ModuleDependency 模块间服务依赖关系表 (traefik_module_dependencies)
+// 5. ModuleDependency 模块间服务依赖关系表 (traefik_module_dependencies)
 type ModuleDependency struct {
 	ID               uint64         `gorm:"primaryKey;autoIncrement" json:"id"`
 	ConsumerModuleID uint64         `gorm:"not null;uniqueIndex:uk_traefik_dep_tuple,priority:1;index:idx_traefik_dep_consumer" json:"consumer_module_id"`
@@ -181,7 +186,7 @@ type ModuleDependency struct {
 func (ModuleDependency) TableName() string { return config.TablePrefix + "module_dependencies" }
 ```
 
-### 3.3 公私域 Agent 纳管、动态排他租约与进程部署表（表 5 ~ 表 6）
+### 3.3 架构物理进程蓝图 SSOT、公私域 Agent 纳管与 `1:1` 宿主机进程挂载表（表 6 ~ 表 9）
 
 ```go
 const (
@@ -191,12 +196,61 @@ const (
 	AgentStatusOnline  = "ONLINE"
 	AgentStatusOffline = "OFFLINE"
 
-	AgentLeaseNone      = ""          // 空闲无租约
+	AgentLeaseNone      = ""          // 空闲无租约 (允许 ARMED 预挂载待命)
 	AgentLeaseRecording = "RECORDING" // 录制会话排他占用中
 	AgentLeaseReplay    = "REPLAY"    // 重放任务排他占用中
+
+	ProbeDesiredArmed    = "ARMED"    // 默认自动预挂待命
+	ProbeDesiredDisarmed = "DISARMED" // 手动暂停探针
+
+	ProbeStatusReady         = "READY"          // 🟢 eBPF 已预挂 + PID 已定位 + 0 存量直连
+	ProbeStatusNeedReconnect = "NEED_RECONNECT" // 🟡 eBPF 已预挂 + PID 已定位 + 存在预挂前存量直连
+	ProbeStatusWaitingProc   = "WAITING_PROC"   // 🔵 eBPF 已预挂 + 待业务进程启动
+	ProbeStatusMonitoring    = "MONITORING"     // 🟣 活跃录制/重放采集中
+	ProbeStatusCapDenied     = "CAP_DENIED"     // 🔴 缺少 CAP_BPF/CAP_NET_ADMIN
+	ProbeStatusError         = "ERROR"          // 🔴 探针同步异常
+	ProbeStatusDisarmed      = "DISARMED"       // ⚪ 已暂停探针或 Agent 离线
 )
 
-// 5. Agent 数据面宿主机守护进程纳管与动态排他租约表 (traefik_agents)
+// 6. ArchProcessGroup 全局架构物理进程组蓝图表 (traefik_arch_process_groups)
+type ArchProcessGroup struct {
+	ID          uint64        `gorm:"primaryKey;autoIncrement" json:"id"`
+	Code        string        `gorm:"size:64;not null;uniqueIndex:uk_traefik_arch_pgrp_code" json:"code"` // 全局唯一大写编码，如 "CORE_TRADE"
+	Name        string        `gorm:"size:128;not null;uniqueIndex:uk_traefik_arch_pgrp_name" json:"name"`
+	SortOrder   int           `gorm:"not null;default:0" json:"sort_order"`
+	Description string        `gorm:"type:text" json:"description"`
+	Processes   []ArchProcess `gorm:"foreignKey:GroupID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"processes,omitempty"`
+	CreatedBy   uint          `gorm:"not null;default:0" json:"created_by"`
+	UpdatedBy   uint          `gorm:"not null;default:0" json:"updated_by"`
+	CreatedAt   time.Time     `json:"created_at"`
+	UpdatedAt   time.Time     `json:"updated_at"`
+}
+
+func (ArchProcessGroup) TableName() string { return config.TablePrefix + "arch_process_groups" }
+
+// 7. ArchProcess 全局架构标准业务进程蓝图表 (traefik_arch_processes)
+// 在 /architecture?tree=physical 中作为全局唯一 SSOT 维护，零 Agent 机器耦合
+type ArchProcess struct {
+	ID                      uint64            `gorm:"primaryKey;autoIncrement" json:"id"`
+	GroupID                 uint64            `gorm:"not null;index:idx_traefik_arch_proc_group" json:"group_id"`
+	Group                   *ArchProcessGroup `gorm:"foreignKey:GroupID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"group,omitempty"`
+	Code                    string            `gorm:"size:64;not null;uniqueIndex:uk_traefik_arch_proc_code" json:"code"` // 全局唯一标准进程编码，如 "sut-order"
+	Name                    string            `gorm:"size:128;not null;index:idx_traefik_arch_proc_name" json:"name"`
+	DefaultListenPort       int               `gorm:"not null;default:0;check:chk_traefik_arch_proc_port,default_listen_port >= 0 AND default_listen_port <= 65535" json:"default_listen_port"` // 0 表示纯客户端进程；1..65535 为默认监听端口
+	DefaultCmdPattern       string            `gorm:"size:512;not null;default:''" json:"default_cmd_pattern"`                                                                                   // 默认 /proc/<pid>/cmdline 匹配特征
+	DefaultExtraDownstreams datatypes.JSON    `gorm:"type:jsonb;not null;default:'[]'" json:"default_extra_downstreams"`                                                                         // 默认补充下游 ["IP:Port"]
+	SortOrder               int               `gorm:"not null;default:0" json:"sort_order"`
+	Description             string            `gorm:"type:text" json:"description"`
+	Modules                 []Module          `gorm:"foreignKey:ArchProcessID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"modules,omitempty"` // 组装承载的 FM 功能模块集合 (1:N)
+	CreatedBy               uint              `gorm:"not null;default:0" json:"created_by"`
+	UpdatedBy               uint              `gorm:"not null;default:0" json:"updated_by"`
+	CreatedAt               time.Time         `json:"created_at"`
+	UpdatedAt               time.Time         `json:"updated_at"`
+}
+
+func (ArchProcess) TableName() string { return config.TablePrefix + "arch_processes" }
+
+// 8. Agent 数据面宿主机守护进程纳管与动态排他租约表 (traefik_agents)
 type Agent struct {
 	ID              uint64     `gorm:"primaryKey;autoIncrement" json:"id"`
 	Name            string     `gorm:"size:128;not null;uniqueIndex:uk_traefik_agents_name" json:"name"`
@@ -205,6 +259,8 @@ type Agent struct {
 	OwnerID         *uint      `gorm:"index:idx_traefik_agents_scope_owner,priority:2" json:"owner_id,omitempty"` // SHARED 为 nil；PRIVATE 必填创建人 users.id
 	Owner           *User      `gorm:"foreignKey:OwnerID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"owner,omitempty"`
 	Status          string     `gorm:"size:32;not null;default:'OFFLINE';index:idx_traefik_agents_status" json:"status"`
+	BootID          string     `gorm:"size:64;not null;default:''" json:"boot_id"` // 感知 Agent 重启以触发预挂自动补齐
+	ArmedDigest     string     `gorm:"size:64;not null;default:''" json:"armed_digest"`
 	AgentVersion    string     `gorm:"size:64;not null;default:''" json:"agent_version"`
 	ProtocolVersion string     `gorm:"size:32;not null;default:''" json:"protocol_version"` // 如 "1.0"
 	KernelVersion   string     `gorm:"size:128;not null;default:''" json:"kernel_version"`
@@ -212,63 +268,68 @@ type Agent struct {
 	CapDetail       string     `gorm:"size:512;not null;default:''" json:"cap_detail"`
 	LastHeartbeatAt *time.Time `gorm:"index:idx_traefik_agents_hb" json:"last_heartbeat_at"`
 
-	// 动态排他租约列 (Agent Mutex Lease：同一时刻仅允许 1 名用户执行 1 项录制或重放操作)
+	// 动态排他租约列 (Agent Mutex Lease：仅活跃 RECORDING / REPLAY 占用；ARMED 预挂待命不占租约)
 	LeaseType       string     `gorm:"size:16;not null;default:'';index:idx_traefik_agents_lease;check:chk_traefik_agents_lease,lease_type IN ('','RECORDING','REPLAY')" json:"lease_type"`
-	LeaseRefID      *uint64    `json:"lease_ref_id,omitempty"`                                                      // 当前占用本 Agent 的 RecordingSession.ID 或 ReplayTask.ID
-	LeaseHolderID   *uint      `gorm:"index:idx_traefik_agents_lease_holder" json:"lease_holder_id,omitempty"`      // 持锁操作人 users.id
+	LeaseRefID      *uint64    `json:"lease_ref_id,omitempty"`
+	LeaseHolderID   *uint      `gorm:"index:idx_traefik_agents_lease_holder" json:"lease_holder_id,omitempty"`
 	LeaseHolder     *User      `gorm:"foreignKey:LeaseHolderID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"lease_holder,omitempty"`
 	LeaseAcquiredAt *time.Time `json:"lease_acquired_at,omitempty"`
-	LeaseExpiresAt  *time.Time `gorm:"index:idx_traefik_agents_lease_exp" json:"lease_expires_at,omitempty"`        // 硬性安全到期时间，超时触发惰性自愈解锁
+	LeaseExpiresAt  *time.Time `gorm:"index:idx_traefik_agents_lease_exp" json:"lease_expires_at,omitempty"`
 
-	Description     string     `gorm:"type:text" json:"description"`
-	CreatedBy       uint       `gorm:"not null;default:0" json:"created_by"`
-	UpdatedBy       uint       `gorm:"not null;default:0" json:"updated_by"`
-	CreatedAt       time.Time  `json:"created_at"`
-	UpdatedAt       time.Time  `json:"updated_at"`
+	Description string    `gorm:"type:text" json:"description"`
+	CreatedBy   uint      `gorm:"not null;default:0" json:"created_by"`
+	UpdatedBy   uint      `gorm:"not null;default:0" json:"updated_by"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 func (Agent) TableName() string { return config.TablePrefix + "agents" }
 
-// 6. Process 业务宿主机目标进程部署映射表 (traefik_processes)
-// 注：实时操作系统 PID 不作为权威静态字段落库，由 Agent 运行期通过 ListenPort / CmdPattern 动态反查
+// 9. Process 宿主机 Agent 架构进程 1:1 挂载实例、本地覆盖与预挂就绪表 (traefik_processes)
+// 注：保持 process_id 主键与历史录制批次、流量分区表及重放任务的完全外键兼容
 type Process struct {
-	ID               uint64          `gorm:"primaryKey;autoIncrement" json:"id"`
-	AgentID          uint64          `gorm:"not null;uniqueIndex:uk_traefik_proc_agent_port,priority:1;uniqueIndex:uk_traefik_proc_agent_name,priority:1;index:idx_traefik_proc_agent" json:"agent_id"`
-	Agent            *Agent          `gorm:"foreignKey:AgentID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"agent,omitempty"`
-	Name             string          `gorm:"size:128;not null;uniqueIndex:uk_traefik_proc_agent_name,priority:2" json:"name"`
-	ListenPort       int             `gorm:"not null;uniqueIndex:uk_traefik_proc_agent_port,priority:2;check:chk_traefik_proc_port,listen_port >= 1 AND listen_port <= 65535" json:"listen_port"` // 单进程单监听端口互斥 (A-02)
-	AdvertiseIP      string          `gorm:"size:64;not null;default:''" json:"advertise_ip"` // 可选对外业务通信 IP，为空时默认取所属 Agent IP
-	CmdPattern       string          `gorm:"size:512;not null" json:"cmd_pattern"`            // /proc/<pid>/cmdline 匹配规则
-	ProcessModules   []ProcessModule `gorm:"foreignKey:ProcessID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"process_modules,omitempty"` // 强关系关联表
-	ModuleIDs        []uint64        `gorm:"-" json:"module_ids,omitempty"`                   // DTO 传输便捷字段 (入库前持久化到 traefik_process_modules)
-	ExtraDownstreams datatypes.JSON  `gorm:"type:jsonb;not null;default:'[]'" json:"extra_downstreams"` // 显式补充的外部未登记下游 ["IP:Port"]
-	Description      string          `gorm:"type:text" json:"description"`
-	CreatedBy        uint            `gorm:"not null;default:0" json:"created_by"`
-	UpdatedBy        uint            `gorm:"not null;default:0" json:"updated_by"`
-	CreatedAt        time.Time       `json:"created_at"`
-	UpdatedAt        time.Time       `json:"updated_at"`
+	ID                  uint64         `gorm:"primaryKey;autoIncrement" json:"id"`
+	AgentID             uint64         `gorm:"not null;uniqueIndex:uk_traefik_proc_agent_arch,priority:1;uniqueIndex:uk_traefik_proc_agent_port,priority:1,where:effective_listen_port > 0;index:idx_traefik_proc_agent" json:"agent_id"`
+	Agent               *Agent         `gorm:"foreignKey:AgentID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"agent,omitempty"`
+	ArchProcessID       uint64         `gorm:"not null;uniqueIndex:uk_traefik_proc_agent_arch,priority:2;index:idx_traefik_proc_arch" json:"arch_process_id"` // 单机严格 1:1 唯一约束
+	ArchProcess         *ArchProcess   `gorm:"foreignKey:ArchProcessID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"arch_process,omitempty"`
+	OverrideListenPort  *int           `gorm:"check:chk_traefik_proc_override_port,override_listen_port IS NULL OR (override_listen_port >= 0 AND override_listen_port <= 65535)" json:"override_listen_port"` // nil 表示继承 ArchProcess.DefaultListenPort
+	EffectiveListenPort int            `gorm:"not null;default:0;uniqueIndex:uk_traefik_proc_agent_port,priority:2,where:effective_listen_port > 0;check:chk_traefik_proc_eff_port,effective_listen_port >= 0 AND effective_listen_port <= 65535" json:"listen_port"` // 物化有效端口，保障同机非零端口互斥 (A-02)
+	OverrideCmdPattern  string         `gorm:"size:512;not null;default:''" json:"override_cmd_pattern"`                                                                                                                                                              // 为空表示继承 ArchProcess.DefaultCmdPattern
+	AdvertiseIP         string         `gorm:"size:64;not null;default:''" json:"advertise_ip"`                                                                                                                                                                       // 可选本地业务通信 IP，为空取所属 Agent IP
+	ExtraDownstreams    datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"extra_downstreams"`                                                                                                                                                             // 本地附加补充下游 ["IP:Port"]
+	Description         string         `gorm:"type:text" json:"description"`
+
+	// eBPF 默认自动预挂期望状态与最近一次宿主机 /proc 就绪诊断快照
+	ProbeDesiredState string     `gorm:"size:16;not null;default:'ARMED';check:chk_traefik_proc_desired,probe_desired_state IN ('ARMED','DISARMED')" json:"probe_desired_state"`
+	ProbeStatus       string     `gorm:"size:32;not null;default:'DISARMED';index:idx_traefik_proc_probe_status" json:"probe_status"`
+	ResolvedPID       uint32     `gorm:"not null;default:0" json:"resolved_pid"`
+	EstablishedConns  int        `gorm:"not null;default:0" json:"established_conns"`
+	NeedReconnect     bool       `gorm:"not null;default:false" json:"need_reconnect"`
+	DiagMessage       string     `gorm:"size:512;not null;default:''" json:"diag_message"`
+	LastDiagAt        *time.Time `json:"last_diag_at,omitempty"`
+
+	// DTO 序列化便捷透出字段（由预加载的 ArchProcess 自动计算填充，不落冗余列）
+	GroupID     uint64 `gorm:"-" json:"group_id"`
+	GroupName   string `gorm:"-" json:"group_name"`
+	Code        string `gorm:"-" json:"code"`
+	Name        string `gorm:"-" json:"name"`
+	CmdPattern  string `gorm:"-" json:"cmd_pattern"`
+	HasOverride bool   `gorm:"-" json:"has_override"`
+
+	CreatedBy uint      `gorm:"not null;default:0" json:"created_by"`
+	UpdatedBy uint      `gorm:"not null;default:0" json:"updated_by"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 func (Process) TableName() string { return config.TablePrefix + "processes" }
-
-// 7. ProcessModule 业务进程与功能模块同构承载关联表 (traefik_process_modules)
-// 替代 JSONB 列表，提供强外键约束与双向高效索引，支撑跨 Agent 同构重放能力定位
-type ProcessModule struct {
-	ID        uint64    `gorm:"primaryKey;autoIncrement" json:"id"`
-	ProcessID uint64    `gorm:"not null;uniqueIndex:uk_traefik_proc_mod,priority:1;index:idx_traefik_proc_mod_pid" json:"process_id"`
-	Process   *Process  `gorm:"foreignKey:ProcessID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
-	ModuleID  uint64    `gorm:"not null;uniqueIndex:uk_traefik_proc_mod,priority:2;index:idx_traefik_proc_mod_mid" json:"module_id"`
-	Module    *Module   `gorm:"foreignKey:ModuleID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"module,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
-}
-
-func (ProcessModule) TableName() string { return config.TablePrefix + "process_modules" }
 ```
 
-### 3.4 IDL 描述集与方法映射字典表（表 8 ~ 表 9）
+### 3.4 IDL 描述集与方法映射字典表（表 10 ~ 表 11）
 
 ```go
-// 8. ProtoSchema Protobuf 编译描述集 (.pb FileDescriptorSet) 多版本仓库表 (traefik_proto_schemas)
+// 10. ProtoSchema Protobuf 编译描述集 (.pb FileDescriptorSet) 多版本仓库表 (traefik_proto_schemas)
 type ProtoSchema struct {
 	ID              uint64    `gorm:"primaryKey;autoIncrement" json:"id"`
 	Name            string    `gorm:"size:128;not null;uniqueIndex:uk_traefik_proto_name_ver,priority:1;uniqueIndex:uk_traefik_proto_active_name,where:is_active = true" json:"name"`
@@ -289,7 +350,7 @@ type ProtoSchema struct {
 
 func (ProtoSchema) TableName() string { return config.TablePrefix + "proto_schemas" }
 
-// 9. ProtoOperation 描述集解析出的 CROS RPC 服务方法映射表 (traefik_proto_operations)
+// 11. ProtoOperation 描述集解析出的 CROS RPC 服务方法映射表 (traefik_proto_operations)
 type ProtoOperation struct {
 	ID                 uint64         `gorm:"primaryKey;autoIncrement" json:"id"`
 	SchemaID           uint64         `gorm:"not null;uniqueIndex:uk_traefik_proto_op_schema,priority:1;index:idx_traefik_proto_op_sid" json:"schema_id"`
@@ -311,7 +372,7 @@ type ProtoOperation struct {
 func (ProtoOperation) TableName() string { return config.TablePrefix + "proto_operations" }
 ```
 
-### 3.5 公私域协同录制、双模物理分区归档与跨 Agent 重放断言表（表 10 ~ 表 13）
+### 3.5 公私域协同录制、双模物理分区归档与跨 Agent 重放断言表（表 12 ~ 表 15）
 
 ```go
 const (
@@ -339,7 +400,7 @@ const (
 	ReplayResultError    = "ERROR"
 )
 
-// 10. RecordingSession 任务级多进程协同录制批次表 (traefik_recording_sessions)
+// 12. RecordingSession 任务级多进程协同录制批次表 (traefik_recording_sessions)
 type RecordingSession struct {
 	ID                    uint64         `gorm:"primaryKey;autoIncrement" json:"id"`
 	SessionNo             string         `gorm:"size:64;not null;uniqueIndex:uk_traefik_rec_session_no" json:"session_no"`
@@ -368,7 +429,7 @@ type RecordingSession struct {
 
 func (RecordingSession) TableName() string { return config.TablePrefix + "recording_sessions" }
 
-// 11. TrafficRecord CROS RPC 无损二进制 + 结构化 JSONB 双模往返物理分区表 (traefik_traffic_records)
+// 13. TrafficRecord CROS RPC 无损二进制 + 结构化 JSONB 双模往返物理分区表 (traefik_traffic_records)
 // 采用 Exchange-per-Row 单次往返一行模型，按 created_at 进行 PostgreSQL PARTITION BY RANGE (created_at)
 // 满足 30 天数据保留期的 O(1) 零锁表 DROP TABLE 毫秒级轮转
 type TrafficRecord struct {
@@ -423,7 +484,7 @@ type TrafficRecord struct {
 
 func (TrafficRecord) TableName() string { return config.TablePrefix + "traffic_records" }
 
-// 12. ReplayTask 跨 Agent 同构离线自愈重放任务头表 (traefik_replay_tasks)
+// 14. ReplayTask 跨 Agent 同构离线自愈重放任务头表 (traefik_replay_tasks)
 type ReplayTask struct {
 	ID                uint64            `gorm:"primaryKey;autoIncrement" json:"id"`
 	TaskNo            string            `gorm:"size:64;not null;uniqueIndex:uk_traefik_replay_task_no" json:"task_no"`
@@ -458,7 +519,7 @@ type ReplayTask struct {
 
 func (ReplayTask) TableName() string { return config.TablePrefix + "replay_tasks" }
 
-// 13. ReplayItem 重放任务单请求独立执行结果与双层 Diff 明细表 (traefik_replay_items)
+// 15. ReplayItem 重放任务单请求独立执行结果与双层 Diff 明细表 (traefik_replay_items)
 // 规范化拆解原 JSONB 大字段，支持明细项并发流式更新、分页检索与实际响应切片归档
 type ReplayItem struct {
 	ID              uint64         `gorm:"primaryKey;autoIncrement" json:"id"`
@@ -543,13 +604,14 @@ func (ReplayItem) TableName() string { return config.TablePrefix + "replay_items
 | `traefik_subsystems` | `uk_traefik_subsystems_code` | `UNIQUE (code)` | F-01：子系统编码全局唯一 |
 | `traefik_functional_groups` | `uk_traefik_fg_sub_code` | `UNIQUE (subsystem_id, code)` | F-01：功能组编码在同一子系统内唯一 |
 | `traefik_modules` | `uk_traefik_modules_code` | `UNIQUE (code)` | F-01：功能模块编码全局唯一 |
-| `traefik_module_interfaces` | `uk_traefik_mod_iface_tuple` | `UNIQUE (module_id, relation_type, service_name, operation)` | F-02：同模块内同一方向接口不重复声明 |
-| `traefik_module_interfaces` | `uk_traefik_provide_service_op` | `UNIQUE (service_name, operation) WHERE relation_type = 'PROVIDE'` | **A-05 & F-02**：全局唯一供给接口契约，同时不阻塞多模块声明相同 `DEPEND` |
+| `traefik_module_services` | `uk_traefik_mod_svc_name` | `UNIQUE (service_name)` | **A-05 & F-02**：全局唯一供给服务契约 |
+| `traefik_module_dependencies` | `uk_traefik_dep_tuple` | `UNIQUE (consumer_module_id, service_id)` | F-02：同模块对同一内部服务不重复声明依赖 |
+| `traefik_arch_process_groups` | `uk_traefik_arch_pgrp_code` / `uk_traefik_arch_pgrp_name` | `UNIQUE (code)` / `UNIQUE (name)` | **F-02 & ADR-09**：全局架构物理进程组编码与名称唯一 |
+| `traefik_arch_processes` | `uk_traefik_arch_proc_code` | `UNIQUE (code)` | **F-02 & ADR-09**：全局标准业务进程蓝图编码唯一 |
 | `traefik_agents` | `uk_traefik_agents_name` | `UNIQUE (name)` | F-06：Agent 节点名称全局唯一 |
 | `traefik_agents` | `uk_traefik_agents_endpoint` | `UNIQUE (endpoint)` | F-06：Agent 访问地址 `IP:Port` 全局唯一 |
-| `traefik_processes` | `uk_traefik_proc_agent_port` | `UNIQUE (agent_id, listen_port)` | **A-02 & F-02**：单进程单端口，同一 Agent 下监听端口严格互斥 |
-| `traefik_processes` | `uk_traefik_proc_agent_name` | `UNIQUE (agent_id, name)` | F-02：同一 Agent 下业务进程名称唯一 |
-| `traefik_process_modules` | `uk_traefik_proc_mod` | `UNIQUE (process_id, module_id)` | F-02：进程与模块多对多承载关联不重复 |
+| `traefik_processes` | `uk_traefik_proc_agent_arch` | `UNIQUE (agent_id, arch_process_id)` | **F-02 & ADR-09**：单台计算机（单个 Agent）上同一标准架构进程严格 `1:1` 单实例 |
+| `traefik_processes` | `uk_traefik_proc_agent_port` | `UNIQUE (agent_id, effective_listen_port) WHERE effective_listen_port > 0` | **A-02 & F-02**：同一 Agent 下非零有效监听端口严格互斥，同时允许多个 `0` 端口纯客户端并存 |
 | `traefik_proto_schemas` | `uk_traefik_proto_name_ver` | `UNIQUE (name, version)` | F-03：同名 `.pb` 描述集版本号严格递增不冲突 |
 | `traefik_proto_schemas` | `uk_traefik_proto_active_name` | `UNIQUE (name) WHERE is_active = true` | F-03：同名 `.pb` 任意时刻至多 1 个版本处于生效态 |
 | `traefik_proto_operations` | `uk_traefik_proto_op_schema` | `UNIQUE (schema_id, service_name, operation)` | F-03：单个 `.pb` 版本内部接口映射唯一 |
@@ -568,13 +630,16 @@ func (ReplayItem) TableName() string { return config.TablePrefix + "replay_items
 | :--- | :--- | :---: | :---: |
 | 删除 `Subsystem` | 存在 `FunctionalGroup` 或 `Module` 引用 | `409 Conflict` | `ON DELETE RESTRICT` |
 | 删除 `FunctionalGroup` | 存在子 `FunctionalGroup`（`parent_id`）或挂载的 `Module` | `409 Conflict` | `ON DELETE RESTRICT` |
-| 删除 `Module` | 存在已对外提供且已被其他 FM 依赖的 `ModuleService`，或仍被 `ProcessModule` 挂载 | `409 Conflict` | 存在下游依赖时禁止孤儿删除；`ProcessModule` 为 `RESTRICT` |
+| 删除 `Module` | 存在已对外提供且已被其他 FM 依赖的 `ModuleService`，或仍装载于某 `ArchProcess`（`arch_process_id IS NOT NULL`） | `409 Conflict` | 存在下游依赖或装载关系时禁止孤儿删除 |
 | 删除 `ModuleService` | 该 Service 已被其他内部功能模块作为依赖引用 (`ModuleDependency`) | `409 Conflict` | 拦截强校验，需先移除下游依赖方的契约绑定 |
-| 访问/查看 `PRIVATE` 资源 | 非 `owner_id` 本人且非 `traefik_admin` 操作 `PRIVATE` Agent 或 `PRIVATE` 录制素材 | `403 Forbidden` | 应用层 `owner_id` 鉴权过滤（管理员可穿透查看/审计） |
-| 操作/租用 `PRIVATE` 资源 | 非 `owner_id` 本人尝试修改或租用他人 `PRIVATE` Agent（即使是管理员也不得代为持锁录制） | `403 Forbidden` | 应用层排他租约归属强校验 |
+| 删除 `ArchProcessGroup` | 组下仍存在 `ArchProcess` 标准架构进程 | `409 Conflict` | `ON DELETE RESTRICT` |
+| 删除 `ArchProcess` | 已被任何宿主机 Agent 挂载实例化（`traefik_processes` 存在引用） | `409 Conflict` | `ON DELETE RESTRICT`（无 Agent 挂载时删除自动将 `Module.arch_process_id` 置 `NULL`） |
+| 挂载 `ArchProcess` 至 `SHARED` Agent | 该 `ArchProcess` 已被另一台公共 `SHARED` Agent 挂载（违背 `A-03` 公共基线单实例） | `409 Conflict` | 应用层事务级公共基线单实例强校验 |
+| 访问/查看 `PRIVATE` 资源 | 非 `owner_id` 本人且非 `traefik_admin` 操作 `PRIVATE` Agent、挂载实例或 `PRIVATE` 录制素材 | `403 Forbidden` | 应用层 `owner_id` 鉴权过滤（管理员可穿透查看/审计） |
+| 操作/租用 `PRIVATE` 资源 | 非 `owner_id` 本人尝试修改挂载/探针或租用他人 `PRIVATE` Agent（即使是管理员也不得代为持锁录制） | `403 Forbidden` | 应用层排他租约与挂载写权限强校验 |
 | 并发租用 `Agent`（录制/重放） | 目标 `Agent`（无论 `SHARED` 还是 `PRIVATE`）存在未过期的活跃租约（`lease_type != '' && now < lease_expires_at`） | `409 Conflict` | 升序 `SELECT ... FOR UPDATE` 行锁 + Agent 内存 `SingleTenantGuard` |
-| 删除 `Agent` | 仍纳管任何 `Process` 或持有活跃排他租约（`lease_type != ''`） | `409 Conflict` | `ON DELETE RESTRICT` |
-| 删除 `Process` | 所属 Agent 持有活跃租约，或被历史录制/重放任务引用 | `409 Conflict` | `ProcessModule` 级联删除；流量母表逻辑解耦；重放任务为 `RESTRICT` |
+| 删除 `Agent` | 仍纳管任何 `Process` 挂载实例或持有活跃排他租约（`lease_type != ''`） | `409 Conflict` | `ON DELETE RESTRICT` |
+| 删除/卸载 `Process` | 所属 Agent 持有活跃租约，或被历史重放任务 `ReplayTask` 引用 | `409 Conflict` | 流量母表逻辑解耦；重放任务为 `RESTRICT`；若 Agent 在线则同步热卸载该进程待命规则 |
 | 删除 `ProtoSchema` | 当前处于 `is_active = true` 生效态 | `409 Conflict` | 非生效历史版本允许删除：`ProtoOperation` 级联 `CASCADE` 删除 |
 | 删除 `RecordingSession` | 当前处于 `RECORDING` / `STOPPING` 态，或仍被 `ReplayTask` 引用 | `409 Conflict` | 删除已完成且无重放引用的批次时，关联清理相关子表 |
 
