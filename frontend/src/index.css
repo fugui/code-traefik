@@ -1235,7 +1235,9 @@ body {
   flex-direction: column;
   gap: 0.25rem;
   max-height: calc(100vh - 280px);
+  padding-left: 0;
   padding-right: 0.25rem;
+  margin-left: 0;
 }
 
 .code-tree-empty,
@@ -1257,10 +1259,15 @@ body {
 .code-tree-node-wrapper {
   display: flex;
   flex-direction: column;
+  margin-left: 0;
+  padding-left: 0;
 }
 
 .code-tree-node-wrapper--subsystem {
   margin-bottom: 0.45rem;
+  margin-left: 0;
+  padding-left: 0;
+  width: 100%;
 }
 
 .code-tree-node-wrapper--group {
@@ -1269,6 +1276,7 @@ body {
 
 .code-tree-node {
   display: flex;
+  flex-direction: row;
   align-items: center;
   justify-content: space-between;
   gap: 0.35rem;
@@ -1278,6 +1286,7 @@ body {
   user-select: none;
   transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
   position: relative;
+  box-sizing: border-box;
 }
 
 .code-tree-node:hover {
@@ -1290,12 +1299,15 @@ body {
   font-weight: 600;
 }
 
-/* L1: 子系统节点 - 顶层系统容器，略带边框与背景 */
+/* L1: 子系统节点 - 顶层系统容器，严格无缩进、零左边距左对齐，略带边框与背景 */
 .code-tree-node--subsystem {
   background: var(--color-bg-muted);
   border: 1px solid var(--color-border-secondary);
   font-weight: 600;
   padding: 0.45rem 0.6rem;
+  margin-left: 0;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .code-tree-node--subsystem:hover {
@@ -1307,6 +1319,16 @@ body {
   background: var(--color-primary-subtle);
   border-color: var(--color-primary);
   color: var(--color-primary);
+}
+
+.code-tree-node--subsystem > .code-tree-node__left {
+  margin-left: 0;
+  padding-left: 0;
+}
+
+.code-tree-node--subsystem .code-tree-expand-btn {
+  margin-left: 0;
+  flex-shrink: 0;
 }
 
 /* L2: 功能组节点 - 垂直领域聚合层 */
@@ -2439,7 +2461,7 @@ body {
   overflow: hidden;
 }
 
-.code-tree-header {
+.code-schema-inspector-tree .code-tree-header {
   display: flex;
   flex-direction: column;
   gap: 0.2rem;
@@ -2448,24 +2470,24 @@ body {
   border-bottom: 1px solid var(--color-border-subtle);
 }
 
-.code-tree-header__title {
+.code-schema-inspector-tree .code-tree-header__title {
   font-weight: 600;
   font-size: 0.85rem;
   color: var(--color-text-primary);
 }
 
-.code-tree-body {
+.code-schema-inspector-tree .code-tree-body {
   padding: 0.5rem 0;
   display: flex;
   flex-direction: column;
 }
 
-.code-tree-node {
+.code-schema-inspector-tree .code-tree-node {
   display: flex;
   flex-direction: column;
 }
 
-.code-tree-node__content {
+.code-schema-inspector-tree .code-tree-node__content {
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -2476,21 +2498,21 @@ body {
   cursor: pointer;
 }
 
-.code-tree-node__content:hover {
+.code-schema-inspector-tree .code-tree-node__content:hover {
   background: var(--color-bg-hover);
 }
 
-.code-tree-node--ignored > .code-tree-node__content {
+.code-schema-inspector-tree .code-tree-node--ignored > .code-tree-node__content {
   background: var(--color-warning-subtle);
   opacity: 0.85;
 }
 
-.code-tree-node--ignored > .code-tree-node__content .code-field-name {
+.code-schema-inspector-tree .code-tree-node--ignored > .code-tree-node__content .code-field-name {
   text-decoration: line-through;
   color: var(--color-text-muted);
 }
 
-.code-tree-expand-slot {
+.code-schema-inspector-tree .code-tree-expand-slot {
   width: 16px;
   display: inline-flex;
   align-items: center;
@@ -2498,12 +2520,12 @@ body {
   flex-shrink: 0;
 }
 
-.code-tree-bullet {
+.code-schema-inspector-tree .code-tree-bullet {
   color: var(--color-text-muted);
   font-size: 0.8rem;
 }
 
-.code-tag-badge {
+.code-schema-inspector-tree .code-tag-badge {
   color: var(--color-text-muted);
   font-size: 0.72rem;
   background: var(--color-bg-muted);
@@ -2511,17 +2533,17 @@ body {
   border-radius: 2px;
 }
 
-.code-field-name {
+.code-schema-inspector-tree .code-field-name {
   font-weight: 600;
   color: var(--color-text-primary);
 }
 
-.code-field-path-preview {
+.code-schema-inspector-tree .code-field-path-preview {
   color: var(--color-text-muted);
   font-size: 0.7rem;
 }
 
-.code-field-comments {
+.code-schema-inspector-tree .code-field-comments {
   color: var(--color-text-muted);
   font-size: 0.75rem;
   font-style: italic;
@@ -2531,7 +2553,7 @@ body {
   white-space: nowrap;
 }
 
-.code-tree-node__actions {
+.code-schema-inspector-tree .code-tree-node__actions {
   margin-left: auto;
   display: flex;
   align-items: center;
