@@ -324,6 +324,7 @@ func GetArchProcessTree(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"tree":                    res,
+		"items":                   res,
 		"unassigned_module_count": unassignedModuleCount,
 	})
 }

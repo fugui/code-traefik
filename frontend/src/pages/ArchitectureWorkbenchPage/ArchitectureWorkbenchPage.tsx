@@ -350,7 +350,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
   const loadArchProcessTree = useCallback(async () => {
     try {
       const res = await archApi.getArchProcessTree();
-      const items = res.items ?? [];
+      const items = res.tree ?? res.items ?? [];
       setArchProcessGroups(items);
       if (items.length > 0) {
         setSelectedArchProcessId((prev) => {

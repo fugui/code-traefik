@@ -301,7 +301,9 @@ export async function getArchProcessTree(search?: string) {
   const query = new URLSearchParams();
   if (search) query.set('search', search);
   const qs = query.toString();
-  return apiRequest<{ items: ArchProcessGroup[] }>(`/arch/processes/tree${qs ? `?${qs}` : ''}`);
+  return apiRequest<{ items?: ArchProcessGroup[]; tree?: ArchProcessGroup[]; unassigned_module_count?: number }>(
+    `/arch/processes/tree${qs ? `?${qs}` : ''}`
+  );
 }
 
 export async function listArchProcesses(params?: {

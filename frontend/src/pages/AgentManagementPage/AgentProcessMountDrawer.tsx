@@ -117,7 +117,7 @@ export const AgentProcessMountContent: React.FC<AgentProcessMountContentProps> =
     setLoadingTree(true);
     try {
       const res = await archApi.getArchProcessTree();
-      setArchGroups(res.items ?? []);
+      setArchGroups(res.tree ?? res.items ?? []);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '加载架构进程树失败');
     } finally {
