@@ -66,3 +66,4 @@
   - 100% 遵循 `theme.css` 语义 Token，亮色/暗色模式均具备高端质感。
 - **兼容性 (Compatibility)**：
   - 对外依然向 `/api/recording-sessions` 提交 `target_process_ids`，后端 API 契约保持完全兼容。
+
