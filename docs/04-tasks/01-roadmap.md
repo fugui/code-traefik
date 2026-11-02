@@ -1,11 +1,11 @@
 # 业务流量监控与重放 (`code-traefik`) TDD 工程实施路线图与质量门禁
 
 - **文档编号**：`01-roadmap.md`
-- **文档版本**：v1.2.1
+- **文档版本**：v1.3.0
 - **更新日期**：2026-11-02
 - **归属阶段**：阶段三/四：TDD 实施路线图与全局门禁 (`04-tasks`)
-- **状态**：已批准（待 M10 实施）(Approved for M10)
-- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.9.1)、[`01-system-architecture.md`](../02-design/01-system-architecture.md)、[`01-http-api-contract.md`](../03-api/01-http-api-contract.md)、[`09-arch-process-ssot-and-ebpf-premount-standby-adr.md`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md) (ADR-09 v1.1.0)
+- **状态**：已批准（待 M11 实施）(Approved for M11)
+- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.9.2)、[`01-system-architecture.md`](../02-design/01-system-architecture.md)、[`01-http-api-contract.md`](../03-api/01-http-api-contract.md)、[`09-arch-process-ssot-and-ebpf-premount-standby-adr.md`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md) (ADR-09 v1.1.0)、[`10-enhanced-proto-schema-file-management-adr.md`](../05-adr/10-enhanced-proto-schema-file-management-adr.md) (ADR-10 v1.1.0)
 
 ---
 
@@ -21,7 +21,7 @@
 
 ---
 
-## 2. M1 ~ M10 里程碑依赖拓扑 (DAG) 与职责边界
+## 2. M1 ~ M11 里程碑依赖拓扑 (DAG) 与职责边界
 
 ```mermaid
 flowchart LR
@@ -41,11 +41,13 @@ flowchart LR
     M7 ==> M8
     M8 ==> M9
     M9 ==> M10
+    M10 ==> M11
     M6["M6: 分层复合拓扑与一致性画布<br/>(React Flow + ELK Worker + 边汇总 + 去 Agent 物理图)"]
     M7["M7: 契约资产化治理、嵌套服务表与消息体字段树<br/>(两级折叠表 + 字段字典树 + 可视化 Diff 忽略 + 原文件导出)"]
     M8["M8: 控制台信息架构重组与调试工作流闭环<br/>(3组8项菜单 + 录制台账/单包调试重放 + 架构解耦与进程收口)"]
     M9["M9: 协同录制抽屉重构与进程树选择器<br/>(Drawer 侧边栏 + 卡片解挤 + 目标 Agent 选择防呆 + 业务进程树)"]
     M10["M10: 架构物理进程蓝图与 eBPF 自动预挂待命<br/>([逻辑架构|物理进程] + 1:1挂载覆盖 + ARMED零重启录制)"]
+    M11["M11: 增强 Protobuf 描述集资产管理<br/>(多.pb文件台账 + 跨集依赖闭包 + 全局单一生效池)"]
 ```
 
 | 里程碑 | 状态 | 作战卡文档 | 核心职责与交付边界 | 准出质量门禁 (Exit Gate) |
@@ -60,6 +62,7 @@ flowchart LR
 | **M8** | ✅ 已交付 | [`09-m8-console-ia-restructuring-and-debug-workflow.md`](./09-m8-console-ia-restructuring-and-debug-workflow.md) | 微前端控制台信息架构重组与调试工作流闭环：3 组 8 项频次金字塔菜单（默认落地 `/record`）与旧深链无损重定向、独立 `流量录制` 素材台账与 `流量调试`（`has_error` 异常过滤 + `SinglePacketReplayDrawer` 单包快速重放原地 Diff）、全屏 `架构拓扑` 与纯逻辑 `架构元素` 解耦、物理进程单点收口至 `Agent 与进程` | `TEST_DB_DSN=... make test` 全绿 + `MenuAndLegacyRoutes` / `RecordingWorkbench` / `SinglePacketReplay` / `TopologyAndArchDecoupling` 单测全绿 + `make lint && make build && make clean` 零警告 |
 | **M9** | ✅ 已交付 | [`10-m9-recording-drawer-and-process-tree-selection.md`](./10-m9-recording-drawer-and-process-tree-selection.md) | 协同录制抽屉重构与进程树选择器：全面弃用居中 Modal 迁移至 680px `Drawer`（Sticky 吸底 Footer）、素材归属卡片式单选解挤、宿主 Agent 下拉选择与在线/租约防呆门禁、业务进程树形分层选择（组级全选/半选/折叠与搜索过滤） | `RecordingStartDrawer` 单测全绿 + `make test && make lint && make build` 零警告 |
 | **M10** | ✅ 已交付 | [`11-m10-arch-process-blueprint-and-premount-workflow.md`](./11-m10-arch-process-blueprint-and-premount-workflow.md) | 架构物理进程蓝图解耦、多环境 `1:1` 挂载与 eBPF 自动预挂待命：15 表清库重建（`ArchProcessGroup`/`ArchProcess` + 多套 `SHARED`/`PRIVATE` 环境 `1:1` 挂载覆盖 + `FallbackAgentID` 基线兜底 + `ProcessSnapshots` 快照解耦）、零 Agent 物理拓扑与可选环境端点叠加、`/architecture` `[逻辑架构 \| 物理进程]` 双视图树、按需入站读写钩子（待命全机零读写 syscall 损耗）+ 三态 `EgressProxy`（`PASSTHROUGH` 停录不断连 / `CAPTURING` 有序闸门 / `REPLAY_MOCK` 既有连接零外泄接管）、Single-Flight 版本化 `Auto-Rearm`、`/agents` 七态就绪树与 `/record` 零重启抽屉联动 | `TEST_DB_DSN=... make test` (15 表 + 三态代理零外泄单测) + `ArchPhysicalBlueprintWorkbench` / `AgentProcessMountAndReadiness` / `RecordingStartDrawer` 单测全绿 + `make lint && make build && make clean` 零警告 |
+| **M11** | ⏳ 待实施 | [`12-m11-enhanced-proto-schema-asset-management.md`](./12-m11-enhanced-proto-schema-asset-management.md) | 增强 Protobuf 描述集资产管理与跨集依赖闭包（取消 `F-21` `code-proto` 联动完全内聚自治）：单包上限升至 `16MB`、三级分类 (`BASE_LIB`/`BUSINESS`/`GATEWAY`)、按 `file.Name` 去重与拓扑排序的跨 `.pb` 联合 `protodesc.NewFiles`（仅导自有 `Service`、支持 `0` 接口 `BASE_LIB`、内置 WKT 兜底、`DiffIgnorePaths` 前向继承）、事务咨询锁 + `CompileTrialPool` 试编译防破坏门禁（支持停用下线与批量原子激活）、`/schemas` 双模无侧栏工作台（`?tab=assets` 文件资产台账 + `680px` 透视抽屉 & `?tab=catalog` 按 `Service` 组分页全局契约目录与孤儿治理） | `TEST_DB_DSN=... make test` (跨集闭包 + `CompileTrialPool` + 零 `N+1` 台账单测) + `SchemaAssetLedgerWorkbench` / `ProtoNestedTable` 单测全绿 + `make lint && make build && make clean` 零警告 |
 
 ---
 
@@ -71,11 +74,14 @@ flowchart LR
 | :--- | :--- | :---: | :--- | :--- |
 | **F-01** | 三级架构元素建模 | M1, M2 | `models/models_test.go`<br>`handlers/arch_proto_agent_test.go` | `TestArchHierarchyCRUDAndMoveValidation`<br>`TestDeleteNonEmptyArchElementsConflict` |
 | **F-02** | 架构物理进程蓝图、模块服务契约与宿主机 1:1 挂载覆盖 | M1, M2, M8, M10 | `models/models_test.go`<br>`internal/server/topology/graph_topology_test.go`<br>`handlers/arch_proto_agent_test.go`<br>`frontend/src/__tests__/AgentProcessMountAndReadiness.test.tsx` | `TestArchProcessBlueprintAndOneToOneAgentMountConstraints`<br>`TestArchProcessCRUD_ModuleExclusiveBindingAndMountAntiIDOR`<br>`TestModuleServiceProvideGlobalUnique`<br>`testAgentProcessMountDrawer_AutoScanMatchOverridesAndReadinessBadges` |
-| **F-03** | Protobuf 描述集注册与接口映射 | M2 | `internal/server/decoder/decoder_test.go`<br>`handlers/arch_proto_agent_test.go` | `TestProtoSchemaUploadAndDashServiceName`<br>`TestProtoSchemaActivateConflictAndHistoryImmutability` |
-| **F-03.1** | 两级嵌套折叠契约表与服务聚合视图 | M7 | `frontend/src/__tests__/ProtoNestedTable.test.tsx` | `testServiceGroupRollup_AggregationAndOperationCounting`<br>`testNestedTable_ExpandCollapseAllAndSearchPenetration` |
-| **F-03.2** | 消息体参数定义字典树查看与源码注释透视 | M7 | `internal/server/decoder/schema_tree_test.go`<br>`frontend/src/__tests__/MessageSchemaTree.test.tsx` | `TestExtractMessageFieldTree_RecursiveAndComments`<br>`testTreeRender_NestedMessageAndTypeBadges` |
-| **F-03.3** | 可视化 Diff 忽略字段标记与多级继承模型 | M7 | `internal/server/diff/ignore_rules_test.go`<br>`handlers/arch_proto_agent_test.go` | `TestOperationLevelDiffIgnorePaths_PrecedenceOverService`<br>`TestUpdateOperationIgnorePaths_ValidationAndAudit` |
-| **F-03.4** | 描述集制品库生命周期、原文件导出与架构认领血缘 | M7 | `handlers/arch_proto_agent_test.go` | `TestDownloadProtoSchemaBinary_IntegrityAndFilename`<br>`TestProtoSchemaSummary_BloodlineAndOrphanServices` |
+| **F-03** | Protobuf 描述集注册与全局单一生效池映射 | M2, M11 | `internal/server/decoder/decoder_test.go`<br>`handlers/arch_proto_agent_test.go` | `TestProtoSchemaUploadAndDashServiceName`<br>`TestProtoSchemaActivateConflictAndHistoryImmutability` |
+| **F-03.1** | 两级嵌套折叠契约表与按 `Service` 组分页视图 | M7, M11 | `handlers/arch_proto_agent_test.go`<br>`frontend/src/__tests__/ProtoNestedTable.test.tsx` | `TestListProtoServices_ServiceLevelPagination_SourceSchemaBadge_AndUnclaimedFilter`<br>`testServiceGroupRollup_AggregationAndOperationCounting` |
+| **F-03.2** | 消息体参数定义字典树查看与源码注释透视（含跨集联合池回退） | M7, M11 | `internal/server/decoder/schema_tree_test.go`<br>`frontend/src/__tests__/MessageSchemaTree.test.tsx` | `TestExtractMessageFieldTree_RecursiveAndComments`<br>`TestCompileTrialPool_BatchActivate_DeactivateReverseDep_AndUnifiedRuntimeDecode` |
+| **F-03.3** | 可视化 Diff 忽略字段标记、多级继承与新版本前向继承 | M7, M11 | `internal/server/diff/ignore_rules_test.go`<br>`internal/server/decoder/decoder_test.go` | `TestOperationLevelDiffIgnorePaths_PrecedenceOverService`<br>`TestUploadNewVersion_InheritsDiffIgnorePaths_AndDraftBorrowsInactiveBaseLib` |
+| **F-03.4** | 描述集制品库生命周期、原文件安全导出与架构认领血缘 | M7, M11 | `handlers/arch_proto_agent_test.go` | `TestDownloadProtoSchemaBinary_IntegrityAndFilename`<br>`TestProtoSchemaSummary_BloodlineAndOrphanServices` |
+| **F-03.5** | 多 `.pb` 描述集文件资产台账、三级分类治理与 `680px` 透视抽屉 | M11 | `models/models_test.go`<br>`handlers/arch_proto_agent_test.go`<br>`frontend/src/__tests__/SchemaAssetLedgerWorkbench.test.tsx` | `TestProtoSchemaConstraints_16MBSize_CategoryEnum_AndBackfillCounts`<br>`TestProtoSchemaLedgerAPI_LatestOnlyGrouping_BatchActivate_Deactivate_GraphAndDownloadHeaders`<br>`testSchemaWorkbench_AssetsLedger_RowNewVersionPreFill_BatchActivateConflictAndInspectDrawer` |
+| **F-03.6** | 跨 `.pb` 去重拓扑依赖闭包解析、停用防破坏与批量原子激活 | M11 | `internal/server/decoder/decoder_test.go`<br>`handlers/arch_proto_agent_test.go` | `TestCrossSchemaClosure_DeduplicateBundledBase_ZeroServiceBaseLib_AndOwnFileOpsOnly`<br>`TestCompileTrialPool_BatchActivate_DeactivateReverseDep_AndUnifiedRuntimeDecode` |
+| **F-03.7** | 全局服务与接口目录跨 `.pb` 溯源检索与孤儿服务治理 | M11 | `handlers/arch_proto_agent_test.go`<br>`frontend/src/__tests__/ProtoNestedTable.test.tsx` | `TestListProtoServices_ServiceLevelPagination_SourceSchemaBadge_AndUnclaimedFilter`<br>`testGlobalServiceCatalog_ServicePagination_SourceBadge_UnclaimedFilterAndLegacyDeepLink` |
 | **F-04** | 分层复合架构拓扑与一致性画布（含零 Agent 物理拓扑直推） | M2, M5, M6, M10 | `internal/server/topology/graph_topology_test.go`<br>`frontend/src/__tests__/ArchCanvasRollup.test.ts` | `TestBuildTopologyGraph_Logical`<br>`TestBuildTopologyGraph_Physical_ZeroAgentsAndCompileDownstreams`<br>`testRollup_AllCollapsedAndInternalBadge`<br>`testLayout_ParentFirstOrderAndCompoundBendPoints` |
 | **F-05** | 实测调用拓扑还原与架构一致性验证 | M4, M6 | `internal/server/topology/consistency_test.go`<br>`frontend/src/__tests__/ArchCanvasRollup.test.ts` | `TestResolveSourceModuleThreeTierPriority`<br>`TestVerifySessionTopologySixCategories`<br>`testOverlay_WorstStatusAndDynamicViolationUnattributed` |
 | **F-06** | Agent 公私域纳管与动态排他租约 | M2 | `internal/server/hub/hub_test.go`<br>`handlers/arch_proto_agent_test.go` | `TestAgentPublicPrivateScopeAndAntiIDOR`<br>`TestAcquireAgentLeasesMutexAndHeartbeatReconcile` |
@@ -125,7 +131,7 @@ flowchart LR
 | 安全领域 | 强制防御措施與验证用例 | 豁免/演进项 (`TODO(security)` 强制注释位) |
 | :--- | :--- | :--- |
 | **认证、会话与授权 (AuthN/AuthZ)** | 1. 受保护 API 与 `/api/events` 强制经 `AuthMiddleware` 校验 `HS256` JWT（拒绝 `none` 算法，校验 `exp`）；<br>2. 严禁在 URL Query 中传 Token；登出清空内存态并重载页面；<br>3. **Anti-IDOR**：所有 `PRIVATE` Agent、进程、录制批次接口在数据层强制核验 `owner_id == currentUser.ID`（越权返 `403`）。 | 1. `config/config.go`：`// TODO(security): 生产环境接入 KMS 托管 JWT_SECRET 与数据库凭据`<br>2. `handlers/auth.go`：`// TODO(security): 企业生产环境启用 OAuth2/OIDC + MFA 与弱口令泄露库检测`<br>3. 本系统 API 采用 `Authorization: Bearer` 头认证（非 Cookie 会话），天然免疫跨站请求伪造；`cmd/server/main.go` 保留 `// TODO(security): 若未来切换 Cookie 会话须挂载 Double-Submit CSRF Token 中间件`。 |
-| **文件上传、SQL 与命令执行防护** | 1. `.pb` 上传通过 `http.MaxBytesReader` 限制 `<= 4MB`，校验 `FileDescriptorSet` 与 `protodesc.NewFiles`，文件名经 `filepath.Base` 净化，仅存 DB `bytea` 不落盘宿主机文件系统；<br>2. 100% 采用 GORM 参数化预编译查询与排序字段白名单，屏蔽原始 SQL 报错；<br>3. Agent 仅通过 Go 标准库只读解析 `/proc`，全仓严禁调用 `os/exec` 拼接外部命令。 | `handlers/proto_handler.go`：`// TODO(security): 接入企业制品防病毒扫描网关对上传描述集做沙箱扫描`。 |
+| **文件上传、SQL 与命令执行防护** | 1. `.pb` 上传通过 `http.MaxBytesReader` 限制 `<= 16MB` 与扩展名白名单，校验 `FileDescriptorSet` 与跨集拓扑 `protodesc.NewFiles`，文件名经 `filepath.Base` 净化，仅存 DB `bytea` 不落盘宿主机文件系统；下载强制附带 `X-Content-Type-Options: nosniff` 与 `Cache-Control: no-store`；<br>2. 100% 采用 GORM 参数化预编译查询与排序字段白名单，屏蔽原始 SQL 报错；<br>3. Agent 仅通过 Go 标准库只读解析 `/proc`，全仓严禁调用 `os/exec` 拼接外部命令。 | `handlers/proto_handler.go`：`// TODO(security): 接入企业制品防病毒扫描网关对上传描述集做沙箱扫描`。 |
 | **内网信道与 SSRF 防护** | 1. 主控 `AgentEndpointGuard` 拦截 `127.0.0.0/8`（非测试模式）、云元数据 `169.254.169.254`、多播段及非 `1024..65535` 端口；<br>2. Agent 校验 TCP `RemoteAddr` 源 IP 白名单（`--allow-ips`）与 `PRIVATE` Agent 一次性 `ClaimCode`；<br>3. 重放未命中规则时内核 `connect4` 执行 Fail-Closed (`EPERM`)，严禁外泄至真实下游。 | `internal/agent/server/http_server.go`：`// TODO(security): F-17 (P1) 引入 X-Traefik-Agent-Token 常量时间比对鉴权与 mTLS`。 |
 | **前端防 XSS 与安全响应头** | 1. 全局注入 `Content-Security-Policy`（禁止 `script-src` 使用 `unsafe-inline`/`unsafe-eval`）、`X-Content-Type-Options: nosniff`、`X-Frame-Options: SAMEORIGIN`、`Permissions-Policy` 与敏感接口 `Cache-Control: no-store`；<br>2. 报文字符串全量依赖 React JSX 自动转义，严禁 `dangerouslySetInnerHTML`、`innerHTML`、`console.log` 打印敏感 Token 或使用原生 `alert()`/`confirm()`。 | `cmd/server/main.go`：`// TODO(security): 独立部署时按受信任门户域名配置严格 CORS 白名单与滑动窗口 API 限流`。 |
 | **测试网络绑定红线** | 所有单测/集成测试中的临时 `Server`、Mock `Agent`、模拟 TCP 业务进程与测试数据库连接强制绑定 `127.0.0.1`，**严禁监听 `0.0.0.0`**。 | - |

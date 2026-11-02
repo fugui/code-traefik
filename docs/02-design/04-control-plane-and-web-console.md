@@ -132,18 +132,26 @@ flowchart LR
 
 ---
 
-## 2. IDL 描述集引擎与 `dynamicpb` 动态编解码 (`internal/server/decoder`)
+## 2. IDL 描述集引擎、跨集依赖闭包与 `dynamicpb` 动态编解码 (`internal/server/decoder`)
 
-### 2.1 `.pb` 描述集注册校验与多版本热切换
+### 2.1 `.pb` 多描述集依赖闭包解析、`CompileTrialPool` 仲裁与全局单一生效池 (`ADR-10`)
 
-1. **上传校验流水线**：
-   - 通过 `http.MaxBytesReader` 强制限制上传流 `<= 4MB (4,194,304 Bytes)`；
-   - `proto.Unmarshal` 解析为 `descriptorpb.FileDescriptorSet`，再经 `protodesc.NewFiles(fds)` 构建完整 `protoregistry.Files` 验证依赖闭包合法性（损坏或缺失 import 依赖返回 `400 Bad Request`）；
-   - 遍历全部 `FileDescriptor.Services()` 与 `ServiceDescriptor.Methods()`，严格按点分规范 **`service_name = string(file.Package()) + "." + string(svc.Name())`**（无 `package` 时使用 `string(svc.Name())`）与 **`operation = string(method.Name())`** 生成操作映射行；
-   - 同名描述集（`name` 相同）每次上传自动递增 `version = max(version) + 1`。
-2. **激活冲突门禁 (`ActivateSchemaVersion`)**：
-   - 激活某版本前，在事务内查询该版本的所有 `(service_name, operation)` 是否与**其他名称下当前已激活 (`is_active = true`)** 的描述集存在交集；若冲突则立即回滚并返回 `409 Conflict` 及冲突接口明细；
-   - 校验通过后，将同名旧版本置为 `is_active = false`，目标版本及旗下 `traefik_proto_operations` 置为 `is_active = true`，并原子重建内存无锁注册表 `atomic.Pointer[CompiledRegistry]`。
+系统内所有运行环境与 Agent 共享唯一的全局生效契约池（`Single Active Schema Pool`），支持超大型系统将公共基础协议（`BASE_LIB`）与各业务域（`BUSINESS` / `GATEWAY`）拆分为多个独立 `.pb` 描述集协同治理：
+
+1. **上传预检、去重拓扑闭包与忽略规则向前继承 (`UploadSchema`)**：
+   - **流式上限与基础校验**：通过 `http.MaxBytesReader` 强制限制上传请求 `<= 16MB (16,777,216 Bytes) + 64KB`；校验扩展名白名单（`.pb/.bin/.desc/.protoset`）与 `category IN ('BASE_LIB', 'BUSINESS', 'GATEWAY')`；`proto.Unmarshal` 解析为 `descriptorpb.FileDescriptorSet`（强制校验 `len(fds.File) > 0` 且 `UnknownFields` 为空）；
+   - **自有文件与外部依赖分离**：提取本文件携带的 `ProtoFiles`（`own_proto_files`），遍历 `file.GetDependency()` 计算不在自有集合内且非内置 `google/protobuf/*` Well-Known Types 的缺失路径记入 `ExternalImports`（`jsonb []string`）；
+   - **去重 DAG 拓扑合并**：当存在外部 `import` 时，按 **「本描述集自有文件 $\succ$ 当前生效 `BASE_LIB` $\succ$ 其他生效描述集（当 `auto_activate=false` 仅草稿归档时，允许回退取未生效各 `BASE_LIB` 最新版本）$\succ$ Go 标准库内置 `google/protobuf/*` WKT」** 优先级按 `file.GetName()` 严格去重并按 `import` 拓扑序重排后执行 `protodesc.NewFiles`（若仍缺失依赖，返回 `400 Bad Request` 并精准列出 `missing_imports` 文件名）；
+   - **自有服务提取与 `0` Service 基础库支持**：**仅遍历 `own_proto_files` 提取 `(service_name, operation)`**（若非 `BASE_LIB` 业务包因 `--include_imports` 重复打包了已生效 `BASE_LIB` 中的同名文件，自动跳过基础库已托管文件的 `Service` 提取），严格按点分规范 **`service_name = string(file.Package()) + "." + string(svc.Name())`**（无 `package` 时为 `string(svc.Name())`）生成映射；完全允许 `OperationCount == 0` 的纯消息体 `BASE_LIB` 入库与激活；
+   - **咨询锁递增版本与 `DiffIgnorePaths` 向前继承**：在 PostgreSQL 事务入口获取 `pg_advisory_xact_lock(hashtext('traefik_proto_schema_registry'))` 计算 `version = max(version) + 1`；若 `version > 1`，自动读取同名当前生效版本（无生效版本则取 `version - 1`）的非空 `ProtoOperation.DiffIgnorePaths`，按 `(service_name, operation)` 无损向前继承。
+2. **`CompileTrialPool` 激活 / 批量激活 / 停用双向门禁 (`Activate` / `BatchActivate` / `Deactivate`)**：
+   - 任何改变全局生效池的操作均在咨询锁事务内先推导出变更后的候选生效集合 $S_{\text{next}}$：
+     - **单集激活 (`Activate`)**：$S_{\text{next}} = (S_{\text{active}} \setminus \{\text{同名旧版}\}) \cup \{s_{\text{target}}\}$；
+     - **批量激活 (`BatchActivate`)**：校验 `schema_ids` 非空且不含同名多版本后，$S_{\text{next}} = \{s \in S_{\text{active}} \mid s.\text{Name} \notin N_T\} \cup T$；
+     - **停用下线 (`Deactivate`)**：$S_{\text{next}} = S_{\text{active}} \setminus \{s_{\text{target}}\}$；
+   - **门禁 ①（跨集方法全局唯一）**：校验 $S_{\text{next}}$ 导出的全部 `(service_name, operation)` 两两无交集（重叠立即回滚返 `409 Conflict` 及 `conflicts` 明细）；
+   - **门禁 ②（`CompileTrialPool(S_next)` 联合预编译与反向依赖保护）**：仅使用 $S_{\text{next}}$ 内部成员（加内置 WKT）执行去重拓扑联合 `protodesc.NewFiles`，并逐一核验 $S_{\text{next}}$ 全部 `ProtoOperation` 的 `ReqMessageFullName / RspMessageFullName` 均可解析为 `MessageDescriptor`。若待激活业务包依赖的 `BASE_LIB` 未激活，或停用/升级某基础库破坏了下游已生效业务包的依赖闭包，立即回滚并返回 **`409 Conflict`**（携带 `broken_dependents: [{schema_id, schema_name, version, reason}]`）；
+   - 校验通过后提交事务，并在 `reloadMu` 保护下执行 `Reload()` 将联合编译出的统一 `CompiledRegistry{Files, Operations}` 原子写入 `atomic.Pointer[CompiledRegistry]`。
 
 ### 2.2 动态编解码与历史版本不可变契约
 
@@ -155,8 +163,8 @@ flowchart LR
 
 为彻底解决“请求/应答参数定义不可见”与“描述集黑盒无法导出”的痛点，控制面提供基于 `protodesc` 的动态字典树反射服务：
 
-1. **服务端动态字典树递归反射 (`ExtractMessageFieldTree`)**：
-   - 给定 `ProtoOperation` 的 `req_message_full_name` 或 `rsp_message_full_name`，由 `Registry` 从缓存的 `protoregistry.Files` 查找目标 `protoreflect.MessageDescriptor`；
+1. **服务端动态字典树递归反射 (`ExtractMessageFieldTree` & 跨集联合池回退)**：
+   - 给定 `ProtoOperation` 的 `req_message_full_name` 或 `rsp_message_full_name`：若所属 `ProtoSchema.IsActive == true`，直接从内存 `CompiledRegistry.Files`（联合生效类型池）`O(1)` 查找目标 `protoreflect.MessageDescriptor`；若为未生效的历史/草稿版本，自动将该版本的 `DescriptorBytes` 与当前生效池（及最新 `BASE_LIB`）合并去重构建临时 `*protoregistry.Files`，确保拆包编译的未激活版本同样 100% 可展开字典树；
    - 递归遍历其包含的全部 `protoreflect.FieldDescriptor`，提取出结构化的 `ProtoFieldNodeDTO`：
      - `name`: 字段名（Proto 原名，如 `server_time`、`order_id`）；
      - `json_name`: JSON 序列化名（如 `serverTime`）；
@@ -246,7 +254,7 @@ type FieldDiff struct {
 | **流量作业** | **流量重放** | `/replay` | `ReplayWorkbenchPage` | 全体登录用户 | `session_id`, `auto_create` (`1`), `target_process_id`, `status`, `page`, `page_size` |
 | **架构与契约** *(静态基线)* | **架构拓扑** | `/topology` | `TopologyWorkbenchPage` | 全体登录用户 | `view` (`LOGICAL` \| `PHYSICAL`), `env_agent_id`, `depth`, `session_id`, `focus` |
 | **架构与契约** | **架构元素** | `/architecture` | `ArchitectureWorkbenchPage` | 全体登录用户 | `tree` (`logical` \| `physical`), `subsystem_id`, `group_id`, `module_id`, `proc_group_id`, `arch_process_id` |
-| **架构与契约** | **Proto 契约** | `/schemas` | `ProtoSchemaWorkbenchPage` | 全体登录用户 | `schema_id`, `active_only`, `search`, `page`, `page_size` |
+| **架构与契约** | **Proto 契约** | `/schemas` | `ProtoSchemaWorkbenchPage` | 全体登录用户 | `tab` (`assets` \| `catalog`), `schema_id`, `category` (`BASE_LIB` \| `BUSINESS` \| `GATEWAY`), `latest_only` (`true` \| `false`), `active_only`, `claimed_status` (`ALL` \| `CLAIMED` \| `UNCLAIMED`), `service_name`, `search`, `sort_by`, `sort_dir`, `page`, `page_size` |
 | **环境与治理** *(沉底低频)* | **Agent 与进程** | `/agents` | `AgentManagementPage` | 全体登录用户 | `scope` (`SHARED` \| `PRIVATE`), `agent_id`, `process_id`, `open_mount` (`1`), `lease_state`, `status`, `page`, `page_size` |
 | **环境与治理** | **模块参数配置** | `/admin/settings` | `AdminSettingsPage` | `traefik_admin` (`adminOnly`) | - |
 
@@ -310,12 +318,15 @@ src/
 │   │   ├── ModuleContractDetailPane.tsx    # 模块元数据、归属标准架构进程(跳 ?tree=physical)、挂载血缘(跳 /agents)与 PROVIDE/DEPEND 双表(跳 /schemas)
 │   │   ├── ArchProcessTreePanel.tsx        # [物理进程 ?tree=physical]: 标准进程组 (ArchProcessGroup) ➔ 标准业务进程 (ArchProcess) 树与搜索/CRUD
 │   │   └── ArchProcessDetailPane.tsx       # 标准架构进程详情: 默认端口(含0纯客户端)/启动特征、组装承载的 FM 模块、汇总服务契约与宿主机挂载就绪血缘
-│   ├── ProtoSchemaWorkbenchPage/           # 6. [架构与契约] Proto 契约工作台 (/schemas)
-│   │   ├── SchemaUploadModal.tsx           # .pb 上传弹窗（<=4MB 预检、版本备注、自动激活开关）
-│   │   ├── SchemaVersionList.tsx           # 描述集资产制品列表（原文件下载导出、包含 Proto 文件透视、架构认领血缘概览）
-│   │   ├── OperationMappingTable.tsx       # 两级嵌套折叠表: 外层服务聚合行 (含认领模块深链跳 /architecture) ➔ 内层 RPC 方法子表
-│   │   ├── ServiceSummaryRow.tsx           # 外层服务行组件: 服务全名、源 Proto、认领模块、RPC 计数、一键全部折叠/展开
-│   │   ├── OperationDocDrawer.tsx          # 契约详情与消息体参数定义抽屉 (双栏/Tab 切换查看 Req/Rsp Message)
+│   ├── ProtoSchemaWorkbenchPage/           # 6. [架构与契约] Proto 契约双模工作台 (/schemas - ADR-06 & ADR-10)
+│   │   ├── SchemaPoolSummaryBar.tsx        # 顶部全局生效池健康摘要栏: 生效制品数(含BASE_LIB)/服务数/方法数/架构认领率与孤儿快捷过滤
+│   │   ├── SchemaAssetLedgerTable.tsx      # [视窗一 ?tab=assets] 制品资产全景宽表: 默认按制品名聚合、分类徽章、依赖血缘、认领率、批量激活与行内[⬆️新版本]
+│   │   ├── SchemaAssetInspectDrawer.tsx    # 制品详情与历史抽屉(680px Drawer): 自有 .proto/外部 import 来源、服务认领明细与同名全版本时间线回滚/停用/清理
+│   │   ├── SchemaUploadModal.tsx           # .pb 上传弹窗（<=16MB 预检、BASE_LIB/BUSINESS/GATEWAY 分类、预填锁定同名升级、自动激活开关）
+│   │   ├── SchemaConflictModal.tsx         # 409 冲突与反向依赖阻断受控弹窗（结构化呈现方法冲突表 conflicts 或受影响下游制品表 broken_dependents）
+│   │   ├── OperationMappingTable.tsx       # [视窗二 ?tab=catalog] 服务级分页两级折叠契约目录树: 外层服务主行(含来源 .pb 徽章与认领深链) ➔ 内层 RPC 方法子表
+│   │   ├── ServiceSummaryRow.tsx           # 外层服务行组件: 服务全名、来源 .pb 制品、源 Proto、认领模块、RPC 计数、一键全部折叠/展开
+│   │   ├── OperationDocDrawer.tsx          # 契约详情与消息体参数定义抽屉 (双栏/Tab 切换查看 Req/Rsp Message，支持生效与未生效版本跨集依赖反射)
 │   │   ├── MessageSchemaInspectorTree.tsx  # 消息体参数定义字典树组件 (多层递归展开、Tag、类型高亮、注释透视)
 │   │   └── DiffIgnoreFieldToggle.tsx       # 字段级 Diff 忽略复选框与路径自动生成控制器
 │   ├── AgentManagementPage/                # 7. [环境与治理] Agent 与进程工作台 (/agents - 1:1 架构进程挂载、本地覆盖与预挂就绪看板)
@@ -475,13 +486,53 @@ export interface OperationSchemaTreeDTO {
 }
 ```
 
-#### (2) 两级嵌套折叠表聚合数据模型
+#### (2) 描述集制品台账与服务级分页契约目录树 TypeScript DTO 契约 (`ADR-10`)
 ```typescript
+export type ProtoCategory = 'BASE_LIB' | 'BUSINESS' | 'GATEWAY';
+
+export interface ResolvedSchemaDependencyDTO {
+  schema_id: string;
+  schema_name: string;
+  version: number;
+  category: ProtoCategory;
+  is_active: boolean;
+  matched_protos: string[];    // 由该前置描述集供给的 import .proto 路径
+}
+
+export interface BrokenDependentItemDTO {
+  schema_id: string;
+  schema_name: string;
+  version: number;
+  missing_import_or_symbol: string; // 停用或破坏性升级导致的缺失文件或 Message 符号
+}
+
+export interface ProtoSchemaLedgerItemDTO extends ProtoSchema {
+  category: ProtoCategory;
+  proto_file_count: number;
+  service_count: number;
+  operation_count: number;
+  external_imports: string[];
+  claimed_service_count: number;
+  claimed_ratio: number;       // service_count == 0 (纯类型 BASE_LIB) 时为 1.0，UI 展示“基础类型库”
+  version_count: number;       // 同名制品累计版本数 (latest_only=true 聚合徽章使用)
+  latest_version: number;
+  active_version?: number;
+  created_by_name?: string;
+  resolved_dependencies: ResolvedSchemaDependencyDTO[];
+}
+
 export interface ServiceContractGroupDTO {
   serviceName: string;         // 聚合键: "{package}.{serviceName}"
   protoPackage: string;
   protoService: string;
   protoFile: string;
+  sourceSchema?: {             // 来源 .pb 制品徽章 (全局契约目录树跨集溯源)
+    id: string;
+    name: string;
+    version: number;
+    category: ProtoCategory;
+    isActive: boolean;
+  };
   claimedByModule?: {          // 架构血缘: 认领此服务的公共架构模块
     id: string;
     code: string;
@@ -492,7 +543,7 @@ export interface ServiceContractGroupDTO {
   unaryCount: number;
   streamCount: number;
   isActive: boolean;
-  operations: ProtoOperation[]; // 展开后的子表数据
+  operations: ProtoOperation[]; // 服务端保证同一 Service 下的全部方法完整不跨页割裂
 }
 ```
 
