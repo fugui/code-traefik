@@ -70,7 +70,7 @@ flowchart TD
 | 阶段步骤 | 测试场景与验证行为 | 关键验收指标 (AC) | 验证结论 | 关联截屏索引 |
 | :--- | :--- | :--- | :---: | :--- |
 | **Step 0: 登录与双模主题** | 管理员账号登录鉴权，校验 Token 存储与深浅（Light/Dark）主题切换 | 鉴权 100% 成功，HTML 根节点 `light-theme` 类平滑响应 | **PASS** | `01_login_page_dark`<br/>`02_dashboard_after_login`<br/>`03_theme_switched_to_light` |
-| **Step 1: 架构建模与蓝图** | 1. 录入四级逻辑架构：子系统 `ECOMMERCE` -> 功能组 `TRADE_CORE` -> 模块 `ORDER_CORE` -> 服务 `demo.order-OrderService`<br/>2. 切换物理进程蓝图：创建进程组 `GROUP_GATEWAY` 与 `GROUP_DOWNSTREAM`，录入 `sut-order` (:9001)、`backend-account` (:9002)、`backend-inventory` (:9003) | 逻辑层级拓扑树渲染完整，物理架构进程端口与指令规则固化 | **PASS** | `04_architecture_logical_empty`<br/>`05_architecture_create_subsystem_drawer`<br/>`06_architecture_subsystem_created`<br/>`07_architecture_create_group_drawer`<br/>`08_architecture_group_created`<br/>`09_architecture_create_module_drawer`<br/>`10_architecture_module_created`<br/>`11_architecture_create_service_modal`<br/>`12_architecture_service_created`<br/>`13_architecture_physical_view`<br/>`14_architecture_create_arch_group_drawer`<br/>`15_architecture_create_arch_process_drawer`<br/>`16_architecture_arch_process_created` |
+| **Step 1: 架构建模与蓝图** | 1. 录入四级逻辑架构：子系统 `ECOMMERCE` -> 功能组 `TRADE_CORE` -> 模块 `ORDER_CORE` -> 服务 `demo.order.OrderService`<br/>2. 切换物理进程蓝图：创建进程组 `GROUP_GATEWAY` 与 `GROUP_DOWNSTREAM`，录入 `sut-order` (:9001)、`backend-account` (:9002)、`backend-inventory` (:9003) | 逻辑层级拓扑树渲染完整，物理架构进程端口与指令规则固化 | **PASS** | `04_architecture_logical_empty`<br/>`05_architecture_create_subsystem_drawer`<br/>`06_architecture_subsystem_created`<br/>`07_architecture_create_group_drawer`<br/>`08_architecture_group_created`<br/>`09_architecture_create_module_drawer`<br/>`10_architecture_module_created`<br/>`11_architecture_create_service_modal`<br/>`12_architecture_service_created`<br/>`13_architecture_physical_view`<br/>`14_architecture_create_arch_group_drawer`<br/>`15_architecture_create_arch_process_drawer`<br/>`16_architecture_arch_process_created` |
 | **Step 2: 契约上传与解析** | 上传 `demo/demo.pb` 二进制描述集，自动识别 3 个服务 6 个方法，并激活为当前版本 | 服务契约大盘渲染正常，字段树与嵌套类型折叠展开无卡顿 | **PASS** | `17_schemas_page_empty`<br/>`18_schemas_upload_modal`<br/>`19_schemas_uploaded_success` |
 | **Step 3: Agent 认领与挂载** | 登记公共 Agent `http://127.0.0.1:9091`，触发一键“自动扫描宿主机进程并对齐蓝图”，批量挂载 3 个微服务进程并进入 `ARMED` 状态 | 握手验证通过，eBPF 特权识别成功，进程拓扑状态实时转变为 `ARMED` | **PASS** | `24_agents_page_initial`<br/>`25_agents_register_modal`<br/>`26_agents_registered_online`<br/>`27_agents_process_mount_drawer`<br/>`28_agents_process_mount_scanned_matched`<br/>`29_agents_processes_mounted_success` |
 | **Step 4: 流量录制会话** | 发起协同录制会话 `E2E-BROWSER-TEST`，勾选目标进程，启动录制；在后台触发 Demo 4 种业务场景全流量（Happy Path、库存不足、余额不足回滚、10笔并发流量），停止录制释放租约 | 实时横幅展示活跃录制态，租约原子锁定，捕获到 63 条双向报文，停止后排他租约自动释放 | **PASS** | `30_recording_page_initial`<br/>`31_recording_start_drawer`<br/>`32_recording_active_banner_dark`<br/>`33_recording_active_banner_light`<br/>`34_recording_with_captured_traffic`<br/>`35_recording_completed_table` |
@@ -137,7 +137,7 @@ flowchart TD
   {
     "step": "Create Service",
     "status": "PASS",
-    "details": "Service demo.order-OrderService created in ORDER_CORE",
+    "details": "Service demo.order.OrderService created in ORDER_CORE",
     "time": "2026-11-02T12:51:10.257Z"
   },
   {
@@ -246,7 +246,7 @@ Proto Recv-Q Send-Q Local Address:Port  Peer Address:Port Process
 - **当前现状**：
   在 `/arch` 架构管理页中，用户必须先在「逻辑架构蓝图」树中逐层创建“子系统 -> 功能组 -> 模块 -> 服务”，然后再手动点击 Tab 切换到「物理进程蓝图」，重新点击“新建标准架构进程”，手动输入进程编号并选择关联分组。
 - **用户痛点**：
-  现实中研发/测试工程师思考微服务时，通常是“服务名即进程”（例如 `demo.order-OrderService` 直接映射到物理进程 `sut-order`）。用户在逻辑页建完服务后，**页面没有任何引导提示“接下来请声明对应的物理承载进程”**，用户必须在两套不同心智的树状视图间来回切，操作流中断感明显。
+  现实中研发/测试工程师思考微服务时，通常是“服务名即进程”（例如 `demo.order.OrderService` 直接映射到物理进程 `sut-order`）。用户在逻辑页建完服务后，**页面没有任何引导提示“接下来请声明对应的物理承载进程”**，用户必须在两套不同心智的树状视图间来回切，操作流中断感明显。
 - **优化建议**：
   - **建议在逻辑服务创建抽屉中增加「同步生成标准承载进程」快捷勾选项**：勾选后系统自动以服务名为蓝本，在物理进程树中预制对应架构进程模板（默认监听端口可留空由用户选填）。
   - 在逻辑模块右侧详情面板中增加「物理部署映射卡片」，直接展示当前模块被哪个物理进程承载，并支持“一键直达”物理进程节点。

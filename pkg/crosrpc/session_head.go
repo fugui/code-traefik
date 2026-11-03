@@ -9,7 +9,7 @@ type ReqHead struct {
 	MsgStructVer       uint16   `json:"msg_struct_ver"`
 	ReqHeadLen         uint16   `json:"req_head_len"`
 	Dst2ndAddrId       uint32   `json:"dst_2nd_addr_id"`
-	ServiceName        string   `json:"service_name"` // 格式 {package}-{serviceName}
+	ServiceName        string   `json:"service_name"` // 格式 {package}.{serviceName}（无 package 时为 {serviceName}）
 	Operation          string   `json:"operation"`    // API 名称
 	ReqType            uint8    `json:"req_type"`     // 1=Sync, 2=Async, 3=Oneway
 	SubjectType        uint8    `json:"subject_type"`

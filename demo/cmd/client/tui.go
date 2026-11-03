@@ -185,7 +185,7 @@ func (t *TUIClient) Run() {
 		case "1":
 			// 查询综合行情
 			reqBytes, _ := proto.Marshal(&orderpb.CompositeQuoteReq{UserId: "Alice", SkuId: "SKU-101"})
-			pkt, rspBytes, err := t.client.Invoke(ctx, "demo.order-OrderService", "GetCompositeQuote", t.nextTrace(), reqBytes)
+			pkt, rspBytes, err := t.client.Invoke(ctx, "demo.order.OrderService", "GetCompositeQuote", t.nextTrace(), reqBytes)
 			lastLatency = time.Since(start)
 			lastPkt = pkt
 			lastPayload = rspBytes
@@ -204,7 +204,7 @@ func (t *TUIClient) Run() {
 		case "2":
 			// 正向下单
 			reqBytes, _ := proto.Marshal(&orderpb.CreateOrderReq{UserId: "Alice", SkuId: "SKU-101", Quantity: 1})
-			pkt, rspBytes, err := t.client.Invoke(ctx, "demo.order-OrderService", "CreateOrder", t.nextTrace(), reqBytes)
+			pkt, rspBytes, err := t.client.Invoke(ctx, "demo.order.OrderService", "CreateOrder", t.nextTrace(), reqBytes)
 			lastLatency = time.Since(start)
 			lastPkt = pkt
 			lastPayload = rspBytes
@@ -226,7 +226,7 @@ func (t *TUIClient) Run() {
 		case "3":
 			// 购买超额库存
 			reqBytes, _ := proto.Marshal(&orderpb.CreateOrderReq{UserId: "Alice", SkuId: "SKU-102", Quantity: 99})
-			pkt, rspBytes, err := t.client.Invoke(ctx, "demo.order-OrderService", "CreateOrder", t.nextTrace(), reqBytes)
+			pkt, rspBytes, err := t.client.Invoke(ctx, "demo.order.OrderService", "CreateOrder", t.nextTrace(), reqBytes)
 			lastLatency = time.Since(start)
 			lastPkt = pkt
 			lastPayload = rspBytes
@@ -242,7 +242,7 @@ func (t *TUIClient) Run() {
 		case "4":
 			// 购买触发余额不足并回滚
 			reqBytes, _ := proto.Marshal(&orderpb.CreateOrderReq{UserId: "Bob", SkuId: "SKU-101", Quantity: 1})
-			pkt, rspBytes, err := t.client.Invoke(ctx, "demo.order-OrderService", "CreateOrder", t.nextTrace(), reqBytes)
+			pkt, rspBytes, err := t.client.Invoke(ctx, "demo.order.OrderService", "CreateOrder", t.nextTrace(), reqBytes)
 			lastLatency = time.Since(start)
 			lastPkt = pkt
 			lastPayload = rspBytes
@@ -262,7 +262,7 @@ func (t *TUIClient) Run() {
 				lastPkt = nil
 			} else {
 				reqBytes, _ := proto.Marshal(&orderpb.OrderDetailReq{OrderId: t.lastOrder})
-				pkt, rspBytes, err := t.client.Invoke(ctx, "demo.order-OrderService", "GetOrderDetail", t.nextTrace(), reqBytes)
+				pkt, rspBytes, err := t.client.Invoke(ctx, "demo.order.OrderService", "GetOrderDetail", t.nextTrace(), reqBytes)
 				lastLatency = time.Since(start)
 				lastPkt = pkt
 				lastPayload = rspBytes
@@ -284,7 +284,7 @@ func (t *TUIClient) Run() {
 				lastPkt = nil
 			} else {
 				reqBytes, _ := proto.Marshal(&orderpb.CancelOrderReq{OrderId: t.lastOrder, Reason: "TUI用户主动退单"})
-				pkt, rspBytes, err := t.client.Invoke(ctx, "demo.order-OrderService", "CancelOrder", t.nextTrace(), reqBytes)
+				pkt, rspBytes, err := t.client.Invoke(ctx, "demo.order.OrderService", "CancelOrder", t.nextTrace(), reqBytes)
 				lastLatency = time.Since(start)
 				lastPkt = pkt
 				lastPayload = rspBytes
@@ -336,7 +336,7 @@ func (t *TUIClient) Run() {
 				SkuId:    skuID,
 				Quantity: int32(qty),
 			})
-			pkt, rspBytes, err := t.client.Invoke(ctx, "demo.order-OrderService", "CreateOrder", t.nextTrace(), reqBytes)
+			pkt, rspBytes, err := t.client.Invoke(ctx, "demo.order.OrderService", "CreateOrder", t.nextTrace(), reqBytes)
 			lastLatency = time.Since(start)
 			lastPkt = pkt
 			lastPayload = rspBytes
@@ -377,7 +377,7 @@ func (t *TUIClient) Run() {
 						SkuId:    "SKU-101",
 						Quantity: 1,
 					})
-					_, rBytes, err := t.client.Invoke(subCtx, "demo.order-OrderService", "CreateOrder", t.nextTrace(), reqB)
+					_, rBytes, err := t.client.Invoke(subCtx, "demo.order.OrderService", "CreateOrder", t.nextTrace(), reqB)
 					mu.Lock()
 					defer mu.Unlock()
 					if err == nil {

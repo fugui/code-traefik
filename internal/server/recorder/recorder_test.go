@@ -218,17 +218,17 @@ func TestExchangeAssemblerDualModeAndLimitAutoStop(t *testing.T) {
 
 	// 场景 1: REQ + RSP (标准 UNARY)
 	sno1 := uint64(101)
-	req1 := buildCrosReqFrame(sno1, crosrpc.ReqTypeSync, "dophi.order-OrderService", "GetOrder", []byte("payload_req_1"))
-	rsp1 := buildCrosRspFrame(sno1, crosrpc.MsgTypeRsp, 1, 0, "dophi.order-OrderService", "GetOrder", []byte("payload_rsp_1"))
+	req1 := buildCrosReqFrame(sno1, crosrpc.ReqTypeSync, "dophi.order.OrderService", "GetOrder", []byte("payload_req_1"))
+	rsp1 := buildCrosRspFrame(sno1, crosrpc.MsgTypeRsp, 1, 0, "dophi.order.OrderService", "GetOrder", []byte("payload_rsp_1"))
 	assembler.Feed(baseEnv(sno1, 1), req1)
 	assembler.Feed(baseEnv(sno1, 2), rsp1)
 
 	// 场景 2: REQ + 2*RSP_SEG + RSP (3 段 STREAM_RSP)
 	sno2 := uint64(102)
-	req2 := buildCrosReqFrame(sno2, crosrpc.ReqTypeAsync, "dophi.stream-StreamService", "FetchLarge", []byte("payload_req_2"))
-	seg1 := buildCrosRspFrame(sno2, crosrpc.MsgTypeRspSeg, 1, 0, "dophi.stream-StreamService", "FetchLarge", []byte("seg_1"))
-	seg2 := buildCrosRspFrame(sno2, crosrpc.MsgTypeRspSeg, 2, 0, "dophi.stream-StreamService", "FetchLarge", []byte("seg_2"))
-	rsp2 := buildCrosRspFrame(sno2, crosrpc.MsgTypeRsp, 3, 0, "dophi.stream-StreamService", "FetchLarge", []byte("seg_final"))
+	req2 := buildCrosReqFrame(sno2, crosrpc.ReqTypeAsync, "dophi.stream.StreamService", "FetchLarge", []byte("payload_req_2"))
+	seg1 := buildCrosRspFrame(sno2, crosrpc.MsgTypeRspSeg, 1, 0, "dophi.stream.StreamService", "FetchLarge", []byte("seg_1"))
+	seg2 := buildCrosRspFrame(sno2, crosrpc.MsgTypeRspSeg, 2, 0, "dophi.stream.StreamService", "FetchLarge", []byte("seg_2"))
+	rsp2 := buildCrosRspFrame(sno2, crosrpc.MsgTypeRsp, 3, 0, "dophi.stream.StreamService", "FetchLarge", []byte("seg_final"))
 	assembler.Feed(baseEnv(sno2, 1), req2)
 	assembler.Feed(baseEnv(sno2, 2), seg1)
 	assembler.Feed(baseEnv(sno2, 2), seg2)
@@ -236,30 +236,30 @@ func TestExchangeAssemblerDualModeAndLimitAutoStop(t *testing.T) {
 
 	// 场景 3: ucReqType=3 Oneway 请求 (ONEWAY)
 	sno3 := uint64(103)
-	req3 := buildCrosReqFrame(sno3, crosrpc.ReqTypeOneway, "dophi.notify-NotifyService", "PushNotice", []byte("payload_oneway"))
+	req3 := buildCrosReqFrame(sno3, crosrpc.ReqTypeOneway, "dophi.notify.NotifyService", "PushNotice", []byte("payload_oneway"))
 	assembler.Feed(baseEnv(sno3, 1), req3)
 
 	// 场景 4: 连接关闭未应答 (REQ_ONLY)
 	sno4 := uint64(104)
 	env4 := baseEnv(sno4, 1)
 	env4.ConnSeq = 99 // 独立连接
-	req4 := buildCrosReqFrame(sno4, crosrpc.ReqTypeSync, "dophi.slow-SlowService", "SlowQuery", []byte("payload_slow"))
+	req4 := buildCrosReqFrame(sno4, crosrpc.ReqTypeSync, "dophi.slow.SlowService", "SlowQuery", []byte("payload_slow"))
 	assembler.Feed(env4, req4)
 	time.Sleep(20 * time.Millisecond)
 	assembler.FeedConnClosed(env4) // 投递连接关闭事件
 
 	// 场景 5: 孤立应答 (RSP_ORPHAN)
 	sno5 := uint64(105)
-	rsp5 := buildCrosRspFrame(sno5, crosrpc.MsgTypeRsp, 1, 0, "dophi.orphan-OrphanService", "OrphanOp", []byte("payload_orphan"))
+	rsp5 := buildCrosRspFrame(sno5, crosrpc.MsgTypeRsp, 1, 0, "dophi.orphan.OrphanService", "OrphanOp", []byte("payload_orphan"))
 	assembler.Feed(baseEnv(sno5, 2), rsp5)
 
 	// 场景 6: 超阈值截断帧 (IS_TRUNCATED)
 	sno6 := uint64(106)
 	env6 := baseEnv(sno6, 1)
 	env6.Flags |= agentproto.FlagIsTruncated
-	req6 := buildCrosReqFrame(sno6, crosrpc.ReqTypeSync, "dophi.big-BigService", "BigOp", []byte("truncated_body"))
+	req6 := buildCrosReqFrame(sno6, crosrpc.ReqTypeSync, "dophi.big.BigService", "BigOp", []byte("truncated_body"))
 	assembler.Feed(env6, req6)
-	rsp6 := buildCrosRspFrame(sno6, crosrpc.MsgTypeRsp, 1, 0, "dophi.big-BigService", "BigOp", []byte("rsp_body"))
+	rsp6 := buildCrosRspFrame(sno6, crosrpc.MsgTypeRsp, 1, 0, "dophi.big.BigService", "BigOp", []byte("rsp_body"))
 	assembler.Feed(baseEnv(sno6, 2), rsp6)
 
 	// 刷盘同步
@@ -353,7 +353,7 @@ func TestExchangeAssemblerDualModeAndLimitAutoStop(t *testing.T) {
 	agentStopCalled.Store(false)
 	for i := 1; i <= 6; i++ {
 		snoL := uint64(500 + i)
-		frame := buildCrosReqFrame(snoL, crosrpc.ReqTypeOneway, "dophi.limit-LimitService", "LimitOp", []byte("data"))
+		frame := buildCrosReqFrame(snoL, crosrpc.ReqTypeOneway, "dophi.limit.LimitService", "LimitOp", []byte("data"))
 		assembler.Feed(agentproto.EnvelopeHeader{
 			Magic:           agentproto.EnvelopeMagic,
 			ProtoVer:        1,

@@ -30,7 +30,7 @@ export interface ProtoFieldNodeDTO {
 export interface OperationSchemaTreeDTO {
   operationId: string;
   operation_id?: string;
-  serviceName: string;         // "{package}-{serviceName}"
+  serviceName: string;         // "{package}.{serviceName}"
   service_name?: string;
   operation: string;           // "DeductBalance"
   protoFile: string;           // "account.proto"
@@ -66,7 +66,7 @@ export interface OperationSchemaTreeDTO {
 }
 
 export interface ServiceContractGroupDTO {
-  serviceName?: string;         // 聚合键: "{package}-{serviceName}" 或 "{service_name}"
+  serviceName?: string;         // 聚合键: "{package}.{serviceName}" 或 "{service_name}"
   service_name?: string;
   protoPackage?: string;
   proto_package?: string;

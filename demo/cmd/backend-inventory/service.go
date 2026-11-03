@@ -59,7 +59,7 @@ func NewInventoryStore() *InventoryStore {
 
 // RegisterHandlers 注册库存履约 CROS RPC 服务
 func (s *InventoryStore) RegisterHandlers(server *crosframe.Server) {
-	serviceName := "demo.inventory-InventoryService"
+	serviceName := "demo.inventory.InventoryService"
 
 	server.Register(serviceName, "GetItemStock", s.handleGetItemStock)
 	server.Register(serviceName, "LockStock", s.handleLockStock)

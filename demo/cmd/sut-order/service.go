@@ -41,7 +41,7 @@ func NewOrderOrchestrator(accountAddr, inventoryAddr string) *OrderOrchestrator 
 }
 
 func (s *OrderOrchestrator) RegisterHandlers(server *crosframe.Server) {
-	serviceName := "demo.order-OrderService"
+	serviceName := "demo.order.OrderService"
 
 	server.Register(serviceName, "GetCompositeQuote", s.handleGetCompositeQuote)
 	server.Register(serviceName, "CreateOrder", s.handleCreateOrder)
@@ -80,7 +80,7 @@ func (s *OrderOrchestrator) handleGetCompositeQuote(ctx context.Context, pkt *cr
 
 	// 1. 调用 Backend 2 查询商品与可用库存
 	invReqBytes, _ := proto.Marshal(&inventorypb.GetItemStockReq{SkuId: req.SkuId})
-	invPkt, invRspBytes, err := s.inventoryCli.Invoke(ctx, "demo.inventory-InventoryService", "GetItemStock", subTrace(pkt.Trace, 0x101), invReqBytes)
+	invPkt, invRspBytes, err := s.inventoryCli.Invoke(ctx, "demo.inventory.InventoryService", "GetItemStock", subTrace(pkt.Trace, 0x101), invReqBytes)
 	if err != nil {
 		rsp.Code = 5002
 		rsp.Message = fmt.Sprintf("调用库存服务失败: %v", err)
@@ -101,7 +101,7 @@ func (s *OrderOrchestrator) handleGetCompositeQuote(ctx context.Context, pkt *cr
 
 	// 2. 调用 Backend 1 查询买家账户可用余额
 	accReqBytes, _ := proto.Marshal(&accountpb.GetBalanceReq{UserId: req.UserId})
-	accPkt, accRspBytes, err := s.accountCli.Invoke(ctx, "demo.account-AccountService", "GetBalance", subTrace(pkt.Trace, 0x102), accReqBytes)
+	accPkt, accRspBytes, err := s.accountCli.Invoke(ctx, "demo.account.AccountService", "GetBalance", subTrace(pkt.Trace, 0x102), accReqBytes)
 	if err != nil {
 		rsp.Code = 5001
 		rsp.Message = fmt.Sprintf("调用账户服务失败: %v", err)
@@ -138,7 +138,7 @@ func (s *OrderOrchestrator) handleCreateOrder(ctx context.Context, pkt *crosrpc.
 
 	// 0. 查验商品行情单价
 	invReqBytes, _ := proto.Marshal(&inventorypb.GetItemStockReq{SkuId: req.SkuId})
-	_, invRspBytes, err := s.inventoryCli.Invoke(ctx, "demo.inventory-InventoryService", "GetItemStock", subTrace(pkt.Trace, 0x201), invReqBytes)
+	_, invRspBytes, err := s.inventoryCli.Invoke(ctx, "demo.inventory.InventoryService", "GetItemStock", subTrace(pkt.Trace, 0x201), invReqBytes)
 	if err != nil {
 		rsp.Code = 5002
 		rsp.Status = "ERROR_INVENTORY_UNAVAILABLE"
@@ -164,7 +164,7 @@ func (s *OrderOrchestrator) handleCreateOrder(ctx context.Context, pkt *crosrpc.
 		Quantity:   req.Quantity,
 		BizOrderId: orderID,
 	})
-	_, lockRspBytes, err := s.inventoryCli.Invoke(ctx, "demo.inventory-InventoryService", "LockStock", subTrace(pkt.Trace, 0x202), lockReqBytes)
+	_, lockRspBytes, err := s.inventoryCli.Invoke(ctx, "demo.inventory.InventoryService", "LockStock", subTrace(pkt.Trace, 0x202), lockReqBytes)
 	if err != nil {
 		rsp.Code = 5002
 		rsp.Status = "ERROR_INVENTORY_LOCK"
@@ -189,7 +189,7 @@ func (s *OrderOrchestrator) handleCreateOrder(ctx context.Context, pkt *crosrpc.
 		AmountCents: totalAmount,
 		BizOrderId:  orderID,
 	})
-	_, deductRspBytes, err := s.accountCli.Invoke(ctx, "demo.account-AccountService", "DeductBalance", subTrace(pkt.Trace, 0x203), deductReqBytes)
+	_, deductRspBytes, err := s.accountCli.Invoke(ctx, "demo.account.AccountService", "DeductBalance", subTrace(pkt.Trace, 0x203), deductReqBytes)
 	if err != nil {
 		// 扣款超时触发补偿释放
 		s.compensateRelease(ctx, pkt.Trace, lockID, "DEDUCT_TIMEOUT")
@@ -217,7 +217,7 @@ func (s *OrderOrchestrator) handleCreateOrder(ctx context.Context, pkt *crosrpc.
 		LockId:     lockID,
 		BizOrderId: orderID,
 	})
-	_, _, _ = s.inventoryCli.Invoke(ctx, "demo.inventory-InventoryService", "ConfirmStock", subTrace(pkt.Trace, 0x204), confirmReqBytes)
+	_, _, _ = s.inventoryCli.Invoke(ctx, "demo.inventory.InventoryService", "ConfirmStock", subTrace(pkt.Trace, 0x204), confirmReqBytes)
 
 	// 4. 落单成功
 	s.mu.Lock()
@@ -245,7 +245,7 @@ func (s *OrderOrchestrator) compensateRelease(ctx context.Context, parentTrace *
 		LockId: lockID,
 		Reason: reason,
 	})
-	_, _, _ = s.inventoryCli.Invoke(ctx, "demo.inventory-InventoryService", "ReleaseStock", subTrace(parentTrace, 0x299), relReqBytes)
+	_, _, _ = s.inventoryCli.Invoke(ctx, "demo.inventory.InventoryService", "ReleaseStock", subTrace(parentTrace, 0x299), relReqBytes)
 }
 
 func (s *OrderOrchestrator) handleGetOrderDetail(ctx context.Context, pkt *crosrpc.ParsedPacket, reqPayload []byte) (uint32, []byte, error) {
@@ -320,7 +320,7 @@ func (s *OrderOrchestrator) handleCancelOrder(ctx context.Context, pkt *crosrpc.
 		BizOrderId:  req.OrderId,
 		Reason:      req.Reason,
 	})
-	_, _, _ = s.accountCli.Invoke(ctx, "demo.account-AccountService", "RefundBalance", subTrace(pkt.Trace, 0x301), refReqBytes)
+	_, _, _ = s.accountCli.Invoke(ctx, "demo.account.AccountService", "RefundBalance", subTrace(pkt.Trace, 0x301), refReqBytes)
 
 	rsp := &orderpb.CancelOrderRsp{
 		Code:                0,

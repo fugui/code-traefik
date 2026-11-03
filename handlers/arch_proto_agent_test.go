@@ -1151,7 +1151,7 @@ func TestUpdateOperationIgnorePaths_ValidationAndAudit(t *testing.T) {
 		ProtoFile:       "order.proto",
 		ProtoPackage:    "dophi.order",
 		ProtoService:    "OrderService",
-		ServiceName:     "dophi.order-OrderService",
+		ServiceName:     "dophi.order.OrderService",
 		Operation:       "CreateOrder",
 		DiffIgnorePaths: datatypes.JSON("[]"),
 	}
@@ -1290,7 +1290,7 @@ func TestGetOperationSchemaTree_SuccessAndNotFound(t *testing.T) {
 		ProtoFile:          "demo/order.proto",
 		ProtoPackage:       "demo.order",
 		ProtoService:       "OrderService",
-		ServiceName:        "demo.order-OrderService",
+		ServiceName:        "demo.order.OrderService",
 		Operation:          "GetOrder",
 		ReqMessageFullName: "demo.order.SimpleReq",
 		RspMessageFullName: "demo.order.SimpleRsp",
@@ -1313,7 +1313,7 @@ func TestGetOperationSchemaTree_SuccessAndNotFound(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &dto); err != nil {
 		t.Fatalf("反序列化 OperationSchemaTreeDTO 失败: %v", err)
 	}
-	if dto.Operation != "GetOrder" || dto.ServiceName != "demo.order-OrderService" {
+	if dto.Operation != "GetOrder" || dto.ServiceName != "demo.order.OrderService" {
 		t.Errorf("DTO 元信息不符合预期: %+v", dto)
 	}
 	if dto.ReqMessage == nil || len(dto.ReqMessage.Fields) != 1 {

@@ -81,7 +81,7 @@ func TestDemoFourProcessClusterEndToEnd(t *testing.T) {
 			UserId: "Alice",
 			SkuId:  "SKU-101",
 		})
-		pkt, rspBytes, err := client.Invoke(ctx, "demo.order-OrderService", "GetCompositeQuote", trace, reqBytes)
+		pkt, rspBytes, err := client.Invoke(ctx, "demo.order.OrderService", "GetCompositeQuote", trace, reqBytes)
 		if err != nil {
 			t.Fatalf("GetCompositeQuote failed: %v", err)
 		}
@@ -105,7 +105,7 @@ func TestDemoFourProcessClusterEndToEnd(t *testing.T) {
 			SkuId:    "SKU-101",
 			Quantity: 1,
 		})
-		pkt, rspBytes, err := client.Invoke(ctx, "demo.order-OrderService", "CreateOrder", trace, reqBytes)
+		pkt, rspBytes, err := client.Invoke(ctx, "demo.order.OrderService", "CreateOrder", trace, reqBytes)
 		if err != nil {
 			t.Fatalf("CreateOrder failed: %v", err)
 		}
@@ -138,7 +138,7 @@ func TestDemoFourProcessClusterEndToEnd(t *testing.T) {
 			SkuId:    "SKU-102",
 			Quantity: 99, // 只有 2 件
 		})
-		_, rspBytes, err := client.Invoke(ctx, "demo.order-OrderService", "CreateOrder", trace, reqBytes)
+		_, rspBytes, err := client.Invoke(ctx, "demo.order.OrderService", "CreateOrder", trace, reqBytes)
 		if err != nil {
 			t.Fatalf("CreateOrder failed: %v", err)
 		}
@@ -162,7 +162,7 @@ func TestDemoFourProcessClusterEndToEnd(t *testing.T) {
 			SkuId:    "SKU-101",
 			Quantity: 1,
 		})
-		_, rspBytes, err := client.Invoke(ctx, "demo.order-OrderService", "CreateOrder", trace, reqBytes)
+		_, rspBytes, err := client.Invoke(ctx, "demo.order.OrderService", "CreateOrder", trace, reqBytes)
 		if err != nil {
 			t.Fatalf("CreateOrder failed: %v", err)
 		}
@@ -186,7 +186,7 @@ func TestDemoFourProcessClusterEndToEnd(t *testing.T) {
 	t.Run("Scenario5_CancelAndRefund", func(t *testing.T) {
 		// 5.1 查订单
 		getReq, _ := proto.Marshal(&orderpb.OrderDetailReq{OrderId: createdOrderID})
-		_, getRspBytes, err := client.Invoke(ctx, "demo.order-OrderService", "GetOrderDetail", trace, getReq)
+		_, getRspBytes, err := client.Invoke(ctx, "demo.order.OrderService", "GetOrderDetail", trace, getReq)
 		if err != nil {
 			t.Fatalf("GetOrderDetail failed: %v", err)
 		}
@@ -198,7 +198,7 @@ func TestDemoFourProcessClusterEndToEnd(t *testing.T) {
 
 		// 5.2 取消退款
 		cancelReq, _ := proto.Marshal(&orderpb.CancelOrderReq{OrderId: createdOrderID, Reason: "买多了"})
-		_, cancelRspBytes, err := client.Invoke(ctx, "demo.order-OrderService", "CancelOrder", trace, cancelReq)
+		_, cancelRspBytes, err := client.Invoke(ctx, "demo.order.OrderService", "CancelOrder", trace, cancelReq)
 		if err != nil {
 			t.Fatalf("CancelOrder failed: %v", err)
 		}
@@ -230,7 +230,7 @@ func newAccountTestStore() *accountTestStore {
 }
 
 func (s *accountTestStore) Register(server *crosframe.Server) {
-	serviceName := "demo.account-AccountService"
+	serviceName := "demo.account.AccountService"
 	server.Register(serviceName, "GetBalance", func(ctx context.Context, pkt *crosrpc.ParsedPacket, payload []byte) (uint32, []byte, error) {
 		var req accountpb.GetBalanceReq
 		_ = proto.Unmarshal(payload, &req)
@@ -296,7 +296,7 @@ func newInventoryTestStore() *inventoryTestStore {
 }
 
 func (s *inventoryTestStore) Register(server *crosframe.Server) {
-	serviceName := "demo.inventory-InventoryService"
+	serviceName := "demo.inventory.InventoryService"
 	server.Register(serviceName, "GetItemStock", func(ctx context.Context, pkt *crosrpc.ParsedPacket, payload []byte) (uint32, []byte, error) {
 		var req inventorypb.GetItemStockReq
 		_ = proto.Unmarshal(payload, &req)
@@ -380,18 +380,18 @@ func newOrderTestOrchestrator(accAddr, invAddr string) *orderTestOrchestrator {
 }
 
 func (o *orderTestOrchestrator) Register(server *crosframe.Server) {
-	serviceName := "demo.order-OrderService"
+	serviceName := "demo.order.OrderService"
 	server.Register(serviceName, "GetCompositeQuote", func(ctx context.Context, pkt *crosrpc.ParsedPacket, payload []byte) (uint32, []byte, error) {
 		var req orderpb.CompositeQuoteReq
 		_ = proto.Unmarshal(payload, &req)
 
 		invReq, _ := proto.Marshal(&inventorypb.GetItemStockReq{SkuId: req.SkuId})
-		_, invRspB, _ := o.inventoryCli.Invoke(ctx, "demo.inventory-InventoryService", "GetItemStock", pkt.Trace, invReq)
+		_, invRspB, _ := o.inventoryCli.Invoke(ctx, "demo.inventory.InventoryService", "GetItemStock", pkt.Trace, invReq)
 		var invRsp inventorypb.GetItemStockRsp
 		_ = proto.Unmarshal(invRspB, &invRsp)
 
 		accReq, _ := proto.Marshal(&accountpb.GetBalanceReq{UserId: req.UserId})
-		_, accRspB, _ := o.accountCli.Invoke(ctx, "demo.account-AccountService", "GetBalance", pkt.Trace, accReq)
+		_, accRspB, _ := o.accountCli.Invoke(ctx, "demo.account.AccountService", "GetBalance", pkt.Trace, accReq)
 		var accRsp accountpb.GetBalanceRsp
 		_ = proto.Unmarshal(accRspB, &accRsp)
 
@@ -413,7 +413,7 @@ func (o *orderTestOrchestrator) Register(server *crosframe.Server) {
 
 		// 查价
 		invReq, _ := proto.Marshal(&inventorypb.GetItemStockReq{SkuId: req.SkuId})
-		_, invRspB, _ := o.inventoryCli.Invoke(ctx, "demo.inventory-InventoryService", "GetItemStock", pkt.Trace, invReq)
+		_, invRspB, _ := o.inventoryCli.Invoke(ctx, "demo.inventory.InventoryService", "GetItemStock", pkt.Trace, invReq)
 		var invRsp inventorypb.GetItemStockRsp
 		_ = proto.Unmarshal(invRspB, &invRsp)
 
@@ -422,7 +422,7 @@ func (o *orderTestOrchestrator) Register(server *crosframe.Server) {
 
 		// 1. 锁库存
 		lockReq, _ := proto.Marshal(&inventorypb.LockStockReq{SkuId: req.SkuId, Quantity: req.Quantity, BizOrderId: orderID})
-		_, lockRspB, _ := o.inventoryCli.Invoke(ctx, "demo.inventory-InventoryService", "LockStock", pkt.Trace, lockReq)
+		_, lockRspB, _ := o.inventoryCli.Invoke(ctx, "demo.inventory.InventoryService", "LockStock", pkt.Trace, lockReq)
 		var lockRsp inventorypb.LockStockRsp
 		_ = proto.Unmarshal(lockRspB, &lockRsp)
 		if lockRsp.Code != 0 {
@@ -432,20 +432,20 @@ func (o *orderTestOrchestrator) Register(server *crosframe.Server) {
 
 		// 2. 扣款
 		deductReq, _ := proto.Marshal(&accountpb.DeductBalanceReq{UserId: req.UserId, AmountCents: total, BizOrderId: orderID})
-		_, deductRspB, _ := o.accountCli.Invoke(ctx, "demo.account-AccountService", "DeductBalance", pkt.Trace, deductReq)
+		_, deductRspB, _ := o.accountCli.Invoke(ctx, "demo.account.AccountService", "DeductBalance", pkt.Trace, deductReq)
 		var deductRsp accountpb.DeductBalanceRsp
 		_ = proto.Unmarshal(deductRspB, &deductRsp)
 		if deductRsp.Code != 0 {
 			// 补偿释放库存
 			relReq, _ := proto.Marshal(&inventorypb.ReleaseStockReq{LockId: lockRsp.LockId, Reason: "BALANCE_INSUFFICIENT"})
-			_, _, _ = o.inventoryCli.Invoke(ctx, "demo.inventory-InventoryService", "ReleaseStock", pkt.Trace, relReq)
+			_, _, _ = o.inventoryCli.Invoke(ctx, "demo.inventory.InventoryService", "ReleaseStock", pkt.Trace, relReq)
 			out, _ := proto.Marshal(&orderpb.CreateOrderRsp{Code: deductRsp.Code, Status: "FAILED_BALANCE", Message: deductRsp.Message})
 			return 0, out, nil
 		}
 
 		// 3. 确认库存
 		confReq, _ := proto.Marshal(&inventorypb.ConfirmStockReq{LockId: lockRsp.LockId, BizOrderId: orderID})
-		_, _, _ = o.inventoryCli.Invoke(ctx, "demo.inventory-InventoryService", "ConfirmStock", pkt.Trace, confReq)
+		_, _, _ = o.inventoryCli.Invoke(ctx, "demo.inventory.InventoryService", "ConfirmStock", pkt.Trace, confReq)
 
 		// 4. 落单
 		o.orders[orderID] = &orderpb.OrderDetailRsp{
@@ -488,7 +488,7 @@ func (o *orderTestOrchestrator) Register(server *crosframe.Server) {
 		}
 		ord.Status = "CANCELLED"
 		refReq, _ := proto.Marshal(&accountpb.RefundBalanceReq{UserId: ord.UserId, AmountCents: ord.TotalAmountCents, BizOrderId: req.OrderId})
-		_, _, _ = o.accountCli.Invoke(ctx, "demo.account-AccountService", "RefundBalance", pkt.Trace, refReq)
+		_, _, _ = o.accountCli.Invoke(ctx, "demo.account.AccountService", "RefundBalance", pkt.Trace, refReq)
 
 		out, _ := proto.Marshal(&orderpb.CancelOrderRsp{
 			Code:                0,

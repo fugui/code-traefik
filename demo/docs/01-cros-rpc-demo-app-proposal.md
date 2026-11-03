@@ -106,12 +106,12 @@ flowchart TB
     end
 
     UI --> ClientCros
-    ClientCros -- "TCP: 127.0.0.1:9001<br/>ascServiceName: demo.order-OrderService" --> SutServer
+    ClientCros -- "TCP: 127.0.0.1:9001<br/>ascServiceName: demo.order.OrderService" --> SutServer
     SutServer --> OrderBiz
     OrderBiz --> AccountCli
     OrderBiz --> InventoryCli
-    AccountCli -- "TCP: 127.0.0.1:9002<br/>ascServiceName: demo.account-AccountService" --> AccServer
-    InventoryCli -- "TCP: 127.0.0.1:9003<br/>ascServiceName: demo.inventory-InventoryService" --> InvServer
+    AccountCli -- "TCP: 127.0.0.1:9002<br/>ascServiceName: demo.account.AccountService" --> AccServer
+    InventoryCli -- "TCP: 127.0.0.1:9003<br/>ascServiceName: demo.inventory.InventoryService" --> InvServer
     AccServer --> AccMem
     InvServer --> InvMem
 
@@ -131,7 +131,7 @@ flowchart TB
 | **传输层协议** | 仅支持 IPv4 TCP 明文通信 | 4 个进程均绑定 `127.0.0.1` 环回或内网 IP，原生 TCP Socket |
 | **魔术字与传输标识** | `CSE.TCP\x01`（8 字节，UINT64 `0x4353452E54435001`） | 公共头前 8 字节严格对齐 `crosrpc.MagicPrefix` + `TransportTCP` |
 | **公共头格式** | 定长 24 字节大端序 `RPC_COMM_HEAD_S` | 复用 `pkg/crosrpc/comm_head.go`，严格填充 `SNO`, `Length`, `HeadLen`, `MsgType`, `IsPacked` |
-| **服务名命名约定** | 遵循契约 A-07：`{package}-{serviceName}`（点分包名 + 中划线连接） | • 订单服务：`demo.order-OrderService`<br/>• 账户服务：`demo.account-AccountService`<br/>• 库存服务：`demo.inventory-InventoryService` |
+| **服务名命名约定** | 遵循契约 A-07：`{package}.{serviceName}`（点分包名 + 点号连接） | • 订单服务：`demo.order.OrderService`<br/>• 账户服务：`demo.account.AccountService`<br/>• 库存服务：`demo.inventory.InventoryService` |
 | **API 操作名** | 遵循契约 A-07：`ascOperation` 与 Method 名字符串直接相等 | 如 `CreateOrder`、`GetOrderDetail`、`DeductBalance`、`LockStock` 等 |
 | **调用链与扩展头** | 扩展头携带 Trace 信息 | 启用 `RPC_EXTEND_HEAD_TYPE_TRACE_KEY`，SUT 将 Client 请求中的 `TraceID` 提取并透传给 Backend 1 和 Backend 2，确保链路还原 |
 | **Payload 格式** | Protobuf 序列化字节流 | 使用标准 Protocol Buffers v3 编译器生成 Go 结构体 |
@@ -145,7 +145,7 @@ flowchart TB
 
 ### 4.1 订单中枢契约 (`proto/order.proto`)
 - **Package**: `demo.order`
-- **ServiceName**: `OrderService` -> 线上传输名: `demo.order-OrderService`
+- **ServiceName**: `OrderService` -> 线上传输名: `demo.order.OrderService`
 
 ```protobuf
 syntax = "proto3";
@@ -231,7 +231,7 @@ message CancelOrderRsp {
 
 ### 4.2 账户资产中心契约 (`proto/account.proto`)
 - **Package**: `demo.account`
-- **ServiceName**: `AccountService` -> 线上传输名: `demo.account-AccountService`
+- **ServiceName**: `AccountService` -> 线上传输名: `demo.account.AccountService`
 
 ```protobuf
 syntax = "proto3";
@@ -308,7 +308,7 @@ message DepositBalanceRsp {
 
 ### 4.3 仓储库存履约契约 (`proto/inventory.proto`)
 - **Package**: `demo.inventory`
-- **ServiceName**: `InventoryService` -> 线上传输名: `demo.inventory-InventoryService`
+- **ServiceName**: `InventoryService` -> 线上传输名: `demo.inventory.InventoryService`
 
 ```protobuf
 syntax = "proto3";
@@ -549,7 +549,7 @@ sequenceDiagram
 │  Qty:     [ 1            ]          │  │ Magic:      CSE.TCP (Proto=1 TCP)                           │ │
 │                                     │  │ HeadLen:    156 Bytes (RspHead V01)                         │ │
 │ [Controls]                          │  │ Payload:    48 Bytes (Protobuf)                             │ │
-│  [1-6] Trigger Preset  [c] Edit Form│  │ Service:    demo.order-OrderService                         │ │
+│  [1-6] Trigger Preset  [c] Edit Form│  │ Service:    demo.order.OrderService                         │ │
 │  [Tab] Switch Hex/JSON [q] Quit     │  │ TraceID:    0x7F2B00318C9A4102                              │ │
 │                                     │  │ Elapse:     2.85 ms                                         │ │
 │                                     │  └─────────────────────────────────────────────────────────────┘ │
@@ -614,7 +614,7 @@ flowchart LR
 3. 用户在 Client TUI 按 `[2]` 触发一次正向下单；
 4. `code-traefik-agent` 通过内核 eBPF 探针自动捕获 SUT 的入站 `:9001` 报文以及出站 `:9002`, `:9003` 报文；
 5. 主控自动解析 Protobuf，并在前端拓扑画布上画出：
-   `demo.order-OrderService` -> 调用 -> `demo.account-AccountService` & `demo.inventory-InventoryService`。
+   `demo.order.OrderService` -> 调用 -> `demo.account.AccountService` & `demo.inventory.InventoryService`。
 
 ### 8.2 验证场景 2：三级架构元素 SSOT 一致性核对
 1. 架构师在 `code-traefik` 声明模块依赖规则：`order-core` 允许依赖 `account-core` 和 `inventory-core`；

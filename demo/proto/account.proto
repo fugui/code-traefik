@@ -3,7 +3,7 @@ syntax = "proto3";
 package demo.account;
 option go_package = "code-traefik/demo/pkg/proto/accountpb";
 
-// 账户资产服务契约 (Service: demo.account-AccountService)
+// 账户资产服务契约 (Service: demo.account.AccountService)
 service AccountService {
   // 查询用户账户信息与可用余额
   rpc GetBalance(GetBalanceReq) returns (GetBalanceRsp);

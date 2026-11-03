@@ -7,7 +7,7 @@ import { rollupServices, OperationMappingTable } from '../pages/ProtoSchemaWorkb
 function buildMockOperations(): ProtoOperation[] {
   const ops: ProtoOperation[] = [];
 
-  // Service 1: dophi.account-AccountService (4 operations: 3 Unary, 1 Stream)
+  // Service 1: dophi.account.AccountService (4 operations: 3 Unary, 1 Stream)
   ops.push(
     {
       id: '101',
@@ -15,7 +15,7 @@ function buildMockOperations(): ProtoOperation[] {
       proto_file: 'account.proto',
       proto_package: 'dophi.account',
       proto_service: 'AccountService',
-      service_name: 'dophi.account-AccountService',
+      service_name: 'dophi.account.AccountService',
       operation: 'GetBalance',
       req_message_full_name: 'dophi.account.GetBalanceReq',
       rsp_message_full_name: 'dophi.account.GetBalanceRsp',
@@ -29,7 +29,7 @@ function buildMockOperations(): ProtoOperation[] {
       proto_file: 'account.proto',
       proto_package: 'dophi.account',
       proto_service: 'AccountService',
-      service_name: 'dophi.account-AccountService',
+      service_name: 'dophi.account.AccountService',
       operation: 'DeductBalance',
       req_message_full_name: 'dophi.account.DeductBalanceReq',
       rsp_message_full_name: 'dophi.account.DeductBalanceRsp',
@@ -43,7 +43,7 @@ function buildMockOperations(): ProtoOperation[] {
       proto_file: 'account.proto',
       proto_package: 'dophi.account',
       proto_service: 'AccountService',
-      service_name: 'dophi.account-AccountService',
+      service_name: 'dophi.account.AccountService',
       operation: 'RefundBalance',
       req_message_full_name: 'dophi.account.RefundBalanceReq',
       rsp_message_full_name: 'dophi.account.RefundBalanceRsp',
@@ -57,7 +57,7 @@ function buildMockOperations(): ProtoOperation[] {
       proto_file: 'account.proto',
       proto_package: 'dophi.account',
       proto_service: 'AccountService',
-      service_name: 'dophi.account-AccountService',
+      service_name: 'dophi.account.AccountService',
       operation: 'StreamAuditLogs',
       req_message_full_name: 'dophi.account.StreamAuditLogsReq',
       rsp_message_full_name: 'dophi.account.StreamAuditLogsRsp',
@@ -67,7 +67,7 @@ function buildMockOperations(): ProtoOperation[] {
     }
   );
 
-  // Service 2: dophi.order-OrderService (5 operations: 4 Unary, 1 Stream)
+  // Service 2: dophi.order.OrderService (5 operations: 4 Unary, 1 Stream)
   ops.push(
     {
       id: '201',
@@ -75,7 +75,7 @@ function buildMockOperations(): ProtoOperation[] {
       proto_file: 'order.proto',
       proto_package: 'dophi.order',
       proto_service: 'OrderService',
-      service_name: 'dophi.order-OrderService',
+      service_name: 'dophi.order.OrderService',
       operation: 'CreateOrder',
       req_message_full_name: 'dophi.order.CreateOrderReq',
       rsp_message_full_name: 'dophi.order.CreateOrderRsp',
@@ -87,7 +87,7 @@ function buildMockOperations(): ProtoOperation[] {
       proto_file: 'order.proto',
       proto_package: 'dophi.order',
       proto_service: 'OrderService',
-      service_name: 'dophi.order-OrderService',
+      service_name: 'dophi.order.OrderService',
       operation: 'CancelOrder',
       req_message_full_name: 'dophi.order.CancelOrderReq',
       rsp_message_full_name: 'dophi.order.CancelOrderRsp',
@@ -99,7 +99,7 @@ function buildMockOperations(): ProtoOperation[] {
       proto_file: 'order.proto',
       proto_package: 'dophi.order',
       proto_service: 'OrderService',
-      service_name: 'dophi.order-OrderService',
+      service_name: 'dophi.order.OrderService',
       operation: 'QueryOrder',
       req_message_full_name: 'dophi.order.QueryOrderReq',
       rsp_message_full_name: 'dophi.order.QueryOrderRsp',
@@ -111,7 +111,7 @@ function buildMockOperations(): ProtoOperation[] {
       proto_file: 'order.proto',
       proto_package: 'dophi.order',
       proto_service: 'OrderService',
-      service_name: 'dophi.order-OrderService',
+      service_name: 'dophi.order.OrderService',
       operation: 'ListOrders',
       req_message_full_name: 'dophi.order.ListOrdersReq',
       rsp_message_full_name: 'dophi.order.ListOrdersRsp',
@@ -123,7 +123,7 @@ function buildMockOperations(): ProtoOperation[] {
       proto_file: 'order.proto',
       proto_package: 'dophi.order',
       proto_service: 'OrderService',
-      service_name: 'dophi.order-OrderService',
+      service_name: 'dophi.order.OrderService',
       operation: 'SyncOrdersStream',
       req_message_full_name: 'dophi.order.SyncOrdersReq',
       rsp_message_full_name: 'dophi.order.SyncOrdersRsp',
@@ -133,7 +133,7 @@ function buildMockOperations(): ProtoOperation[] {
     }
   );
 
-  // Service 3: dophi.inventory-InventoryService (3 operations: 3 Unary, 0 Stream)
+  // Service 3: dophi.inventory.InventoryService (3 operations: 3 Unary, 0 Stream)
   ops.push(
     {
       id: '301',
@@ -141,7 +141,7 @@ function buildMockOperations(): ProtoOperation[] {
       proto_file: 'inventory.proto',
       proto_package: 'dophi.inventory',
       proto_service: 'InventoryService',
-      service_name: 'dophi.inventory-InventoryService',
+      service_name: 'dophi.inventory.InventoryService',
       operation: 'LockStock',
       req_message_full_name: 'dophi.inventory.LockStockReq',
       rsp_message_full_name: 'dophi.inventory.LockStockRsp',
@@ -153,7 +153,7 @@ function buildMockOperations(): ProtoOperation[] {
       proto_file: 'inventory.proto',
       proto_package: 'dophi.inventory',
       proto_service: 'InventoryService',
-      service_name: 'dophi.inventory-InventoryService',
+      service_name: 'dophi.inventory.InventoryService',
       operation: 'UnlockStock',
       req_message_full_name: 'dophi.inventory.UnlockStockReq',
       rsp_message_full_name: 'dophi.inventory.UnlockStockRsp',
@@ -165,7 +165,7 @@ function buildMockOperations(): ProtoOperation[] {
       proto_file: 'inventory.proto',
       proto_package: 'dophi.inventory',
       proto_service: 'InventoryService',
-      service_name: 'dophi.inventory-InventoryService',
+      service_name: 'dophi.inventory.InventoryService',
       operation: 'QueryStock',
       req_message_full_name: 'dophi.inventory.QueryStockReq',
       rsp_message_full_name: 'dophi.inventory.QueryStockRsp',
@@ -182,7 +182,7 @@ describe('ProtoNestedTable Suite (M7-P2)', () => {
     expect(ops.length).toBe(12);
 
     const claimMap = {
-      'dophi.account-AccountService': {
+      'dophi.account.AccountService': {
         id: '1',
         code: 'MOD_ACCOUNT',
         name: '账户模块',
@@ -194,9 +194,9 @@ describe('ProtoNestedTable Suite (M7-P2)', () => {
     // 1. 验证聚合为 3 个服务
     expect(groups.length).toBe(3);
 
-    const accountSvc = groups.find((g) => g.serviceName === 'dophi.account-AccountService');
-    const orderSvc = groups.find((g) => g.serviceName === 'dophi.order-OrderService');
-    const invSvc = groups.find((g) => g.serviceName === 'dophi.inventory-InventoryService');
+    const accountSvc = groups.find((g) => g.serviceName === 'dophi.account.AccountService');
+    const orderSvc = groups.find((g) => g.serviceName === 'dophi.order.OrderService');
+    const invSvc = groups.find((g) => g.serviceName === 'dophi.inventory.InventoryService');
 
     expect(accountSvc).toBeDefined();
     expect(orderSvc).toBeDefined();
@@ -232,9 +232,9 @@ describe('ProtoNestedTable Suite (M7-P2)', () => {
     );
 
     // 包含 3 个服务名
-    expect(html).toContain('dophi.account-AccountService');
-    expect(html).toContain('dophi.order-OrderService');
-    expect(html).toContain('dophi.inventory-InventoryService');
+    expect(html).toContain('dophi.account.AccountService');
+    expect(html).toContain('dophi.order.OrderService');
+    expect(html).toContain('dophi.inventory.InventoryService');
     // 包含认领徽章与孤儿徽章
     expect(html).toContain('MOD_ACCOUNT');
     expect(html).toContain('未认领孤儿契约');
@@ -244,7 +244,7 @@ describe('ProtoNestedTable Suite (M7-P2)', () => {
     const ops = buildMockOperations();
     const noop = () => {};
 
-    // 1. 搜索 DeductBalance (属于 dophi.account-AccountService)
+    // 1. 搜索 DeductBalance (属于 dophi.account.AccountService)
     const htmlWithSearch = renderToString(
       <MemoryRouter>
         <OperationMappingTable

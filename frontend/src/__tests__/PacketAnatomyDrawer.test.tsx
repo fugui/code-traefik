@@ -39,11 +39,11 @@ export const mockAnatomyDTO: PacketAnatomyDrawerDTO = {
       headKind: 'REQ',
       detectedVersion: 'V05 (256B)',
       sessionHeadLen: 256,
-      serviceName: `dophi.order.v1-OrderService${evilScript}`,
+      serviceName: `dophi.order.v1.OrderService${evilScript}`,
       operation: 'CreateOrder',
       fields: [
         { name: 'uiVersion', offsetRange: '24..27', value: '5' },
-        { name: 'szServiceName', offsetRange: '28..91', value: `dophi.order.v1-OrderService${evilScript}` },
+        { name: 'szServiceName', offsetRange: '28..91', value: `dophi.order.v1.OrderService${evilScript}` },
         { name: 'szOperation', offsetRange: '92..123', value: 'CreateOrder' },
       ],
     },
@@ -117,7 +117,7 @@ export const mockAnatomyDTO: PacketAnatomyDrawerDTO = {
       headKind: 'RSP',
       detectedVersion: 'V05 (256B)',
       sessionHeadLen: 256,
-      serviceName: 'dophi.order.v1-OrderService',
+      serviceName: 'dophi.order.v1.OrderService',
       operation: 'CreateOrder',
       uiStatusCode: 0,
       timingBreakdownUs: {

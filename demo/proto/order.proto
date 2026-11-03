@@ -3,7 +3,7 @@ syntax = "proto3";
 package demo.order;
 option go_package = "code-traefik/demo/pkg/proto/orderpb";
 
-// 订单综合服务契约 (Service: demo.order-OrderService)
+// 订单综合服务契约 (Service: demo.order.OrderService)
 service OrderService {
   // 综合聚合查询：同时查询用户资产与商品实时库存行情
   rpc GetCompositeQuote(CompositeQuoteReq) returns (CompositeQuoteRsp);

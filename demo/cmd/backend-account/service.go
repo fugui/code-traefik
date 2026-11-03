@@ -44,7 +44,7 @@ func NewAccountStore() *AccountStore {
 
 // RegisterHandlers 注册账户业务 CROS RPC 服务
 func (s *AccountStore) RegisterHandlers(server *crosframe.Server) {
-	serviceName := "demo.account-AccountService"
+	serviceName := "demo.account.AccountService"
 
 	server.Register(serviceName, "GetBalance", s.handleGetBalance)
 	server.Register(serviceName, "DeductBalance", s.handleDeductBalance)

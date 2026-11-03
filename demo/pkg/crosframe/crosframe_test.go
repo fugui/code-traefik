@@ -19,7 +19,7 @@ func TestBuildPacketValidation(t *testing.T) {
 	payload := []byte("hello cros rpc payload")
 
 	// 1. 测试请求包构建
-	reqPkt := BuildReqPacket(2001, "demo.order-OrderService", "CreateOrder", trace, payload)
+	reqPkt := BuildReqPacket(2001, "demo.order.OrderService", "CreateOrder", trace, payload)
 	parsedReq, err := crosrpc.ParsePacket(reqPkt)
 	if err != nil {
 		t.Fatalf("ParsePacket for Req failed: %v", err)
@@ -27,7 +27,7 @@ func TestBuildPacketValidation(t *testing.T) {
 	if parsedReq.Comm.SNO != 2001 {
 		t.Fatalf("SNO expected 2001, got %d", parsedReq.Comm.SNO)
 	}
-	if parsedReq.Req == nil || parsedReq.Req.ServiceName != "demo.order-OrderService" || parsedReq.Req.Operation != "CreateOrder" {
+	if parsedReq.Req == nil || parsedReq.Req.ServiceName != "demo.order.OrderService" || parsedReq.Req.Operation != "CreateOrder" {
 		t.Fatalf("Req header mismatch: %+v", parsedReq.Req)
 	}
 	if parsedReq.Trace == nil || parsedReq.Trace.TraceID != trace.TraceID || parsedReq.Trace.SpanID != trace.SpanID {
@@ -39,7 +39,7 @@ func TestBuildPacketValidation(t *testing.T) {
 	}
 
 	// 2. 测试应答包构建
-	rspPkt := BuildRspPacket(2001, "demo.order-OrderService", "CreateOrder", 0, trace, payload)
+	rspPkt := BuildRspPacket(2001, "demo.order.OrderService", "CreateOrder", 0, trace, payload)
 	parsedRsp, err := crosrpc.ParsePacket(rspPkt)
 	if err != nil {
 		t.Fatalf("ParsePacket for Rsp failed: %v", err)
@@ -47,7 +47,7 @@ func TestBuildPacketValidation(t *testing.T) {
 	if parsedRsp.Comm.SNO != 2001 {
 		t.Fatalf("SNO expected 2001, got %d", parsedRsp.Comm.SNO)
 	}
-	if parsedRsp.Rsp == nil || parsedRsp.Rsp.ServiceName != "demo.order-OrderService" || parsedRsp.Rsp.StatusCode != 0 {
+	if parsedRsp.Rsp == nil || parsedRsp.Rsp.ServiceName != "demo.order.OrderService" || parsedRsp.Rsp.StatusCode != 0 {
 		t.Fatalf("Rsp header mismatch: %+v", parsedRsp.Rsp)
 	}
 	if parsedRsp.Trace == nil || parsedRsp.Trace.TraceID != trace.TraceID {

@@ -61,7 +61,7 @@
 ### 3.3 `03-architecture-elements-and-topology.md`：架构元素建模与拓扑验证
 1. **三级逻辑架构体系**：子系统 -> 功能组（自嵌套树，`parent_id` + `level` + `path` 编码体系、移动节点时的递归防成环检测算法）-> 功能模块（叶子业务单元）；
 2. **模块级接口供给与依赖契约**：
-   - 供给接口 (`PROVIDE`)：全局唯一约束，服务名格式为 `{package}-{serviceName}`（package 原样保留点分结构，以中划线连接）；
+   - 供给接口 (`PROVIDE`)：全局唯一约束，服务名格式为 `{package}.{serviceName}`（若无 package 则为 `{serviceName}`）；
    - 依赖接口 (`DEPEND`)：声明下游调用的服务名与方法；
 3. **物理部署映射**：1 个操作系统进程承载多个功能模块、单监听端口互斥、`cmd_pattern` 反查实时 PID；
 4. **静态拓扑自动推导**：模块间依赖边匹配推导算法、未登记外部系统占位边、同进程内模块互调（标记为「进程内不可观测」）；
@@ -74,7 +74,7 @@
 1. **Server 核心服务、双轨分发管道与调度**：WebSocket 流双轨分发（实时前端 SSE 推送 + 异步连接分片 Worker 配对解码落盘管道）、多进程协同录制批次编排器、跨 Agent 同构进程重放任务调度器；
 2. **IDL 描述集引擎与动态编解码**：
    - `.pb` 描述集文件注册、合法性校验、多版本管理与切换；
-   - 基于 `dynamicpb` 按 `{package}-{serviceName}` 映射执行 Payload JSON 动态反序列化与序列化；
+   - 基于 `dynamicpb` 按 `{package}.{serviceName}` 映射执行 Payload JSON 动态反序列化与序列化；
 3. **双层回归 Diff 断言引擎**：
    - 第一层协议头级比对：状态码 `uiStatusCode` / `ullStatusCode`、消息类型、Payload 字节比对；
    - 第二层 Protobuf 语义字段级 Diff 算法：服务端时间戳固定豁免规则、忽略字段配置解析、map/repeated 顺序语义处理；

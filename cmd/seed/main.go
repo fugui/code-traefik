@@ -284,7 +284,7 @@ func main() {
 	// 7.1 服务契约 (ModuleServices)
 	svcOrder := models.ModuleService{
 		ModuleID:        modOrder.ID,
-		ServiceName:     "demo.order-OrderService",
+		ServiceName:     "demo.order.OrderService",
 		DiffIgnorePaths: datatypes.JSON([]byte("[]")),
 		Description:     "CROS RPC 订单微服务对外契约",
 		CreatedBy:       1,
@@ -293,7 +293,7 @@ func main() {
 
 	svcAccount := models.ModuleService{
 		ModuleID:        modAccount.ID,
-		ServiceName:     "demo.account-AccountService",
+		ServiceName:     "demo.account.AccountService",
 		DiffIgnorePaths: datatypes.JSON([]byte("[]")),
 		Description:     "CROS RPC 账户资产微服务契约",
 		CreatedBy:       1,
@@ -302,7 +302,7 @@ func main() {
 
 	svcInventory := models.ModuleService{
 		ModuleID:        modInventory.ID,
-		ServiceName:     "demo.inventory-InventoryService",
+		ServiceName:     "demo.inventory.InventoryService",
 		DiffIgnorePaths: datatypes.JSON([]byte("[]")),
 		Description:     "CROS RPC 仓储库存微服务契约",
 		CreatedBy:       1,

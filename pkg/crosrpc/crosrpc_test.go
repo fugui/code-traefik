@@ -282,7 +282,7 @@ func TestParseReqRspMngAndExtendHeads(t *testing.T) {
 	v01Req := make([]byte, 160)
 	binary.BigEndian.PutUint16(v01Req[0:2], 1)
 	binary.BigEndian.PutUint16(v01Req[2:4], 160)
-	copy(v01Req[8:72], []byte("pkg.sub-OrderService"))
+	copy(v01Req[8:72], []byte("pkg.sub.OrderService"))
 	copy(v01Req[72:136], []byte("CreateOrder"))
 	v01Req[136] = ReqTypeSync
 	copy(v01Req[144:160], []byte("1234567890abcdef"))
@@ -292,7 +292,7 @@ func TestParseReqRspMngAndExtendHeads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParsePacket V01 Req 失败: %v", err)
 	}
-	if p01.Req == nil || p01.Req.ServiceName != "pkg.sub-OrderService" || p01.Req.Operation != "CreateOrder" {
+	if p01.Req == nil || p01.Req.ServiceName != "pkg.sub.OrderService" || p01.Req.Operation != "CreateOrder" {
 		t.Fatalf("V01 Req 解析字段不符: %+v", p01.Req)
 	}
 
@@ -300,7 +300,7 @@ func TestParseReqRspMngAndExtendHeads(t *testing.T) {
 	v05Req := make([]byte, 256)
 	binary.BigEndian.PutUint16(v05Req[0:2], 5)
 	binary.BigEndian.PutUint16(v05Req[2:4], 256)
-	copy(v05Req[8:72], []byte("pkg.sub-OrderService"))
+	copy(v05Req[8:72], []byte("pkg.sub.OrderService"))
 	copy(v05Req[72:136], []byte("CreateOrder"))
 	binary.BigEndian.PutUint32(v05Req[244:248], 5000)
 	binary.BigEndian.PutUint64(v05Req[248:256], 1700000000123)
@@ -333,7 +333,7 @@ func TestParseReqRspMngAndExtendHeads(t *testing.T) {
 		rawRsp := make([]byte, tc.headLen)
 		binary.BigEndian.PutUint16(rawRsp[0:2], 1)
 		binary.BigEndian.PutUint16(rawRsp[2:4], uint16(tc.headLen))
-		copy(rawRsp[layout.ServiceNameOffset:layout.ServiceNameOffset+64], []byte("pkg.sub-OrderService"))
+		copy(rawRsp[layout.ServiceNameOffset:layout.ServiceNameOffset+64], []byte("pkg.sub.OrderService"))
 		copy(rawRsp[layout.OperationOffset:layout.OperationOffset+64], []byte("CreateOrder"))
 		binary.BigEndian.PutUint16(rawRsp[layout.RspMsgNoOffset:layout.RspMsgNoOffset+2], 7)
 
@@ -351,7 +351,7 @@ func TestParseReqRspMngAndExtendHeads(t *testing.T) {
 		if err != nil {
 			t.Fatalf("解析 Rsp %s 失败: %v", tc.ver, err)
 		}
-		if parsed.Rsp.ServiceName != "pkg.sub-OrderService" || parsed.Rsp.Operation != "CreateOrder" || parsed.Rsp.RspMsgNo != 7 {
+		if parsed.Rsp.ServiceName != "pkg.sub.OrderService" || parsed.Rsp.Operation != "CreateOrder" || parsed.Rsp.RspMsgNo != 7 {
 			t.Fatalf("Rsp %s 字段解析不匹配: %+v", tc.ver, parsed.Rsp)
 		}
 		if tc.is64BitSt && parsed.Rsp.StatusCode != 18446744073709551610 {

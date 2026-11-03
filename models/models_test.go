@@ -189,7 +189,7 @@ func TestPartialUniqueIndexesAndFKConstraints(t *testing.T) {
 	// 1. 验证 ModuleService PROVIDE 相同 Service 全局唯一性拦截，以及 ModuleDependency 内部/外部依赖与唯一约束
 	prov1 := ModuleService{
 		ModuleID:    mod1.ID,
-		ServiceName: "pkg.order-OrderService",
+		ServiceName: "pkg.order.OrderService",
 	}
 	if err := db.Create(&prov1).Error; err != nil {
 		t.Fatalf("Module1 声明 PROVIDE Service 失败: %v", err)
@@ -197,7 +197,7 @@ func TestPartialUniqueIndexesAndFKConstraints(t *testing.T) {
 
 	prov2 := ModuleService{
 		ModuleID:    mod2.ID,
-		ServiceName: "pkg.order-OrderService",
+		ServiceName: "pkg.order.OrderService",
 	}
 	// 期望被 uk_traefik_mod_svc_name 唯一索引拦截
 	errProv2 := db.Create(&prov2).Error

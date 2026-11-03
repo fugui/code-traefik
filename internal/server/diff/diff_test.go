@@ -58,8 +58,8 @@ func TestValidateReplayProcessCompatibility(t *testing.T) {
 
 	// 提供接口
 	provideMap := map[string]uint64{
-		"dophi.order-OrderService:CreateOrder": modOrder.ID,
-		"dophi.stock-StockService:DeductStock": modStock.ID,
+		"dophi.order.OrderService:CreateOrder": modOrder.ID,
+		"dophi.stock.StockService:DeductStock": modStock.ID,
 	}
 
 	// 2. 模拟用户 A 与用户 B 的 Agent 与进程
@@ -123,7 +123,7 @@ func TestValidateReplayProcessCompatibility(t *testing.T) {
 	selectedRecords := []models.TrafficRecord{
 		{
 			SessionID:   sessShared.ID,
-			ServiceName: "dophi.order-OrderService",
+			ServiceName: "dophi.order.OrderService",
 			Operation:   "CreateOrder",
 		},
 	}
@@ -190,7 +190,7 @@ func TestValidateReplayProcessCompatibility_AfterProcessUnmount(t *testing.T) {
 		archOrder.ID: {modOrder.ID},
 	}
 	provideMap := map[string]uint64{
-		"dophi.order-OrderService:CreateOrder": modOrder.ID,
+		"dophi.order.OrderService:CreateOrder": modOrder.ID,
 	}
 
 	agtShared := models.Agent{Name: "agt-unm-shared", Endpoint: "http://127.0.0.1:19811", Scope: models.ScopeShared, Status: models.AgentStatusOnline}
@@ -239,7 +239,7 @@ func TestValidateReplayProcessCompatibility_AfterProcessUnmount(t *testing.T) {
 	selectedRecords := []models.TrafficRecord{
 		{
 			SessionID:   sess.ID,
-			ServiceName: "dophi.order-OrderService",
+			ServiceName: "dophi.order.OrderService",
 			Operation:   "CreateOrder",
 		},
 	}
@@ -279,7 +279,7 @@ func buildRspPacketWithAllTiming(
 	binary.BigEndian.PutUint32(rawRsp[4:8], statusCode)
 	copy(rawRsp[8:24], traceBuff[:])
 	binary.BigEndian.PutUint64(rawRsp[32:40], clientSendTime)
-	copy(rawRsp[56:120], []byte("dophi.order-OrderService"))
+	copy(rawRsp[56:120], []byte("dophi.order.OrderService"))
 	copy(rawRsp[120:184], []byte("GetOrder"))
 	binary.BigEndian.PutUint64(rawRsp[184:192], uint64(statusCode))
 	binary.BigEndian.PutUint16(rawRsp[192:194], 1) // rspMsgNo

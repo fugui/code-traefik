@@ -13,9 +13,9 @@ flowchart LR
     B1["进程 3: backend-account (资产服务 :9002)"]
     B2["进程 4: backend-inventory (库存服务 :9003)"]
 
-    Client -- "CROS RPC over TCP (:9001)<br/>demo.order-OrderService" --> SUT
-    SUT -- "CROS RPC over TCP (:9002)<br/>demo.account-AccountService" --> B1
-    SUT -- "CROS RPC over TCP (:9003)<br/>demo.inventory-InventoryService" --> B2
+    Client -- "CROS RPC over TCP (:9001)<br/>demo.order.OrderService" --> SUT
+    SUT -- "CROS RPC over TCP (:9002)<br/>demo.account.AccountService" --> B1
+    SUT -- "CROS RPC over TCP (:9003)<br/>demo.inventory.InventoryService" --> B2
 ```
 
 - **Client (`cmd/client`)**：交互式 TUI 控制台，支持数字快捷键触发预置业务场景、自定义表单输入、压力测试，并实时以四段解剖视窗展示底层 `SNO`、`TraceID`、时延、Protobuf JSON 与十六进制 HEX Dump。

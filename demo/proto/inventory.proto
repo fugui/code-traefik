@@ -3,7 +3,7 @@ syntax = "proto3";
 package demo.inventory;
 option go_package = "code-traefik/demo/pkg/proto/inventorypb";
 
-// 库存履约服务契约 (Service: demo.inventory-InventoryService)
+// 库存履约服务契约 (Service: demo.inventory.InventoryService)
 service InventoryService {
   // 查询 SKU 详情及可售库存
   rpc GetItemStock(GetItemStockReq) returns (GetItemStockRsp);
