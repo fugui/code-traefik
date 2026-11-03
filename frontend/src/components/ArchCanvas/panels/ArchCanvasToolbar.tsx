@@ -44,20 +44,24 @@ export const ArchCanvasToolbar: React.FC<ArchCanvasToolbarProps> = ({
       {/* 左侧控制区 */}
       <div className="code-arch-toolbar__left">
         {/* 视角切换 Segmented Control */}
-        <div className="code-arch-segmented" role="tablist">
+        <div className="code-arch-segmented" role="tablist" data-testid="topology-view-segmented">
           <button
             type="button"
             className={`code-arch-segmented__item ${view === 'LOGICAL' ? 'code-arch-segmented__item--active' : ''}`}
             onClick={() => onViewChange('LOGICAL')}
+            data-testid="toggle-topo-logical"
           >
-            逻辑架构视图
+            <Layers size={14} style={{ marginRight: 6, verticalAlign: 'text-bottom' }} />
+            逻辑架构
           </button>
           <button
             type="button"
             className={`code-arch-segmented__item ${view === 'PHYSICAL' ? 'code-arch-segmented__item--active' : ''}`}
             onClick={() => onViewChange('PHYSICAL')}
+            data-testid="toggle-topo-physical"
           >
-            物理部署视图
+            <Server size={14} style={{ marginRight: 6, verticalAlign: 'text-bottom' }} />
+            物理架构
           </button>
         </div>
 

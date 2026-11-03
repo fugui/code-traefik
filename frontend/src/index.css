@@ -516,6 +516,49 @@ body {
   box-shadow: var(--shadow-sm);
 }
 
+/* 架构分段控制器 (逻辑架构 / 物理架构 统一切换) */
+.code-arch-segmented {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px;
+  background-color: var(--color-bg-muted);
+  border-radius: 6px;
+  border: 1px solid var(--color-border-primary);
+}
+
+.code-arch-segmented__item {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 4px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.code-arch-segmented__item:hover {
+  color: var(--color-text-primary);
+}
+
+.code-arch-segmented__item--active {
+  background-color: var(--color-bg-surface);
+  color: var(--color-primary);
+  font-weight: 600;
+  box-shadow: var(--shadow-sm);
+}
+
+.code-arch-toolbar__divider {
+  width: 1px;
+  height: 20px;
+  background-color: var(--color-border-primary);
+  flex-shrink: 0;
+}
+
 /* 按钮规范 */
 .code-btn {
   display: inline-flex;

@@ -772,20 +772,19 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
 
   return (
     <div className="code-workbench-page code-arch-workbench" data-testid="architecture-workbench">
-      {/* 头部标题与视图切换 */}
-      <div className="code-workbench-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <div className="code-workbench-title-group">
-          <h2 className="code-workbench-title">
-            {treeView === 'physical' ? '物理进程蓝图台账' : '三级逻辑架构台账'}
-          </h2>
-          <span className="code-workbench-subtitle">
-            {treeView === 'physical'
-              ? '维护标准物理进程定义、默认监听端口、特征命令行与多环境 Agent 探针挂载血缘'
-              : '维护子系统、8 级功能组与模块契约 (PROVIDE / DEPEND)'}
-          </span>
-        </div>
-
-        {/* 逻辑架构 | 物理进程 双视图 Segmented Control 切换器 */}
+      {/* 头部：视图切换与说明（居左布局，与架构拓扑保持一致） */}
+      <div
+        className="code-workbench-header code-arch-workbench-header"
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'flex-start',
+          gap: '16px',
+          marginBottom: '1rem',
+          flexWrap: 'wrap',
+        }}
+      >
+        {/* 逻辑架构 | 物理架构 双视图 Segmented Control 切换器（居左与拓扑保持一致） */}
         <div className="code-arch-segmented" role="tablist" data-testid="arch-tree-view-segmented">
           <button
             type="button"
@@ -796,7 +795,8 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
             }}
             data-testid="toggle-tree-logical"
           >
-            三级逻辑架构
+            <Layers size={14} style={{ marginRight: 6, verticalAlign: 'text-bottom' }} />
+            逻辑架构
           </button>
           <button
             type="button"
@@ -807,9 +807,18 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
             }}
             data-testid="toggle-tree-physical"
           >
-            物理进程蓝图
+            <Server size={14} style={{ marginRight: 6, verticalAlign: 'text-bottom' }} />
+            物理架构
           </button>
         </div>
+
+        <div className="code-arch-toolbar__divider" style={{ height: 20 }} />
+
+        <span className="code-workbench-subtitle" style={{ fontSize: '0.8125rem', color: 'var(--color-text-secondary)' }}>
+          {treeView === 'physical'
+            ? '维护标准物理进程、默认端口、特征命令行与多环境 Agent 探针挂载血缘'
+            : '维护子系统、功能组与模块契约 (PROVIDE / DEPEND)'}
+        </span>
       </div>
 
       {/* 视图主体：纯双栏布局（根据 treeView 切换） */}

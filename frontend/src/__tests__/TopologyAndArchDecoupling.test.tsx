@@ -150,7 +150,8 @@ export function testArchWorkbench_PureLogicalAndBloodlineLinks(): void {
     </MemoryRouter>
   );
 
-  expect(workbenchHtml).toContain('三级逻辑架构台账');
+  expect(workbenchHtml).toContain('逻辑架构');
+  expect(workbenchHtml).not.toContain('三级逻辑架构台账');
   expect(workbenchHtml).not.toContain('code-tab-pills');
   expect(workbenchHtml).not.toContain('静态拓扑与一致性画布');
   expect(workbenchHtml).not.toContain('code-topology-pane');

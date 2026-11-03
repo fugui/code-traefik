@@ -273,11 +273,11 @@ describe('ArchPhysicalBlueprintWorkbench Test Suite', () => {
     );
 
     expect(html).toContain('data-testid="arch-tree-view-segmented"');
-    expect(html).toContain('三级逻辑架构');
-    expect(html).toContain('物理进程蓝图');
+    expect(html).toContain('逻辑架构');
+    expect(html).toContain('物理架构');
     expect(html).toContain('data-testid="toggle-tree-logical"');
     expect(html).toContain('data-testid="toggle-tree-physical"');
-    expect(html).toContain('物理进程蓝图台账');
+    expect(html).not.toContain('三级逻辑架构台账');
     expect(html).toContain('data-testid="arch-physical-empty-state"');
   });
 });
