@@ -31,3 +31,6 @@ tmp/
 coverage.out
 coverage/
 frontend/coverage/
+
+# E2E 浏览器测试产物与截图
+e2e_browser_test/
