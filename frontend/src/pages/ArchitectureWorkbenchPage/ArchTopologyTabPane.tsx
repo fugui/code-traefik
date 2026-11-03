@@ -349,7 +349,7 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
       style={{
         display: 'flex',
         flexDirection: 'column',
-        height: 'calc(100vh - 130px)',
+        height: 'calc(100vh - var(--portal-header-height, 0px) - 130px)',
         minHeight: 640,
         backgroundColor: 'var(--color-bg-surface)',
         border: '1px solid var(--color-border-primary)',

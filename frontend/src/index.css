@@ -447,6 +447,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 1rem;
+  box-sizing: border-box;
 }
 
 .code-workbench-body {
@@ -1234,7 +1235,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
-  max-height: calc(100vh - 280px);
+  max-height: calc(100vh - var(--portal-header-height, 0px) - 280px);
   padding-left: 0;
   padding-right: 0.25rem;
   margin-left: 0;

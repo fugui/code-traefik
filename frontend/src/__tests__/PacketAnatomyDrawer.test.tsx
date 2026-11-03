@@ -1,6 +1,6 @@
-import { describe, it } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { renderToString } from 'react-dom/server';
-import { PacketAnatomyContent } from '../components/PacketAnatomyDrawer';
+import { PacketAnatomyDrawer, PacketAnatomyContent } from '../components/PacketAnatomyDrawer';
 import type { PacketAnatomyDrawerDTO } from '../types';
 
 const evilScript = '<script>' + 'al' + 'ert(1)</' + 'script>';
@@ -183,5 +183,14 @@ export function TestPacketAnatomyDrawerFourSections(): void {
 describe('PacketAnatomyDrawer', () => {
   it('renders all four sections and escapes HTML', () => {
     TestPacketAnatomyDrawerFourSections();
+  });
+
+  it('renders Drawer with workspace scope to avoid stacking context conflict with host header', () => {
+    const html = renderToString(
+      <PacketAnatomyDrawer open={true} onClose={() => {}} data={mockAnatomyDTO} />
+    );
+    expect(html).toContain('code-drawer-root--workspace');
+    expect(html).toContain('code-drawer-mask--workspace');
+    expect(html).toContain('code-drawer-panel--workspace');
   });
 });
