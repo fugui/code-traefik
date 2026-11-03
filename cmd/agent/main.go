@@ -12,12 +12,13 @@ import (
 	"time"
 
 	"code-traefik/internal/agent/server"
+	"code-traefik/pkg/version"
 )
 
 var (
-	Version   = "1.0.0"
-	CommitID  = "unknown"
-	BuildTime = "unknown"
+	Version   = version.Version
+	CommitID  = version.CommitID
+	BuildTime = version.BuildTime
 )
 
 func main() {
@@ -32,8 +33,19 @@ func main() {
 	)
 	flag.Parse()
 
+	// 保证向后兼容，双向同步版本元数据
+	if Version != "1.0.0" && Version != version.Version {
+		version.Version = Version
+	}
+	if CommitID != "unknown" && CommitID != version.CommitID {
+		version.CommitID = CommitID
+	}
+	if BuildTime != "unknown" && BuildTime != version.BuildTime {
+		version.BuildTime = BuildTime
+	}
+
 	if *showVersion {
-		fmt.Printf("code-traefik-agent %s (commit: %s, built: %s)\n", Version, CommitID, BuildTime)
+		fmt.Printf("code-traefik-agent %s\n", version.Full())
 		os.Exit(0)
 	}
 
@@ -53,7 +65,7 @@ func main() {
 		ClaimCode:             *claimCode,
 		ClaimCodeFile:         *claimFile,
 		MaxSessionBufferBytes: *maxBufferMB * 1024 * 1024,
-		AgentVersion:          Version,
+		AgentVersion:          version.Short(),
 		ProcRoot:              *procRoot,
 	}
 
@@ -62,7 +74,7 @@ func main() {
 		log.Fatalf("初始化 code-traefik-agent 失败: %v", err)
 	}
 
-	log.Printf("[Agent] 启动 code-traefik-agent 版本: %s", Version)
+	log.Printf("[Agent] 启动 code-traefik-agent 版本: %s", version.Full())
 	log.Printf("[Agent] 监听地址: %s, 白名单: %v", *listenAddr, allowIPs)
 	log.Printf("[Agent] 认领码 (ClaimCode): %s", srv.ClaimCode())
 	log.Printf("[Agent] 实例 BootID: %s", srv.BootID())

@@ -5,20 +5,22 @@ import (
 	"time"
 
 	"code-traefik/config"
+	"code-traefik/pkg/version"
 
 	"github.com/gin-gonic/gin"
 )
 
-// AppVersion 由启动入口注入构建版本号
-var AppVersion = "dev"
+// AppVersion 由启动入口注入构建版本号，默认继承 pkg/version.Short()
+var AppVersion = version.Short()
 
 // HealthCheck 提供免密健康探针接口 GET /api/health
 func HealthCheck(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
-		"status":     "healthy",
-		"service":    config.ServiceName,
-		"module_key": config.ModuleKey,
-		"version":    AppVersion,
-		"timestamp":  time.Now().Format(time.RFC3339),
+		"status":       "healthy",
+		"service":      config.ServiceName,
+		"module_key":   config.ModuleKey,
+		"version":      AppVersion,
+		"full_version": version.Full(),
+		"timestamp":    time.Now().Format(time.RFC3339),
 	})
 }

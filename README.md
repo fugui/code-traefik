@@ -1,5 +1,6 @@
 # 业务流量监控与重放 (`code-traefik`)
 
+> **当前版本**：`v0.1.0`
 > 基于 CodeBench 微前端架构与 `code-common` 公共底座构建的 **业务流量监控与重放** 业务子系统。
 
 本项目严格遵循 **SDD (Spec-Driven Development，规范驱动开发) + TDD (Test-Driven Development，测试驱动开发)** 工程模式：
@@ -82,3 +83,23 @@ make install && make lint && make test && make build
 # 3. 启动服务（默认监听 :8091）
 ./code-traefik-server
 ```
+
+---
+
+## 5. 🏷️ 版本历史 (Release History)
+
+### v0.1.0 (2026-11-03)
+* **🧩 核心架构与微前端集成**：
+  - 基于 CodeBench 微前端模块联邦规范设计，支持主控控制面（`code-traefik-server`）与数据面探针（`code-traefik-agent`）物理防腐隔离。
+  - 前端基于 React 18 + Vite 5 + Module Federation，暴露 `./App` 与 `./menu` 双模接入点。
+* **🛡️ 业务协议与契约治理**：
+  - 聚焦明文 IPv4 TCP CROS RPC 二进制分帧与 SessionHead 会话头解析（支持 V01~V05 会话头演进）。
+  - 支持 Protobuf 描述集（`.pb`）同名多版本管理、联合编译冲突门禁检测与接口级 Diff 忽略规则继承。
+* **⚡ 协同录制与排他租约**：
+  - 严格区分团队共享（`SHARED`）与个人私有（`PRIVATE`）作用域，实现 Agent 动态排他租约互斥（`409 Conflict` 防并发争抢）。
+  - 采用基于 TCP 会话对的单往返双模持久化（`raw_req_packet` + `raw_rsp_packet` 及 `payload_json`）。
+* **🔄 双层 Diff 对账与单包调试重放**：
+  - 支持单包即时重放、序列号 `ullSNO` 自愈与基于多字段维度的结构化 Diff 对账引擎。
+  - Agent 严格落实重放零外泄（`MOCK_MISS` 阻断）与探针卫生管理（退出自动卸载 eBPF）。
+* **🏷️ 规范版本号体系**：
+  - 建立统一的语义版本号（SemVer）与构建指纹规范（`pkg/version`），支持 `v0.1.0 (commit: <hash>, built: <time>)` 精准溯源，彻底解决无 tag 时降级为裸 commit ID 的问题。

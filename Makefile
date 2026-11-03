@@ -4,10 +4,21 @@ FRONTEND_DIR    := frontend
 DIST_DIR        := $(FRONTEND_DIR)/dist
 NODE_MODULES    := $(FRONTEND_DIR)/node_modules
 
-VERSION         ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+DEFAULT_VERSION := v0.1.0
 COMMIT          ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 BUILDTIME       ?= $(shell date -u '+%Y-%m-%d %H:%M:%S')
-LDFLAGS         := -X 'main.Version=$(VERSION)' -X 'main.CommitID=$(COMMIT)' -X 'main.BuildTime=$(BUILDTIME)'
+
+# 优先匹配精确 tag；有 tag 且有增量提交则使用 describe；若无 tag 则回退为 $(DEFAULT_VERSION)-dev+$(COMMIT)
+GIT_TAG         := $(shell git describe --tags --exact-match 2>/dev/null)
+GIT_DESCRIBE    := $(shell git describe --tags --always --dirty 2>/dev/null)
+VERSION         ?= $(if $(GIT_TAG),$(GIT_TAG),$(shell if echo "$(GIT_DESCRIBE)" | grep -qE '^v[0-9]'; then echo "$(GIT_DESCRIBE)"; else echo "$(DEFAULT_VERSION)-dev+$(COMMIT)"; fi))
+
+LDFLAGS         := -X 'code-traefik/pkg/version.Version=$(VERSION)' \
+                   -X 'code-traefik/pkg/version.CommitID=$(COMMIT)' \
+                   -X 'code-traefik/pkg/version.BuildTime=$(BUILDTIME)' \
+                   -X 'main.Version=$(VERSION)' \
+                   -X 'main.CommitID=$(COMMIT)' \
+                   -X 'main.BuildTime=$(BUILDTIME)'
 
 COMMON_DIR      := ../code-common/frontend/src
 COMMON_SRCS     := $(shell find $(COMMON_DIR) -type f 2>/dev/null)

@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
+	"os"
 
 	commonAudit "code-common/backend/audit"
 	commonServer "code-common/backend/server"
@@ -13,14 +15,15 @@ import (
 	"code-traefik/internal/server/decoder"
 	"code-traefik/internal/server/hub"
 	"code-traefik/models"
+	"code-traefik/pkg/version"
 
 	"github.com/gin-gonic/gin"
 )
 
 var (
-	Version   = "dev"
-	CommitID  = "unknown"
-	BuildTime = "unknown"
+	Version   = version.Version
+	CommitID  = version.CommitID
+	BuildTime = version.BuildTime
 )
 
 // securityHeadersMiddleware 为响应统一补充浏览器安全防御头 (CSP, Nosniff, Frame-Options)
@@ -41,11 +44,28 @@ func RegisterAPIRoutes(r *gin.Engine) {
 
 func main() {
 	configPath := flag.String("config", "config.yaml", "配置文件路径")
+	showVersion := flag.Bool("version", false, "显示版本信息并退出")
 	flag.Parse()
 
-	handlers.AppVersion = Version
-	log.Printf("[%s] 启动微前端业务子服务 (Version=%s, Commit=%s, BuildTime=%s)",
-		config.ServiceName, Version, CommitID, BuildTime)
+	// 保证向后兼容，双向同步版本元数据
+	if Version != "dev" && Version != version.Version {
+		version.Version = Version
+	}
+	if CommitID != "unknown" && CommitID != version.CommitID {
+		version.CommitID = CommitID
+	}
+	if BuildTime != "unknown" && BuildTime != version.BuildTime {
+		version.BuildTime = BuildTime
+	}
+
+	if *showVersion {
+		fmt.Printf("%s %s\n", config.ServiceName, version.Full())
+		os.Exit(0)
+	}
+
+	handlers.AppVersion = version.Short()
+	log.Printf("[%s] 启动微前端业务子服务 版本: %s",
+		config.ServiceName, version.Full())
 
 	// 1. 加载配置
 	if err := config.LoadConfig(*configPath); err != nil {
