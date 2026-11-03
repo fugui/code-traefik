@@ -12,7 +12,8 @@ docs/
 │   ├── 01-init-features-prompt.md                 # 阶段一：特性矩阵 (Feature Matrix) 与需求边界生成提示词
 │   ├── 02-design-prompt.md                        # 阶段二：系统架构、GORM 模型与微前端交互设计提示词
 │   ├── 03-api-and-tasks-prompt.md                 # 阶段三：API 契约冻结与 TDD Milestone 任务拆解提示词
-│   └── 04-tdd-implementation-prompt.md            # 阶段四：TDD 红-绿-重构编码实施与全链路交付验证提示词
+│   ├── 04-tdd-implementation-prompt.md            # 阶段四：TDD 红-绿-重构编码实施与全链路交付验证提示词
+│   └── 05-e2e-browser-test-and-ux-review-goal-prompt.md # 阶段四/验收：微前端全链路端到端黑盒测试与产品交互体验走查 Goal 提示词
 ├── 01-features/     # 特性与需求边界：特性清单矩阵 (Feature Matrix)、P0~P2 优先级与 Non-Goals
 │   └── 01-feature-matrix.md                       # 阶段一：需求范围、核心特性矩阵 (F-01~F-16 含子特性) 与验收场景 (SC-01~SC-08)
 ├── 02-design/       # 系统技术架构 (SDD)：双子系统边界、数据面引擎、业务拓扑与数据模型
