@@ -229,6 +229,19 @@ func BuildTransactionSequence(
 		}
 	}
 
+	if lineages == nil {
+		lineages = []ParameterLineageEdgeDTO{}
+	}
+	if entityChains == nil {
+		entityChains = []EntityLifecycleChainDTO{}
+	}
+	if participants == nil {
+		participants = []SequenceParticipantDTO{}
+	}
+	if steps == nil {
+		steps = []SequenceStepDTO{}
+	}
+
 	return &TransactionSequenceDTO{
 		RootRecordID:      rootGroup.RootRecordID,
 		TraceID:           rootGroup.TraceID,

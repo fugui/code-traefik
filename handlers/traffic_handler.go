@@ -376,6 +376,9 @@ func GetRecordingSessionTransactions(c *gin.Context) {
 
 	trees := callgraph.BuildTransactionTrees(records, &session, filter)
 	entityChains := callgraph.BuildEntityChains(records)
+	if entityChains == nil {
+		entityChains = []callgraph.EntityLifecycleChainDTO{}
+	}
 
 	// 4. 按根事务分页 (15/25/50/100, 默认 25)
 	page := query.Page

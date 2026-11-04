@@ -55,7 +55,7 @@ export const EntityLifecycleFilterStrip: React.FC<EntityLifecycleFilterStripProp
       )}
       {chains.map((chain) => {
         const isSelected = selectedEntityKey === chain.entity_key;
-        const stepCount = chain.steps.length;
+        const stepCount = chain.steps ? chain.steps.length : 0;
 
         return (
           <button

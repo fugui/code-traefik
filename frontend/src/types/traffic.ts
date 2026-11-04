@@ -176,7 +176,7 @@ export interface TransactionTreeGroupDTO {
   has_protocol_error: boolean;
   has_biz_error: boolean;
   has_compensation: boolean;
-  entity_tags: string[];
+  entity_tags?: string[] | null;
   root: TransactionTreeNodeDTO;
 }
 
@@ -228,8 +228,8 @@ export interface TransactionSequenceDTO {
   total_duration_us: number;
   participants: SequenceParticipantDTO[];
   steps: SequenceStepDTO[];
-  parameter_lineages: ParameterLineageEdgeDTO[];
-  entity_chains: EntityLifecycleChainDTO[];
+  parameter_lineages?: ParameterLineageEdgeDTO[] | null;
+  entity_chains?: EntityLifecycleChainDTO[] | null;
 }
 
 export interface ReplayClosureMockItemDTO {
@@ -255,9 +255,9 @@ export interface ReplayClosurePrerequisiteDTO {
 
 export interface ReplayClosurePreviewDTO {
   ingress_record: TrafficRecordSummary;
-  scoped_egress_mocks: ReplayClosureMockItemDTO[];
-  prerequisite_chain: ReplayClosurePrerequisiteDTO[];
-  recommended_record_ids: string[];
+  scoped_egress_mocks?: ReplayClosureMockItemDTO[] | null;
+  prerequisite_chain?: ReplayClosurePrerequisiteDTO[] | null;
+  recommended_record_ids?: string[] | null;
 }
 
 export interface ProcessDiagnostic {

@@ -127,10 +127,10 @@ export const SinglePacketReplayContent: React.FC<SinglePacketReplayContentProps>
     }
   }, [candidateProcesses]);
 
-  const hasPrereqs = closure && closure.prerequisite_chain.length > 0;
+  const hasPrereqs = closure && closure.prerequisite_chain && closure.prerequisite_chain.length > 0;
   const effectiveRecordIds =
     hasPrereqs && includePrerequisites
-      ? closure.recommended_record_ids
+      ? (closure.recommended_record_ids || [record.id])
       : [record.id];
 
   return (
@@ -168,7 +168,7 @@ export const SinglePacketReplayContent: React.FC<SinglePacketReplayContentProps>
         <div className="code-anatomy-card__header">
           <span className="code-anatomy-card__title">专属下游 ScopedMock 闭包预览 (RecordID 隔离)</span>
           <span className="code-badge code-badge--info">
-            {closure ? `${closure.scoped_egress_mocks.length} 条下游 Mock` : '加载中...'}
+            {closure ? `${(closure.scoped_egress_mocks || []).length} 条下游 Mock` : '加载中...'}
           </span>
         </div>
         <div className="code-anatomy-card__body">
@@ -176,7 +176,7 @@ export const SinglePacketReplayContent: React.FC<SinglePacketReplayContentProps>
             <div style={{ padding: '12px', textAlign: 'center', color: '#64748b' }}>
               正在检索当前入口事务因果闭包...
             </div>
-          ) : closure && closure.scoped_egress_mocks.length > 0 ? (
+          ) : closure && (closure.scoped_egress_mocks || []).length > 0 ? (
             <div className="code-table-wrapper">
               <table className="code-table code-table--compact">
                 <thead>
@@ -188,7 +188,7 @@ export const SinglePacketReplayContent: React.FC<SinglePacketReplayContentProps>
                   </tr>
                 </thead>
                 <tbody>
-                  {closure.scoped_egress_mocks.map((mock) => (
+                  {(closure.scoped_egress_mocks || []).map((mock) => (
                     <tr key={mock.record_id}>
                       <td className="code-font-mono">#{mock.seq_no}</td>
                       <td>
@@ -246,7 +246,7 @@ export const SinglePacketReplayContent: React.FC<SinglePacketReplayContentProps>
             本请求消费了同批次前序事务产出的实体主键。直接单独重放可能因目标库不存在对应数据引发业务失败。
           </div>
           <ul style={{ margin: '0 0 10px 20px', padding: 0, fontSize: '12px' }}>
-            {closure.prerequisite_chain.map((prereq) => (
+            {(closure.prerequisite_chain || []).map((prereq) => (
               <li key={prereq.record_id}>
                 前序 #{prereq.seq_no} <code>{prereq.operation}</code> (产出 <b>{prereq.shared_entity_key}</b>)
               </li>
@@ -259,7 +259,7 @@ export const SinglePacketReplayContent: React.FC<SinglePacketReplayContentProps>
               onChange={(e) => setIncludePrerequisites(e.target.checked)}
               data-testid="checkbox-include-prerequisites"
             />
-            <span>按序连带回放前置依赖事务链 (共 {closure.recommended_record_ids.length} 笔)</span>
+            <span>按序连带回放前置依赖事务链 (共 {(closure.recommended_record_ids || []).length} 笔)</span>
           </label>
         </div>
       )}

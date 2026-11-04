@@ -17,8 +17,11 @@ export const SequenceSwimlaneCanvas: React.FC<SequenceSwimlaneCanvasProps> = ({
 }) => {
   const [showLineage, setShowLineage] = useState(true);
 
-  const { participants, steps, parameter_lineages } = sequence;
-  if (!participants || participants.length === 0 || !steps || steps.length === 0) {
+  const participants = sequence?.participants || [];
+  const steps = sequence?.steps || [];
+  const parameter_lineages = sequence?.parameter_lineages || [];
+
+  if (participants.length === 0 || steps.length === 0) {
     return (
       <div style={{ padding: '40px', textAlign: 'center', color: 'var(--color-text-secondary, #64748b)' }}>
         暂无可绘制的时序泳道数据
@@ -68,7 +71,7 @@ export const SequenceSwimlaneCanvas: React.FC<SequenceSwimlaneCanvasProps> = ({
         <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
           <span style={{ fontWeight: 600 }}>全链路时序泳道图 (DOTR 权威时序)</span>
           <span style={{ color: 'var(--color-text-secondary, #64748b)' }}>
-            总耗时: {sequence.total_duration_us}µs · 步骤: {steps.length}步
+            {`总耗时: ${sequence.total_duration_us ?? 0}µs · 步骤: ${steps.length}步`}
           </span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
@@ -79,7 +82,7 @@ export const SequenceSwimlaneCanvas: React.FC<SequenceSwimlaneCanvasProps> = ({
               onChange={(e) => setShowLineage(e.target.checked)}
               data-testid="toggle-show-lineage"
             />
-            <span>显示参数传递血缘 ({parameter_lineages.length} 处)</span>
+            <span>{`显示参数传递血缘 (${parameter_lineages.length} 处)`}</span>
           </label>
         </div>
       </div>

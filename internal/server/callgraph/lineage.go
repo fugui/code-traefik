@@ -150,6 +150,9 @@ func ExtractParameterLineage(records []models.TrafficRecord) []ParameterLineageE
 		}
 	}
 
+	if edges == nil {
+		edges = []ParameterLineageEdgeDTO{}
+	}
 	return edges
 }
 
@@ -330,6 +333,9 @@ func BuildEntityChains(records []models.TrafficRecord) []EntityLifecycleChainDTO
 		return result[i].EntityKey < result[j].EntityKey
 	})
 
+	if result == nil {
+		result = []EntityLifecycleChainDTO{}
+	}
 	return result
 }
 

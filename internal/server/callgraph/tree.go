@@ -17,7 +17,7 @@ func BuildTransactionTrees(
 	filter *TreeFilterOptions,
 ) []TransactionTreeGroupDTO {
 	if len(records) == 0 {
-		return nil
+		return []TransactionTreeGroupDTO{}
 	}
 
 	// 1. 批量水合
@@ -194,6 +194,9 @@ func BuildTransactionTrees(
 		groups = append(groups, group)
 	}
 
+	if groups == nil {
+		groups = []TransactionTreeGroupDTO{}
+	}
 	return groups
 }
 

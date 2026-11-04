@@ -319,6 +319,22 @@ describe('M13 Frontend Test Suite: Transaction Call Tree and Sequence Workbench'
     expect(svgHtml).toContain('[✅ SCOPED_HIT 精确匹配]');
     expect(svgHtml).toContain('data-testid="toggle-show-lineage"');
     expect(svgHtml).toContain('SKU_888');
+
+    // 验证 parameter_lineages 为 null/undefined 时的稳健防御，防 TypeError: Cannot read properties of null (reading 'length')
+    const nullLineagesSequence: TransactionSequenceDTO = {
+      ...mockSequence,
+      parameter_lineages: null,
+      entity_chains: null,
+    };
+    const nullLineageHtml = renderToString(
+      <SequenceSwimlaneCanvas
+        sequence={nullLineagesSequence}
+        selectedStepIndex={1}
+        onSelectStep={() => {}}
+      />
+    );
+    expect(nullLineageHtml).toContain('显示参数传递血缘 (0 处)');
+    expect(nullLineageHtml).toContain('data-testid="sequence-svg-canvas"');
   });
 
   // T-M13-12: 事务闭包重放抽屉、前置依赖链勾选回放与 XSS 安全防御

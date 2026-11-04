@@ -173,6 +173,13 @@ func BuildReplayClosurePreview(
 	// 推荐重放列表最后加上当前记录
 	recommendedIDs = append(recommendedIDs, strconv.FormatUint(inRec.ID, 10))
 
+	if scopedMocks == nil {
+		scopedMocks = []ReplayClosureMockItemDTO{}
+	}
+	if prereqs == nil {
+		prereqs = []ReplayClosurePrerequisiteDTO{}
+	}
+
 	return &ReplayClosurePreviewDTO{
 		IngressRecord:        ingressSummary,
 		ScopedEgressMocks:    scopedMocks,
