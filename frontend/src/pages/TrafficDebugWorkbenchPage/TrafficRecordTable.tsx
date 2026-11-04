@@ -24,13 +24,13 @@ export const TrafficRecordTable: React.FC<TrafficRecordTableProps> = ({
         <table className="code-table">
           <thead>
             <tr>
+              <th>#Seq 发起序</th>
               <th>方向</th>
               <th>模式 (Exchange)</th>
-              <th>流水号 (ullSNO)</th>
-              <th>服务契约 (service_name)</th>
-              <th>调用方法 (operation)</th>
+              <th>连接 / 流水号</th>
+              <th>服务契约 & 接口方法</th>
               <th>耗时 (RTT)</th>
-              <th>状态码</th>
+              <th>双态状态码</th>
               <th>架构链路</th>
               <th>操作</th>
             </tr>
@@ -46,6 +46,7 @@ export const TrafficRecordTable: React.FC<TrafficRecordTableProps> = ({
               records.map((r) => {
                 const isSelected = selectedRecordId === r.id;
                 const isIngressReplayable = r.direction === 'INGRESS' && r.is_replayable;
+                const isProtoSuccess = r.status_code === 0 || r.status_code === '0';
 
                 return (
                   <tr
@@ -54,6 +55,9 @@ export const TrafficRecordTable: React.FC<TrafficRecordTableProps> = ({
                     onClick={() => onSelectRecord(r)}
                     data-testid={`traffic-row-${r.id}`}
                   >
+                    <td className="code-font-mono" style={{ color: 'var(--color-text-secondary, #64748b)' }}>
+                      {`#${r.seq_no ?? '-'}`}
+                    </td>
                     <td>
                       <span
                         className={`code-badge ${
@@ -66,27 +70,57 @@ export const TrafficRecordTable: React.FC<TrafficRecordTableProps> = ({
                     <td>
                       <span className="code-badge code-badge--info">{r.exchange_type}</span>
                     </td>
-                    <td className="code-font-mono code-color-primary">{r.sno}</td>
-                    <td className="code-font-mono">{r.service_name}</td>
-                    <td className="code-font-mono">{r.operation}</td>
-                    <td className="code-font-mono">{r.latency_us} μs</td>
-                    <td>
+                    <td className="code-font-mono">
                       <span
-                        className={`code-font-mono ${
-                          r.status_code === 0 ? 'code-color-success' : 'code-color-danger'
-                        }`}
+                        style={{
+                          fontSize: '11px',
+                          padding: '1px 5px',
+                          borderRadius: '3px',
+                          backgroundColor: 'var(--color-bg-secondary, #f1f5f9)',
+                          color: 'var(--color-text-secondary, #475569)',
+                        }}
                       >
-                        {r.status_code}
+                        {`Conn#${r.conn_index ?? 1} · ${r.sno}`}
                       </span>
                     </td>
                     <td>
-                      {r.src_module_name ? (
-                        <span className="code-text-xs">
-                          {r.src_module_name} &rarr; {r.dst_module_name || '未知下游'}
+                      <div style={{ display: 'flex', flexDirection: 'column' }}>
+                        <span style={{ fontWeight: 600 }}>{r.operation}</span>
+                        <span className="code-text-xs code-color-muted">{r.service_name}</span>
+                      </div>
+                    </td>
+                    <td className="code-font-mono">
+                      {r.latency_us !== undefined && r.latency_us !== null ? `${r.latency_us} μs` : '-'}
+                    </td>
+                    <td>
+                      <div style={{ display: 'inline-flex', flexDirection: 'column', gap: '2px' }}>
+                        <span
+                          className={`code-font-mono ${
+                            isProtoSuccess ? 'code-color-success' : 'code-color-danger'
+                          }`}
+                        >
+                          {isProtoSuccess ? '0 OK' : `Err: ${r.status_code}`}
                         </span>
-                      ) : (
-                        <span className="code-color-muted code-text-xs">-</span>
-                      )}
+                        {r.biz_error && (
+                          <span
+                            style={{
+                              fontSize: '10px',
+                              padding: '1px 4px',
+                              borderRadius: '3px',
+                              backgroundColor: 'var(--color-danger-bg, #fef2f2)',
+                              color: 'var(--color-danger, #ef4444)',
+                              border: '1px dashed var(--color-danger, #ef4444)',
+                            }}
+                          >
+                            {`⚠️ 业务异常 ${r.biz_status_summary ? `(${r.biz_status_summary})` : ''}`}
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                    <td>
+                      <span className="code-text-xs">
+                        {`${r.src_module_name || r.peer_proc_name || '-'} → ${r.dst_module_name || r.process_name || '-'}`}
+                      </span>
                     </td>
                     <td>
                       <div className="code-action-links">
@@ -111,7 +145,7 @@ export const TrafficRecordTable: React.FC<TrafficRecordTableProps> = ({
                             }}
                             data-testid={`btn-single-replay-${r.id}`}
                           >
-                            单包重放调试
+                            事务重放
                           </button>
                         )}
                       </div>
@@ -128,4 +162,3 @@ export const TrafficRecordTable: React.FC<TrafficRecordTableProps> = ({
 };
 
 export default TrafficRecordTable;
-

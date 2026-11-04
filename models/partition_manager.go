@@ -67,6 +67,7 @@ CREATE INDEX IF NOT EXISTS idx_traefik_tr_payload_gin ON traefik_traffic_records
 CREATE INDEX IF NOT EXISTS idx_traefik_tr_session_seq ON traefik_traffic_records (session_id, seq_no);
 CREATE INDEX IF NOT EXISTS idx_traefik_tr_session_svc ON traefik_traffic_records (session_id, service_name, operation);
 CREATE INDEX IF NOT EXISTS idx_traefik_tr_conn_sno ON traefik_traffic_records (conn_key, sno);
+CREATE INDEX IF NOT EXISTS idx_traefik_tr_session_req_ns ON traefik_traffic_records (session_id, req_captured_at_ns, id);
 `
 	return db.Exec(ddl).Error
 }

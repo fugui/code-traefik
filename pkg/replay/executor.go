@@ -41,6 +41,11 @@ func (e *ReplayExecutor) MockPort() uint16 {
 
 // Execute 执行重放任务
 func (e *ReplayExecutor) Execute(ctx context.Context, req agentproto.ExecuteReplayReq) (*agentproto.ReplayTaskResultResp, error) {
+	return e.ExecuteWithMatcher(ctx, req, nil)
+}
+
+// ExecuteWithMatcher 执行重放任务，支持传入外部共享的 Mock 匹配器 (如与 EgressProxy 共享，ADR-12, M13)
+func (e *ReplayExecutor) ExecuteWithMatcher(ctx context.Context, req agentproto.ExecuteReplayReq, existingMatcher *ScopedMockMatcher) (*agentproto.ReplayTaskResultResp, error) {
 	taskCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -60,31 +65,42 @@ func (e *ReplayExecutor) Execute(ctx context.Context, req agentproto.ExecuteRepl
 	}
 
 	// 1. 初始化 Mock 匹配器
-	matcher := NewScopedMockMatcher()
-	for _, mng := range req.MngMocks {
-		if len(mng) > 22 {
-			matcher.AddMngMock(mng[22], mng)
-		}
-	}
-	for i, eg := range req.EgressMocks {
-		parsed, err := crosrpc.ParsePacket(eg)
-		if err == nil {
-			recID := uint64(i + 1)
-			svc, op := "", ""
-			if parsed.Req != nil {
-				svc = parsed.Req.ServiceName
-				op = parsed.Req.Operation
-			} else if parsed.Rsp != nil {
-				svc = parsed.Rsp.ServiceName
-				op = parsed.Rsp.Operation
+	matcher := existingMatcher
+	if matcher == nil {
+		matcher = NewScopedMockMatcher()
+		for _, mng := range req.MngMocks {
+			if len(mng) > 22 {
+				matcher.AddMngMock(mng[22], mng)
 			}
-			if svc != "" {
-				var payload []byte
-				if len(eg) > parsed.PayloadOffset {
-					payload = eg[parsed.PayloadOffset:]
+		}
+		for recID, rules := range req.ScopedEgressMocks {
+			for _, rule := range rules {
+				_ = matcher.RegisterScopedDownstreamRule(recID, rule)
+			}
+		}
+		for _, rule := range req.GlobalFallbackMocks {
+			_ = matcher.RegisterGlobalFallbackRule(rule)
+		}
+		for i, eg := range req.EgressMocks {
+			parsed, err := crosrpc.ParsePacket(eg)
+			if err == nil {
+				recID := uint64(i + 1)
+				svc, op := "", ""
+				if parsed.Req != nil {
+					svc = parsed.Req.ServiceName
+					op = parsed.Req.Operation
+				} else if parsed.Rsp != nil {
+					svc = parsed.Rsp.ServiceName
+					op = parsed.Rsp.Operation
 				}
-				matcher.AddScopedMock(recID, svc, op, payload, [][]byte{eg})
-				matcher.AddGlobalFallback(svc, op, payload, [][]byte{eg})
+				if svc != "" {
+					var payload []byte
+					if len(eg) > parsed.PayloadOffset {
+						payload = eg[parsed.PayloadOffset:]
+					}
+					matcher.AddScopedMock(recID, svc, op, payload, [][]byte{eg})
+					matcher.AddGlobalFallback(svc, op, payload, [][]byte{eg})
+				}
 			}
 		}
 	}
@@ -140,12 +156,29 @@ func (e *ReplayExecutor) Execute(ctx context.Context, req agentproto.ExecuteRepl
 		}
 	}
 
-	total := len(req.IngressRequests)
+	type reqItem struct {
+		recordID uint64
+		rawReq   []byte
+	}
+	var items []reqItem
+	if len(req.IngressItems) > 0 {
+		items = make([]reqItem, len(req.IngressItems))
+		for i, it := range req.IngressItems {
+			items[i] = reqItem{recordID: it.RecordID, rawReq: it.RawReq}
+		}
+	} else {
+		items = make([]reqItem, len(req.IngressRequests))
+		for i, r := range req.IngressRequests {
+			items[i] = reqItem{recordID: uint64(i + 1), rawReq: r}
+		}
+	}
+
+	total := len(items)
 	passed := 0
 	framer := crosrpc.NewStreamFramer(crosrpc.MaxPayloadLen)
 
 	// 4. 逐条注入入站请求并等待应答
-	for i, rawReq := range req.IngressRequests {
+	for i, item := range items {
 		select {
 		case <-taskCtx.Done():
 			res := &agentproto.ReplayTaskResultResp{
@@ -159,10 +192,9 @@ func (e *ReplayExecutor) Execute(ctx context.Context, req agentproto.ExecuteRepl
 		default:
 		}
 
-		recID := uint64(i + 1)
-		matcher.SetActiveRecordID(recID)
+		matcher.SetActiveRecordID(item.recordID)
 
-		if _, err := targetConn.Write(rawReq); err != nil {
+		if _, err := targetConn.Write(item.rawReq); err != nil {
 			res := &agentproto.ReplayTaskResultResp{
 				TaskID:         req.TaskID,
 				Status:         "ERROR",
@@ -170,7 +202,7 @@ func (e *ReplayExecutor) Execute(ctx context.Context, req agentproto.ExecuteRepl
 				PassedRequests: passed,
 				MockHitCount:   matcher.MockHitCount(),
 				MockMissCount:  matcher.MockMissCount(),
-				Details:        fmt.Sprintf("请求 #%d 写入失败: %v", i+1, err),
+				Details:        fmt.Sprintf("请求 #%d (RecordID=%d) 写入失败: %v", i+1, item.recordID, err),
 			}
 			e.saveResult(req.TaskID, res)
 			return res, nil
@@ -178,15 +210,15 @@ func (e *ReplayExecutor) Execute(ctx context.Context, req agentproto.ExecuteRepl
 
 		// 检查是否为 Oneway 请求
 		var reqType uint8
-		if len(rawReq) > 24+136 {
-			reqType = rawReq[24+136]
+		if len(item.rawReq) > 24+136 {
+			reqType = item.rawReq[24+136]
 		}
 		if reqType == crosrpc.ReqTypeOneway {
 			passed++
 			continue
 		}
 
-		expectedSNO := binary.BigEndian.Uint64(rawReq[8:16])
+		expectedSNO := binary.BigEndian.Uint64(item.rawReq[8:16])
 		_ = targetConn.SetReadDeadline(time.Now().Add(timeout))
 
 		var gotRsp bool

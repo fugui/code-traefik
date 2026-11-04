@@ -173,14 +173,29 @@ type StopMonitorResp struct {
 	BypassedSelfCount int64 `json:"bypassed_self_count"`
 }
 
+// ReplayIngressItem 带原始 RecordID 的入站重放请求项
+type ReplayIngressItem struct {
+	RecordID uint64 `json:"record_id"`
+	RawReq   []byte `json:"raw_req"`
+}
+
+// MockRuleDownstream 下游出站 Mock 成对规则（同时携带出站请求帧与应答帧列表，彻底消除下游 Mock 仅带应答帧导致的精确匹配失效与并发参数错配）
+type MockRuleDownstream struct {
+	ReqPacket  []byte   `json:"req_packet"`
+	RspPackets [][]byte `json:"rsp_packets"`
+}
+
 // ExecuteReplayReq 下发重放执行规格
 type ExecuteReplayReq struct {
-	TaskID          uint64             `json:"task_id"`
-	ProcessSpec     ProcessMonitorSpec `json:"process_spec"`
-	TimeoutMs       int                `json:"timeout_ms"`
-	IngressRequests [][]byte           `json:"ingress_requests"` // 纯二进制流切片传输，零 .pb
-	EgressMocks     [][]byte           `json:"egress_mocks"`
-	MngMocks        [][]byte           `json:"mng_mocks"`
+	TaskID              uint64                          `json:"task_id"`
+	ProcessSpec         ProcessMonitorSpec              `json:"process_spec"`
+	TimeoutMs           int                             `json:"timeout_ms"`
+	IngressItems        []ReplayIngressItem             `json:"ingress_items,omitempty"`
+	ScopedEgressMocks   map[uint64][]MockRuleDownstream `json:"scoped_egress_mocks,omitempty"`
+	GlobalFallbackMocks []MockRuleDownstream            `json:"global_fallback_mocks,omitempty"`
+	IngressRequests     [][]byte                        `json:"ingress_requests,omitempty"` // 纯二进制流切片传输，零 .pb (向后兼容)
+	EgressMocks         [][]byte                        `json:"egress_mocks,omitempty"`     // 向后兼容
+	MngMocks            [][]byte                        `json:"mng_mocks,omitempty"`
 }
 
 // ReplayItemDetail 单请求执行结果明细（序列化放入 Details JSON 串中）

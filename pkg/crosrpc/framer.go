@@ -2,6 +2,7 @@ package crosrpc
 
 import (
 	"bytes"
+	"time"
 )
 
 // Frame 表示分帧器切出的单条报文帧
@@ -10,12 +11,25 @@ type Frame struct {
 	IsTruncated bool   // 是否因超过 MaxCaptureBytes 被截断
 }
 
+// StampedFrame 封装分帧器切出的单条报文帧及首字节到达时刻 (纳秒)
+type StampedFrame struct {
+	Frame
+	CapturedAtNs int64
+}
+
+type chunkSpan struct {
+	length int
+	ns     int64
+}
+
 // StreamFramer 流式分帧与滑动重同步状态机
 type StreamFramer struct {
 	maxCaptureBytes  int
 	buf              []byte
+	spans            []chunkSpan
 	dirtyBytes       uint64
 	draining         bool
+	drainingStartNs  int64
 	truncatedFrame   []byte
 	remainingToDrain int
 }
@@ -41,15 +55,47 @@ func (f *StreamFramer) Feed(p []byte) ([]Frame, error) {
 	return f.Write(p)
 }
 
+func (f *StreamFramer) discard(n int) {
+	if n <= 0 {
+		return
+	}
+	if n >= len(f.buf) {
+		f.buf = f.buf[:0]
+		f.spans = nil
+		return
+	}
+	copy(f.buf, f.buf[n:])
+	f.buf = f.buf[:len(f.buf)-n]
+
+	rem := n
+	for len(f.spans) > 0 && rem > 0 {
+		if f.spans[0].length <= rem {
+			rem -= f.spans[0].length
+			f.spans = f.spans[1:]
+		} else {
+			f.spans[0].length -= rem
+			rem = 0
+		}
+	}
+}
+
+func (f *StreamFramer) headNs(defaultNs int64) int64 {
+	if len(f.spans) > 0 {
+		return f.spans[0].ns
+	}
+	return defaultNs
+}
+
 var magicPrefixBytes = []byte(MagicPrefix)
 
-// Write 接收输入切片并推进状态机
-func (f *StreamFramer) Write(p []byte) ([]Frame, error) {
+// WriteAt 接收流式字节分片与到达纳秒时刻，并在定位到帧首字节时锁存到达定戳
+func (f *StreamFramer) WriteAt(p []byte, arrivalNs int64) []StampedFrame {
 	if len(p) > 0 {
 		f.buf = append(f.buf, p...)
+		f.spans = append(f.spans, chunkSpan{length: len(p), ns: arrivalNs})
 	}
 
-	var frames []Frame
+	var frames []StampedFrame
 
 	for len(f.buf) > 0 || (f.draining && f.remainingToDrain == 0 && len(f.truncatedFrame) > 0) {
 		// 1. 若当前处于超大帧流式排空模式
@@ -58,21 +104,22 @@ func (f *StreamFramer) Write(p []byte) ([]Frame, error) {
 				needed := f.maxCaptureBytes - len(f.truncatedFrame)
 				take := min(needed, len(f.buf))
 				f.truncatedFrame = append(f.truncatedFrame, f.buf[:take]...)
-				copy(f.buf, f.buf[take:])
-				f.buf = f.buf[:len(f.buf)-take]
+				f.discard(take)
 			}
 
 			if len(f.truncatedFrame) == f.maxCaptureBytes && f.remainingToDrain > 0 && len(f.buf) > 0 {
-				discard := min(f.remainingToDrain, len(f.buf))
-				copy(f.buf, f.buf[discard:])
-				f.buf = f.buf[:len(f.buf)-discard]
-				f.remainingToDrain -= discard
+				discardBytes := min(f.remainingToDrain, len(f.buf))
+				f.discard(discardBytes)
+				f.remainingToDrain -= discardBytes
 			}
 
 			if f.remainingToDrain == 0 && len(f.truncatedFrame) > 0 {
-				frames = append(frames, Frame{
-					Data:        f.truncatedFrame,
-					IsTruncated: true,
+				frames = append(frames, StampedFrame{
+					Frame: Frame{
+						Data:        f.truncatedFrame,
+						IsTruncated: true,
+					},
+					CapturedAtNs: f.drainingStartNs,
 				})
 				f.draining = false
 				f.truncatedFrame = nil
@@ -89,11 +136,10 @@ func (f *StreamFramer) Write(p []byte) ([]Frame, error) {
 			if idx < 0 {
 				// 未命中魔术字：保留尾部至多 6 字节（可能为跨分片魔术字前缀）并原地紧缩
 				keep := min(len(f.buf), len(magicPrefixBytes)-1)
-				discard := len(f.buf) - keep
-				if discard > 0 {
-					f.dirtyBytes += uint64(discard)
-					copy(f.buf[:keep], f.buf[discard:])
-					f.buf = f.buf[:keep]
+				discardCount := len(f.buf) - keep
+				if discardCount > 0 {
+					f.dirtyBytes += uint64(discardCount)
+					f.discard(discardCount)
 				}
 				break
 			}
@@ -101,8 +147,7 @@ func (f *StreamFramer) Write(p []byte) ([]Frame, error) {
 			// 命中魔术字，丢弃前面所有脏字节并原地前移
 			if idx > 0 {
 				f.dirtyBytes += uint64(idx)
-				copy(f.buf, f.buf[idx:])
-				f.buf = f.buf[:len(f.buf)-idx]
+				f.discard(idx)
 			}
 
 			// 检查是否凑齐 ucProtocol (第 8 字节)
@@ -117,8 +162,7 @@ func (f *StreamFramer) Write(p []byte) ([]Frame, error) {
 
 			// 假阳性魔术字 (ucProtocol > 1)，跳过首字节继续查找
 			f.dirtyBytes++
-			copy(f.buf, f.buf[1:])
-			f.buf = f.buf[:len(f.buf)-1]
+			f.discard(1)
 		}
 
 		// 3. 检查是否凑齐 24B 公共头
@@ -130,8 +174,7 @@ func (f *StreamFramer) Write(p []byte) ([]Frame, error) {
 		if err != nil || ValidateCommHead(comm) != nil {
 			// 头校验失败，丢弃首字节重新滑窗
 			f.dirtyBytes++
-			copy(f.buf, f.buf[1:])
-			f.buf = f.buf[:len(f.buf)-1]
+			f.discard(1)
 			continue
 		}
 
@@ -140,12 +183,12 @@ func (f *StreamFramer) Write(p []byte) ([]Frame, error) {
 		// 4. 判断是否进入合法超大包截断排空模式
 		if totalLen > f.maxCaptureBytes {
 			f.draining = true
+			f.drainingStartNs = f.headNs(arrivalNs)
 			f.remainingToDrain = totalLen - f.maxCaptureBytes
 			take := min(len(f.buf), f.maxCaptureBytes)
 			f.truncatedFrame = make([]byte, take, f.maxCaptureBytes)
 			copy(f.truncatedFrame, f.buf[:take])
-			copy(f.buf, f.buf[take:])
-			f.buf = f.buf[:len(f.buf)-take]
+			f.discard(take)
 			continue
 		}
 
@@ -155,16 +198,29 @@ func (f *StreamFramer) Write(p []byte) ([]Frame, error) {
 		}
 
 		// 6. 切出完整帧并原地紧缩释放
+		frameStartNs := f.headNs(arrivalNs)
 		frameBytes := make([]byte, totalLen)
 		copy(frameBytes, f.buf[:totalLen])
-		copy(f.buf, f.buf[totalLen:])
-		f.buf = f.buf[:len(f.buf)-totalLen]
-		frames = append(frames, Frame{
-			Data:        frameBytes,
-			IsTruncated: false,
+		f.discard(totalLen)
+		frames = append(frames, StampedFrame{
+			Frame: Frame{
+				Data:        frameBytes,
+				IsTruncated: false,
+			},
+			CapturedAtNs: frameStartNs,
 		})
 	}
 
+	return frames
+}
+
+// Write 接收输入切片并推进状态机 (向后兼容)
+func (f *StreamFramer) Write(p []byte) ([]Frame, error) {
+	stamped := f.WriteAt(p, time.Now().UnixNano())
+	frames := make([]Frame, len(stamped))
+	for i, sf := range stamped {
+		frames[i] = sf.Frame
+	}
 	return frames, nil
 }
 

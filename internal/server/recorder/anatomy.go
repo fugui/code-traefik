@@ -48,8 +48,11 @@ type SessionHeadFieldDTO struct {
 
 // TimingBreakdownUsDTO 会话耗时拆解
 type TimingBreakdownUsDTO struct {
-	ClientToServerUs *int64 `json:"clientToServerUs,omitempty"`
-	ServerProcessUs  *int64 `json:"serverProcessUs,omitempty"`
+	ClientToServerUs    *int64 `json:"clientToServerUs,omitempty"`
+	ServerProcessUs     *int64 `json:"serverProcessUs,omitempty"`
+	NetworkAndFramingUs *int64 `json:"networkAndFramingUs,omitempty"`
+	QueueWaitUs         *int64 `json:"queueWaitUs,omitempty"`
+	ServerExecUs        *int64 `json:"serverExecUs,omitempty"`
 }
 
 // SessionHeadAnatomyDTO ② 第二段：会话头明细与耗时
@@ -275,6 +278,25 @@ func BuildSingleFrameSide(
 				cTime := int64(*parsed.Rsp.ClientSendTime) / 1000
 				timing.ClientToServerUs = &cTime
 			}
+			if parsed.Rsp.ServerRecvTime > 0 && parsed.Rsp.ClientSendTime != nil && *parsed.Rsp.ClientSendTime > 0 && parsed.Rsp.ServerRecvTime >= *parsed.Rsp.ClientSendTime {
+				netUs := int64(parsed.Rsp.ServerRecvTime-*parsed.Rsp.ClientSendTime) / 1000
+				timing.NetworkAndFramingUs = &netUs
+			}
+			if parsed.ServerEnqueue != nil && parsed.Rsp.ServerRecvTime > 0 && *parsed.ServerEnqueue >= parsed.Rsp.ServerRecvTime {
+				qUs := int64(*parsed.ServerEnqueue-parsed.Rsp.ServerRecvTime) / 1000
+				timing.QueueWaitUs = &qUs
+			}
+			if parsed.ServerEnqueue != nil && parsed.Rsp.ServerSendTime > 0 && parsed.Rsp.ServerSendTime >= *parsed.ServerEnqueue {
+				execUs := int64(parsed.Rsp.ServerSendTime-*parsed.ServerEnqueue) / 1000
+				timing.ServerExecUs = &execUs
+			}
+			if parsed.Rsp.ServerSendTime > 0 && parsed.Rsp.ServerRecvTime > 0 && parsed.Rsp.ServerSendTime >= parsed.Rsp.ServerRecvTime {
+				procUs := int64(parsed.Rsp.ServerSendTime-parsed.Rsp.ServerRecvTime) / 1000
+				timing.ServerProcessUs = &procUs
+				if timing.ServerExecUs == nil {
+					timing.ServerExecUs = &procUs
+				}
+			}
 			sessDTO.TimingBreakdownUs = &timing
 
 			sessDTO.Fields = []SessionHeadFieldDTO{
@@ -284,6 +306,16 @@ func BuildSingleFrameSide(
 				{Name: "ascServiceName", OffsetRange: "48..111", Value: parsed.Rsp.ServiceName},
 				{Name: "ascOperation", OffsetRange: "112..175", Value: parsed.Rsp.Operation},
 				{Name: "usRspMsgNo", OffsetRange: "176..177", Value: fmt.Sprintf("%d", parsed.Rsp.RspMsgNo)},
+			}
+			if parsed.Rsp.ServerRecvTime > 0 {
+				sessDTO.Fields = append(sessDTO.Fields, SessionHeadFieldDTO{
+					Name: "ullServerRecvTime", OffsetRange: "40..47", Value: fmt.Sprintf("%d", parsed.Rsp.ServerRecvTime),
+				})
+			}
+			if parsed.Rsp.ServerSendTime > 0 {
+				sessDTO.Fields = append(sessDTO.Fields, SessionHeadFieldDTO{
+					Name: "ullServerSendTime", OffsetRange: "48..55", Value: fmt.Sprintf("%d", parsed.Rsp.ServerSendTime),
+				})
 			}
 		}
 	}

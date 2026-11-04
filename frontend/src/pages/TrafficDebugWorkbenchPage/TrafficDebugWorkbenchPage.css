@@ -1,0 +1,43 @@
+/* TrafficDebugWorkbenchPage.css - M13 报文因果树与时序泳道样式 (100% 语义 Token) */
+
+.code-traffic-debug-workbench {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+
+.code-tree-table-wrapper {
+  background-color: var(--color-bg-primary, #ffffff);
+  border: 1px solid var(--color-border, #e2e8f0);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.code-tree-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.code-tree-table-row:hover {
+  background-color: var(--color-bg-hover, #f8fafc);
+}
+
+.code-tree-table-row.highlight-matched {
+  background-color: var(--color-warning-bg, rgba(254, 243, 199, 0.4)) !important;
+}
+
+.code-waterfall-track {
+  background-color: var(--color-bg-secondary, #f1f5f9);
+}
+
+.code-debug-entity-capsule:hover {
+  border-color: var(--color-primary, #3b82f6) !important;
+}
+
+.code-view-segmented-switch button:hover {
+  color: var(--color-primary, #3b82f6);
+}
+
+.code-seq-step-group:hover line {
+  stroke-width: 2.5px;
+}

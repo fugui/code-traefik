@@ -81,6 +81,8 @@ type RspLayout struct {
 	TraceBuffOffset      int
 	TraceBuffLen         int
 	ClientSendTimeOffset int // 0 表示当前版本无此字段
+	ServerRecvTimeOffset int // 0 表示当前版本无此字段 (V03/V04: 40..47)
+	ServerSendTimeOffset int // 0 表示当前版本无此字段 (V03/V04: 48..55)
 	ServiceNameOffset    int
 	OperationOffset      int
 	StatusCode64Offset   int // 0 表示当前版本仅有 32 位状态码
@@ -94,6 +96,8 @@ var rspLayouts = map[int]RspLayout{
 		TraceBuffOffset:      8,
 		TraceBuffLen:         16,
 		ClientSendTimeOffset: 0,
+		ServerRecvTimeOffset: 0,
+		ServerSendTimeOffset: 0,
 		ServiceNameOffset:    24,
 		OperationOffset:      88,
 		StatusCode64Offset:   0,
@@ -105,6 +109,8 @@ var rspLayouts = map[int]RspLayout{
 		TraceBuffOffset:      8,
 		TraceBuffLen:         16,
 		ClientSendTimeOffset: 0,
+		ServerRecvTimeOffset: 0,
+		ServerSendTimeOffset: 0,
 		ServiceNameOffset:    32,
 		OperationOffset:      96,
 		StatusCode64Offset:   0,
@@ -116,6 +122,8 @@ var rspLayouts = map[int]RspLayout{
 		TraceBuffOffset:      8,
 		TraceBuffLen:         16,
 		ClientSendTimeOffset: 32,
+		ServerRecvTimeOffset: 40,
+		ServerSendTimeOffset: 48,
 		ServiceNameOffset:    56,
 		OperationOffset:      120,
 		StatusCode64Offset:   0,
@@ -127,6 +135,8 @@ var rspLayouts = map[int]RspLayout{
 		TraceBuffOffset:      8,
 		TraceBuffLen:         16,
 		ClientSendTimeOffset: 32,
+		ServerRecvTimeOffset: 40,
+		ServerSendTimeOffset: 48,
 		ServiceNameOffset:    56,
 		OperationOffset:      120,
 		StatusCode64Offset:   184,
@@ -150,6 +160,8 @@ type RspHead struct {
 	StatusCode     uint64   `json:"status_code"`
 	TraceBuff      [16]byte `json:"trace_buff"`
 	ClientSendTime *uint64  `json:"client_send_time,omitempty"`
+	ServerRecvTime uint64   `json:"server_recv_time,omitempty"`
+	ServerSendTime uint64   `json:"server_send_time,omitempty"`
 	ServiceName    string   `json:"service_name"`
 	Operation      string   `json:"operation"`
 	RspMsgNo       uint16   `json:"rsp_msg_no"`
@@ -183,6 +195,14 @@ func ParseRspHead(b []byte, headLen int) (*RspHead, error) {
 	if layout.ClientSendTimeOffset > 0 {
 		t := binary.BigEndian.Uint64(b[layout.ClientSendTimeOffset : layout.ClientSendTimeOffset+8])
 		h.ClientSendTime = &t
+	}
+
+	if layout.ServerRecvTimeOffset > 0 && len(b) >= layout.ServerRecvTimeOffset+8 {
+		h.ServerRecvTime = binary.BigEndian.Uint64(b[layout.ServerRecvTimeOffset : layout.ServerRecvTimeOffset+8])
+	}
+
+	if layout.ServerSendTimeOffset > 0 && len(b) >= layout.ServerSendTimeOffset+8 {
+		h.ServerSendTime = binary.BigEndian.Uint64(b[layout.ServerSendTimeOffset : layout.ServerSendTimeOffset+8])
 	}
 
 	return h, nil

@@ -2,4 +2,9 @@ export { TrafficDebugWorkbenchPage as default, TrafficDebugWorkbenchPage } from 
 export * from './DebugSessionContextBar';
 export * from './LiveTrafficFilterForm';
 export * from './TrafficRecordTable';
+export * from './TransactionCallTreeTable';
+export * from './InlineWaterfallBar';
+export * from './EntityLifecycleFilterStrip';
+export * from './TransactionSequenceDrawer';
+export * from './SequenceSwimlaneCanvas';
 export * from './SinglePacketReplayDrawer';

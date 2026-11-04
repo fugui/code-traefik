@@ -4,9 +4,15 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"sync"
 
+	"code-traefik/pkg/agentproto"
 	"code-traefik/pkg/crosrpc"
+)
+
+var (
+	ErrInvalidFrame = errors.New("crosrpc invalid frame")
 )
 
 // MatchResultType 匹配分类
@@ -169,6 +175,62 @@ func (m *ScopedMockMatcher) AddGlobalFallback(service, operation string, reqPayl
 	hash := sha256.Sum256(reqPayload)
 	exactKey := methodKey + ":" + hex.EncodeToString(hash[:])
 	m.globalFallback.add(exactKey, methodKey, rsps)
+}
+
+// RegisterScopedDownstreamRule 解析出站请求帧与应答帧列表，注册到指定 RecordID 的专属局部作用域 (ADR-12, M13)
+func (m *ScopedMockMatcher) RegisterScopedDownstreamRule(recordID uint64, rule agentproto.MockRuleDownstream) error {
+	if len(rule.ReqPacket) < crosrpc.CommHeadLen {
+		return ErrFrameTooShort
+	}
+	parsed, err := crosrpc.ParsePacket(rule.ReqPacket)
+	if err != nil {
+		return err
+	}
+	svc, op := "", ""
+	if parsed.Req != nil {
+		svc = parsed.Req.ServiceName
+		op = parsed.Req.Operation
+	} else if parsed.Rsp != nil {
+		svc = parsed.Rsp.ServiceName
+		op = parsed.Rsp.Operation
+	}
+	if svc == "" {
+		return ErrInvalidFrame
+	}
+	var payload []byte
+	if len(rule.ReqPacket) > parsed.PayloadOffset {
+		payload = rule.ReqPacket[parsed.PayloadOffset:]
+	}
+	m.AddScopedMock(recordID, svc, op, payload, rule.RspPackets)
+	return nil
+}
+
+// RegisterGlobalFallbackRule 解析出站请求帧与应答帧列表，注册到全局兜底作用域 (ADR-12, M13)
+func (m *ScopedMockMatcher) RegisterGlobalFallbackRule(rule agentproto.MockRuleDownstream) error {
+	if len(rule.ReqPacket) < crosrpc.CommHeadLen {
+		return ErrFrameTooShort
+	}
+	parsed, err := crosrpc.ParsePacket(rule.ReqPacket)
+	if err != nil {
+		return err
+	}
+	svc, op := "", ""
+	if parsed.Req != nil {
+		svc = parsed.Req.ServiceName
+		op = parsed.Req.Operation
+	} else if parsed.Rsp != nil {
+		svc = parsed.Rsp.ServiceName
+		op = parsed.Rsp.Operation
+	}
+	if svc == "" {
+		return ErrInvalidFrame
+	}
+	var payload []byte
+	if len(rule.ReqPacket) > parsed.PayloadOffset {
+		payload = rule.ReqPacket[parsed.PayloadOffset:]
+	}
+	m.AddGlobalFallback(svc, op, payload, rule.RspPackets)
+	return nil
 }
 
 // AddMngMock 录入管理类消息

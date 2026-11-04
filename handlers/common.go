@@ -152,6 +152,7 @@ func InitRecorderAndDiff(db *gorm.DB, dec *decoder.Registry) (*recorder.Exchange
 				_, _ = orch.StopSession(context.Background(), sessionID, 0, true, reason)
 			}
 		},
+		dec,
 		nil,
 	)
 

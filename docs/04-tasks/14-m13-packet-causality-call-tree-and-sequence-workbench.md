@@ -1,7 +1,7 @@
 # M13 作战卡：报文时序因果树、内联甘特瀑布、全链路时序泳道与事务闭包重放
 
 - **里程碑编号**：`M13`
-- **状态**：📋 待实施 (Planned — SDD 已冻结)
+- **状态**：✅ 已完成 (Completed)
 - **前置依赖**：`M1 ~ M12` 已完成交付（单/多进程开箱即用双录与重放零外泄闭环就绪）
 - **关联特性**：`F-10`、`F-11`、`F-12`、`F-13`、`F-15.2`、`F-15.6`、`SC-04`、`SC-05`、`SC-07`
 - **关联设计规范**：[`12-packet-causality-call-tree-and-sequence-ux-adr.md`](../05-adr/12-packet-causality-call-tree-and-sequence-ux-adr.md) (ADR-12 v1.0.0)、[`02-data-plane-and-cros-rpc-engine.md`](../02-design/02-data-plane-and-cros-rpc-engine.md) (v1.5.0)、[`04-control-plane-and-web-console.md`](../02-design/04-control-plane-and-web-console.md) (v1.7.0)、[`05-database-schema.md`](../02-design/05-database-schema.md) (v1.3.2)、[`01-http-api-contract.md`](../03-api/01-http-api-contract.md) (v1.3.0)

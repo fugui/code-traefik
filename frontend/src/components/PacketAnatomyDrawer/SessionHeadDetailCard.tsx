@@ -60,6 +60,24 @@ export const SessionHeadDetailCard: React.FC<SessionHeadDetailCardProps> = ({ se
                   <span className="code-timing-val">{sessionHead.timingBreakdownUs.serverProcessUs} μs</span>
                 </div>
               )}
+              {sessionHead.timingBreakdownUs.networkAndFramingUs !== undefined && (
+                <div className="code-timing-item">
+                  <span className="code-timing-label">网络与分帧耗时:</span>
+                  <span className="code-timing-val">{sessionHead.timingBreakdownUs.networkAndFramingUs} μs</span>
+                </div>
+              )}
+              {sessionHead.timingBreakdownUs.queueWaitUs !== undefined && (
+                <div className="code-timing-item">
+                  <span className="code-timing-label">入队排队耗时:</span>
+                  <span className="code-timing-val">{sessionHead.timingBreakdownUs.queueWaitUs} μs</span>
+                </div>
+              )}
+              {sessionHead.timingBreakdownUs.serverExecUs !== undefined && (
+                <div className="code-timing-item">
+                  <span className="code-timing-label">纯服务端执行耗时:</span>
+                  <span className="code-timing-val">{sessionHead.timingBreakdownUs.serverExecUs} μs</span>
+                </div>
+              )}
             </div>
           </div>
         )}

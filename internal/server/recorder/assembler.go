@@ -11,10 +11,12 @@ import (
 	"log"
 	"net"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"code-traefik/internal/server/decoder"
 	"code-traefik/models"
 	"code-traefik/pkg/agentproto"
 	"code-traefik/pkg/crosrpc"
@@ -53,6 +55,7 @@ type envelopeFrame struct {
 
 type pendingExchange struct {
 	sessionID       uint64
+	seqNo           int64
 	processID       uint64
 	capturedPID     uint32
 	agentID         uint64
@@ -89,12 +92,14 @@ type ExchangeAssembler struct {
 	broadcaster    SSEPreviewBroadcaster
 	dstResolver    DestinationResolver
 	onLimitReached LimitReachedCallback
+	dec            *decoder.Registry
 
 	cfg           AssemblerConfig
 	workers       []*assemblerWorker
 	totalCaptured int64
 	sessionLimits sync.Map // sessionID (uint64) -> int64 (maxFrames)
 	sessionCounts sync.Map // sessionID (uint64) -> *int64 (capturedCount)
+	sessionSeqs   sync.Map // sessionID (uint64) -> *atomic.Int64 (seq_no 单调自增)
 
 	flushQueue chan *models.TrafficRecord
 	flushReq   chan chan struct{}
@@ -103,12 +108,13 @@ type ExchangeAssembler struct {
 }
 
 type assemblerWorker struct {
-	id        int
-	parent    *ExchangeAssembler
-	ch        chan *envelopeFrame
-	pending   map[string]*pendingExchange // key: connKey + "#" + SNO
-	pendingMu sync.Mutex
-	stopCh    chan struct{}
+	id            int
+	parent        *ExchangeAssembler
+	ch            chan *envelopeFrame
+	pending       map[string]*pendingExchange // key: connKey + "#" + SNO
+	pendingMu     sync.Mutex
+	peerProcNames map[string]string // connKey -> 对端自报进程名
+	stopCh        chan struct{}
 }
 
 // NewExchangeAssembler 构建 ExchangeAssembler
@@ -117,6 +123,7 @@ func NewExchangeAssembler(
 	broadcaster SSEPreviewBroadcaster,
 	dstResolver DestinationResolver,
 	onLimitReached LimitReachedCallback,
+	dec *decoder.Registry,
 	cfg *AssemblerConfig,
 ) *ExchangeAssembler {
 	if cfg == nil {
@@ -147,6 +154,7 @@ func NewExchangeAssembler(
 		broadcaster:    broadcaster,
 		dstResolver:    dstResolver,
 		onLimitReached: onLimitReached,
+		dec:            dec,
 		cfg:            *cfg,
 		flushQueue:     make(chan *models.TrafficRecord, cfg.BatchSize*20),
 		flushReq:       make(chan chan struct{}, 4),
@@ -157,11 +165,12 @@ func NewExchangeAssembler(
 	a.workers = make([]*assemblerWorker, cfg.WorkerShards)
 	for i := 0; i < cfg.WorkerShards; i++ {
 		w := &assemblerWorker{
-			id:      i,
-			parent:  a,
-			ch:      make(chan *envelopeFrame, 2048),
-			pending: make(map[string]*pendingExchange),
-			stopCh:  make(chan struct{}),
+			id:            i,
+			parent:        a,
+			ch:            make(chan *envelopeFrame, 2048),
+			pending:       make(map[string]*pendingExchange),
+			peerProcNames: make(map[string]string),
+			stopCh:        make(chan struct{}),
 		}
 		a.workers[i] = w
 		go w.run()
@@ -169,6 +178,123 @@ func NewExchangeAssembler(
 
 	go a.batchWriterLoop()
 	return a
+}
+
+func (a *ExchangeAssembler) nextSeqNo(sessionID uint64) int64 {
+	val, ok := a.sessionSeqs.Load(sessionID)
+	if !ok {
+		var n atomic.Int64
+		val, _ = a.sessionSeqs.LoadOrStore(sessionID, &n)
+	}
+	return val.(*atomic.Int64).Add(1)
+}
+
+func extractBizStatus(rspJSON interface{}) (bool, string) {
+	m, ok := rspJSON.(map[string]interface{})
+	if !ok || m == nil {
+		return false, ""
+	}
+	errKeys := []string{"code", "err_code", "ret_code", "error_code", "status_code", "rc"}
+	for _, k := range errKeys {
+		if v, found := m[k]; found {
+			switch num := v.(type) {
+			case float64:
+				if int64(num) != 0 {
+					return true, fmt.Sprintf("%s=%d", k, int64(num))
+				}
+			case int:
+				if num != 0 {
+					return true, fmt.Sprintf("%s=%d", k, num)
+				}
+			case int64:
+				if num != 0 {
+					return true, fmt.Sprintf("%s=%d", k, num)
+				}
+			case string:
+				if num != "0" && num != "" && num != "SUCCESS" && num != "OK" {
+					return true, fmt.Sprintf("%s=%s", k, num)
+				}
+			}
+		}
+	}
+	for _, k := range []string{"success", "is_success"} {
+		if v, found := m[k]; found {
+			if b, ok := v.(bool); ok && !b {
+				return true, fmt.Sprintf("%s=false", k)
+			}
+		}
+	}
+	return false, ""
+}
+
+var noiseEntityFields = map[string]bool{
+	"user_id":     true,
+	"tenant_id":   true,
+	"page":        true,
+	"page_size":   true,
+	"page_num":    true,
+	"limit":       true,
+	"offset":      true,
+	"client_id":   true,
+	"app_id":      true,
+	"trace_id":    true,
+	"span_id":     true,
+	"father_span": true,
+	"operator_id": true,
+}
+
+func extractEntities(val interface{}) []string {
+	if val == nil {
+		return nil
+	}
+	var res []string
+	seen := make(map[string]bool)
+
+	var walk func(v interface{}, depth int)
+	walk = func(v interface{}, depth int) {
+		if depth > 4 || len(res) >= 20 {
+			return
+		}
+		switch m := v.(type) {
+		case map[string]interface{}:
+			for k, fv := range m {
+				lowerK := strings.ToLower(k)
+				if (strings.HasSuffix(lowerK, "_id") || strings.HasSuffix(lowerK, "_no") || lowerK == "id") && !noiseEntityFields[lowerK] {
+					strVal := ""
+					switch sv := fv.(type) {
+					case string:
+						strVal = sv
+					case float64:
+						if int64(sv) > 0 {
+							strVal = fmt.Sprintf("%d", int64(sv))
+						}
+					case int64:
+						if sv > 0 {
+							strVal = fmt.Sprintf("%d", sv)
+						}
+					case int:
+						if sv > 0 {
+							strVal = fmt.Sprintf("%d", sv)
+						}
+					}
+					if strVal != "" && len(strVal) <= 64 {
+						tag := fmt.Sprintf("%s=%s", lowerK, strVal)
+						if !seen[tag] {
+							seen[tag] = true
+							res = append(res, tag)
+						}
+					}
+				}
+				walk(fv, depth+1)
+			}
+		case []interface{}:
+			for _, item := range m {
+				walk(item, depth+1)
+			}
+		}
+	}
+	walk(val, 0)
+	return res
 }
 
 // SetSessionMaxFrames 设置录制批次的帧数阈值
@@ -295,6 +421,13 @@ func (w *assemblerWorker) processFrame(agentID uint64, env agentproto.EnvelopeHe
 	// 4. 分流处理
 	// (a) 管理帧 MsgType >= 5
 	if comm.MsgType >= 5 {
+		if parsed != nil && parsed.Mng != nil && parsed.Mng.ProcName != "" {
+			w.peerProcNames[connKey] = parsed.Mng.ProcName
+		} else if len(frame) >= 24+88 {
+			if mngHead, mErr := crosrpc.ParseMngHead(frame[24:]); mErr == nil && mngHead.ProcName != "" {
+				w.peerProcNames[connKey] = mngHead.ProcName
+			}
+		}
 		record := w.buildSingleRecord(agentID, env, comm, parsed, frame, isTruncated, models.ExchangeMng)
 		w.parent.enqueueRecord(record)
 		return
@@ -304,12 +437,14 @@ func (w *assemblerWorker) processFrame(agentID uint64, env agentproto.EnvelopeHe
 
 	// (b) 请求帧 MsgType == 2 (REQ)
 	if comm.MsgType == crosrpc.MsgTypeReq {
+		seqNo := w.parent.nextSeqNo(env.SessionOrTaskID)
 		isOneway := false
 		if parsed != nil && parsed.Req != nil && parsed.Req.ReqType == crosrpc.ReqTypeOneway {
 			isOneway = true
 		}
 		if isOneway {
 			record := w.buildSingleRecord(agentID, env, comm, parsed, frame, isTruncated, models.ExchangeOneway)
+			record.SeqNo = seqNo
 			w.parent.enqueueRecord(record)
 			return
 		}
@@ -351,8 +486,34 @@ func (w *assemblerWorker) processFrame(agentID uint64, env agentproto.EnvelopeHe
 			}
 		}
 
+		var reqJSON interface{}
+		var schemaID *uint64
+		var schemaVersion *int
+		decodeStatus := ""
+		if w.parent.dec != nil && len(frame) > 0 {
+			decRes, err := w.parent.dec.DecodeCrosFrame(frame, isTruncated)
+			if err == nil {
+				if len(decRes.Decode.JSONBytes) > 0 {
+					var obj interface{}
+					if err := json.Unmarshal(decRes.Decode.JSONBytes, &obj); err == nil {
+						reqJSON = obj
+					}
+				}
+				if decRes.Decode.SchemaID != nil {
+					schemaID = decRes.Decode.SchemaID
+				}
+				if decRes.Decode.SchemaVersion != nil {
+					schemaVersion = decRes.Decode.SchemaVersion
+				}
+				if decRes.Decode.DecodeStatus != "" {
+					decodeStatus = decRes.Decode.DecodeStatus
+				}
+			}
+		}
+
 		pendingItem := &pendingExchange{
 			sessionID:       env.SessionOrTaskID,
+			seqNo:           seqNo,
 			processID:       env.ProcessID,
 			capturedPID:     env.CapturedPID,
 			agentID:         agentID,
@@ -374,6 +535,10 @@ func (w *assemblerWorker) processFrame(agentID uint64, env agentproto.EnvelopeHe
 			timeoutAt:       time.Now().Add(timeoutDur),
 			rawReqPacket:    frame,
 			isTruncated:     isTruncated,
+			schemaID:        schemaID,
+			schemaVersion:   schemaVersion,
+			decodeStatus:    decodeStatus,
+			reqJSON:         reqJSON,
 			reqSHA256:       reqSHA,
 		}
 		w.pending[pendingKey] = pendingItem
@@ -407,6 +572,7 @@ func (w *assemblerWorker) processFrame(agentID uint64, env agentproto.EnvelopeHe
 		if !ok {
 			// 孤立应答 RSP_ORPHAN
 			record := w.buildSingleRecord(agentID, env, comm, parsed, frame, isTruncated, models.ExchangeRspOrphan)
+			record.SeqNo = w.parent.nextSeqNo(env.SessionOrTaskID)
 			w.parent.enqueueRecord(record)
 			return
 		}
@@ -466,6 +632,7 @@ func (w *assemblerWorker) buildSingleRecord(
 	rec := &models.TrafficRecord{
 		CreatedAt:       time.Now(),
 		SessionID:       env.SessionOrTaskID,
+		SeqNo:           w.parent.nextSeqNo(env.SessionOrTaskID),
 		AgentID:         agentID,
 		ProcessID:       env.ProcessID,
 		CapturedPID:     env.CapturedPID,
@@ -483,15 +650,14 @@ func (w *assemblerWorker) buildSingleRecord(
 	}
 
 	payloadMap := make(map[string]interface{})
+	payloadMap["req"] = nil
+	payloadMap["rsp"] = nil
+
 	if exType == models.ExchangeOneway {
 		rec.RawReqPacket = frame
-		payloadMap["req"] = nil
-		payloadMap["rsp"] = nil
 	} else if exType == models.ExchangeRspOrphan {
 		rec.RawRspPacket = frame
 		rec.RspCapturedAtNs = &env.CapturedAtNs
-		payloadMap["req"] = nil
-		payloadMap["rsp"] = nil
 	} else if exType == models.ExchangeMng {
 		rec.RawReqPacket = frame
 	}
@@ -521,6 +687,50 @@ func (w *assemblerWorker) buildSingleRecord(
 			rec.ReqPayloadSHA256 = hex.EncodeToString(hash[:])
 		}
 	}
+
+	meta := map[string]interface{}{
+		"biz_error":          false,
+		"biz_status_summary": "",
+	}
+	if peerProc, ok := w.peerProcNames[connKey]; ok && peerProc != "" {
+		meta["peer_proc_name"] = peerProc
+	}
+
+	if w.parent.dec != nil && len(frame) > 0 {
+		if exType == models.ExchangeOneway {
+			decRes, err := w.parent.dec.DecodeCrosFrame(frame, isTruncated)
+			if err == nil {
+				if len(decRes.Decode.JSONBytes) > 0 {
+					var obj interface{}
+					if err := json.Unmarshal(decRes.Decode.JSONBytes, &obj); err == nil {
+						payloadMap["req"] = obj
+						rec.SchemaID = decRes.Decode.SchemaID
+						rec.SchemaVersion = decRes.Decode.SchemaVersion
+						rec.DecodeStatus = decRes.Decode.DecodeStatus
+						meta["consumed_entities"] = extractEntities(obj)
+					}
+				}
+			}
+		} else if exType == models.ExchangeRspOrphan {
+			decRes, err := w.parent.dec.DecodeCrosFrame(frame, isTruncated)
+			if err == nil {
+				if len(decRes.Decode.JSONBytes) > 0 {
+					var obj interface{}
+					if err := json.Unmarshal(decRes.Decode.JSONBytes, &obj); err == nil {
+						payloadMap["rsp"] = obj
+						rec.SchemaID = decRes.Decode.SchemaID
+						rec.SchemaVersion = decRes.Decode.SchemaVersion
+						rec.DecodeStatus = decRes.Decode.DecodeStatus
+						bizErr, bizSummary := extractBizStatus(obj)
+						meta["biz_error"] = bizErr
+						meta["biz_status_summary"] = bizSummary
+						meta["produced_entities"] = extractEntities(obj)
+					}
+				}
+			}
+		}
+	}
+	headers["meta"] = meta
 	hdrJSON, _ := json.Marshal(headers)
 	rec.HeadersJSON = datatypes.JSON(hdrJSON)
 
@@ -538,6 +748,7 @@ func (w *assemblerWorker) pendingToRecord(item *pendingExchange, exType string) 
 	rec := &models.TrafficRecord{
 		CreatedAt:        time.Now(),
 		SessionID:        item.sessionID,
+		SeqNo:            item.seqNo,
 		AgentID:          item.agentID,
 		ProcessID:        item.processID,
 		CapturedPID:      item.capturedPID,
@@ -560,7 +771,21 @@ func (w *assemblerWorker) pendingToRecord(item *pendingExchange, exType string) 
 		ReqPayloadSHA256: item.reqSHA256,
 		IsTruncated:      item.isTruncated,
 		IsReplayable:     false,
+		SchemaID:         item.schemaID,
+		SchemaVersion:    item.schemaVersion,
+		DecodeStatus:     item.decodeStatus,
 	}
+
+	consumed := extractEntities(item.reqJSON)
+	meta := map[string]interface{}{
+		"biz_error":          false,
+		"biz_status_summary": "",
+		"consumed_entities":  consumed,
+	}
+	if peerProc, ok := w.peerProcNames[item.connKey]; ok && peerProc != "" {
+		meta["peer_proc_name"] = peerProc
+	}
+	item.headersJSON["meta"] = meta
 
 	hdrBytes, _ := json.Marshal(item.headersJSON)
 	rec.HeadersJSON = datatypes.JSON(hdrBytes)
@@ -608,6 +833,7 @@ func (w *assemblerWorker) assembleMatchedRecord(
 	rec := &models.TrafficRecord{
 		CreatedAt:        time.Now(),
 		SessionID:        item.sessionID,
+		SeqNo:            item.seqNo,
 		AgentID:          item.agentID,
 		ProcessID:        item.processID,
 		CapturedPID:      item.capturedPID,
@@ -646,15 +872,54 @@ func (w *assemblerWorker) assembleMatchedRecord(
 		}
 	}
 
-	hdrBytes, _ := json.Marshal(item.headersJSON)
-	rec.HeadersJSON = datatypes.JSON(hdrBytes)
+	var rspJSON interface{}
+	if w.parent.dec != nil && len(rawRsp) > 0 {
+		decRes, err := w.parent.dec.DecodeCrosFrame(rawRsp, hasTruncated)
+		if err == nil {
+			if len(decRes.Decode.JSONBytes) > 0 {
+				var obj interface{}
+				if err := json.Unmarshal(decRes.Decode.JSONBytes, &obj); err == nil {
+					rspJSON = obj
+				}
+			}
+			if item.schemaID == nil && decRes.Decode.SchemaID != nil {
+				item.schemaID = decRes.Decode.SchemaID
+			}
+			if item.schemaVersion == nil && decRes.Decode.SchemaVersion != nil {
+				item.schemaVersion = decRes.Decode.SchemaVersion
+			}
+			if item.decodeStatus == "" && decRes.Decode.DecodeStatus != "" {
+				item.decodeStatus = decRes.Decode.DecodeStatus
+			}
+		}
+	}
+
+	rec.SchemaID = item.schemaID
+	rec.SchemaVersion = item.schemaVersion
+	rec.DecodeStatus = item.decodeStatus
 
 	payloadMap := map[string]interface{}{
 		"req": item.reqJSON,
-		"rsp": nil,
+		"rsp": rspJSON,
 	}
 	pBytes, _ := json.Marshal(payloadMap)
 	rec.PayloadJSON = datatypes.JSON(pBytes)
+
+	bizErr, bizSummary := extractBizStatus(rspJSON)
+	produced := extractEntities(rspJSON)
+	consumed := extractEntities(item.reqJSON)
+	meta := map[string]interface{}{
+		"biz_error":          bizErr,
+		"biz_status_summary": bizSummary,
+		"produced_entities":  produced,
+		"consumed_entities":  consumed,
+	}
+	if peerProc, ok := w.peerProcNames[item.connKey]; ok && peerProc != "" {
+		meta["peer_proc_name"] = peerProc
+	}
+	item.headersJSON["meta"] = meta
+	hdrBytes, _ := json.Marshal(item.headersJSON)
+	rec.HeadersJSON = datatypes.JSON(hdrBytes)
 
 	if w.parent.dstResolver != nil && rec.ServiceName != "" {
 		rec.DstModuleID = w.parent.dstResolver.ResolveDestination(rec.ServiceName, rec.Operation)

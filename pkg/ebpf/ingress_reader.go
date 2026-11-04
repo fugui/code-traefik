@@ -198,17 +198,14 @@ func (r *GapAwareIngressReader) FeedChunk(chunk IngressChunk) (ProcessChunkResul
 	}
 	entry.expectedOff = chunk.StreamOff + uint64(len(chunk.Data))
 
-	rawFrames, err := entry.framer.Feed(chunk.Data)
-	if err != nil {
-		return ProcessChunkResult{HasGap: hasGapNow}, err
-	}
+	arrivalNs := time.Now().UnixNano()
+	stampedFrames := entry.framer.WriteAt(chunk.Data, arrivalNs)
 
 	var envelopes [][]byte
-	nowNs := time.Now().UnixNano()
 
-	for _, rf := range rawFrames {
+	for _, sf := range stampedFrames {
 		flags := uint8(0)
-		if rf.IsTruncated {
+		if sf.IsTruncated {
 			flags |= agentproto.FlagIsTruncated
 		}
 		if entry.hasGap {
@@ -226,7 +223,7 @@ func (r *GapAwareIngressReader) FeedChunk(chunk IngressChunk) (ProcessChunkResul
 			CapturedPID:     chunk.PID,
 			Direction:       agentproto.DirectionIngress, // 恒定为 DirectionIngress (1)，解耦 Socket 读写半流
 			Flags:           flags,
-			CapturedAtNs:    nowNs,
+			CapturedAtNs:    sf.CapturedAtNs,
 			SrcPort:         chunk.SrcPort,
 			DstPort:         chunk.DstPort,
 			ConnSeq:         chunk.ConnSeq,
@@ -234,7 +231,7 @@ func (r *GapAwareIngressReader) FeedChunk(chunk IngressChunk) (ProcessChunkResul
 		envHeader.SetSrcIP(chunk.SrcIP)
 		envHeader.SetDstIP(chunk.DstIP)
 
-		envelopes = append(envelopes, agentproto.MarshalEnvelope(envHeader, rf.Data))
+		envelopes = append(envelopes, agentproto.MarshalEnvelope(envHeader, sf.Data))
 	}
 
 	return ProcessChunkResult{

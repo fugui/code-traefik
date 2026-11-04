@@ -2,7 +2,15 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Drawer } from '@code/common';
 import { useToast } from '../../utils/toast';
 import * as replayApi from '../../api/replay';
-import type { TrafficRecordSummary, Process, Agent, ReplayTask, ReplayItem } from '../../types';
+import { getReplayClosure } from '../../api/traffic';
+import type {
+  TrafficRecordSummary,
+  Process,
+  Agent,
+  ReplayTask,
+  ReplayItem,
+  ReplayClosurePreviewDTO,
+} from '../../types';
 import {
   HeaderAssertionCard,
   ProtoFieldDiffTable,
@@ -14,11 +22,12 @@ export interface SinglePacketReplayContentProps {
   allProcesses: Process[];
   allAgents: Agent[];
   currentUserId?: number;
-  onExecute?: (targetProcessId: string) => Promise<void>;
+  onExecute?: (targetProcessId: string, recordIds: string[]) => Promise<void>;
   task?: ReplayTask | null;
   replayItem?: ReplayItem | null;
   loadingItem?: boolean;
   executing?: boolean;
+  onOpenSequenceWithTask?: (rootRecordId: string, replayTaskId: string) => void;
 }
 
 export const SinglePacketReplayContent: React.FC<SinglePacketReplayContentProps> = ({
@@ -31,16 +40,43 @@ export const SinglePacketReplayContent: React.FC<SinglePacketReplayContentProps>
   replayItem,
   loadingItem = false,
   executing = false,
+  onOpenSequenceWithTask,
 }) => {
   const [selectedProcessId, setSelectedProcessId] = useState<string>('');
+  const [closure, setClosure] = useState<ReplayClosurePreviewDTO | null>(null);
+  const [loadingClosure, setLoadingClosure] = useState(false);
+  const [includePrerequisites, setIncludePrerequisites] = useState(true);
+
+  // 加载下游 Mock 闭包与前置依赖链
+  useEffect(() => {
+    if (!record || record.direction !== 'INGRESS') {
+      setClosure(null);
+      return;
+    }
+    let isMounted = true;
+    setLoadingClosure(true);
+    getReplayClosure(record.id)
+      .then((res) => {
+        if (!isMounted) return;
+        setClosure(res);
+      })
+      .catch(() => {
+        if (!isMounted) return;
+        setClosure(null);
+      })
+      .finally(() => {
+        if (isMounted) setLoadingClosure(false);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [record]);
 
   // 同构服务端业务进程过滤与智能推荐排序
   const candidateProcesses = useMemo(() => {
     if (!record) return [];
 
-    // 过滤规则：
-    // ① 排除 listen_port <= 0 的纯客户端进程
-    // ② 必须挂载与报文目标模块同构的模块（匹配 module_id 或 module_name / module_code）
     const targetModuleName = (record.dst_module_name || record.src_module_name || '').toLowerCase();
 
     const isomorphicProcs = allProcesses.filter((p) => {
@@ -65,10 +101,6 @@ export const SinglePacketReplayContent: React.FC<SinglePacketReplayContentProps>
       });
     });
 
-    // 优先级排序：
-    // ① 优先推荐本人在线空闲 PRIVATE Agent 进程
-    // ② 其次推荐本人其他 PRIVATE 进程
-    // ③ 最后公共 SHARED 在线进程
     return isomorphicProcs.sort((a, b) => {
       const agentA = allAgents.find((ag) => ag.id === a.agent_id);
       const agentB = allAgents.find((ag) => ag.id === b.agent_id);
@@ -94,6 +126,12 @@ export const SinglePacketReplayContent: React.FC<SinglePacketReplayContentProps>
       setSelectedProcessId('');
     }
   }, [candidateProcesses]);
+
+  const hasPrereqs = closure && closure.prerequisite_chain.length > 0;
+  const effectiveRecordIds =
+    hasPrereqs && includePrerequisites
+      ? closure.recommended_record_ids
+      : [record.id];
 
   return (
     <div className="code-single-replay-drawer code-p-md" data-testid="single-packet-replay-drawer">
@@ -125,10 +163,111 @@ export const SinglePacketReplayContent: React.FC<SinglePacketReplayContentProps>
         </div>
       </div>
 
+      {/* 事务下游专属 ScopedMock 闭包预览 */}
+      <div className="code-anatomy-card code-mt-md" data-testid="scoped-mocks-card">
+        <div className="code-anatomy-card__header">
+          <span className="code-anatomy-card__title">专属下游 ScopedMock 闭包预览 (RecordID 隔离)</span>
+          <span className="code-badge code-badge--info">
+            {closure ? `${closure.scoped_egress_mocks.length} 条下游 Mock` : '加载中...'}
+          </span>
+        </div>
+        <div className="code-anatomy-card__body">
+          {loadingClosure ? (
+            <div style={{ padding: '12px', textAlign: 'center', color: '#64748b' }}>
+              正在检索当前入口事务因果闭包...
+            </div>
+          ) : closure && closure.scoped_egress_mocks.length > 0 ? (
+            <div className="code-table-wrapper">
+              <table className="code-table code-table--compact">
+                <thead>
+                  <tr>
+                    <th>#Seq</th>
+                    <th>下游服务 & 方法</th>
+                    <th>模式</th>
+                    <th>Mock 状态</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {closure.scoped_egress_mocks.map((mock) => (
+                    <tr key={mock.record_id}>
+                      <td className="code-font-mono">#{mock.seq_no}</td>
+                      <td>
+                        <div style={{ display: 'flex', flexDirection: 'column' }}>
+                          <span style={{ fontWeight: 600 }}>{mock.operation}</span>
+                          <span className="code-text-xs code-color-muted">{mock.service_name}</span>
+                        </div>
+                      </td>
+                      <td>
+                        <span className="code-badge code-badge--secondary">{mock.exchange_type}</span>
+                      </td>
+                      <td>
+                        {mock.usable_as_mock ? (
+                          <span style={{ color: 'var(--color-success, #10b981)', fontSize: '11px', fontWeight: 600 }}>
+                            ✓ 具备成对应答
+                          </span>
+                        ) : (
+                          <span
+                            title={mock.warning}
+                            style={{ color: 'var(--color-warning, #d97706)', fontSize: '11px', fontWeight: 600 }}
+                          >
+                            ⚠️ 无应答帧 (可能超时)
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div style={{ color: 'var(--color-text-secondary, #64748b)', fontSize: '12px' }}>
+              本事务无直接下游出站调用，重放将作为纯独立计算执行。
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* 前置业务状态依赖诊断与连带回放勾选项 */}
+      {hasPrereqs && (
+        <div
+          className="code-alert-banner code-alert-banner--warning code-mt-md"
+          data-testid="prerequisite-chain-card"
+          style={{
+            backgroundColor: 'var(--color-warning-bg, #fffbeb)',
+            border: '1px solid var(--color-warning-border, #fde68a)',
+            padding: '12px 16px',
+            borderRadius: '6px',
+          }}
+        >
+          <div style={{ fontWeight: 600, color: 'var(--color-warning, #d97706)', marginBottom: '6px' }}>
+            💡 检测到有状态业务实体依赖前置事务:
+          </div>
+          <div style={{ fontSize: '12px', color: 'var(--color-text-primary, #334155)', marginBottom: '8px' }}>
+            本请求消费了同批次前序事务产出的实体主键。直接单独重放可能因目标库不存在对应数据引发业务失败。
+          </div>
+          <ul style={{ margin: '0 0 10px 20px', padding: 0, fontSize: '12px' }}>
+            {closure.prerequisite_chain.map((prereq) => (
+              <li key={prereq.record_id}>
+                前序 #{prereq.seq_no} <code>{prereq.operation}</code> (产出 <b>{prereq.shared_entity_key}</b>)
+              </li>
+            ))}
+          </ul>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontWeight: 600, fontSize: '13px' }}>
+            <input
+              type="checkbox"
+              checked={includePrerequisites}
+              onChange={(e) => setIncludePrerequisites(e.target.checked)}
+              data-testid="checkbox-include-prerequisites"
+            />
+            <span>按序连带回放前置依赖事务链 (共 {closure.recommended_record_ids.length} 笔)</span>
+          </label>
+        </div>
+      )}
+
       {/* 目标进程选择与注入触发器 */}
       <div className="code-anatomy-card code-mt-md">
         <div className="code-anatomy-card__header">
-          <span className="code-anatomy-card__title">同构目标进程智能路由 (排除纯客户端与异构进程)</span>
+          <span className="code-anatomy-card__title">同构目标进程智能路由</span>
         </div>
         <div className="code-anatomy-card__body">
           {candidateProcesses.length === 0 ? (
@@ -167,12 +306,12 @@ export const SinglePacketReplayContent: React.FC<SinglePacketReplayContentProps>
                   disabled={executing || !selectedProcessId}
                   onClick={() => {
                     if (onExecute && selectedProcessId) {
-                      void onExecute(selectedProcessId);
+                      void onExecute(selectedProcessId, effectiveRecordIds);
                     }
                   }}
                   data-testid="btn-execute-single-replay"
                 >
-                  {executing ? '注入重放中...' : '发起单包验证'}
+                  {executing ? '注入重放中...' : `发起闭包验证 (${effectiveRecordIds.length} 笔)`}
                 </button>
               </div>
             </div>
@@ -187,14 +326,28 @@ export const SinglePacketReplayContent: React.FC<SinglePacketReplayContentProps>
         </div>
       ) : replayItem ? (
         <div className="code-mt-md" data-testid="single-replay-result-section">
-          <div className="code-section-header code-mb-sm">
-            <span className="code-section-title">重放回归断言结果</span>
-            <span
-              className={`code-status-tag code-status-tag--${replayItem.result_status.toLowerCase()}`}
-              data-testid="replay-result-status-tag"
-            >
-              {replayItem.result_status}
-            </span>
+          <div className="code-section-header code-mb-sm" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div>
+              <span className="code-section-title">重放回归断言结果</span>
+              <span
+                className={`code-status-tag code-status-tag--${replayItem.result_status.toLowerCase()}`}
+                data-testid="replay-result-status-tag"
+                style={{ marginLeft: '8px' }}
+              >
+                {replayItem.result_status}
+              </span>
+            </div>
+            {task && onOpenSequenceWithTask && (
+              <button
+                type="button"
+                className="code-btn code-btn--secondary code-btn--sm"
+                onClick={() => onOpenSequenceWithTask(record.id, String(task.id))}
+                data-testid="btn-view-fault-in-swimlane"
+                style={{ color: 'var(--color-primary, #3b82f6)', fontWeight: 600 }}
+              >
+                📊 在时序泳道图中查看故障定位
+              </button>
+            )}
           </div>
 
           <HeaderAssertionCard item={replayItem} />
@@ -208,8 +361,17 @@ export const SinglePacketReplayContent: React.FC<SinglePacketReplayContentProps>
           </div>
         </div>
       ) : task ? (
-        <div className="code-alert-banner code-alert-banner--info code-mt-md">
-          重放任务 #{task.id} 已完成，状态: {task.lifecycle_state} (裁决: {task.result_status})
+        <div className="code-alert-banner code-alert-banner--info code-mt-md" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span>重放任务 #{task.id} 已完成，状态: {task.lifecycle_state} (裁决: {task.result_status})</span>
+          {onOpenSequenceWithTask && (
+            <button
+              type="button"
+              className="code-btn code-btn--secondary code-btn--xs"
+              onClick={() => onOpenSequenceWithTask(record.id, String(task.id))}
+            >
+              📊 时序泳道定位
+            </button>
+          )}
         </div>
       ) : null}
     </div>
@@ -223,6 +385,7 @@ export interface SinglePacketReplayDrawerProps {
   allProcesses: Process[];
   allAgents: Agent[];
   currentUserId?: number;
+  onOpenSequenceWithTask?: (rootRecordId: string, replayTaskId: string) => void;
 }
 
 export const SinglePacketReplayDrawer: React.FC<SinglePacketReplayDrawerProps> = ({
@@ -232,6 +395,7 @@ export const SinglePacketReplayDrawer: React.FC<SinglePacketReplayDrawerProps> =
   allProcesses,
   allAgents,
   currentUserId,
+  onOpenSequenceWithTask,
 }) => {
   const toast = useToast();
   const [executing, setExecuting] = useState(false);
@@ -239,7 +403,7 @@ export const SinglePacketReplayDrawer: React.FC<SinglePacketReplayDrawerProps> =
   const [replayItem, setReplayItem] = useState<ReplayItem | null>(null);
   const [loadingItem, setLoadingItem] = useState(false);
 
-  const handleExecuteSingleReplay = async (targetProcessId: string) => {
+  const handleExecuteReplay = async (targetProcessId: string, recordIds: string[]) => {
     if (!record) return;
 
     setExecuting(true);
@@ -247,16 +411,15 @@ export const SinglePacketReplayDrawer: React.FC<SinglePacketReplayDrawerProps> =
     setReplayItem(null);
     try {
       const created = await replayApi.createReplayTask({
-        name: `单包验证-SNO-${record.sno}`,
+        name: `闭包验证-SNO-${record.sno}`,
         session_id: record.session_id,
         source_process_id: record.process_id,
         target_process_id: targetProcessId,
-        selected_record_ids: [record.id],
+        selected_record_ids: recordIds.map((id) => parseInt(id, 10)),
       });
       setTask(created);
-      toast.success('单包重放验证任务已投递并执行完毕');
+      toast.success('事务闭包重放任务已投递并执行完毕');
 
-      // 加载单包重放比对条目
       setLoadingItem(true);
       try {
         const itemsRes = await replayApi.listReplayItems(created.id, { page_size: 1 });
@@ -269,7 +432,7 @@ export const SinglePacketReplayDrawer: React.FC<SinglePacketReplayDrawerProps> =
         setLoadingItem(false);
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : '执行单包重放失败');
+      toast.error(err instanceof Error ? err.message : '执行事务重放失败');
     } finally {
       setExecuting(false);
     }
@@ -282,7 +445,7 @@ export const SinglePacketReplayDrawer: React.FC<SinglePacketReplayDrawerProps> =
       open={open}
       onClose={onClose}
       width="xl"
-      title="单包快速重放验证与原地双层 Diff"
+      title="事务闭包重放与有状态前置链回放"
       subtitle={`来源批次: ${record.session_id} | 报文流水号: ${record.sno} | 方法: ${record.service_name}/${record.operation}`}
     >
       <SinglePacketReplayContent
@@ -290,11 +453,12 @@ export const SinglePacketReplayDrawer: React.FC<SinglePacketReplayDrawerProps> =
         allProcesses={allProcesses}
         allAgents={allAgents}
         currentUserId={currentUserId}
-        onExecute={handleExecuteSingleReplay}
+        onExecute={handleExecuteReplay}
         task={task}
         replayItem={replayItem}
         loadingItem={loadingItem}
         executing={executing}
+        onOpenSequenceWithTask={onOpenSequenceWithTask}
       />
     </Drawer>
   );

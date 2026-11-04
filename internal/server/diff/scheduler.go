@@ -15,6 +15,7 @@ import (
 
 	commonAudit "code-common/backend/audit"
 	"code-traefik/config"
+	"code-traefik/internal/server/callgraph"
 	"code-traefik/internal/server/decoder"
 	"code-traefik/internal/server/hub"
 	"code-traefik/internal/server/topology"
@@ -330,12 +331,44 @@ func (s *ReplayScheduler) executeReplayAsync(
 		Downstreams: downstreams,
 	}
 
+	// 组装新版成对 ScopedMock 与 IngressItems
+	var ingressItems []agentproto.ReplayIngressItem
+	scopedEgressMocks := make(map[uint64][]agentproto.MockRuleDownstream)
+	for _, r := range records {
+		ingressItems = append(ingressItems, agentproto.ReplayIngressItem{
+			RecordID: r.ID,
+			RawReq:   r.RawReqPacket,
+		})
+
+		var matchedEgress []models.TrafficRecord
+		for _, eg := range egressRecords {
+			if r.TraceID != "" && r.TraceID != "0" && eg.TraceID == r.TraceID {
+				matchedEgress = append(matchedEgress, eg)
+			} else if eg.ReqCapturedAtNs >= r.ReqCapturedAtNs {
+				rEnd := r.ReqCapturedAtNs + 500_000_000
+				if r.RspCapturedAtNs != nil {
+					rEnd = *r.RspCapturedAtNs + 10_000_000
+				}
+				if eg.ReqCapturedAtNs <= rEnd {
+					matchedEgress = append(matchedEgress, eg)
+				}
+			}
+		}
+		if len(matchedEgress) > 0 {
+			scopedEgressMocks[r.ID] = callgraph.BuildScopedMockRules(matchedEgress)
+		}
+	}
+	globalFallbackMocks := callgraph.BuildScopedMockRules(egressRecords)
+
 	execReq := agentproto.ExecuteReplayReq{
-		TaskID:          task.ID,
-		ProcessSpec:     spec,
-		TimeoutMs:       task.TimeoutMs,
-		IngressRequests: ingressRequests,
-		EgressMocks:     egressMocks,
+		TaskID:              task.ID,
+		ProcessSpec:         spec,
+		TimeoutMs:           task.TimeoutMs,
+		IngressRequests:     ingressRequests,
+		EgressMocks:         egressMocks,
+		IngressItems:        ingressItems,
+		ScopedEgressMocks:   scopedEgressMocks,
+		GlobalFallbackMocks: globalFallbackMocks,
 	}
 
 	body, _ := json.Marshal(execReq)

@@ -163,6 +163,11 @@ WHERE traefik_proto_schemas.id = sub.schema_id
 		return fmt.Errorf("回填描述集统计计数失败: %w", err)
 	}
 
+	// 幂等补齐复合索引 idx_traefik_tr_session_req_ns (ADR-12, M13)
+	if err := DB.Exec(`CREATE INDEX IF NOT EXISTS idx_traefik_tr_session_req_ns ON traefik_traffic_records (session_id, req_captured_at_ns, id)`).Error; err != nil {
+		log.Printf("[models] 提示: 创建复合索引 idx_traefik_tr_session_req_ns: %v", err)
+	}
+
 	// 4. 显式创建外键约束（由于工作区基础库默认配置 DisableForeignKeyConstraintWhenMigrating，此处补充权威外键以保障数据防腐）
 	fkSQL := `
 DO $$

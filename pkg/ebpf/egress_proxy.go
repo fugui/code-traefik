@@ -404,9 +404,9 @@ func (p *EgressProxy) relayBidirectional(
 					if framer == nil {
 						framer = crosrpc.NewStreamFramer(crosrpc.DefaultMaxCaptureBytes)
 					}
-					frames, fErr := framer.Feed(buf[:n])
-					if fErr == nil && len(frames) > 0 && p.frameSink != nil {
-						nowNs := time.Now().UnixNano()
+					arrivalNs := time.Now().UnixNano()
+					frames := framer.WriteAt(buf[:n], arrivalNs)
+					if len(frames) > 0 && p.frameSink != nil {
 						for _, f := range frames {
 							flags := uint8(0)
 							if f.IsTruncated {
@@ -421,7 +421,7 @@ func (p *EgressProxy) relayBidirectional(
 								CapturedPID:     pid,
 								Direction:       agentproto.DirectionEgress, // 恒定为 DirectionEgress (2)
 								Flags:           flags,
-								CapturedAtNs:    nowNs,
+								CapturedAtNs:    f.CapturedAtNs,
 								SrcPort:         clientPort,
 								DstPort:         origPort,
 								ConnSeq:         connSeq,

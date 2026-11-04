@@ -264,10 +264,13 @@ func RegisterRoutesForTest(r *gin.Engine) {
 		protected.PATCH("/recording-sessions/:id/publish", handlers.PublishRecordingSession)
 		protected.DELETE("/recording-sessions/:id", handlers.DeleteRecordingSession)
 		protected.GET("/recording-sessions/:id/consistency-report", handlers.GetConsistencyReport)
+		protected.GET("/recording-sessions/:id/transactions", handlers.GetRecordingSessionTransactions)
+		protected.GET("/recording-sessions/:id/transactions/:rootRecordId/sequence", handlers.GetRecordingSessionTransactionSequence)
 
 		// 9. 流量检索与解剖域 (F-03, F-11)
 		protected.GET("/traffic-records", handlers.ListTrafficRecords)
 		protected.GET("/traffic-records/:id/anatomy", handlers.GetTrafficRecordAnatomy)
+		protected.GET("/traffic-records/:id/replay-closure", handlers.GetTrafficRecordReplayClosure)
 		protected.POST("/traffic-records/:id/redecode", handlers.RedecodeTrafficRecord)
 
 		// 10. 跨 Agent 同构离线重放与双层回归 Diff 域 (F-12, F-14)

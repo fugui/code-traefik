@@ -9,6 +9,9 @@ export interface DebugSessionContextBarProps {
   onToggleLiveStream: () => void;
   isPaused: boolean;
   onTogglePause: () => void;
+  viewMode?: 'tree' | 'flat';
+  onChangeViewMode?: (mode: 'tree' | 'flat') => void;
+  onToggleExpandAll?: (expand: boolean) => void;
 }
 
 export const DebugSessionContextBar: React.FC<DebugSessionContextBarProps> = ({
@@ -19,6 +22,9 @@ export const DebugSessionContextBar: React.FC<DebugSessionContextBarProps> = ({
   onToggleLiveStream,
   isPaused,
   onTogglePause,
+  viewMode = 'tree',
+  onChangeViewMode,
+  onToggleExpandAll,
 }) => {
   const currentSession = sessions.find((s) => s.id === currentSessionId);
   const isRecording = currentSession?.status === 'RECORDING';
@@ -63,7 +69,80 @@ export const DebugSessionContextBar: React.FC<DebugSessionContextBarProps> = ({
           )}
         </div>
 
-        <div className="code-session-bar__actions">
+        <div className="code-session-bar__actions" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          {/* 视图模式分段切换 */}
+          {onChangeViewMode && (
+            <div
+              className="code-view-segmented-switch"
+              style={{
+                display: 'inline-flex',
+                borderRadius: '6px',
+                border: '1px solid var(--color-border, #cbd5e1)',
+                padding: '2px',
+                backgroundColor: 'var(--color-bg-secondary, #f1f5f9)',
+              }}
+            >
+              <button
+                type="button"
+                data-testid="switch-view-tree"
+                onClick={() => onChangeViewMode('tree')}
+                style={{
+                  padding: '3px 10px',
+                  fontSize: '12px',
+                  borderRadius: '4px',
+                  border: 'none',
+                  cursor: 'pointer',
+                  backgroundColor: viewMode === 'tree' ? 'var(--color-bg-primary, #ffffff)' : 'transparent',
+                  color: viewMode === 'tree' ? 'var(--color-primary, #3b82f6)' : 'var(--color-text-secondary, #64748b)',
+                  fontWeight: viewMode === 'tree' ? 600 : 400,
+                  boxShadow: viewMode === 'tree' ? '0 1px 2px rgba(0,0,0,0.05)' : 'none',
+                }}
+              >
+                🌳 事务调用树
+              </button>
+              <button
+                type="button"
+                data-testid="switch-view-flat"
+                onClick={() => onChangeViewMode('flat')}
+                style={{
+                  padding: '3px 10px',
+                  fontSize: '12px',
+                  borderRadius: '4px',
+                  border: 'none',
+                  cursor: 'pointer',
+                  backgroundColor: viewMode === 'flat' ? 'var(--color-bg-primary, #ffffff)' : 'transparent',
+                  color: viewMode === 'flat' ? 'var(--color-primary, #3b82f6)' : 'var(--color-text-secondary, #64748b)',
+                  fontWeight: viewMode === 'flat' ? 600 : 400,
+                  boxShadow: viewMode === 'flat' ? '0 1px 2px rgba(0,0,0,0.05)' : 'none',
+                }}
+              >
+                📋 原始时序平铺
+              </button>
+            </div>
+          )}
+
+          {/* 树视图下的展开/折叠全部 */}
+          {viewMode === 'tree' && onToggleExpandAll && (
+            <div style={{ display: 'inline-flex', gap: '4px' }}>
+              <button
+                type="button"
+                className="code-btn code-btn--sm code-btn--secondary"
+                onClick={() => onToggleExpandAll(true)}
+                title="展开所有树子节点"
+              >
+                全部展开
+              </button>
+              <button
+                type="button"
+                className="code-btn code-btn--sm code-btn--secondary"
+                onClick={() => onToggleExpandAll(false)}
+                title="折叠所有树子节点"
+              >
+                全部折叠
+              </button>
+            </div>
+          )}
+
           <button
             type="button"
             className={`code-btn code-btn--sm ${liveStreamActive ? 'code-btn--primary' : 'code-btn--secondary'}`}
@@ -91,4 +170,3 @@ export const DebugSessionContextBar: React.FC<DebugSessionContextBarProps> = ({
 };
 
 export default DebugSessionContextBar;
-

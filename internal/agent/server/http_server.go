@@ -622,40 +622,47 @@ func (s *AgentServer) handleExecuteReplay(w http.ResponseWriter, r *http.Request
 	s.activeRefID = req.TaskID
 	s.mu.Unlock()
 
-	// 2. 将 EgressProxy 切换为 REPLAY_MOCK 模式并注入 Mock 数据
-	if s.ebpfMgr != nil {
-		matcher := replay.NewScopedMockMatcher()
-		// 加载 Mocks
-		for _, mng := range req.MngMocks {
-			if len(mng) > 22 {
-				matcher.AddMngMock(mng[22], mng)
-			}
+	// 2. 将 EgressProxy 切换为 REPLAY_MOCK 模式并注入 Mock 数据 (ADR-12, M13)
+	matcher := replay.NewScopedMockMatcher()
+	for _, mng := range req.MngMocks {
+		if len(mng) > 22 {
+			matcher.AddMngMock(mng[22], mng)
 		}
-		for _, egMock := range req.EgressMocks {
-			if len(egMock) >= 24 {
-				parsed, err := crosrpc.ParsePacket(egMock)
-				if err == nil {
-					svc, op := "", ""
-					if parsed.Req != nil {
-						svc = parsed.Req.ServiceName
-						op = parsed.Req.Operation
-					} else if parsed.Rsp != nil {
-						svc = parsed.Rsp.ServiceName
-						op = parsed.Rsp.Operation
-					}
-					if svc != "" {
-						payload := egMock[parsed.PayloadOffset:]
-						matcher.AddGlobalFallback(svc, op, payload, [][]byte{egMock})
-					}
+	}
+	for recID, rules := range req.ScopedEgressMocks {
+		for _, rule := range rules {
+			_ = matcher.RegisterScopedDownstreamRule(recID, rule)
+		}
+	}
+	for _, rule := range req.GlobalFallbackMocks {
+		_ = matcher.RegisterGlobalFallbackRule(rule)
+	}
+	for _, egMock := range req.EgressMocks {
+		if len(egMock) >= 24 {
+			parsed, err := crosrpc.ParsePacket(egMock)
+			if err == nil {
+				svc, op := "", ""
+				if parsed.Req != nil {
+					svc = parsed.Req.ServiceName
+					op = parsed.Req.Operation
+				} else if parsed.Rsp != nil {
+					svc = parsed.Rsp.ServiceName
+					op = parsed.Rsp.Operation
+				}
+				if svc != "" {
+					payload := egMock[parsed.PayloadOffset:]
+					matcher.AddGlobalFallback(svc, op, payload, [][]byte{egMock})
 				}
 			}
 		}
+	}
+	if s.ebpfMgr != nil {
 		s.ebpfMgr.SetReplayMock(req.TaskID, matcher, req.ProcessSpec.Downstreams)
 	}
 
-	// 异步执行重放
+	// 异步执行重放 (与 EgressProxy 共享同一 matcher 实例)
 	go func() {
-		_, _ = s.replayExec.Execute(context.Background(), req)
+		_, _ = s.replayExec.ExecuteWithMatcher(context.Background(), req, matcher)
 	}()
 
 	w.Header().Set("Content-Type", "application/json")

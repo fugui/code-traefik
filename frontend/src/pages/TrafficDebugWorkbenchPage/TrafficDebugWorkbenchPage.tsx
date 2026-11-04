@@ -11,12 +11,18 @@ import type {
   Process,
   Agent,
   PacketAnatomyDrawerDTO,
+  TransactionTreeGroupDTO,
+  EntityLifecycleChainDTO,
 } from '../../types';
 import { DebugSessionContextBar } from './DebugSessionContextBar';
 import { LiveTrafficFilterForm, type TrafficFilterValues } from './LiveTrafficFilterForm';
 import { TrafficRecordTable } from './TrafficRecordTable';
+import { TransactionCallTreeTable } from './TransactionCallTreeTable';
+import { EntityLifecycleFilterStrip } from './EntityLifecycleFilterStrip';
+import { TransactionSequenceDrawer } from './TransactionSequenceDrawer';
 import { SinglePacketReplayDrawer } from './SinglePacketReplayDrawer';
 import { PacketAnatomyDrawer } from '../../components/PacketAnatomyDrawer';
+import './TrafficDebugWorkbenchPage.css';
 
 export const TrafficDebugWorkbenchPage: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -30,12 +36,22 @@ export const TrafficDebugWorkbenchPage: React.FC = () => {
   const urlSessionId = searchParams.get('session_id') || '';
   const urlLive = searchParams.get('live') === '1';
   const urlTraceId = searchParams.get('trace_id') || '';
+  const urlView = (searchParams.get('view') as 'tree' | 'flat') || 'tree';
+  const urlEntityKey = searchParams.get('entity_key') || undefined;
+  const urlSeqRootId = searchParams.get('seq_root_id') || undefined;
+
+  const [viewMode, setViewMode] = useState<'tree' | 'flat'>(urlView);
+  const [selectedEntityKey, setSelectedEntityKey] = useState<string | undefined>(urlEntityKey);
+  const [forceExpandAll, setForceExpandAll] = useState<boolean | undefined>(undefined);
 
   const [sessions, setSessions] = useState<RecordingSession[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string>(urlSessionId);
   const [liveMode, setLiveMode] = useState<boolean>(urlLive);
   const [isPaused, setIsPaused] = useState<boolean>(false);
 
+  // 树表与平铺表数据
+  const [treeGroups, setTreeGroups] = useState<TransactionTreeGroupDTO[]>([]);
+  const [entityChains, setEntityChains] = useState<EntityLifecycleChainDTO[]>([]);
   const [records, setRecords] = useState<TrafficRecordSummary[]>([]);
   const [totalRecords, setTotalRecords] = useState<number>(0);
   const [loading, setLoading] = useState<boolean>(false);
@@ -48,7 +64,12 @@ export const TrafficDebugWorkbenchPage: React.FC = () => {
     trace_id: urlTraceId || undefined,
   });
 
-  // 抽屉状态
+  // 时序泳道抽屉
+  const [sequenceDrawerOpen, setSequenceDrawerOpen] = useState(false);
+  const [sequenceRootRecordId, setSequenceRootRecordId] = useState<string | undefined>(urlSeqRootId);
+  const [sequenceReplayTaskId, setSequenceReplayTaskId] = useState<string | undefined>(undefined);
+
+  // 解剖与单包重放抽屉
   const [anatomyDrawerOpen, setAnatomyDrawerOpen] = useState(false);
   const [anatomyData, setAnatomyData] = useState<PacketAnatomyDrawerDTO | null>(null);
   const [loadingAnatomy, setLoadingAnatomy] = useState(false);
@@ -89,52 +110,101 @@ export const TrafficDebugWorkbenchPage: React.FC = () => {
     })();
   }, []);
 
-  // 3. 加载报文列表
-  const loadRecords = useCallback(async () => {
+  // 3. 核心数据加载 (按 viewMode 切换树表或平铺表)
+  const loadData = useCallback(async () => {
     if (!selectedSessionId) return;
     setLoading(true);
+
     try {
-      const res = await trafficApi.listTrafficRecords({
-        session_id: selectedSessionId,
-        direction: filters.direction,
-        exchange_type: filters.exchange_type,
-        service_name: filters.service_name,
-        operation: filters.operation,
-        sno: filters.sno,
-        trace_id: filters.trace_id,
-        keyword: filters.keyword,
-        is_replayable: filters.is_replayable,
-        has_error: filters.has_error,
-        page,
-        page_size: pageSize,
-      });
-      setRecords(res.items ?? []);
-      setTotalRecords(res.total ?? 0);
+      if (viewMode === 'tree') {
+        const res = await trafficApi.getTransactionTrees(selectedSessionId, {
+          direction: filters.direction,
+          exchange_type: filters.exchange_type,
+          service_name: filters.service_name,
+          operation: filters.operation,
+          sno: filters.sno,
+          trace_id: filters.trace_id,
+          entity_key: selectedEntityKey,
+          keyword: filters.keyword,
+          is_replayable: filters.is_replayable,
+          has_error: filters.has_error,
+          page,
+          page_size: pageSize,
+        });
+        setTreeGroups(res.items ?? []);
+        setTotalRecords(res.total ?? 0);
+        setEntityChains(res.entity_chains ?? []);
+      } else {
+        const res = await trafficApi.listTrafficRecords({
+          session_id: selectedSessionId,
+          direction: filters.direction,
+          exchange_type: filters.exchange_type,
+          service_name: filters.service_name,
+          operation: filters.operation,
+          sno: filters.sno,
+          trace_id: filters.trace_id,
+          keyword: filters.keyword,
+          sort_dir: 'asc',
+          is_replayable: filters.is_replayable,
+          has_error: filters.has_error,
+          page,
+          page_size: pageSize,
+        });
+        setRecords(res.items ?? []);
+        setTotalRecords(res.total ?? 0);
+      }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : '检索报文流水失败');
+      toast.error(err instanceof Error ? err.message : '检索流量数据失败');
     } finally {
       setLoading(false);
     }
-  }, [selectedSessionId, filters, page, pageSize, toast]);
+  }, [selectedSessionId, viewMode, filters, selectedEntityKey, page, pageSize, toast]);
 
   useEffect(() => {
-    void loadRecords();
-  }, [loadRecords]);
+    void loadData();
+  }, [loadData]);
 
-  // 4. 跟流定时轮询刷新
+  // 4. 定时跟流
   useEffect(() => {
     if (!liveMode || isPaused) return;
     const timer = setInterval(() => {
-      void loadRecords();
+      void loadData();
     }, 2000);
     return () => clearInterval(timer);
-  }, [liveMode, isPaused, loadRecords]);
+  }, [liveMode, isPaused, loadData]);
 
+  // URL 参数同步
   const handleSelectSession = (id: string) => {
     setSelectedSessionId(id);
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
       next.set('session_id', id);
+      next.set('page', '1');
+      return next;
+    });
+  };
+
+  const handleViewModeChange = (mode: 'tree' | 'flat') => {
+    setViewMode(mode);
+    setPage(1);
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.set('view', mode);
+      next.set('page', '1');
+      return next;
+    });
+  };
+
+  const handleSelectEntityKey = (key: string | undefined) => {
+    setSelectedEntityKey(key);
+    setPage(1);
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (key) {
+        next.set('entity_key', key);
+      } else {
+        next.delete('entity_key');
+      }
       next.set('page', '1');
       return next;
     });
@@ -147,6 +217,7 @@ export const TrafficDebugWorkbenchPage: React.FC = () => {
 
   const handleFilterReset = () => {
     setFilters({});
+    setSelectedEntityKey(undefined);
     setPage(1);
   };
 
@@ -169,18 +240,30 @@ export const TrafficDebugWorkbenchPage: React.FC = () => {
     setSingleReplayDrawerOpen(true);
   };
 
+  const handleOpenSequenceDrawer = (rootRecordId: string) => {
+    setSequenceRootRecordId(rootRecordId);
+    setSequenceReplayTaskId(undefined);
+    setSequenceDrawerOpen(true);
+  };
+
+  const handleOpenSequenceWithTask = (rootRecordId: string, replayTaskId: string) => {
+    setSequenceRootRecordId(rootRecordId);
+    setSequenceReplayTaskId(replayTaskId);
+    setSequenceDrawerOpen(true);
+  };
+
   return (
     <div className="code-workbench-page code-traffic-debug-workbench" data-testid="traffic-debug-workbench-page">
       <div className="code-workbench-header">
         <div className="code-workbench-title-group">
           <h2 className="code-workbench-title">独立流量调试工作台</h2>
           <span className="code-workbench-subtitle">
-            深度解剖 CROS RPC 往返报文，依托 Trace 串联与异常过滤定位缺陷，并对入站报文发起单包快速重放验证
+            基于 DOTR 权威因果构建报文时序树与甘特瀑布，贯通参数血缘与实体生命线，支持时序泳道透视与事务闭包重放
           </span>
         </div>
       </div>
 
-      {/* 批次上下文导航条 */}
+      {/* 批次上下文导航条与视图切换 */}
       <DebugSessionContextBar
         currentSessionId={selectedSessionId}
         sessions={sessions}
@@ -189,7 +272,19 @@ export const TrafficDebugWorkbenchPage: React.FC = () => {
         onToggleLiveStream={() => setLiveMode((prev) => !prev)}
         isPaused={isPaused}
         onTogglePause={() => setIsPaused((prev) => !prev)}
+        viewMode={viewMode}
+        onChangeViewMode={handleViewModeChange}
+        onToggleExpandAll={(expand) => setForceExpandAll(expand)}
       />
+
+      {/* 识别出的有状态业务实体胶囊筛选条 */}
+      {viewMode === 'tree' && entityChains.length > 0 && (
+        <EntityLifecycleFilterStrip
+          chains={entityChains}
+          selectedEntityKey={selectedEntityKey}
+          onSelectEntityKey={handleSelectEntityKey}
+        />
+      )}
 
       {/* 报文检索多维过滤栏 (含 has_error) */}
       <div className="code-mt-sm">
@@ -200,15 +295,26 @@ export const TrafficDebugWorkbenchPage: React.FC = () => {
         />
       </div>
 
-      {/* 报文流水表 */}
+      {/* 主表格：根据 viewMode 默认展示事务调用树或时序平铺 */}
       <div className="code-mt-sm">
-        <TrafficRecordTable
-          records={records}
-          onSelectRecord={(r) => void handleOpenAnatomy(r)}
-          selectedRecordId={selectedRecordForAnatomy?.id}
-          onSinglePacketReplay={handleOpenSingleReplay}
-          loading={loading}
-        />
+        {viewMode === 'tree' ? (
+          <TransactionCallTreeTable
+            groups={treeGroups}
+            loading={loading}
+            onSelectRecordForAnatomy={(r) => void handleOpenAnatomy(r)}
+            onOpenSequenceDrawer={handleOpenSequenceDrawer}
+            onSinglePacketReplay={handleOpenSingleReplay}
+            forceExpandAll={forceExpandAll}
+          />
+        ) : (
+          <TrafficRecordTable
+            records={records}
+            onSelectRecord={(r) => void handleOpenAnatomy(r)}
+            selectedRecordId={selectedRecordForAnatomy?.id}
+            onSinglePacketReplay={handleOpenSingleReplay}
+            loading={loading}
+          />
+        )}
 
         <div className="code-mt-md">
           <Pagination
@@ -220,6 +326,15 @@ export const TrafficDebugWorkbenchPage: React.FC = () => {
           />
         </div>
       </div>
+
+      {/* 全链路交互式时序泳道抽屉 (双栏联动) */}
+      <TransactionSequenceDrawer
+        open={sequenceDrawerOpen}
+        onClose={() => setSequenceDrawerOpen(false)}
+        sessionId={selectedSessionId}
+        rootRecordId={sequenceRootRecordId}
+        replayTaskId={sequenceReplayTaskId}
+      />
 
       {/* 四段深度报文解剖抽屉 */}
       <PacketAnatomyDrawer
@@ -253,13 +368,13 @@ export const TrafficDebugWorkbenchPage: React.FC = () => {
               }}
               data-testid="btn-drawer-single-replay"
             >
-              单包重放调试 &rarr;
+              事务闭包重放 &rarr;
             </button>
           ) : null
         }
       />
 
-      {/* 单包重放调试抽屉 */}
+      {/* 事务闭包重放调试抽屉 */}
       <SinglePacketReplayDrawer
         open={singleReplayDrawerOpen}
         onClose={() => setSingleReplayDrawerOpen(false)}
@@ -267,6 +382,7 @@ export const TrafficDebugWorkbenchPage: React.FC = () => {
         allProcesses={allProcesses}
         allAgents={allAgents}
         currentUserId={user?.id}
+        onOpenSequenceWithTask={handleOpenSequenceWithTask}
       />
     </div>
   );

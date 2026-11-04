@@ -189,7 +189,7 @@ func TestExchangeAssemblerDualModeAndLimitAutoStop(t *testing.T) {
 		if orchestrator != nil {
 			_, _ = orchestrator.StopSession(context.Background(), sID, 0, true, reason)
 		}
-	}, cfg)
+	}, nil, cfg)
 	defer assembler.Close()
 
 	orchestrator = NewOrchestrator(db, assembler)

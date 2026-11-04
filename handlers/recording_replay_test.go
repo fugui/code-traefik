@@ -18,6 +18,7 @@ import (
 	commonModels "code-common/backend/models"
 	"code-traefik/config"
 	"code-traefik/handlers"
+	"code-traefik/internal/server/callgraph"
 	"code-traefik/internal/server/diff"
 	"code-traefik/internal/server/recorder"
 	"code-traefik/models"
@@ -791,8 +792,8 @@ func TestListTrafficRecords_HasErrorFilter(t *testing.T) {
 	}
 
 	type listResp struct {
-		Items []models.TrafficRecord `json:"items"`
-		Total int64                  `json:"total"`
+		Items []callgraph.TrafficRecordSummary `json:"items"`
+		Total int64                            `json:"total"`
 	}
 
 	// 1. 请求 ?session_id=S&has_error=true 精确返回记录 ② 与 ③（共 2 条）
@@ -811,9 +812,11 @@ func TestListTrafficRecords_HasErrorFilter(t *testing.T) {
 		if resp.Total != 2 || len(resp.Items) != 2 {
 			t.Fatalf("has_error=true 期望返回 2 条记录，实际 total=%d, len=%d", resp.Total, len(resp.Items))
 		}
+		sno0, _ := strconv.ParseUint(resp.Items[0].SNO, 10, 64)
+		sno1, _ := strconv.ParseUint(resp.Items[1].SNO, 10, 64)
 		snoSet := map[uint64]bool{
-			uint64(resp.Items[0].SNO): true,
-			uint64(resp.Items[1].SNO): true,
+			sno0: true,
+			sno1: true,
 		}
 		if !snoSet[102] || !snoSet[103] {
 			t.Fatalf("has_error=true 期望返回 SNO 102 与 103，实际返回: %+v", resp.Items)
@@ -836,7 +839,8 @@ func TestListTrafficRecords_HasErrorFilter(t *testing.T) {
 		if resp.Total != 1 || len(resp.Items) != 1 {
 			t.Fatalf("has_error=false 期望返回 1 条记录，实际 total=%d, len=%d", resp.Total, len(resp.Items))
 		}
-		if uint64(resp.Items[0].SNO) != 101 {
+		sno0, _ := strconv.ParseUint(resp.Items[0].SNO, 10, 64)
+		if sno0 != 101 {
 			t.Fatalf("has_error=false 期望返回 SNO 101，实际返回: %+v", resp.Items[0])
 		}
 	}
