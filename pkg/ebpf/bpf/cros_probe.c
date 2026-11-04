@@ -293,7 +293,7 @@ int cros_sock_ops(struct bpf_sock_ops *skops) {
         if (od) {
             client_addr addr = {
                 .ip = skops->local_ip4,
-                .port = (__u16)bpf_ntohl(skops->local_port),
+                .port = (__u16)skops->local_port,
                 .pad = 0,
             };
             bpf_map_update_elem(&nat_tuple_map, &addr, od, BPF_ANY);
