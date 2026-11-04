@@ -24,8 +24,8 @@ docs/
 │   └── 05-database-schema.md                      # 【数据模型篇】15 张 traefik_* 物理表 GORM 字典、分区表与索引设计
 ├── 03-api/          # 接口与数据契约：RESTful / SSE API 签名、主从信道契约、RBAC 权限与审计规范
 │   └── 01-http-api-contract.md                    # 【API 契约】控制面 REST/SSE 字典、主从 HTTP/WS 契约、RBAC 守卫与 AuditAction
-├── 04-tasks/        # TDD 实施规划与验收：Milestone 1~11 依赖拓扑、任务作战卡与自动化验收标准 (AC)
-│   ├── 01-roadmap.md                              # 【工程路线图】模板清理策略、M1~M11 DAG 拓扑、F/SC 覆盖矩阵与安全质量门禁
+├── 04-tasks/        # TDD 实施规划与验收：Milestone 1~12 依赖拓扑、任务作战卡与自动化验收标准 (AC)
+│   ├── 01-roadmap.md                              # 【工程路线图】模板清理策略、M1~M12 DAG 拓扑、F/SC 覆盖矩阵与安全质量门禁
 │   ├── 02-m1-crosrpc-and-domain-models.md         # 【M1 作战卡】协议栈 (pkg/crosrpc)、信封协议与 13 张表/分区管理器
 │   ├── 03-m2-arch-proto-and-agent-control.md      # 【M2 作战卡】三级架构元素、.pb 动态编解码与公私域 Agent 排他租约管控
 │   ├── 04-m3-agent-dataplane-ebpf-and-replay.md   # 【M3 作战卡】数据面 Agent 信道、cilium/ebpf 采集与零 .pb 二进制自愈重放
@@ -36,7 +36,8 @@ docs/
 │   ├── 09-m8-console-ia-restructuring-and-debug-workflow.md          # 【M8 作战卡】控制台三层信息架构重组、录制-调试-重放闭环与物理进程单点收口
 │   ├── 10-m9-recording-drawer-and-process-tree-selection.md          # 【M9 作战卡】协同录制抽屉重构、作用域卡片解挤、Agent 状态防呆与业务进程树
 │   ├── 11-m10-arch-process-blueprint-and-premount-workflow.md        # 【M10 作战卡】架构物理进程蓝图解耦、Agent 1:1 挂载覆盖与 eBPF 默认自动预挂待命工作流
-│   └── 12-m11-enhanced-proto-schema-asset-management.md              # 【M11 作战卡】增强 Protobuf 描述集资产管理、跨集依赖闭包解析与双模契约工作台
+│   ├── 12-m11-enhanced-proto-schema-asset-management.md              # 【M11 作战卡】增强 Protobuf 描述集资产管理、跨集依赖闭包解析与双模契约工作台
+│   └── 13-m12-bidirectional-capture-and-agent-recording-ux.md        # 【M12 作战卡】单进程开箱即用出入站双录、数据面链路修复与双工作台协同录制体验优化
 ├── 05-adr/          # 架构决策记录 (ADR)：重大技术选型与权衡记录 (Architecture Decision Records)
 │   ├── 01-microfrontend-and-table-prefix-isolation.md                  # ADR-01：微前端集成、共享库表前缀隔离与 TDD 测试策略
 │   ├── 02-ebpf-hook-and-dual-subsystem-adr.md                          # ADR-02：eBPF 入站旁路钩子、Cookie 原目的还原与无 Schema 数据面解耦
@@ -47,7 +48,8 @@ docs/
 │   ├── 07-console-ia-restructuring-and-workflow-workbench-adr.md       # ADR-07：微前端控制台信息架构重组、“录制-调试-重放”高频工作流闭环与物理进程收口
 │   ├── 08-recording-drawer-and-process-tree-selection-adr.md          # ADR-08：协同录制抽屉重构与进程树选择器设计（Drawer 侧边栏、Agent 选择防呆与业务分组树）
 │   ├── 09-arch-process-ssot-and-ebpf-premount-standby-adr.md          # ADR-09：架构物理进程蓝图 SSOT 解耦、Agent 1:1 挂载覆盖与 eBPF 默认自动预挂待命架构
-│   └── 10-enhanced-proto-schema-file-management-adr.md                # ADR-10：增强 Protobuf 描述集管理：多 .pb 资产台账、跨集依赖闭包解析与全局单一生效池
+│   ├── 10-enhanced-proto-schema-file-management-adr.md                # ADR-10：增强 Protobuf 描述集管理：多 .pb 资产台账、跨集依赖闭包解析与全局单一生效池
+│   └── 11-single-process-bidirectional-capture-and-recording-ux-adr.md # ADR-11：单进程开箱即用出入站双向采集、数据面链路修复与双工作台协同录制体验优化
 ├── 06-ops/          # 交付与验证：双模联调、物理隔离数据库测试与生产环境单二进制部署手册
 │   └── 01-verification-and-deployment-guide.md    # 联调验证、自动化回归测试与生产部署操作指南
 └── 07-references/   # 外部参考与上位契约基准：协议包规范、字节字典与领域标准文档

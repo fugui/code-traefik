@@ -1,11 +1,11 @@
 # 业务流量监控与重放 (`code-traefik`) 系统总体架构与主从协同设计
 
 - **文档编号**：`01-system-architecture.md`
-- **文档版本**：v1.3.1
-- **更新日期**：2026-11-02
+- **文档版本**：v1.3.2
+- **更新日期**：2026-11-03
 - **归属阶段**：阶段二：系统架构与数据模型设计 (`02-design`)
-- **状态**：已批准（待 M10 实施）(Approved for M10)
-- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.9.1)、[`01-cros-rpc-protocol-spec.md`](../07-references/01-cros-rpc-protocol-spec.md) (v1.0.0)、[`02-ebpf-hook-and-dual-subsystem-adr.md`](../05-adr/02-ebpf-hook-and-dual-subsystem-adr.md)、[`03-control-plane-state-recovery-and-lease-reconciliation.md`](../05-adr/03-control-plane-state-recovery-and-lease-reconciliation.md)、[`09-arch-process-ssot-and-ebpf-premount-standby-adr.md`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md) (ADR-09 v1.1.0)
+- **状态**：已批准待实施 (Approved for M12)
+- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.9.3)、[`01-cros-rpc-protocol-spec.md`](../07-references/01-cros-rpc-protocol-spec.md) (v1.0.0)、[`02-ebpf-hook-and-dual-subsystem-adr.md`](../05-adr/02-ebpf-hook-and-dual-subsystem-adr.md)、[`03-control-plane-state-recovery-and-lease-reconciliation.md`](../05-adr/03-control-plane-state-recovery-and-lease-reconciliation.md)、[`09-arch-process-ssot-and-ebpf-premount-standby-adr.md`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md) (ADR-09 v1.1.0)、[`11-single-process-bidirectional-capture-and-recording-ux-adr.md`](../05-adr/11-single-process-bidirectional-capture-and-recording-ux-adr.md) (ADR-11 v1.0.0)
 
 ---
 
@@ -220,7 +220,7 @@ type ProcessMonitorSpec struct {
 	ProcessID   uint64               `json:"process_id"`   // 主控 traefik_processes.id
 	ListenPort  uint16               `json:"listen_port"`  // 唯一有效监听端口 (0 表示纯客户端，A-02)
 	CmdPattern  string               `json:"cmd_pattern"`  // /proc/<pid>/cmdline 有效匹配表达式
-	Downstreams []DownstreamEndpoint `json:"downstreams"`  // 混合拓扑推导(本机优先+SHARED兜底) + 同机/批次协同端口 + 补充端点
+	Downstreams []DownstreamEndpoint `json:"downstreams"`  // 录制/待命期用作已声明下游参考集(未配置时仍默认透明代理全部出站连接, ADR-11)；重放期为静态推导 ∪ 历史 EGRESS 实测 DstAddr 并集
 }
 
 // ArmStandbyReq 声明式同步 Agent 预挂载待命规格（不占排他租约，携带单调递增 Revision 防乱序覆盖）
@@ -291,7 +291,7 @@ type ProcessDiagStatus struct {
 
 * **`EventType` 枚举与租约校验守卫**：
   * 主控 `AgentHub` 收到任意 WebSocket 二进制帧后，核对信封偏移 `4..11` 的 `SessionOrTaskID` 及 `Flags.REF_KIND` 是否与该 Agent 当前持有的排他租约一致；过期或悬空会话的残帧直接丢弃；
-  * `0x01 (EVENT_TRAFFIC_FRAME)`：采集到的单条完整（或截断）CROS RPC 原始帧；`Direction` 取值 `1 = INGRESS`、`2 = EGRESS`；
+  * `0x01 (EVENT_TRAFFIC_FRAME)`：采集到的单条完整（或截断）CROS RPC 原始帧；`SessionOrTaskID` 必须等于当前活跃录制 `session_id`（严禁为 `0`）；**`Direction` 恒定表达相对于目标进程的业务调用方向（[`ADR-11`](../05-adr/11-single-process-bidirectional-capture-and-recording-ux-adr.md)）：`1 = INGRESS`（入站监听连接上的 `REQ` 与 `RSP/RSP_SEG` 均为 `1`）、`2 = EGRESS`（出站代理连接上的 `REQ` 与 `RSP/RSP_SEG` 均为 `2`）**，消息是请求或应答仅由载荷 24B 公共头 `ucMsgType` 判定；
   * `0x02 (EVENT_PROCESS_LIFECYCLE)`：目标进程生命周期事件（如 `PROCESS_RESTARTED` 新旧 PID 切换、`PROCESS_EXITED`）；
   * `0x03 (EVENT_SESSION_STATS)`：每 2s 周期上报会话采集计数、当前缓冲水位与累计背压丢帧数 `dropped_frames`；
   * `0x04 (EVENT_REPLAY_ITEM_DONE)`：重放单条请求完成事件，携带实际捕获的 `RSP` / `RSP_SEG` 原始字节流或超时/连接错误状态；
