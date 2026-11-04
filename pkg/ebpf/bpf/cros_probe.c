@@ -221,6 +221,31 @@ int cros_connect4(struct bpf_sock_addr *ctx) {
         return 1; // 非纳管目标进程，原样放行
     }
 
+    // 豁免条件 2：目的端口等于自身非零监听端口 bpf_htons(tp->listen_port)（不限目的 IP，杜绝自连死锁）
+    if (tp->listen_port != 0 && ctx->user_port == bpf_htons(tp->listen_port)) {
+        return 1;
+    }
+
+    // 豁免条件 3：目的为 127.0.0.1:{proxy_port, mock_port} 的连接（杜绝代理自环）
+    if (ctx->user_ip4 == bpf_htonl(0x7f000001)) {
+        if ((cfg->proxy_port != 0 && ctx->user_port == cfg->proxy_port) ||
+            (cfg->mock_port != 0 && ctx->user_port == cfg->mock_port)) {
+            return 1;
+        }
+    }
+
+    // 记录原始目的地址到 cookie_orig_dst_map
+    __u64 cookie = bpf_get_socket_cookie(ctx);
+    orig_dst od = {
+        .process_id = tp->process_id,
+        .pid = pid,
+        .orig_ip = ctx->user_ip4,
+        .orig_port = ctx->user_port,
+        .pad = 0,
+    };
+    bpf_map_update_elem(&cookie_orig_dst_map, &cookie, &od, BPF_ANY);
+
+    // 检查是否命中下游白名单规则（若未命中，仍透明重定向，并异步写 connect_observe_ringbuf 以支撑 F-05 架构未声明调用分析）
     ds_key key = {
         .process_id = tp->process_id,
         .dst_ip = ctx->user_ip4,
@@ -234,13 +259,8 @@ int cros_connect4(struct bpf_sock_addr *ctx) {
         dst = bpf_map_lookup_elem(&downstream_rules_map, &key);
     }
 
-    // 未命中下游重定向规则分支
+    // 未命中下游重定向规则时，仅异步写 connect_observe_ringbuf 观测事件
     if (!dst) {
-        // 重放模式下执行 Fail-Closed：严禁未声明连接外泄到真实网络，直接拒绝建连
-        if (tp->mode == MODE_REPLAY) {
-            return 0; // 返回 0 (EPERM)，内核强制阻断连接
-        }
-        // 录制模式下：投递观测事件以检出架构漂移 (VIOLATION)
         conn_observe_event obs = {
             .process_id = tp->process_id,
             .pid = pid,
@@ -249,21 +269,15 @@ int cros_connect4(struct bpf_sock_addr *ctx) {
             .pad = 0,
         };
         bpf_ringbuf_output(&connect_observe_ringbuf, &obs, sizeof(obs), 0);
-        return 1; // 原样放行
     }
 
-    __u64 cookie = bpf_get_socket_cookie(ctx);
-    orig_dst od = {
-        .process_id = tp->process_id,
-        .pid = pid,
-        .orig_ip = ctx->user_ip4,
-        .orig_port = ctx->user_port,
-        .pad = 0,
-    };
-    bpf_map_update_elem(&cookie_orig_dst_map, &cookie, &od, BPF_ANY);
-
-    ctx->user_ip4 = bpf_htonl(0x7f000001); // 重定向到 127.0.0.1 本地代理或 MockServer
-    ctx->user_port = dst->redirect_port;
+    // 重定向目标地址与端口 (MODE_RECORDING 导向 proxy_port, MODE_REPLAY 导向 mock_port)
+    ctx->user_ip4 = bpf_htonl(0x7f000001);
+    if (tp->mode == MODE_REPLAY) {
+        ctx->user_port = (cfg->mock_port != 0) ? cfg->mock_port : cfg->proxy_port;
+    } else {
+        ctx->user_port = cfg->proxy_port;
+    }
     incr_stat(STAT_REDIRECTED);
     return 1;
 }

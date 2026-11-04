@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,6 +17,7 @@ import (
 	"code-traefik/config"
 	"code-traefik/internal/server/decoder"
 	"code-traefik/internal/server/hub"
+	"code-traefik/internal/server/topology"
 	"code-traefik/models"
 	"code-traefik/pkg/agentproto"
 	"code-traefik/pkg/crosrpc"
@@ -280,23 +283,51 @@ func (s *ReplayScheduler) executeReplayAsync(
 		ingressRequests = append(ingressRequests, r.RawReqPacket)
 	}
 
-	// 检索同批次 Egress 流量用作 ScopedMock (过滤截断与 REQ_ONLY)
+	// 检索同批次属于 source_process_id 的 Egress 流量用作 ScopedMock 与历史端点提取
 	var egressRecords []models.TrafficRecord
-	_ = s.db.Where("session_id = ? AND direction = 'EGRESS' AND is_truncated = false AND exchange_type != 'REQ_ONLY'", task.SessionID).
-		Limit(500).Find(&egressRecords).Error
+	egressQuery := s.db.Where("session_id = ? AND direction = 'EGRESS' AND is_truncated = false AND exchange_type != 'REQ_ONLY'", task.SessionID)
+	if task.SourceProcessID != nil && *task.SourceProcessID > 0 {
+		egressQuery = egressQuery.Where("process_id = ?", *task.SourceProcessID)
+	}
+	_ = egressQuery.Limit(500).Find(&egressRecords).Error
 
 	var egressMocks [][]byte
+	var historyEgressEndpoints []agentproto.DownstreamEndpoint
+	seenHistoryEP := make(map[string]bool)
+
 	for _, eg := range egressRecords {
-		if len(eg.RawReqPacket) > 0 {
-			egressMocks = append(egressMocks, eg.RawReqPacket)
+		mockData := eg.RawRspPacket
+		if len(mockData) == 0 {
+			mockData = eg.RawReqPacket
+		}
+		if len(mockData) > 0 {
+			egressMocks = append(egressMocks, mockData)
+		}
+		if eg.DstAddr != "" {
+			host, portStr, err := net.SplitHostPort(strings.TrimSpace(eg.DstAddr))
+			if err == nil {
+				port, err := strconv.Atoi(portStr)
+				if err == nil && port > 0 && port <= 65535 {
+					key := fmt.Sprintf("%s:%d", host, port)
+					if !seenHistoryEP[key] {
+						seenHistoryEP[key] = true
+						historyEgressEndpoints = append(historyEgressEndpoints, agentproto.DownstreamEndpoint{
+							IP:   host,
+							Port: uint16(port),
+						})
+					}
+				}
+			}
 		}
 	}
 
+	downstreams, _ := topology.CompileProcessDownstreams(s.db, targetProc.ID, nil, historyEgressEndpoints)
 	targetProc.FillFromArchProcess()
 	spec := agentproto.ProcessMonitorSpec{
-		ProcessID:  targetProc.ID,
-		ListenPort: uint16(targetProc.EffectiveListenPort),
-		CmdPattern: targetProc.CmdPattern,
+		ProcessID:   targetProc.ID,
+		ListenPort:  uint16(targetProc.EffectiveListenPort),
+		CmdPattern:  targetProc.CmdPattern,
+		Downstreams: downstreams,
 	}
 
 	execReq := agentproto.ExecuteReplayReq{
@@ -324,7 +355,22 @@ func (s *ReplayScheduler) executeReplayAsync(
 		s.markTaskFailed(task.ID, fmt.Sprintf("调用 Agent 失败: %v", err))
 		return
 	}
-	_ = resp.Body.Close()
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		var errResp struct {
+			Error       string `json:"error"`
+			Status      string `json:"status"`
+			DiagMessage string `json:"diag_message"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&errResp)
+		msg := errResp.Error
+		if msg == "" {
+			msg = fmt.Sprintf("Agent 返回状态码 %d", resp.StatusCode)
+		}
+		s.markTaskFailed(task.ID, msg)
+		return
+	}
 
 	startedAt := time.Now()
 	s.db.Model(&models.ReplayTask{}).Where("id = ?", task.ID).Updates(map[string]interface{}{

@@ -158,7 +158,16 @@ func GetAgent(c *gin.Context) {
 	}
 
 	procs := make([]models.Process, 0)
-	_ = models.DB.Preload("ProcessModules.Module").Where("agent_id = ?", agent.ID).Order("listen_port ASC").Find(&procs).Error
+	if err := models.DB.Preload("ArchProcess.Group").Preload("ArchProcess.Modules").
+		Where("agent_id = ?", agent.ID).
+		Order("effective_listen_port ASC, id ASC").
+		Find(&procs).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询 Agent 进程挂载失败: " + err.Error()})
+		return
+	}
+	for i := range procs {
+		procs[i].FillFromArchProcess()
+	}
 	agent.ProcessesCount = len(procs)
 
 	c.JSON(http.StatusOK, gin.H{
@@ -610,12 +619,21 @@ func BatchUpdateProcessMounts(c *gin.Context) {
 	}(id)
 
 	var updatedProcs []models.Process
-	_ = models.DB.Preload("ArchProcess").Where("agent_id = ?", id).Order("id ASC").Find(&updatedProcs).Error
+	if err := models.DB.Preload("ArchProcess.Group").Preload("ArchProcess.Modules").
+		Where("agent_id = ?", id).
+		Order("effective_listen_port ASC, id ASC").
+		Find(&updatedProcs).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询更新后进程挂载失败: " + err.Error()})
+		return
+	}
 	for i := range updatedProcs {
 		updatedProcs[i].FillFromArchProcess()
 	}
 
-	_ = models.DB.First(&agent, id).Error
+	if err := models.DB.First(&agent, id).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询 Agent 详情失败: " + err.Error()})
+		return
+	}
 	recordAudit(c, "batch_process_mounts", commonModels.AuditLevelP2, fmt.Sprintf("批量挂载 Agent [%s] 进程 (共 %d 个)", agent.Name, len(updatedProcs)), "agent", agent.ID, agent.Name, beforeAgent, agent)
 
 	c.JSON(http.StatusOK, gin.H{

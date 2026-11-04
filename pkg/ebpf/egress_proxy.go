@@ -1,6 +1,7 @@
 package ebpf
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -55,19 +56,20 @@ var proxyBufPool = sync.Pool{
 
 // EgressProxy 透明 TCP 出站代理（三态隔离与零泄漏不断连机制）
 type EgressProxy struct {
-	mu            sync.RWMutex
-	listener      net.Listener
-	proxyPort     uint16
-	natLookup     NatLookupFunc
-	frameSink     FrameSinkFunc
-	activeConns   sync.Map // net.Conn -> bool
-	connSeqGen    uint32
-	closed        chan struct{}
-	statCaptured  int64
-	mode          int32 // ProxyMode (atomic)
-	mockMatcher   *replay.ScopedMockMatcher
-	mockEndpoints map[string]bool // "IP:Port" -> true
-	draining      int32           // atomic flag: 1 = graceful draining
+	mu              sync.RWMutex
+	listener        net.Listener
+	proxyPort       uint16
+	natLookup       NatLookupFunc
+	frameSink       FrameSinkFunc
+	activeConns     sync.Map // net.Conn -> bool
+	connSeqGen      uint32
+	closed          chan struct{}
+	statCaptured    int64
+	mode            int32 // ProxyMode (atomic)
+	activeSessionID atomic.Uint64
+	mockMatcher     *replay.ScopedMockMatcher
+	mockEndpoints   map[string]bool // "IP:Port" -> true
+	draining        int32           // atomic flag: 1 = graceful draining
 }
 
 // NewEgressProxy 创建出站代理，默认为 ModePassthrough 模式
@@ -103,6 +105,9 @@ func (p *EgressProxy) Mode() ProxyMode {
 
 // SetMode 设置当前代理模式
 func (p *EgressProxy) SetMode(mode ProxyMode) {
+	if mode == ModeCapturing && p.activeSessionID.Load() == 0 {
+		p.activeSessionID.Store(1)
+	}
 	atomic.StoreInt32(&p.mode, int32(mode))
 }
 
@@ -118,6 +123,17 @@ func (p *EgressProxy) SetMockMatcher(matcher *replay.ScopedMockMatcher, mockEndp
 	}
 }
 
+// StartCapture 开启录制并原子注入 sessionID (F-09, ADR-11)
+func (p *EgressProxy) StartCapture(sessionID uint64) {
+	p.activeSessionID.Store(sessionID)
+	p.SetMode(ModeCapturing)
+}
+
+// ActiveSessionID 获取当前录制会话 ID
+func (p *EgressProxy) ActiveSessionID() uint64 {
+	return p.activeSessionID.Load()
+}
+
 // DrainAndSetPassthrough 会话停止时等待排空在途帧并平滑切回透传待命模式 (停录不断连)
 func (p *EgressProxy) DrainAndSetPassthrough(drainDuration time.Duration) {
 	if drainDuration <= 0 {
@@ -125,6 +141,7 @@ func (p *EgressProxy) DrainAndSetPassthrough(drainDuration time.Duration) {
 	}
 	time.Sleep(drainDuration)
 	p.SetMode(ModePassthrough)
+	p.activeSessionID.Store(0)
 }
 
 // isMockTarget 判断目标端点是否属于被 Mock 拦截的服务
@@ -290,34 +307,37 @@ func (p *EgressProxy) handleConnection(clientConn net.Conn) {
 	go func() {
 		defer wg.Done()
 		defer targetConn.Close()
-		p.relayBidirectional(clientConn, targetConn, processID, pid, clientAddr.IP, origIP, clientPort, origPort, connSeq, agentproto.DirectionEgress)
+		p.relayBidirectional(clientConn, targetConn, processID, pid, clientAddr.IP, origIP, clientPort, origPort, connSeq, true)
 	}()
 
 	// 2. Target -> Client (出站应答)
 	go func() {
 		defer wg.Done()
-		defer clientConn.Close()
-		p.relayBidirectional(targetConn, clientConn, processID, pid, origIP, clientAddr.IP, origPort, clientPort, connSeq, agentproto.DirectionIngress)
+		p.relayBidirectional(targetConn, clientConn, processID, pid, clientAddr.IP, origIP, clientPort, origPort, connSeq, false)
+		if p.Mode() != ModeReplayMock {
+			_ = clientConn.Close()
+		}
 	}()
 
 	wg.Wait()
 }
 
-// relayBidirectional 双向转发与按需抓包循环 (停录不断连核心实现)
+// relayBidirectional 双向转发与按需抓包循环 (停录不断连与写前魔术字守卫核心实现)
 func (p *EgressProxy) relayBidirectional(
 	src, dst net.Conn,
 	processID uint64,
 	pid uint32,
-	srcIP, dstIP net.IP,
-	srcPort, dstPort uint16,
+	clientIP, origIP net.IP,
+	clientPort, origPort uint16,
 	connSeq uint32,
-	dir uint8,
+	isClientToTarget bool,
 ) {
 	bufPtr := proxyBufPool.Get().(*[]byte)
 	defer proxyBufPool.Put(bufPtr)
 	buf := *bufPtr
 
 	var framer *crosrpc.StreamFramer
+	magicPrefixBytes := []byte(crosrpc.MagicPrefix)
 
 	for {
 		select {
@@ -328,44 +348,91 @@ func (p *EgressProxy) relayBidirectional(
 
 		n, err := src.Read(buf)
 		if n > 0 {
+			curMode := p.Mode()
+
+			// 核心防御：REPLAY_MOCK 模式防外泄与自愈处理
+			if curMode == ModeReplayMock {
+				isMockTarget := p.isMockTarget(origIP, origPort)
+				hasCrosMagic := isClientToTarget && bytes.Contains(buf[:n], magicPrefixBytes)
+
+				if isMockTarget || hasCrosMagic {
+					if !isClientToTarget {
+						// 真实下游发来的数据，在 Mock 接管时直接丢弃并切断 targetConn
+						_ = src.Close()
+						return
+					}
+
+					// 物理切断向真实下游的连接，严守 0 字节外泄
+					_ = dst.Close()
+
+					p.mu.RLock()
+					matcher := p.mockMatcher
+					p.mu.RUnlock()
+
+					if matcher != nil {
+						if framer == nil {
+							framer = crosrpc.NewStreamFramer(crosrpc.DefaultMaxCaptureBytes)
+						}
+						frames, fErr := framer.Feed(buf[:n])
+						if fErr == nil && len(frames) > 0 {
+							for _, f := range frames {
+								matchRes, mErr := matcher.MatchAndHeal(f.Data)
+								if mErr == nil && matchRes != nil && len(matchRes.ResponseFrames) > 0 {
+									for _, rsp := range matchRes.ResponseFrames {
+										if _, wErr := src.Write(rsp); wErr != nil {
+											return
+										}
+									}
+								}
+							}
+						}
+					}
+					// 已接管出站请求，切勿向 targetConn 写入，继续在 clientConn 循环中响应后续请求
+					continue
+				}
+			}
+
 			// 透明转发真实数据
 			if _, wErr := dst.Write(buf[:n]); wErr != nil {
 				return
 			}
 
-			// 若处于 CAPTURING 录制模式，按需解析并投递信封流
-			curMode := p.Mode()
+			// 若处于 CAPTURING 录制模式且已注入有效会话，按需解析并投递信封流
 			if curMode == ModeCapturing {
-				if framer == nil {
-					framer = crosrpc.NewStreamFramer(crosrpc.DefaultMaxCaptureBytes)
-				}
-				frames, fErr := framer.Feed(buf[:n])
-				if fErr == nil && len(frames) > 0 && p.frameSink != nil {
-					nowNs := time.Now().UnixNano()
-					for _, f := range frames {
-						flags := uint8(0)
-						if f.IsTruncated {
-							flags |= agentproto.FlagIsTruncated
-						}
-						header := agentproto.EnvelopeHeader{
-							Magic:        agentproto.EnvelopeMagic,
-							ProtoVer:     agentproto.EnvelopeProtoVer,
-							EventType:    agentproto.EventTrafficFrame,
-							ProcessID:    processID,
-							CapturedPID:  pid,
-							Direction:    dir,
-							Flags:        flags,
-							CapturedAtNs: nowNs,
-							SrcPort:      srcPort,
-							DstPort:      dstPort,
-							ConnSeq:      connSeq,
-						}
-						header.SetSrcIP(srcIP)
-						header.SetDstIP(dstIP)
+				sessID := p.activeSessionID.Load()
+				if sessID > 0 {
+					if framer == nil {
+						framer = crosrpc.NewStreamFramer(crosrpc.DefaultMaxCaptureBytes)
+					}
+					frames, fErr := framer.Feed(buf[:n])
+					if fErr == nil && len(frames) > 0 && p.frameSink != nil {
+						nowNs := time.Now().UnixNano()
+						for _, f := range frames {
+							flags := uint8(0)
+							if f.IsTruncated {
+								flags |= agentproto.FlagIsTruncated
+							}
+							header := agentproto.EnvelopeHeader{
+								Magic:           agentproto.EnvelopeMagic,
+								ProtoVer:        agentproto.EnvelopeProtoVer,
+								EventType:       agentproto.EventTrafficFrame,
+								SessionOrTaskID: sessID,
+								ProcessID:       processID,
+								CapturedPID:     pid,
+								Direction:       agentproto.DirectionEgress, // 恒定为 DirectionEgress (2)
+								Flags:           flags,
+								CapturedAtNs:    nowNs,
+								SrcPort:         clientPort,
+								DstPort:         origPort,
+								ConnSeq:         connSeq,
+							}
+							header.SetSrcIP(clientIP)
+							header.SetDstIP(origIP)
 
-						env := agentproto.MarshalEnvelope(header, f.Data)
-						p.frameSink(env)
-						atomic.AddInt64(&p.statCaptured, 1)
+							env := agentproto.MarshalEnvelope(header, f.Data)
+							p.frameSink(env)
+							atomic.AddInt64(&p.statCaptured, 1)
+						}
 					}
 				}
 			} else {

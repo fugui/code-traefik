@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { useSearchParams, useInRouterContext } from 'react-router-dom';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { useNavigate, useSearchParams, useInRouterContext } from 'react-router-dom';
 import { Drawer } from '@code/common';
 import { Search, ChevronDown, ChevronRight, AlertCircle, Sparkles } from 'lucide-react';
 import { useToast } from '../../utils/toast';
@@ -36,9 +36,25 @@ export interface GroupedProcesses {
   processes: Process[];
 }
 
+/**
+ * 智能默认预选规则 (ADR-11 / F-15.4):
+ * - 排除已卸载探针进程 (probe_desired_state === 'DISARMED')
+ * - 可用数 1 <= N <= 5: 默认自动全选（单进程开箱 0 次额外点击）
+ * - 可用数 N > 5: 默认自动勾选 probe_status === 'READY' 进程
+ */
+export function computeSmartDefaultSelection(procs: Process[]): string[] {
+  const available = procs.filter((p) => p.probe_desired_state !== 'DISARMED');
+  if (available.length === 0) return [];
+  if (available.length <= 5) {
+    return available.map((p) => p.id);
+  }
+  return available.filter((p) => p.probe_status === 'READY').map((p) => p.id);
+}
+
 interface RecordingStartInnerProps extends RecordingStartContentProps {
   urlAgentId?: string | null;
   urlSessionNo?: string | null;
+  navigate?: (to: string) => void;
 }
 
 const RecordingStartInner: React.FC<RecordingStartInnerProps> = ({
@@ -50,6 +66,7 @@ const RecordingStartInner: React.FC<RecordingStartInnerProps> = ({
   onStateChange,
   urlAgentId,
   urlSessionNo,
+  navigate,
 }) => {
   const toast = useToast();
 
@@ -69,12 +86,18 @@ const RecordingStartInner: React.FC<RecordingStartInnerProps> = ({
     return allAgents[0].id;
   });
 
-  // 3. 业务进程树状态
+  // 3. 业务进程树状态（智能默认规则：1..5 可用进程全选，>5 仅选 READY）
   const [targetProcessIds, setTargetProcessIds] = useState<string[]>(() => {
-    if (urlAgentId) {
-      return allProcesses.filter((p) => p.agent_id === urlAgentId).map((p) => p.id);
-    }
-    return [];
+    const agtId =
+      urlAgentId && allAgents.some((a) => a.id === urlAgentId)
+        ? urlAgentId
+        : allAgents.find((a) => a.status === 'ONLINE' && !a.lease_type)?.id ||
+          allAgents.find((a) => a.status === 'ONLINE')?.id ||
+          allAgents[0]?.id ||
+          '';
+    if (!agtId) return [];
+    const procs = allProcesses.filter((p) => p.agent_id === agtId);
+    return computeSmartDefaultSelection(procs);
   });
   const [searchQuery, setSearchQuery] = useState('');
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
@@ -94,7 +117,7 @@ const RecordingStartInner: React.FC<RecordingStartInnerProps> = ({
       setSelectedAgentId(urlAgentId);
       const agentProcs = allProcesses.filter((p) => p.agent_id === urlAgentId);
       if (agentProcs.length > 0) {
-        setTargetProcessIds(agentProcs.map((p) => p.id));
+        setTargetProcessIds(computeSmartDefaultSelection(agentProcs));
       }
     }
   }, [urlAgentId, urlSessionNo, allAgents, allProcesses]);
@@ -125,10 +148,11 @@ const RecordingStartInner: React.FC<RecordingStartInnerProps> = ({
     setSelectedAgentId(allAgents[0].id);
   }, [allAgents, selectedAgentId]);
 
-  // 当切换选中的 Agent 时，清空选中的进程 ID，避免跨 Agent 混选
+  // 当切换选中的 Agent 时，对新 Agent 下的进程执行智能默认预选
   const handleAgentChange = (newAgentId: string) => {
     setSelectedAgentId(newAgentId);
-    setTargetProcessIds([]);
+    const procs = allProcesses.filter((p) => p.agent_id === newAgentId);
+    setTargetProcessIds(computeSmartDefaultSelection(procs));
   };
 
   const currentAgent = useMemo(() => {
@@ -142,6 +166,16 @@ const RecordingStartInner: React.FC<RecordingStartInnerProps> = ({
     if (!selectedAgentId) return [];
     return allProcesses.filter((p) => p.agent_id === selectedAgentId);
   }, [allProcesses, selectedAgentId]);
+
+  const initializedAgentRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!selectedAgentId) return;
+    if (initializedAgentRef.current !== selectedAgentId && currentAgentProcesses.length > 0) {
+      initializedAgentRef.current = selectedAgentId;
+      setTargetProcessIds(computeSmartDefaultSelection(currentAgentProcesses));
+    }
+  }, [selectedAgentId, currentAgentProcesses]);
 
   const groupedProcesses = useMemo(() => {
     const map = new Map<string, Process[]>();
@@ -314,6 +348,8 @@ const RecordingStartInner: React.FC<RecordingStartInnerProps> = ({
   };
 
   const toggleProcess = (procId: string) => {
+    const proc = currentAgentProcesses.find((p) => p.id === procId);
+    if (proc?.probe_desired_state === 'DISARMED') return;
     setTargetProcessIds((prev) => {
       const set = new Set(prev);
       if (set.has(procId)) {
@@ -326,7 +362,11 @@ const RecordingStartInner: React.FC<RecordingStartInnerProps> = ({
   };
 
   const toggleGroup = (group: GroupedProcesses) => {
-    const groupProcIds = group.processes.map((p) => p.id);
+    const availableGroupProcs = group.processes.filter(
+      (p) => p.probe_desired_state !== 'DISARMED'
+    );
+    const groupProcIds = availableGroupProcs.map((p) => p.id);
+    if (groupProcIds.length === 0) return;
     const allSelected = groupProcIds.every((id) => targetProcessIds.includes(id));
 
     setTargetProcessIds((prev) => {
@@ -348,8 +388,79 @@ const RecordingStartInner: React.FC<RecordingStartInnerProps> = ({
   };
 
   const handleSelectAll = () => {
-    const allIds = currentAgentProcesses.map((p) => p.id);
-    setTargetProcessIds(allIds);
+    const avail = currentAgentProcesses.filter((p) => p.probe_desired_state !== 'DISARMED');
+    setTargetProcessIds(avail.map((p) => p.id));
+  };
+
+  const handleSelectOnlyReady = () => {
+    const ready = currentAgentProcesses.filter(
+      (p) => p.probe_desired_state !== 'DISARMED' && p.probe_status === 'READY'
+    );
+    setTargetProcessIds(ready.map((p) => p.id));
+  };
+
+  const handleCascadeDownstreams = () => {
+    const selectedSet = new Set(targetProcessIds);
+    const selectedProcs = currentAgentProcesses.filter((p) => selectedSet.has(p.id));
+    const toAdd = new Set<string>();
+
+    selectedProcs.forEach((proc) => {
+      // 1. 从 arch_process?.modules.dependencies 拓扑元数据中匹配同机下游
+      const modules = proc.arch_process?.modules ?? [];
+      modules.forEach((mod) => {
+        const deps = mod.dependencies ?? [];
+        deps.forEach((dep) => {
+          const providerArchProcId =
+            dep.provider_module?.arch_process_id ?? dep.provider_module?.arch_process?.id;
+          const providerModuleId = dep.provider_module_id ?? dep.provider_module?.id;
+          const providerProcId = dep.provider_module?.process_id;
+
+          currentAgentProcesses.forEach((candidate) => {
+            if (candidate.probe_desired_state === 'DISARMED') return;
+            if (selectedSet.has(candidate.id)) return;
+
+            if (
+              providerArchProcId != null &&
+              candidate.arch_process_id != null &&
+              String(candidate.arch_process_id) === String(providerArchProcId)
+            ) {
+              toAdd.add(candidate.id);
+            } else if (providerProcId != null && candidate.id === providerProcId) {
+              toAdd.add(candidate.id);
+            } else if (providerModuleId != null) {
+              if (candidate.process_modules?.some((pm) => String(pm.module_id) === String(providerModuleId))) {
+                toAdd.add(candidate.id);
+              } else if (candidate.arch_process?.modules?.some((m) => String(m.id) === String(providerModuleId))) {
+                toAdd.add(candidate.id);
+              }
+            }
+          });
+        });
+      });
+
+      // 2. 从 extra_downstreams 或 default_extra_downstreams 端点中匹配同机端口
+      const extraDownstreams = [
+        ...(proc.extra_downstreams ?? []),
+        ...(proc.arch_process?.default_extra_downstreams ?? []),
+      ];
+      extraDownstreams.forEach((endpoint) => {
+        currentAgentProcesses.forEach((candidate) => {
+          if (candidate.probe_desired_state === 'DISARMED') return;
+          if (selectedSet.has(candidate.id)) return;
+          const candPort = String(candidate.effective_listen_port ?? candidate.listen_port);
+          if (candPort !== '0' && (endpoint.endsWith(`:${candPort}`) || endpoint === candPort)) {
+            toAdd.add(candidate.id);
+          }
+        });
+      });
+    });
+
+    if (toAdd.size > 0) {
+      setTargetProcessIds((prev) => Array.from(new Set([...prev, ...toAdd])));
+      toast.success(`已自动级联勾选 ${toAdd.size} 个同机下游依赖进程`);
+    } else {
+      toast.info('未发现更多未勾选的同机依赖下游进程');
+    }
   };
 
   const handleClearAll = () => {
@@ -560,7 +671,7 @@ const RecordingStartInner: React.FC<RecordingStartInnerProps> = ({
         <div className="code-form-item">
           <div className="code-form-label-row code-flex-between">
             <label className="code-form-label code-required">
-              监控目标业务进程 (勾选即下发 eBPF 探针租约)
+              本次采集目标进程（从已挂载进程中圈定范围 · 默认同时录制入口 INGRESS 与出口 EGRESS）
             </label>
             <span className="code-text-sm code-text-muted">
               当前主机共 {currentAgentProcesses.length} 个进程
@@ -582,18 +693,51 @@ const RecordingStartInner: React.FC<RecordingStartInnerProps> = ({
                   onChange={(e) => setSearchQuery(e.target.value)}
                 />
               </div>
-              <div className="code-process-tree-actions">
+              <div className="code-process-tree-actions" style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap' }}>
                 <button
                   type="button"
                   className="code-process-tree-btn"
+                  data-testid="select-all-available-btn"
                   onClick={handleSelectAll}
-                  disabled={currentAgentProcesses.length === 0}
+                  disabled={
+                    currentAgentProcesses.filter(
+                      (p) => p.probe_desired_state !== 'DISARMED'
+                    ).length === 0
+                  }
+                  title="全选当前 Agent 下所有探针未卸载的可用业务进程"
                 >
-                  全选
+                  全选可用
                 </button>
                 <button
                   type="button"
                   className="code-process-tree-btn"
+                  data-testid="select-only-ready-btn"
+                  onClick={handleSelectOnlyReady}
+                  disabled={
+                    currentAgentProcesses.filter(
+                      (p) =>
+                        p.probe_desired_state !== 'DISARMED' &&
+                        p.probe_status === 'READY'
+                    ).length === 0
+                  }
+                  title="仅勾选探针处于 READY 状态的进程"
+                >
+                  仅选就绪
+                </button>
+                <button
+                  type="button"
+                  className="code-process-tree-btn"
+                  data-testid="select-cascade-downstream-btn"
+                  onClick={handleCascadeDownstreams}
+                  disabled={targetProcessIds.length === 0}
+                  title="根据架构契约与本地拓扑元数据，自动级联补选已勾选进程的同机下游依赖"
+                >
+                  🔗 勾选关联下游
+                </button>
+                <button
+                  type="button"
+                  className="code-process-tree-btn"
+                  data-testid="clear-all-selection-btn"
                   onClick={handleClearAll}
                   disabled={targetProcessIds.length === 0}
                 >
@@ -605,7 +749,37 @@ const RecordingStartInner: React.FC<RecordingStartInnerProps> = ({
             {/* 树主体 */}
             <div className="code-process-tree-body">
               {currentAgentProcesses.length === 0 ? (
-                <div className="code-process-tree-empty">该 Agent 下暂无纳管的业务进程</div>
+                <div
+                  className="code-process-tree-empty code-process-tree-empty--guide"
+                  data-testid="empty-processes-guide"
+                  style={{ textAlign: 'center', padding: '2rem 1rem' }}
+                >
+                  <p
+                    style={{
+                      margin: '0 0 1rem 0',
+                      color: 'var(--color-text-secondary)',
+                      fontSize: '0.875rem',
+                    }}
+                  >
+                    该 Agent 暂未挂载任何架构物理进程，无法圈定出入站采集范围。
+                  </p>
+                  <button
+                    type="button"
+                    className="code-btn code-btn--primary code-btn--sm"
+                    data-testid="goto-mount-process-btn"
+                    onClick={() => {
+                      onClose();
+                      const targetUrl = `/agents?scope=${currentAgent?.scope || 'SHARED'}&agent_id=${selectedAgentId}&open_mount=1`;
+                      if (navigate) {
+                        navigate(targetUrl);
+                      } else if (typeof window !== 'undefined') {
+                        window.location.href = targetUrl;
+                      }
+                    }}
+                  >
+                    前往挂载架构进程 →
+                  </button>
+                </div>
               ) : groupedProcesses.length === 0 ? (
                 <div className="code-process-tree-empty">未匹配到符合过滤条件的进程</div>
               ) : (
@@ -654,6 +828,7 @@ const RecordingStartInner: React.FC<RecordingStartInnerProps> = ({
                       {!isCollapsed && (
                         <div className="code-process-leaf-list">
                           {group.processes.map((proc) => {
+                            const isDisarmed = proc.probe_desired_state === 'DISARMED';
                             const checked = targetProcessIds.includes(proc.id);
                             const moduleBinding = proc.process_modules?.[0];
                             const isClientOnly = proc.listen_port === 0;
@@ -661,14 +836,21 @@ const RecordingStartInner: React.FC<RecordingStartInnerProps> = ({
                             return (
                               <div
                                 key={proc.id}
-                                className="code-process-leaf-item"
-                                onClick={() => toggleProcess(proc.id)}
+                                className={`code-process-leaf-item ${isDisarmed ? 'code-process-leaf-item--disabled' : ''}`}
+                                style={isDisarmed ? { opacity: 0.6, cursor: 'not-allowed' } : undefined}
+                                onClick={() => {
+                                  if (!isDisarmed) toggleProcess(proc.id);
+                                }}
+                                title={isDisarmed ? '探针已被卸载，需在 Agent 管理中重新挂载' : undefined}
                               >
                                 <div className="code-process-leaf-left">
                                   <input
                                     type="checkbox"
-                                    checked={checked}
-                                    onChange={() => toggleProcess(proc.id)}
+                                    checked={checked && !isDisarmed}
+                                    disabled={isDisarmed}
+                                    onChange={() => {
+                                      if (!isDisarmed) toggleProcess(proc.id);
+                                    }}
                                     onClick={(e) => e.stopPropagation()}
                                   />
                                   <span className="code-process-leaf-name">{proc.name}</span>
@@ -681,7 +863,24 @@ const RecordingStartInner: React.FC<RecordingStartInnerProps> = ({
                                       端口: {proc.listen_port}
                                     </span>
                                   )}
-                                  {renderProbeBadge(proc.probe_status)}
+                                  {isDisarmed ? (
+                                    <span
+                                      className="code-badge"
+                                      style={{
+                                        fontSize: '0.675rem',
+                                        padding: '1px 5px',
+                                        background: 'var(--color-bg-muted)',
+                                        color: 'var(--color-text-muted)',
+                                        border: '1px solid var(--color-border-primary)',
+                                      }}
+                                      data-testid="probe-badge-disarmed"
+                                      title="探针已被卸载，需在 Agent 管理中重新挂载"
+                                    >
+                                      ⚪ DISARMED
+                                    </span>
+                                  ) : (
+                                    renderProbeBadge(proc.probe_status)
+                                  )}
                                 </div>
                                 <div className="code-process-leaf-right">
                                   {moduleBinding?.module && (
@@ -833,9 +1032,11 @@ const RecordingStartInner: React.FC<RecordingStartInnerProps> = ({
 
 const RecordingStartWithRouter: React.FC<RecordingStartContentProps> = (props) => {
   const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
   return (
     <RecordingStartInner
       {...props}
+      navigate={navigate}
       urlAgentId={searchParams.get('agent_id')}
       urlSessionNo={searchParams.get('session_no')}
     />
@@ -864,7 +1065,7 @@ export const RecordingStartDrawer: React.FC<RecordingStartDrawerProps> = ({
       onClose={onClose}
       width={680}
       title="发起多进程协同录制"
-      subtitle="在指定 Agent 上下发 eBPF 探针租约，纳管微服务链路通信并聚合录制流量"
+      subtitle="在指定 Agent 上下发 eBPF 探针租约，纳管微服务链路通信并聚合录制流量（默认同时录制入口 INGRESS 与出口 EGRESS）"
     >
       <RecordingStartContent
         allProcesses={allProcesses}

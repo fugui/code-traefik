@@ -481,8 +481,8 @@ func TestAllScenarios_SC01_To_SC08(t *testing.T) {
 			}
 		}
 
-		glbAssembler.Feed(makeEnv(agentproto.DirectionIngress, len(reqPacket)), reqPacket)
-		glbAssembler.Feed(makeEnv(agentproto.DirectionIngress, len(rspPacket)), rspPacket)
+		glbAssembler.Feed(agentID, makeEnv(agentproto.DirectionIngress, len(reqPacket)), reqPacket)
+		glbAssembler.Feed(agentID, makeEnv(agentproto.DirectionIngress, len(rspPacket)), rspPacket)
 
 		// 强制刷新并等待落盘
 		glbAssembler.Flush()

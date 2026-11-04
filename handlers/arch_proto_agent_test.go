@@ -2324,3 +2324,172 @@ func TestListProtoServices_ServiceLevelPagination_SourceSchemaBadge_AndUnclaimed
 		}
 	}
 }
+
+// TestGetAgent_ReturnsPreloadedMountedProcesses_AndAntiIDOR 校验 GetAgent 预加载完整性与 Anti-IDOR (M12-P2, ADR-11)
+func TestGetAgent_ReturnsPreloadedMountedProcesses_AndAntiIDOR(t *testing.T) {
+	r, db := setupRouterAndDB(t)
+
+	adminUser := createTestUserInDB(t, db, "admin_m12", config.AdminRole)
+	adminToken := generateTestJWT(t, adminUser)
+
+	userA := createTestUserInDB(t, db, "user_a", "developer")
+	tokenA := generateTestJWT(t, userA)
+
+	userB := createTestUserInDB(t, db, "user_b", "developer")
+	tokenB := generateTestJWT(t, userB)
+
+	// 1. 创建 Group, ArchProcess, 以及 2 个关联 Module
+	group := &models.ArchProcessGroup{
+		Code:      "trade_group",
+		Name:      "交易核心分组",
+		CreatedBy: adminUser.ID,
+		UpdatedBy: adminUser.ID,
+	}
+	if err := db.Create(group).Error; err != nil {
+		t.Fatalf("创建 ArchProcessGroup 失败: %v", err)
+	}
+
+	archProc := &models.ArchProcess{
+		GroupID:           group.ID,
+		Code:              "order_core",
+		Name:              "订单核心服务",
+		DefaultListenPort: 9001,
+		DefaultCmdPattern: "./bin/order_core",
+		CreatedBy:         adminUser.ID,
+		UpdatedBy:         adminUser.ID,
+	}
+	if err := db.Create(archProc).Error; err != nil {
+		t.Fatalf("创建 ArchProcess 失败: %v", err)
+	}
+
+	subsys := &models.Subsystem{Name: "订单子系统", Code: "order_subsys", CreatedBy: adminUser.ID, UpdatedBy: adminUser.ID}
+	_ = db.Create(subsys).Error
+
+	fg := &models.FunctionalGroup{
+		SubsystemID: subsys.ID,
+		Code:        "order_fg",
+		Name:        "订单功能组",
+		CreatedBy:   adminUser.ID,
+		UpdatedBy:   adminUser.ID,
+	}
+	if err := db.Create(fg).Error; err != nil {
+		t.Fatalf("创建 FunctionalGroup 失败: %v", err)
+	}
+
+	mod1 := &models.Module{
+		SubsystemID:   subsys.ID,
+		GroupID:       fg.ID,
+		ArchProcessID: &archProc.ID,
+		Code:          "order_api",
+		Name:          "订单API模块",
+		CreatedBy:     adminUser.ID,
+		UpdatedBy:     adminUser.ID,
+	}
+	mod2 := &models.Module{
+		SubsystemID:   subsys.ID,
+		GroupID:       fg.ID,
+		ArchProcessID: &archProc.ID,
+		Code:          "order_worker",
+		Name:          "订单后台处理模块",
+		CreatedBy:     adminUser.ID,
+		UpdatedBy:     adminUser.ID,
+	}
+	if err := db.Create(mod1).Error; err != nil {
+		t.Fatalf("创建 Module1 失败: %v", err)
+	}
+	if err := db.Create(mod2).Error; err != nil {
+		t.Fatalf("创建 Module2 失败: %v", err)
+	}
+
+	// 2. 管理员创建 SHARED Agent 并挂载该 ArchProcess (带覆盖端口 19001)
+	sharedAgent := &models.Agent{
+		Name:           "shared_agent_m12",
+		Endpoint:       "http://127.0.0.1:8092",
+		Scope:          models.ScopeShared,
+		Status:         models.AgentStatusOnline,
+		CreatedBy:      adminUser.ID,
+		UpdatedBy:      adminUser.ID,
+		MountsRevision: 0,
+	}
+	if err := db.Create(sharedAgent).Error; err != nil {
+		t.Fatalf("创建 SHARED Agent 失败: %v", err)
+	}
+
+	overridePort := 19001
+	mountReq := handlers.BatchProcessMountReq{
+		ExpectedRevision: 0,
+		Mounts: []handlers.ProcessMountItem{
+			{
+				ArchProcessID:      archProc.ID,
+				OverrideListenPort: &overridePort,
+				ProbeDesiredState:  models.ProbeDesiredStateArmed,
+			},
+		},
+	}
+	mountBody, _ := json.Marshal(mountReq)
+	req := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/api/agents/%d/process-mounts", sharedAgent.ID), bytes.NewReader(mountBody))
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("批量挂载进程期望 200，实际: %d %s", w.Code, w.Body.String())
+	}
+
+	// 3. 用户 A 创建 PRIVATE Agent
+	privAgentA := &models.Agent{
+		Name:      "private_agent_user_a",
+		Endpoint:  "http://127.0.0.1:8093",
+		Scope:     models.ScopePrivate,
+		OwnerID:   &userA.ID,
+		Status:    models.AgentStatusOnline,
+		CreatedBy: userA.ID,
+		UpdatedBy: userA.ID,
+	}
+	if err := db.Create(privAgentA).Error; err != nil {
+		t.Fatalf("创建 PRIVATE Agent A 失败: %v", err)
+	}
+
+	// 4. 断言 GET /api/agents/:id 预加载完整性 (SHARED Agent)
+	req = httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/agents/%d", sharedAgent.ID), nil)
+	req.Header.Set("Authorization", "Bearer "+tokenA) // 普通用户可读 SHARED
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /api/agents/%d 期望 200，实际: %d %s", sharedAgent.ID, w.Code, w.Body.String())
+	}
+
+	var agentDetail struct {
+		Agent     models.Agent     `json:"agent"`
+		Processes []models.Process `json:"processes"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &agentDetail); err != nil {
+		t.Fatalf("解析响应失败: %v", err)
+	}
+
+	if len(agentDetail.Processes) != 1 {
+		t.Fatalf("进程列表期望 1 个，实际返回 %d (空表缺陷验证)", len(agentDetail.Processes))
+	}
+	procItem := agentDetail.Processes[0]
+	if procItem.GroupName != "交易核心分组" {
+		t.Errorf("期望 GroupName '交易核心分组'，实际: '%s'", procItem.GroupName)
+	}
+	if procItem.EffectiveListenPort != 19001 {
+		t.Errorf("期望 EffectiveListenPort 19001，实际: %d", procItem.EffectiveListenPort)
+	}
+	if !procItem.HasOverride {
+		t.Errorf("期望 HasOverride=true，实际为 false")
+	}
+	if procItem.ArchProcess == nil || len(procItem.ArchProcess.Modules) != 2 {
+		t.Errorf("期望 Preload ArchProcess.Modules 为 2 个，实际: %+v", procItem.ArchProcess)
+	}
+
+	// 5. 断言 Anti-IDOR: 用户 B 访问用户 A 的 PRIVATE Agent 返回 403 Forbidden
+	req = httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/agents/%d", privAgentA.ID), nil)
+	req.Header.Set("Authorization", "Bearer "+tokenB)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("普通用户 B 访问用户 A 的私有 Agent 期望 403 Forbidden，实际: %d %s", w.Code, w.Body.String())
+	}
+}

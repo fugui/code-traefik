@@ -328,7 +328,7 @@ func (o *Orchestrator) StopSession(
 
 	// 2. 并发向所有相关 Agent 发送 /stop
 	for _, agt := range agents {
-		o.callAgentStop(ctx, &agt)
+		o.callAgentStop(ctx, &agt, session.ID)
 	}
 
 	// 3. 刷空 ExchangeAssembler 挂起帧
@@ -623,8 +623,8 @@ func (o *Orchestrator) callAgentSync(ctx context.Context, agt *models.Agent, req
 	return result.Diagnostics, nil
 }
 
-func (o *Orchestrator) callAgentStop(ctx context.Context, agt *models.Agent) {
-	url := fmt.Sprintf("%s/agent/v1/monitors/stop", agt.Endpoint)
+func (o *Orchestrator) callAgentStop(ctx context.Context, agt *models.Agent, sessionID uint64) {
+	url := fmt.Sprintf("%s/agent/v1/monitors/%d/stop", agt.Endpoint, sessionID)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
 	if err != nil {
 		return
@@ -674,7 +674,7 @@ func (o *Orchestrator) startAgentStream(ctx context.Context, sessionID uint64, a
 			}
 		}
 
-		_ = o.readAgentStream(ctx, sessionID, conn)
+		_ = o.readAgentStream(ctx, sessionID, agt.ID, conn)
 		_ = conn.Close()
 		if ctx.Err() != nil {
 			return
@@ -683,7 +683,7 @@ func (o *Orchestrator) startAgentStream(ctx context.Context, sessionID uint64, a
 	}
 }
 
-func (o *Orchestrator) readAgentStream(ctx context.Context, sessionID uint64, conn *websocket.Conn) error {
+func (o *Orchestrator) readAgentStream(ctx context.Context, sessionID uint64, agentID uint64, conn *websocket.Conn) error {
 	pingCtx, pingCancel := context.WithCancel(ctx)
 	defer pingCancel()
 
@@ -730,11 +730,11 @@ func (o *Orchestrator) readAgentStream(ctx context.Context, sessionID uint64, co
 		switch header.EventType {
 		case agentproto.EventTrafficFrame:
 			if o.assembler != nil {
-				o.assembler.Feed(header, payload)
+				o.assembler.Feed(agentID, header, payload)
 			}
 		case agentproto.EventConnClosed:
 			if o.assembler != nil {
-				o.assembler.FeedConnClosed(header)
+				o.assembler.FeedConnClosed(agentID, header)
 			}
 		case agentproto.EventSessionDrained:
 			log.Printf("[Orchestrator] Agent 会话排空信号: session=%d", sessionID)

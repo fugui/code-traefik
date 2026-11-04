@@ -1,7 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
 import { renderToString } from 'react-dom/server';
+import { MemoryRouter } from 'react-router-dom';
 import type { Agent, Process } from '../types';
-import { RecordingStartContent } from '../pages/RecordingWorkbenchPage/RecordingStartDrawer';
+import {
+  RecordingStartContent,
+  computeSmartDefaultSelection,
+} from '../pages/RecordingWorkbenchPage/RecordingStartDrawer';
 
 describe('RecordingStartDrawer TDD Test Suite', () => {
   const mockAgents: Agent[] = [
@@ -212,5 +216,119 @@ describe('RecordingStartDrawer TDD Test Suite', () => {
     expect(html).toContain('RECORDING');
     expect(html).toContain('租用人: 李四');
     expect(html).toContain('暂不可发起并发录制');
+  });
+
+  it('TC-REC-DRAWER-07: 单/少进程 (1..5) 智能默认全选，大于 5 进程仅默认勾选 READY 探针', () => {
+    // 1. 少于等于 5 个进程时，默认全选可用进程
+    const procs5: Process[] = [
+      { id: 'p1', agent_id: 'agent-1', name: 'p1', listen_port: 8001, probe_status: 'WAITING_PROC' },
+      { id: 'p2', agent_id: 'agent-1', name: 'p2', listen_port: 8002, probe_status: 'READY' },
+      { id: 'p3', agent_id: 'agent-1', name: 'p3', listen_port: 8003, probe_status: 'NEED_RECONNECT' },
+    ];
+    const sel5 = computeSmartDefaultSelection(procs5);
+    expect(sel5).toEqual(['p1', 'p2', 'p3']);
+
+    // 2. 超过 5 个进程时，仅默认勾选 probe_status === 'READY'
+    const procs7: Process[] = [
+      { id: 'p1', agent_id: 'agent-1', name: 'p1', listen_port: 8001, probe_status: 'WAITING_PROC' },
+      { id: 'p2', agent_id: 'agent-1', name: 'p2', listen_port: 8002, probe_status: 'READY' },
+      { id: 'p3', agent_id: 'agent-1', name: 'p3', listen_port: 8003, probe_status: 'READY' },
+      { id: 'p4', agent_id: 'agent-1', name: 'p4', listen_port: 8004, probe_status: 'NEED_RECONNECT' },
+      { id: 'p5', agent_id: 'agent-1', name: 'p5', listen_port: 8005, probe_status: 'WAITING_PROC' },
+      { id: 'p6', agent_id: 'agent-1', name: 'p6', listen_port: 8006, probe_status: 'READY' },
+      { id: 'p7', agent_id: 'agent-1', name: 'p7', listen_port: 8007, probe_status: 'ERROR' },
+    ];
+    const sel7 = computeSmartDefaultSelection(procs7);
+    expect(sel7).toEqual(['p2', 'p3', 'p6']);
+
+    // 3. 抽屉内容渲染验证：1..5 个进程时底部直接显示已选 4 个（mockProcesses 中 agent-1 有 4 个进程）
+    const html = renderToString(
+      <MemoryRouter>
+        <RecordingStartContent
+          onClose={vi.fn()}
+          onSuccess={vi.fn()}
+          allProcesses={mockProcesses}
+          allAgents={mockAgents}
+          isAdmin={true}
+        />
+      </MemoryRouter>
+    );
+    expect(html).toContain('已选');
+    expect(html).toContain('本次采集目标进程（从已挂载进程中圈定范围 · 默认同时录制入口 INGRESS 与出口 EGRESS）');
+  });
+
+  it('TC-REC-DRAWER-08: DISARMED 探针进程置灰禁选并展示专属提示 Badge', () => {
+    const disarmedProcs: Process[] = [
+      {
+        id: 'p-disarmed',
+        agent_id: 'agent-1',
+        name: 'legacy-service',
+        listen_port: 8089,
+        probe_desired_state: 'DISARMED',
+        probe_status: 'DISARMED',
+      },
+    ];
+
+    const sel = computeSmartDefaultSelection(disarmedProcs);
+    expect(sel).toEqual([]);
+
+    const html = renderToString(
+      <MemoryRouter>
+        <RecordingStartContent
+          onClose={vi.fn()}
+          onSuccess={vi.fn()}
+          allProcesses={disarmedProcs}
+          allAgents={mockAgents}
+          isAdmin={true}
+        />
+      </MemoryRouter>
+    );
+
+    expect(html).toContain('probe-badge-disarmed');
+    expect(html).toContain('⚪ DISARMED');
+    expect(html).toContain('disabled=""');
+    expect(html).toContain('探针已被卸载，需在 Agent 管理中重新挂载');
+  });
+
+  it('TC-REC-DRAWER-09: 空挂载进程 Agent 渲染引导卡片与 [前往挂载架构进程 →] 深链按钮', () => {
+    const html = renderToString(
+      <MemoryRouter>
+        <RecordingStartContent
+          onClose={vi.fn()}
+          onSuccess={vi.fn()}
+          allProcesses={[]}
+          allAgents={mockAgents}
+          isAdmin={true}
+        />
+      </MemoryRouter>
+    );
+
+    expect(html).toContain('data-testid="empty-processes-guide"');
+    expect(html).toContain('该 Agent 暂未挂载任何架构物理进程，无法圈定出入站采集范围');
+    expect(html).toContain('data-testid="goto-mount-process-btn"');
+    expect(html).toContain('前往挂载架构进程 →');
+  });
+
+  it('TC-REC-DRAWER-10: 工具栏 [全选可用]、[仅选就绪]、[🔗 勾选关联下游] 与 [清空]', () => {
+    const html = renderToString(
+      <MemoryRouter>
+        <RecordingStartContent
+          onClose={vi.fn()}
+          onSuccess={vi.fn()}
+          allProcesses={mockProcesses}
+          allAgents={mockAgents}
+          isAdmin={true}
+        />
+      </MemoryRouter>
+    );
+
+    expect(html).toContain('data-testid="select-all-available-btn"');
+    expect(html).toContain('全选可用');
+    expect(html).toContain('data-testid="select-only-ready-btn"');
+    expect(html).toContain('仅选就绪');
+    expect(html).toContain('data-testid="select-cascade-downstream-btn"');
+    expect(html).toContain('🔗 勾选关联下游');
+    expect(html).toContain('data-testid="clear-all-selection-btn"');
+    expect(html).toContain('清空');
   });
 });

@@ -33,6 +33,20 @@ export const RecordingWorkbenchPage: React.FC = () => {
   const [allAgents, setAllAgents] = useState<Agent[]>([]);
   const [startModalOpen, setStartModalOpen] = useState(false);
 
+  // 解析 URL ?auto_start=1&agent_id=<id> 自动唤起协同录制抽屉
+  const urlAutoStart = searchParams.get('auto_start') === '1';
+
+  const handleCloseStartModal = useCallback(() => {
+    setStartModalOpen(false);
+    if (searchParams.get('auto_start')) {
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete('auto_start');
+        return next;
+      }, { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
+
   const loadSessions = useCallback(async () => {
     setLoading(true);
     try {
@@ -89,6 +103,13 @@ export const RecordingWorkbenchPage: React.FC = () => {
   useEffect(() => {
     void loadMeta();
   }, [loadMeta]);
+
+  useEffect(() => {
+    if (urlAutoStart) {
+      void loadMeta();
+      setStartModalOpen(true);
+    }
+  }, [urlAutoStart, loadMeta]);
 
   const handleStopSession = async (sessionId: string) => {
     setStopping(true);
@@ -199,8 +220,11 @@ export const RecordingWorkbenchPage: React.FC = () => {
       {/* 发起多进程协同录制抽屉 */}
       <RecordingStartDrawer
         open={startModalOpen}
-        onClose={() => setStartModalOpen(false)}
-        onSuccess={() => void loadSessions()}
+        onClose={handleCloseStartModal}
+        onSuccess={() => {
+          handleCloseStartModal();
+          void loadSessions();
+        }}
         allProcesses={allProcesses}
         allAgents={allAgents}
         isAdmin={isAdmin}

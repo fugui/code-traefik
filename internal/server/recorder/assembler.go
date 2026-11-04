@@ -46,6 +46,7 @@ type AssemblerConfig struct {
 }
 
 type envelopeFrame struct {
+	agentID uint64
 	header  agentproto.EnvelopeHeader
 	payload []byte
 }
@@ -206,22 +207,22 @@ func (a *ExchangeAssembler) getWorker(sessionID, processID uint64, connKey strin
 }
 
 // Feed 投递由 Agent 上报的 56B 信封与变长载荷帧
-func (a *ExchangeAssembler) Feed(env agentproto.EnvelopeHeader, frame []byte) {
+func (a *ExchangeAssembler) Feed(agentID uint64, env agentproto.EnvelopeHeader, frame []byte) {
 	connKey := calcConnKey(env.SrcIP(), env.SrcPort, env.DstIP(), env.DstPort, env.ConnSeq)
 	w := a.getWorker(env.SessionOrTaskID, env.ProcessID, connKey)
 	select {
-	case w.ch <- &envelopeFrame{header: env, payload: frame}:
+	case w.ch <- &envelopeFrame{agentID: agentID, header: env, payload: frame}:
 	default:
 	}
 }
 
 // FeedConnClosed 投递连接关闭事件，刷空挂起请求为 REQ_ONLY
-func (a *ExchangeAssembler) FeedConnClosed(env agentproto.EnvelopeHeader) {
+func (a *ExchangeAssembler) FeedConnClosed(agentID uint64, env agentproto.EnvelopeHeader) {
 	connKey := calcConnKey(env.SrcIP(), env.SrcPort, env.DstIP(), env.DstPort, env.ConnSeq)
 	w := a.getWorker(env.SessionOrTaskID, env.ProcessID, connKey)
 	env.EventType = agentproto.EventConnClosed
 	select {
-	case w.ch <- &envelopeFrame{header: env, payload: nil}:
+	case w.ch <- &envelopeFrame{agentID: agentID, header: env, payload: nil}:
 	default:
 	}
 }
@@ -240,13 +241,13 @@ func (w *assemblerWorker) run() {
 			if item.header.EventType == agentproto.EventConnClosed {
 				w.handleConnClosed(item.header)
 			} else {
-				w.processFrame(item.header, item.payload)
+				w.processFrame(item.agentID, item.header, item.payload)
 			}
 		}
 	}
 }
 
-func (w *assemblerWorker) processFrame(env agentproto.EnvelopeHeader, frame []byte) {
+func (w *assemblerWorker) processFrame(agentID uint64, env agentproto.EnvelopeHeader, frame []byte) {
 	connKey := calcConnKey(env.SrcIP(), env.SrcPort, env.DstIP(), env.DstPort, env.ConnSeq)
 	dirStr := models.TrafficDirIngress
 	if env.Direction == 2 {
@@ -294,7 +295,7 @@ func (w *assemblerWorker) processFrame(env agentproto.EnvelopeHeader, frame []by
 	// 4. 分流处理
 	// (a) 管理帧 MsgType >= 5
 	if comm.MsgType >= 5 {
-		record := w.buildSingleRecord(env, comm, parsed, frame, isTruncated, models.ExchangeMng)
+		record := w.buildSingleRecord(agentID, env, comm, parsed, frame, isTruncated, models.ExchangeMng)
 		w.parent.enqueueRecord(record)
 		return
 	}
@@ -308,7 +309,7 @@ func (w *assemblerWorker) processFrame(env agentproto.EnvelopeHeader, frame []by
 			isOneway = true
 		}
 		if isOneway {
-			record := w.buildSingleRecord(env, comm, parsed, frame, isTruncated, models.ExchangeOneway)
+			record := w.buildSingleRecord(agentID, env, comm, parsed, frame, isTruncated, models.ExchangeOneway)
 			w.parent.enqueueRecord(record)
 			return
 		}
@@ -354,7 +355,7 @@ func (w *assemblerWorker) processFrame(env agentproto.EnvelopeHeader, frame []by
 			sessionID:       env.SessionOrTaskID,
 			processID:       env.ProcessID,
 			capturedPID:     env.CapturedPID,
-			agentID:         1,
+			agentID:         agentID,
 			connKey:         connKey,
 			direction:       dirStr,
 			srcAddr:         fmt.Sprintf("%s:%d", env.SrcIP().String(), env.SrcPort),
@@ -405,7 +406,7 @@ func (w *assemblerWorker) processFrame(env agentproto.EnvelopeHeader, frame []by
 
 		if !ok {
 			// 孤立应答 RSP_ORPHAN
-			record := w.buildSingleRecord(env, comm, parsed, frame, isTruncated, models.ExchangeRspOrphan)
+			record := w.buildSingleRecord(agentID, env, comm, parsed, frame, isTruncated, models.ExchangeRspOrphan)
 			w.parent.enqueueRecord(record)
 			return
 		}
@@ -448,6 +449,7 @@ func (w *assemblerWorker) cleanExpiredPending() {
 }
 
 func (w *assemblerWorker) buildSingleRecord(
+	agentID uint64,
 	env agentproto.EnvelopeHeader,
 	comm crosrpc.CommHead,
 	parsed *crosrpc.ParsedPacket,
@@ -464,7 +466,7 @@ func (w *assemblerWorker) buildSingleRecord(
 	rec := &models.TrafficRecord{
 		CreatedAt:       time.Now(),
 		SessionID:       env.SessionOrTaskID,
-		AgentID:         1,
+		AgentID:         agentID,
 		ProcessID:       env.ProcessID,
 		CapturedPID:     env.CapturedPID,
 		ConnKey:         connKey,

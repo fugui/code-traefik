@@ -41,6 +41,8 @@ func (f *StreamFramer) Feed(p []byte) ([]Frame, error) {
 	return f.Write(p)
 }
 
+var magicPrefixBytes = []byte(MagicPrefix)
+
 // Write 接收输入切片并推进状态机
 func (f *StreamFramer) Write(p []byte) ([]Frame, error) {
 	if len(p) > 0 {
@@ -56,12 +58,14 @@ func (f *StreamFramer) Write(p []byte) ([]Frame, error) {
 				needed := f.maxCaptureBytes - len(f.truncatedFrame)
 				take := min(needed, len(f.buf))
 				f.truncatedFrame = append(f.truncatedFrame, f.buf[:take]...)
-				f.buf = f.buf[take:]
+				copy(f.buf, f.buf[take:])
+				f.buf = f.buf[:len(f.buf)-take]
 			}
 
 			if len(f.truncatedFrame) == f.maxCaptureBytes && f.remainingToDrain > 0 && len(f.buf) > 0 {
 				discard := min(f.remainingToDrain, len(f.buf))
-				f.buf = f.buf[discard:]
+				copy(f.buf, f.buf[discard:])
+				f.buf = f.buf[:len(f.buf)-discard]
 				f.remainingToDrain -= discard
 			}
 
@@ -79,27 +83,42 @@ func (f *StreamFramer) Write(p []byte) ([]Frame, error) {
 			break
 		}
 
-		// 2. 魔术字滑窗重同步扫描
+		// 2. SIMD 魔术字滑窗与原地紧缩重同步扫描
 		for len(f.buf) > 0 {
-			if len(f.buf) < 8 {
-				if bytes.HasPrefix([]byte(MagicPrefix), f.buf) {
-					// 可能是魔术字前半段，暂停等待凑齐
-					break
+			idx := bytes.Index(f.buf, magicPrefixBytes)
+			if idx < 0 {
+				// 未命中魔术字：保留尾部至多 6 字节（可能为跨分片魔术字前缀）并原地紧缩
+				keep := min(len(f.buf), len(magicPrefixBytes)-1)
+				discard := len(f.buf) - keep
+				if discard > 0 {
+					f.dirtyBytes += uint64(discard)
+					copy(f.buf[:keep], f.buf[discard:])
+					f.buf = f.buf[:keep]
 				}
-				// 首字节肯定不是魔术字，丢弃并计数
-				f.buf = f.buf[1:]
-				f.dirtyBytes++
-				continue
-			}
-
-			// >= 8 字节，精确比对 "CSE.TCP" + ucProtocol (<= 1)
-			if bytes.Equal(f.buf[0:7], []byte(MagicPrefix)) && f.buf[7] <= 1 {
-				// 成功对齐魔术字
 				break
 			}
 
-			f.buf = f.buf[1:]
+			// 命中魔术字，丢弃前面所有脏字节并原地前移
+			if idx > 0 {
+				f.dirtyBytes += uint64(idx)
+				copy(f.buf, f.buf[idx:])
+				f.buf = f.buf[:len(f.buf)-idx]
+			}
+
+			// 检查是否凑齐 ucProtocol (第 8 字节)
+			if len(f.buf) < 8 {
+				break
+			}
+
+			if f.buf[7] <= 1 {
+				// 协议版本合法，魔术字对齐成功
+				break
+			}
+
+			// 假阳性魔术字 (ucProtocol > 1)，跳过首字节继续查找
 			f.dirtyBytes++
+			copy(f.buf, f.buf[1:])
+			f.buf = f.buf[:len(f.buf)-1]
 		}
 
 		// 3. 检查是否凑齐 24B 公共头
@@ -110,8 +129,9 @@ func (f *StreamFramer) Write(p []byte) ([]Frame, error) {
 		comm, err := ParseCommHead(f.buf[:CommHeadLen])
 		if err != nil || ValidateCommHead(comm) != nil {
 			// 头校验失败，丢弃首字节重新滑窗
-			f.buf = f.buf[1:]
 			f.dirtyBytes++
+			copy(f.buf, f.buf[1:])
+			f.buf = f.buf[:len(f.buf)-1]
 			continue
 		}
 
@@ -124,7 +144,8 @@ func (f *StreamFramer) Write(p []byte) ([]Frame, error) {
 			take := min(len(f.buf), f.maxCaptureBytes)
 			f.truncatedFrame = make([]byte, take, f.maxCaptureBytes)
 			copy(f.truncatedFrame, f.buf[:take])
-			f.buf = f.buf[take:]
+			copy(f.buf, f.buf[take:])
+			f.buf = f.buf[:len(f.buf)-take]
 			continue
 		}
 
@@ -133,10 +154,11 @@ func (f *StreamFramer) Write(p []byte) ([]Frame, error) {
 			break
 		}
 
-		// 6. 切出完整帧
+		// 6. 切出完整帧并原地紧缩释放
 		frameBytes := make([]byte, totalLen)
 		copy(frameBytes, f.buf[:totalLen])
-		f.buf = f.buf[totalLen:]
+		copy(f.buf, f.buf[totalLen:])
+		f.buf = f.buf[:len(f.buf)-totalLen]
 		frames = append(frames, Frame{
 			Data:        frameBytes,
 			IsTruncated: false,

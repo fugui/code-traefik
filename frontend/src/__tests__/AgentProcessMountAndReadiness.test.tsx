@@ -132,14 +132,16 @@ describe('AgentProcessMountAndReadiness Test Suite', () => {
             reloadUser: async () => {},
           }}
         >
-          <AgentManagementPage />
+          <AgentManagementPage initialAgent={dummyAgent} initialProcesses={dummyProcesses} />
         </ModuleUserProvider>
       </MemoryRouter>
     );
 
-    // Header actions
+    // Header actions & right pane details
     expect(html).toContain('公私域 Agent 纳管与排他租约控制台');
     expect(html).toContain('团队公共 Agent');
+    expect(html).toContain('mounts-revision-badge');
+    expect(html).toContain('fallback-agent-badge');
   });
 
   it('renders RecordingStartDrawer with 7-state badges, zero-restart banner, and need-reconnect warning', () => {
@@ -212,5 +214,101 @@ describe('AgentProcessMountAndReadiness Test Suite', () => {
     expect(htmlMixed).toContain('⚠️ 存在历史长连接警示');
     expect(htmlMixed).toContain('probe-badge-need-reconnect');
     expect(htmlMixed).toContain('🟡 NEED_RECONNECT');
+  });
+
+  it('testTwoWorkbenches_SmartDefaultSelection_CascadeDownstream_AndBidirectionalDeepLinks', () => {
+    // 1. /agents 页面渲染常驻待命消歧文案与 [🎬 发起录制] 按钮
+    const agentHtml = renderToString(
+      <MemoryRouter initialEntries={['/agents?scope=SHARED&agent_id=agent-101']}>
+        <ModuleUserProvider
+          value={{
+            user: adminUser,
+            loadingUser: false,
+            isEmbedded: false,
+            reloadUser: async () => {},
+          }}
+        >
+          <AgentManagementPage initialAgent={dummyAgent} initialProcesses={dummyProcesses} />
+        </ModuleUserProvider>
+      </MemoryRouter>
+    );
+
+    expect(agentHtml).toContain('环境进程部署映射与常驻待命探针（配置一次 · 零损耗待命）');
+    expect(agentHtml).toContain('data-testid="start-record-btn"');
+    expect(agentHtml).toContain('🎬 发起录制');
+
+    // 2. /record?auto_start=1&agent_id=agent-101 验证抽屉自动唤起、文案与单进程默认全选
+    const singleProc: Process[] = [
+      {
+        id: 'p-order-single',
+        agent_id: 'agent-101',
+        name: 'sut-order',
+        listen_port: 9001,
+        probe_status: 'READY',
+      },
+    ];
+
+    const drawerHtml = renderToString(
+      <MemoryRouter initialEntries={['/record?agent_id=agent-101&auto_start=1&session_no=REC-M12-01']}>
+        <RecordingStartContent
+          allProcesses={singleProc}
+          allAgents={[dummyAgent]}
+          isAdmin={true}
+          onClose={() => {}}
+          onSuccess={() => {}}
+        />
+      </MemoryRouter>
+    );
+
+    expect(drawerHtml).toContain('本次采集目标进程（从已挂载进程中圈定范围 · 默认同时录制入口 INGRESS 与出口 EGRESS）');
+    expect(drawerHtml).toContain('已选');
+    expect(drawerHtml).toContain('sut-order');
+    expect(drawerHtml).toContain('9001');
+
+    // 3. 6 个进程大环境下验证智能默认预选（仅预选 READY 探针，DISARMED 禁选）
+    const largeEnvProcs: Process[] = [
+      { id: 'p1', agent_id: 'agent-101', name: 'p1', listen_port: 9001, probe_status: 'READY' },
+      { id: 'p2', agent_id: 'agent-101', name: 'p2', listen_port: 9002, probe_status: 'WAITING_PROC' },
+      { id: 'p3', agent_id: 'agent-101', name: 'p3', listen_port: 9003, probe_status: 'READY' },
+      { id: 'p4', agent_id: 'agent-101', name: 'p4', listen_port: 9004, probe_status: 'NEED_RECONNECT' },
+      { id: 'p5', agent_id: 'agent-101', name: 'p5', listen_port: 9005, probe_status: 'ERROR' },
+      { id: 'p6', agent_id: 'agent-101', name: 'p6', listen_port: 9006, probe_status: 'READY' },
+      { id: 'p7', agent_id: 'agent-101', name: 'p7', listen_port: 9007, probe_status: 'DISARMED', probe_desired_state: 'DISARMED' },
+    ];
+
+    const largeDrawerHtml = renderToString(
+      <MemoryRouter initialEntries={['/record?agent_id=agent-101&auto_start=1']}>
+        <RecordingStartContent
+          allProcesses={largeEnvProcs}
+          allAgents={[dummyAgent]}
+          isAdmin={true}
+          onClose={() => {}}
+          onSuccess={() => {}}
+        />
+      </MemoryRouter>
+    );
+
+    // 默认仅选中 p1, p3, p6 (3 个 READY 探针)
+    expect(largeDrawerHtml).toContain('data-testid="probe-badge-disarmed"');
+    expect(largeDrawerHtml).toContain('⚪ DISARMED');
+    expect(largeDrawerHtml).toContain('disabled=""');
+    expect(largeDrawerHtml).toContain('data-testid="select-cascade-downstream-btn"');
+
+    // 4. 空挂载态点击引导按钮验证跳转链接指示
+    const emptyDrawerHtml = renderToString(
+      <MemoryRouter initialEntries={['/record?agent_id=agent-101&auto_start=1']}>
+        <RecordingStartContent
+          allProcesses={[]}
+          allAgents={[dummyAgent]}
+          isAdmin={true}
+          onClose={() => {}}
+          onSuccess={() => {}}
+        />
+      </MemoryRouter>
+    );
+
+    expect(emptyDrawerHtml).toContain('data-testid="empty-processes-guide"');
+    expect(emptyDrawerHtml).toContain('data-testid="goto-mount-process-btn"');
+    expect(emptyDrawerHtml).toContain('前往挂载架构进程 →');
   });
 });

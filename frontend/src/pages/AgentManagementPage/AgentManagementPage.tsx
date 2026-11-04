@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Modal, Pagination, usePaginationState } from '@code/common';
 import { useToast } from '../../utils/toast';
 import { useModuleUser } from '../../context/ModuleUserContext';
@@ -9,7 +9,16 @@ import { AgentScopeTabs } from './AgentScopeTabs';
 import { AgentLeaseStatusBadge } from './AgentLeaseStatusBadge';
 import { AgentProcessMountDrawer } from './AgentProcessMountDrawer';
 
-export const AgentManagementPage: React.FC = () => {
+export interface AgentManagementPageProps {
+  initialAgent?: Agent | null;
+  initialProcesses?: Process[];
+}
+
+export const AgentManagementPage: React.FC<AgentManagementPageProps> = ({
+  initialAgent = null,
+  initialProcesses = [],
+}) => {
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const { user } = useModuleUser();
   const toast = useToast();
@@ -28,8 +37,8 @@ export const AgentManagementPage: React.FC = () => {
   const [loading, setLoading] = useState(false);
 
   // 选中的 Agent 及其进程列表
-  const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null);
-  const [processes, setProcesses] = useState<Process[]>([]);
+  const [selectedAgent, setSelectedAgent] = useState<Agent | null>(initialAgent);
+  const [processes, setProcesses] = useState<Process[]>(initialProcesses);
 
   // 弹窗状态
   const [registerModalOpen, setRegisterModalOpen] = useState(false);
@@ -55,6 +64,22 @@ export const AgentManagementPage: React.FC = () => {
     if (!selectedAgent.owner_id) return true;
     return String(selectedAgent.owner_id) === String(user?.id);
   }, [isAdmin, selectedAgent, user]);
+
+  // 解析 URL ?agent_id=<id>&open_mount=1 (Anti-IDOR 守卫：写权限自动滑出挂载抽屉，只读权限提示并清理参数)
+  const openMountParam = searchParams.get('open_mount');
+  useEffect(() => {
+    if (!selectedAgent || openMountParam !== '1') return;
+    if (canWriteSelectedAgent) {
+      setMountDrawerOpen(true);
+    } else {
+      toast.warning('您无权编辑该 Agent 的进程挂载');
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete('open_mount');
+        return next;
+      }, { replace: true });
+    }
+  }, [selectedAgent, canWriteSelectedAgent, openMountParam, setSearchParams, toast]);
 
   const loadAgents = useCallback(async () => {
     setLoading(true);
@@ -112,6 +137,7 @@ export const AgentManagementPage: React.FC = () => {
       next.set('page', '1');
       next.delete('agent_id');
       next.delete('process_id');
+      next.delete('open_mount');
       return next;
     });
     setSelectedAgent(null);
@@ -343,7 +369,7 @@ export const AgentManagementPage: React.FC = () => {
         <div className="code-workbench-title-group">
           <h2 className="code-workbench-title">公私域 Agent 纳管与排他租约控制台</h2>
           <span className="code-workbench-subtitle">
-            纳管数据面 Agent、探查主机进程、挂载公共架构契约并保障单机单租约互斥安全
+            纳管数据面 Agent、探查主机进程、挂载公共架构契约并保障单机单租约互斥安全 —— 环境进程部署映射与常驻待命探针（配置一次 · 零损耗待命）
           </span>
         </div>
 
@@ -402,6 +428,7 @@ export const AgentManagementPage: React.FC = () => {
                       setSearchParams((prev) => {
                         const next = new URLSearchParams(prev);
                         next.set('agent_id', ag.id);
+                        next.delete('open_mount');
                         return next;
                       });
                     }}
@@ -507,30 +534,54 @@ export const AgentManagementPage: React.FC = () => {
                     )}
                   </div>
                   <span className="code-color-muted code-text-sm">
-                    所属端点: {selectedAgent.endpoint} | 租约状态: {selectedAgent.lease_type || '空闲'}
+                    环境进程部署映射与常驻待命探针（配置一次 · 零损耗待命） | 所属端点: {selectedAgent.endpoint} | 租约状态: {selectedAgent.lease_type || '空闲'}
                   </span>
                 </div>
-                {canWriteSelectedAgent && (
-                  <div style={{ display: 'flex', gap: '0.4rem' }}>
-                    <button
-                      type="button"
-                      className="code-btn code-btn--secondary code-btn--xs"
-                      data-testid="disarm-all-probes-btn"
-                      onClick={() => void handleDisarmAllProbes()}
-                      title="一键卸载此 Agent 上的所有已激活探针"
-                    >
-                      一键卸载全部探针
-                    </button>
-                    <button
-                      type="button"
-                      className="code-btn code-btn--primary code-btn--xs"
-                      data-testid="batch-mount-btn"
-                      onClick={() => setMountDrawerOpen(true)}
-                    >
-                      ⚡ 批量挂载架构进程
-                    </button>
-                  </div>
-                )}
+                <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+                  <button
+                    type="button"
+                    className="code-btn code-btn--primary code-btn--xs"
+                    data-testid="start-record-btn"
+                    disabled={selectedAgent.status !== 'ONLINE' || Boolean(selectedAgent.lease_type) || processes.length === 0}
+                    title={
+                      selectedAgent.status !== 'ONLINE'
+                        ? 'Agent 处于离线状态，无法发起录制'
+                        : selectedAgent.lease_type
+                        ? `Agent 已被占用 (${selectedAgent.lease_type})`
+                        : processes.length === 0
+                        ? '未挂载任何业务进程，请先挂载进程'
+                        : '前往流量录制工作台快速发起录制'
+                    }
+                    onClick={() => {
+                      if (selectedAgent.status === 'ONLINE' && !selectedAgent.lease_type && processes.length > 0) {
+                        navigate(`/record?auto_start=1&agent_id=${selectedAgent.id}`);
+                      }
+                    }}
+                  >
+                    🎬 发起录制
+                  </button>
+                  {canWriteSelectedAgent && (
+                    <>
+                      <button
+                        type="button"
+                        className="code-btn code-btn--secondary code-btn--xs"
+                        data-testid="disarm-all-probes-btn"
+                        onClick={() => void handleDisarmAllProbes()}
+                        title="一键卸载此 Agent 上的所有已激活探针"
+                      >
+                        一键卸载全部探针
+                      </button>
+                      <button
+                        type="button"
+                        className="code-btn code-btn--primary code-btn--xs"
+                        data-testid="batch-mount-btn"
+                        onClick={() => setMountDrawerOpen(true)}
+                      >
+                        ⚡ 批量挂载架构进程
+                      </button>
+                    </>
+                  )}
+                </div>
               </div>
 
               <div className="code-table-wrapper code-mt-sm">
@@ -732,7 +783,16 @@ export const AgentManagementPage: React.FC = () => {
       {selectedAgent && (
         <AgentProcessMountDrawer
           open={mountDrawerOpen}
-          onClose={() => setMountDrawerOpen(false)}
+          onClose={() => {
+            setMountDrawerOpen(false);
+            if (searchParams.get('open_mount')) {
+              setSearchParams((prev) => {
+                const next = new URLSearchParams(prev);
+                next.delete('open_mount');
+                return next;
+              }, { replace: true });
+            }
+          }}
           agent={selectedAgent}
           existingProcesses={processes}
           onSuccess={() => {

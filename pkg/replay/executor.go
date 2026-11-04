@@ -68,14 +68,24 @@ func (e *ReplayExecutor) Execute(ctx context.Context, req agentproto.ExecuteRepl
 	}
 	for i, eg := range req.EgressMocks {
 		parsed, err := crosrpc.ParsePacket(eg)
-		if err == nil && parsed.Req != nil {
+		if err == nil {
 			recID := uint64(i + 1)
-			var payload []byte
-			if len(eg) > parsed.PayloadOffset {
-				payload = eg[parsed.PayloadOffset:]
+			svc, op := "", ""
+			if parsed.Req != nil {
+				svc = parsed.Req.ServiceName
+				op = parsed.Req.Operation
+			} else if parsed.Rsp != nil {
+				svc = parsed.Rsp.ServiceName
+				op = parsed.Rsp.Operation
 			}
-			matcher.AddScopedMock(recID, parsed.Req.ServiceName, parsed.Req.Operation, payload, [][]byte{eg})
-			matcher.AddGlobalFallback(parsed.Req.ServiceName, parsed.Req.Operation, payload, [][]byte{eg})
+			if svc != "" {
+				var payload []byte
+				if len(eg) > parsed.PayloadOffset {
+					payload = eg[parsed.PayloadOffset:]
+				}
+				matcher.AddScopedMock(recID, svc, op, payload, [][]byte{eg})
+				matcher.AddGlobalFallback(svc, op, payload, [][]byte{eg})
+			}
 		}
 	}
 

@@ -474,3 +474,46 @@ func TestSplitFramesMultiSegRsp(t *testing.T) {
 		}
 	}
 }
+
+func TestStreamFramer_NonCrosTrafficBoundedMemory_AndMidStreamResync(t *testing.T) {
+	framer := NewStreamFramer(DefaultMaxCaptureBytes)
+
+	// 1. 连续写入 4MB 模拟 PostgreSQL/HTTP 纯随机非 "CSE.TCP" 字节流 (1024 次 * 4096 字节)
+	chunkSize := 4096
+	totalChunks := 1024
+	randomChunk := make([]byte, chunkSize)
+	for i := range randomChunk {
+		randomChunk[i] = byte((i*31 + 17) % 251) // 确定性非 0 数据，确保不出现 "CSE.TCP"
+	}
+
+	for i := 0; i < totalChunks; i++ {
+		frames, err := framer.Write(randomChunk)
+		if err != nil {
+			t.Fatalf("Write randomChunk 失败 (chunk %d): %v", i, err)
+		}
+		if len(frames) != 0 {
+			t.Fatalf("非 CROS RPC 随机流预期产出 0 帧，实际在 chunk %d 切出 %d 帧", i, len(frames))
+		}
+		if cap(framer.buf) > 8192 {
+			t.Fatalf("chunk %d 后 cap(framer.buf) = %d 超过恒定 8192 字节上界", i, cap(framer.buf))
+		}
+	}
+
+	// 2. 紧随其后拼入 1 条合法 CROS RPC REQ 帧
+	reqPayload := []byte("hello-order-cros-rpc")
+	validReqPkt := buildValidReqPacket("com.test.OrderService", "CreateOrder", reqPayload)
+
+	frames, err := framer.Write(validReqPkt)
+	if err != nil {
+		t.Fatalf("Write validReqPkt 失败: %v", err)
+	}
+	if len(frames) != 1 {
+		t.Fatalf("写入合法 CROS RPC REQ 帧后预期切出 1 帧，实际切出 %d 帧", len(frames))
+	}
+	if frames[0].IsTruncated {
+		t.Fatalf("预期未截断帧，实际标记为截断")
+	}
+	if !bytes.Equal(frames[0].Data, validReqPkt) {
+		t.Fatalf("切出的数据切片与原请求帧逐字节不一致")
+	}
+}

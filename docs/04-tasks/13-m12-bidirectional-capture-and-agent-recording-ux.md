@@ -2,8 +2,8 @@
 
 - **文档编号**：`13-m12-bidirectional-capture-and-agent-recording-ux.md`
 - **文档版本**：v1.0.0
-- **更新日期**：2026-11-03
-- **状态**：⏳ 待检视批准 (Pending User Review)
+- **更新日期**：2026-11-04
+- **状态**：✅ 已实施交付 (Completed)
 - **归属阶段**：阶段三/四：M12 TDD 任务拆解与验收标准 (`04-tasks`)
 - **覆盖特性与场景**：`F-08` (基于进程自有 Socket Inode 的精准七态存量连接诊断)、`F-09` (目标 PID 默认全出站透明代理、BPF 网络字节序契约、存量入站 FD 预热与 `Direction` 不变量)、`F-10` (`StreamFramer` `bytes.Index` SIMD 滑窗紧缩)、`F-11` (单/多进程零拓扑前置开箱双录、会话与真实 `agent_id` 归属、停录路由修复)、`F-12` (重放期历史 `EGRESS` `DstAddr` 自动并集与写前 `"CSE.TCP"` 魔术字零外泄守卫)、`F-15.4` (协同录制抽屉文案消歧、`1..5` 可用进程智能默认全选、`[🔗 勾选关联下游]` 与空状态引导)、`F-15.5` (`/agents` 挂载列表预加载修复、`open_mount=1` 自动唤起与 `[🎬 发起录制]` 双向深链)、`F-16` (公私域 Anti-IDOR 守卫)、`SC-05`、`SC-07`、`SC-08`
 - **设计参考基线**：[`11-single-process-bidirectional-capture-and-recording-ux-adr.md`](../05-adr/11-single-process-bidirectional-capture-and-recording-ux-adr.md) (ADR-11 v1.0.0)、[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.9.3)、[`01-system-architecture.md` §4.2~§4.4](../02-design/01-system-architecture.md)、[`02-data-plane-and-cros-rpc-engine.md` §1.4 & §2~§3](../02-design/02-data-plane-and-cros-rpc-engine.md)、[`04-control-plane-and-web-console.md` §1.2~§1.3 & §4.5](../02-design/04-control-plane-and-web-console.md)、[`01-http-api-contract.md` §2.4 & §3](../03-api/01-http-api-contract.md)

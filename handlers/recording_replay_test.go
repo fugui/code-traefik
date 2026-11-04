@@ -6,13 +6,17 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	commonModels "code-common/backend/models"
+	"code-traefik/config"
 	"code-traefik/handlers"
 	"code-traefik/internal/server/diff"
 	"code-traefik/internal/server/recorder"
@@ -438,10 +442,10 @@ func TestSC05_SC07_SC08_EndToEndRecordingAndReplayPipeline(t *testing.T) {
 		}
 	}
 
-	glbAssembler.Feed(makeEnv(agentproto.DirectionIngress, len(reqPkt1)), reqPkt1)
-	glbAssembler.Feed(makeEnv(agentproto.DirectionIngress, len(rspPkt1)), rspPkt1)
-	glbAssembler.Feed(makeEnv(agentproto.DirectionIngress, len(reqPkt2)), reqPkt2)
-	glbAssembler.Feed(makeEnv(agentproto.DirectionIngress, len(rspPkt2)), rspPkt2)
+	glbAssembler.Feed(agent1.ID, makeEnv(agentproto.DirectionIngress, len(reqPkt1)), reqPkt1)
+	glbAssembler.Feed(agent1.ID, makeEnv(agentproto.DirectionIngress, len(rspPkt1)), rspPkt1)
+	glbAssembler.Feed(agent1.ID, makeEnv(agentproto.DirectionIngress, len(reqPkt2)), reqPkt2)
+	glbAssembler.Feed(agent1.ID, makeEnv(agentproto.DirectionIngress, len(rspPkt2)), rspPkt2)
 
 	// 强制落盘
 	glbAssembler.Flush()
@@ -849,5 +853,280 @@ func TestListTrafficRecords_HasErrorFilter(t *testing.T) {
 		if bytes.Contains(bytes.ToLower(w.Body.Bytes()), []byte("sql")) || bytes.Contains(bytes.ToLower(w.Body.Bytes()), []byte("select")) {
 			t.Fatalf("400 响应中不应泄露 SQL 细节: %s", w.Body.String())
 		}
+	}
+}
+
+// TestSingleProcessZeroTopology_BidirectionalCapture_StopRelease_AndZeroLeakReplay 校验单进程零拓扑双录、停录路由与历史EGRESS并集重放 (M12-P2, ADR-11)
+func TestSingleProcessZeroTopology_BidirectionalCapture_StopRelease_AndZeroLeakReplay(t *testing.T) {
+	r, db := setupRouterAndDB(t)
+
+	adminUser := createTestUserInDB(t, db, "admin_m12_replay", config.AdminRole)
+	adminToken := generateTestJWT(t, adminUser)
+
+	var (
+		agentStopHit       atomic.Bool
+		agentStopSessionID atomic.Uint64
+		mockDownstreams    []agentproto.DownstreamEndpoint
+		replayExecuted     atomic.Bool
+	)
+
+	// Mock Agent 服务端
+	mockAgent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		path := req.URL.Path
+		switch {
+		case strings.HasPrefix(path, "/agent/v1/monitors/") && strings.HasSuffix(path, "/stop"):
+			agentStopHit.Store(true)
+			// 提取 sessionId
+			parts := strings.Split(strings.Trim(path, "/"), "/")
+			if len(parts) >= 4 {
+				if sID, err := strconv.ParseUint(parts[3], 10, 64); err == nil {
+					agentStopSessionID.Store(sID)
+				}
+			}
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(agentproto.StopMonitorResp{})
+		case strings.HasPrefix(path, "/agent/v1/monitors/sync"):
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": "ARMED"})
+		case strings.HasPrefix(path, "/agent/v1/replays/execute"):
+			var execReq agentproto.ExecuteReplayReq
+			_ = json.NewDecoder(req.Body).Decode(&execReq)
+			mockDownstreams = execReq.ProcessSpec.Downstreams
+			replayExecuted.Store(true)
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": "ARMED"})
+		case strings.HasPrefix(path, "/agent/v1/replays/") && strings.HasSuffix(path, "/result"):
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(agentproto.ReplayTaskResultResp{
+				Status:         "PASS",
+				TotalRequests:  1,
+				PassedRequests: 1,
+				MockHitCount:   1,
+				Details:        "单进程零拓扑历史 EGRESS 重放成功",
+			})
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer mockAgent.Close()
+
+	// 1. 创建固定 Agent ID = 7
+	agent7 := &models.Agent{
+		ID:             7,
+		Name:           "agent_zero_topology_7",
+		Endpoint:       mockAgent.URL,
+		Scope:          models.ScopeShared,
+		Status:         models.AgentStatusOnline,
+		CreatedBy:      adminUser.ID,
+		UpdatedBy:      adminUser.ID,
+		MountsRevision: 0,
+	}
+	if err := db.Create(agent7).Error; err != nil {
+		t.Fatalf("创建 Agent 7 失败: %v", err)
+	}
+
+	// 2. 挂载单进程 sut-order (端口 9001, 无 ModuleDependency, 无 extra_downstreams)
+	grp := &models.ArchProcessGroup{
+		Code:      "sut_group",
+		Name:      "SUT进程组",
+		CreatedBy: adminUser.ID,
+		UpdatedBy: adminUser.ID,
+	}
+	if err := db.Create(grp).Error; err != nil {
+		t.Fatalf("创建 ArchProcessGroup 失败: %v", err)
+	}
+
+	archProc := &models.ArchProcess{
+		GroupID:           grp.ID,
+		Code:              "sut_order",
+		Name:              "订单服务SUT",
+		DefaultListenPort: 9001,
+		DefaultCmdPattern: "./bin/sut-order",
+		CreatedBy:         adminUser.ID,
+		UpdatedBy:         adminUser.ID,
+	}
+	if err := db.Create(archProc).Error; err != nil {
+		t.Fatalf("创建 ArchProcess 失败: %v", err)
+	}
+
+	procSUT := &models.Process{
+		AgentID:             agent7.ID,
+		ArchProcessID:       archProc.ID,
+		EffectiveListenPort: 9001,
+		ProbeDesiredState:   models.ProbeDesiredStateArmed,
+		ProbeStatus:         models.ProbeStatusReady,
+		CreatedBy:           adminUser.ID,
+		UpdatedBy:           adminUser.ID,
+	}
+	if err := db.Create(procSUT).Error; err != nil {
+		t.Fatalf("创建 Process SUT 失败: %v", err)
+	}
+
+	// 3. 发起录制会话
+	startReq := recorder.StartSessionReq{
+		Name:             "M12单进程双录测试",
+		Scope:            models.ScopeShared,
+		TargetProcessIDs: []uint64{procSUT.ID},
+		MaxDurationSec:   300,
+	}
+	body, _ := json.Marshal(startReq)
+	req := httptest.NewRequest(http.MethodPost, "/api/recording-sessions", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("发起录制期望 201，实际: %d %s", w.Code, w.Body.String())
+	}
+	var sessionResp models.RecordingSession
+	_ = json.Unmarshal(w.Body.Bytes(), &sessionResp)
+
+	// 4. 模拟外部入站流量 (INGRESS: 外部 -> sut-order:9001) 与出站流量 (EGRESS: sut-order:9001 -> downstream:9002)
+	ingReq := buildTestCrosReqFrame(2001, crosrpc.ReqTypeSync, "OrderService", "PlaceOrder", []byte("ing_req_data"))
+	ingRsp := buildTestCrosRspFrame(2001, crosrpc.MsgTypeRsp, 1, 0, "OrderService", "PlaceOrder", []byte("ing_rsp_data"))
+
+	egReq := buildTestCrosReqFrame(3001, crosrpc.ReqTypeSync, "DownstreamPayment", "Charge", []byte("eg_req_data"))
+	egRsp := buildTestCrosRspFrame(3001, crosrpc.MsgTypeRsp, 1, 0, "DownstreamPayment", "Charge", []byte("eg_rsp_data"))
+
+	glbAssembler := handlers.GetGlobalOrchestrator().Assembler()
+
+	// Ingress envelope (Src=192.168.1.50:51234, Dst=127.0.0.1:9001, Direction=1)
+	ingEnv := func(sno uint64, pLen int) agentproto.EnvelopeHeader {
+		var h agentproto.EnvelopeHeader
+		h.Magic = agentproto.EnvelopeMagic
+		h.ProtoVer = 1
+		h.EventType = agentproto.EventTrafficFrame
+		h.SessionOrTaskID = sessionResp.ID
+		h.ProcessID = procSUT.ID
+		h.CapturedPID = 8888
+		h.Direction = agentproto.DirectionIngress
+		h.SetSrcIP(net.IPv4(192, 168, 1, 50))
+		h.SetDstIP(net.IPv4(127, 0, 0, 1))
+		h.SrcPort = 51234
+		h.DstPort = 9001
+		h.ConnSeq = 10
+		h.PayloadLen = uint32(pLen)
+		h.CapturedAtNs = time.Now().UnixNano()
+		return h
+	}
+
+	// Egress envelope (Src=127.0.0.1:41234, Dst=127.0.0.1:9002, Direction=2)
+	egEnv := func(sno uint64, pLen int) agentproto.EnvelopeHeader {
+		var h agentproto.EnvelopeHeader
+		h.Magic = agentproto.EnvelopeMagic
+		h.ProtoVer = 1
+		h.EventType = agentproto.EventTrafficFrame
+		h.SessionOrTaskID = sessionResp.ID
+		h.ProcessID = procSUT.ID
+		h.CapturedPID = 8888
+		h.Direction = agentproto.DirectionEgress
+		h.SetSrcIP(net.IPv4(127, 0, 0, 1))
+		h.SetDstIP(net.IPv4(127, 0, 0, 1))
+		h.SrcPort = 41234
+		h.DstPort = 9002
+		h.ConnSeq = 20
+		h.PayloadLen = uint32(pLen)
+		h.CapturedAtNs = time.Now().UnixNano()
+		return h
+	}
+
+	glbAssembler.Feed(agent7.ID, ingEnv(2001, len(ingReq)), ingReq)
+	glbAssembler.Feed(agent7.ID, ingEnv(2001, len(ingRsp)), ingRsp)
+	glbAssembler.Feed(agent7.ID, egEnv(3001, len(egReq)), egReq)
+	glbAssembler.Feed(agent7.ID, egEnv(3001, len(egRsp)), egRsp)
+
+	glbAssembler.Flush()
+	time.Sleep(100 * time.Millisecond)
+
+	// 5. 校验数据库落盘数据：包含 INGRESS 和 EGRESS 记录，且 AgentID 均为 7
+	var records []models.TrafficRecord
+	if err := db.Where("session_id = ?", sessionResp.ID).Order("id ASC").Find(&records).Error; err != nil {
+		t.Fatalf("查询流量记录失败: %v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("预期落盘 2 条往返记录 (INGRESS+EGRESS)，实际: %d", len(records))
+	}
+
+	var hasIngress, hasEgress bool
+	var ingRecordID uint64
+	for _, rec := range records {
+		if rec.AgentID != 7 {
+			t.Errorf("记录 AgentID 期望为 7 (真实 AgentID)，实际: %d", rec.AgentID)
+		}
+		if rec.Direction == models.TrafficDirIngress {
+			hasIngress = true
+			ingRecordID = rec.ID
+		}
+		if rec.Direction == models.TrafficDirEgress {
+			hasEgress = true
+			if rec.DstAddr != "127.0.0.1:9002" {
+				t.Errorf("EGRESS 记录 DstAddr 期望 '127.0.0.1:9002'，实际: '%s'", rec.DstAddr)
+			}
+		}
+	}
+	if !hasIngress || !hasEgress {
+		t.Fatalf("双录失败：hasIngress=%v, hasEgress=%v", hasIngress, hasEgress)
+	}
+
+	// 6. 停录：POST /api/recording-sessions/:id/stop
+	req = httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/recording-sessions/%d/stop", sessionResp.ID), nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("停录请求期望 200，实际: %d %s", w.Code, w.Body.String())
+	}
+
+	// 断言 Agent 收到停录且 SessionID 一致
+	if !agentStopHit.Load() {
+		t.Errorf("预期向 Agent 发送 /stop 请求，实际未收到")
+	}
+	if agentStopSessionID.Load() != sessionResp.ID {
+		t.Errorf("停录路由 SessionID 期望 %d，实际: %d", sessionResp.ID, agentStopSessionID.Load())
+	}
+
+	// 断言 Agent 租约恢复 IDLE
+	var chkAgent models.Agent
+	_ = db.First(&chkAgent, agent7.ID)
+	if chkAgent.LeaseType != "" {
+		t.Errorf("Agent 租约期望释放为空 (IDLE)，实际为: '%s'", chkAgent.LeaseType)
+	}
+
+	// 7. 发起重放：对单进程批次发起离线重放
+	replayReq := diff.CreateReplayTaskReq{
+		Name:              "M12单进程重放",
+		SessionID:         sessionResp.ID,
+		SourceProcessID:   procSUT.ID,
+		TargetProcessID:   procSUT.ID,
+		SelectedRecordIDs: []uint64{ingRecordID},
+		TimeoutMs:         3000,
+	}
+	replayBody, _ := json.Marshal(replayReq)
+	req = httptest.NewRequest(http.MethodPost, "/api/replay-tasks", bytes.NewReader(replayBody))
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK && w.Code != http.StatusCreated {
+		t.Fatalf("发起重放期望 200/201，实际: %d %s", w.Code, w.Body.String())
+	}
+
+	// 等待重放调度完成
+	time.Sleep(500 * time.Millisecond)
+
+	// 断言重放已下发，且 Downstreams 自动合并了历史 EGRESS 的 127.0.0.1:9002！
+	if !replayExecuted.Load() {
+		t.Fatalf("重放任务未被执行")
+	}
+
+	foundHistoryEP := false
+	for _, ep := range mockDownstreams {
+		if ep.Port == 9002 {
+			foundHistoryEP = true
+			break
+		}
+	}
+	if !foundHistoryEP {
+		t.Errorf("重放 ProcessSpec.Downstreams 未自动纳入历史 EGRESS 端口 9002: %+v", mockDownstreams)
 	}
 }

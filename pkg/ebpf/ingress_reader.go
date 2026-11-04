@@ -224,7 +224,7 @@ func (r *GapAwareIngressReader) FeedChunk(chunk IngressChunk) (ProcessChunkResul
 			SessionOrTaskID: chunk.SessionID,
 			ProcessID:       chunk.ProcessID,
 			CapturedPID:     chunk.PID,
-			Direction:       chunk.Direction,
+			Direction:       agentproto.DirectionIngress, // 恒定为 DirectionIngress (1)，解耦 Socket 读写半流
 			Flags:           flags,
 			CapturedAtNs:    nowNs,
 			SrcPort:         chunk.SrcPort,

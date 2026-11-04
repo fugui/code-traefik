@@ -185,26 +185,113 @@ func (s *ProcScanner) FindPIDByPortAndCmd(listenPort uint16, cmdPattern string) 
 	return 0, nil
 }
 
-// DiagnoseEstablishedConns 诊断目标进程当前已与登记下游建立的 ESTABLISHED 长连接数 (A-01)
-func (s *ProcScanner) DiagnoseEstablishedConns(pid uint32, downstreams []agentproto.DownstreamEndpoint) (int, bool, error) {
-	if len(downstreams) == 0 {
-		return 0, false, nil
+// EstablishedSocket 表示由目标进程自有 Socket Inode 关联的 TCP_ESTABLISHED 状态连接 (F-08, ADR-11)
+type EstablishedSocket struct {
+	FD        int32
+	Inode     string
+	LocalIP   string
+	LocalPort uint16
+	RemIP     string
+	RemPort   uint16
+}
+
+// ScanProcessEstablishedSockets 读取 /proc/<pid>/fd 提取该进程持有的全部 socket:[inode]，
+// 再扫描 /proc/<pid>/net/tcp (或 /proc/net/tcp) 求交集，仅返回归属该 pid 自有的 TCP_ESTABLISHED 连接 (F-08, ADR-11)
+func (s *ProcScanner) ScanProcessEstablishedSockets(pid uint32) ([]EstablishedSocket, error) {
+	fdDir := filepath.Join(s.root, strconv.FormatUint(uint64(pid), 10), "fd")
+	entries, err := os.ReadDir(fdDir)
+	if err != nil {
+		return nil, nil // 进程不存在或无权读取
 	}
 
-	// 目标进程网络空间连接
+	inodeToFD := make(map[string]int32)
+	for _, entry := range entries {
+		linkTarget, err := os.Readlink(filepath.Join(fdDir, entry.Name()))
+		if err != nil {
+			continue
+		}
+		if strings.HasPrefix(linkTarget, "socket:[") && strings.HasSuffix(linkTarget, "]") {
+			inode := linkTarget[8 : len(linkTarget)-1]
+			fdNum, err := strconv.ParseInt(entry.Name(), 10, 32)
+			if err == nil {
+				inodeToFD[inode] = int32(fdNum)
+			}
+		}
+	}
+	if len(inodeToFD) == 0 {
+		return nil, nil
+	}
+
 	tcpPath := filepath.Join(s.root, strconv.FormatUint(uint64(pid), 10), "net", "tcp")
 	f, err := os.Open(tcpPath)
 	if err != nil {
-		// 回退读取宿主机全局 /proc/net/tcp
 		tcpPath = filepath.Join(s.root, "net", "tcp")
 		f, err = os.Open(tcpPath)
 		if err != nil {
-			return 0, false, fmt.Errorf("读取 tcp 连接失败: %w", err)
+			return nil, err
 		}
 	}
 	defer f.Close()
 
-	// 构造下游 endpoint 匹配集
+	var sockets []EstablishedSocket
+	scanner := bufio.NewScanner(f)
+	if scanner.Scan() { // 跳过标题行
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			fields := strings.Fields(line)
+			if len(fields) < 10 {
+				continue
+			}
+			if fields[3] != "01" { // 仅关注 TCP_ESTABLISHED
+				continue
+			}
+			inode := fields[9]
+			fd, ok := inodeToFD[inode]
+			if !ok {
+				continue // 必须存在于目标进程 /proc/<pid>/fd 中
+			}
+			localIP, localPort, err := parseHexAddr(fields[1])
+			if err != nil {
+				continue
+			}
+			remIP, remPort, err := parseHexAddr(fields[2])
+			if err != nil {
+				continue
+			}
+			sockets = append(sockets, EstablishedSocket{
+				FD:        fd,
+				Inode:     inode,
+				LocalIP:   localIP,
+				LocalPort: localPort,
+				RemIP:     remIP,
+				RemPort:   remPort,
+			})
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return sockets, nil
+}
+
+// DiagnoseEstablishedConns 诊断目标进程当前存量已建立长连接数 (A-01, F-08, ADR-11)
+// 基于 /proc/<pid>/fd 自有 Inode 精准诊断，排除入站监听端口与 127.0.0.1:proxyPort 已代理连接
+// 若 downstreams 为空，统计该进程全部未代理直连出站连接；若指定 downstreams，按目标端点集精准匹配
+func (s *ProcScanner) DiagnoseEstablishedConns(pid uint32, downstreams []agentproto.DownstreamEndpoint, extra ...uint16) (int, bool, error) {
+	listenPort := uint16(0)
+	proxyPort := uint16(0)
+	if len(extra) > 0 {
+		listenPort = extra[0]
+	}
+	if len(extra) > 1 {
+		proxyPort = extra[1]
+	}
+
+	socks, err := s.ScanProcessEstablishedSockets(pid)
+	if err != nil {
+		return 0, false, err
+	}
+
 	matchMap := make(map[string]bool)
 	for _, ds := range downstreams {
 		ip := ds.IP
@@ -216,24 +303,22 @@ func (s *ProcScanner) DiagnoseEstablishedConns(pid uint32, downstreams []agentpr
 	}
 
 	count := 0
-	scanner := bufio.NewScanner(f)
-	if scanner.Scan() { // skip header
-		for scanner.Scan() {
-			line := strings.TrimSpace(scanner.Text())
-			fields := strings.Fields(line)
-			if len(fields) < 4 {
-				continue
-			}
-			// 01 表示 TCP_ESTABLISHED
-			if fields[3] != "01" {
-				continue
-			}
-			remAddr := fields[2]
-			remIP, remPort, err := parseHexAddr(remAddr)
-			if err != nil {
-				continue
-			}
-			key := fmt.Sprintf("%s:%d", remIP, remPort)
+	for _, sock := range socks {
+		// 1. 排除入站连接 (本地端口等于自身监听端口)
+		if listenPort > 0 && sock.LocalPort == listenPort {
+			continue
+		}
+
+		// 2. 排除已受 EgressProxy 接管的代理连接 (对端为 127.0.0.1:proxyPort)
+		if proxyPort > 0 && (sock.RemIP == "127.0.0.1" || sock.RemIP == "localhost") && sock.RemPort == proxyPort {
+			continue
+		}
+
+		// 3. 统计未受代理的直连出站长连接
+		if len(downstreams) == 0 {
+			count++
+		} else {
+			key := fmt.Sprintf("%s:%d", sock.RemIP, sock.RemPort)
 			if matchMap[key] {
 				count++
 			}

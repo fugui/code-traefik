@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -20,6 +19,7 @@ import (
 	"time"
 
 	"code-traefik/pkg/agentproto"
+	"code-traefik/pkg/crosrpc"
 	"code-traefik/pkg/ebpf"
 	"code-traefik/pkg/replay"
 
@@ -632,12 +632,22 @@ func (s *AgentServer) handleExecuteReplay(w http.ResponseWriter, r *http.Request
 			}
 		}
 		for _, egMock := range req.EgressMocks {
-			if len(egMock) >= 24+136 {
-				svc := string(bytes.TrimRight(egMock[24+8:24+72], "\x00"))
-				op := string(bytes.TrimRight(egMock[24+72:24+136], "\x00"))
-				headLen := int(egMock[20])<<8 | int(egMock[21])
-				payload := egMock[24+headLen:]
-				matcher.AddGlobalFallback(svc, op, payload, [][]byte{egMock})
+			if len(egMock) >= 24 {
+				parsed, err := crosrpc.ParsePacket(egMock)
+				if err == nil {
+					svc, op := "", ""
+					if parsed.Req != nil {
+						svc = parsed.Req.ServiceName
+						op = parsed.Req.Operation
+					} else if parsed.Rsp != nil {
+						svc = parsed.Rsp.ServiceName
+						op = parsed.Rsp.Operation
+					}
+					if svc != "" {
+						payload := egMock[parsed.PayloadOffset:]
+						matcher.AddGlobalFallback(svc, op, payload, [][]byte{egMock})
+					}
+				}
 			}
 		}
 		s.ebpfMgr.SetReplayMock(req.TaskID, matcher, req.ProcessSpec.Downstreams)
