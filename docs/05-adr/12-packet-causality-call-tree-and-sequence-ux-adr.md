@@ -41,7 +41,8 @@
    - 联合扩展头 `RPC_TIME_STAMP_HEAD_S`（`extType = 1`）的 `ullServerEnqueueTime`，在单调同量纲条件下自动计算三段微秒级耗时拆解：**网络及框架传输耗时 (`NetworkAndFramingUs`)**、**服务端入队等待耗时 (`QueueWaitUs = ServerEnqueue - ServerRecv`)** 与 **业务纯执行耗时 (`ServerExecUs = ServerSend - ServerEnqueue`)**。
 2. **流式分帧首字节到达定戳 (`FirstByteCapturedAtNs`)**：
    - `StreamFramer` 在定位到 `"CSE.TCP"` 魔术字首字节进入 `ReadCommHead` 状态瞬间锁定该帧的 `frameStartNs`，在多 TCP 分片凑齐输出完整帧时以 `frameStartNs`（而非末字节到达时刻）填充信封 `CapturedAtNs`，确保大报文分片场景下依然严格保持 `Parent.ReqCapturedAtNs <= Child.ReqCapturedAtNs <= Child.RspCapturedAtNs <= Parent.RspCapturedAtNs`。
-3. **请求发起时刻单调序号 (`SeqNo`) 与连接级 `MNG.acProcName` 身份缓存 (`ExchangeAssembler`)**：
+3. **慢轨解码器接入真实 `payload_json` 落盘、单调序号 (`SeqNo`) 与连接级 `MNG.acProcName` 身份缓存 (`ExchangeAssembler`)**：
+   - 为 `ExchangeAssembler` 注入 `dec *decoder.Registry`（通过 `handlers/common.go` 构造注入）：在慢轨聚合生成记录时调用 `dec.DecodePayloadToJSON` 完成请求与应答双向载荷解析，真实落盘 `payload_json: {"req": {...}, "rsp": {...}}`，彻底根治既有代码中 `reqJSON` 未赋值导致 `payload_json` 恒为 `null` 的文档与实现脱节问题；基于已解码 JSON 载荷提取顶层业务软错误（`code != 0` 或 `success == false`）与实体键值（如 `order_id`）写入 `headers_json.meta`；
    - `ExchangeAssembler` 为每个录制批次维护原子递增序号器 `sessionSeq`：**在收到 `REQ` 首帧创建挂起项瞬间（以及 `ONEWAY` / `MNG` / `RSP_ORPHAN` 到达瞬间）立即分配 `SeqNo = sessionSeq.Add(1)`**，而非等到 `RSP` 完成落盘时分配；所有查询默认按 `ORDER BY req_captured_at_ns ASC, seq_no ASC, id ASC` 排序，彻底根治后序倒挂；
    - 当连接捕获到 `ucMsgType ∈ {5, 6, 7}` (`MNG`) 握手管理帧且 `acProcName` 非空时，在连接上下文中缓存对端自报进程名并随同连接后续记录写入 `headers_json.meta.peer_proc_name`，为未纳管外部上游补齐可读身份标识。
 
@@ -83,9 +84,11 @@ flowchart LR
 
 ### 2.4 决策四：端到端打通 `RecordID` 级 `ScopedMock` 事务闭包重放与有状态前置链回放
 
-1. **主从重放协议按 `RecordID` 精确隔离局部 Mock 池（坚守 Agent 零 DB、零 `.pb` 红线）**：
-   - `pkg/agentproto.ExecuteReplayReq` 新增 `IngressItems []ReplayIngressItem{RecordID, RawReq}` 与 `ScopedEgressMocks map[uint64][][]byte`（加 `GlobalFallbackMocks [][]byte` 兜底，保留旧平铺字段向后兼容）；
-   - 主控 `diff.ReplayScheduler` 按 DOTR 子树（无 Trace 时回退时间包含窗）为每条选定 `INGRESS` 提取专属下游原始应答切片填充 `ScopedEgressMocks[recordID]`；Agent `ReplayExecutor` 在注入每条 `IngressItem` 前调用 `matcher.SetActiveRecordID(item.RecordID)`，实现单事务与多事务批量重放下的精准因果隔离。
+1. **主从重放协议升级为请求+应答成对规则（坚守 Agent 零 DB、零 `.pb` 红线，彻底根除事务内并发错配）**：
+   - 原有设计仅下发下游应答帧，导致 Agent 侧初始化时使用应答载荷 SHA256 注册精确键，而运行时被测程序发起的是下游请求帧，两者哈希必然不匹配，致使精确匹配 100% 击穿退化为同方法名 FIFO 顺序出队；当事务内并发或多次调用同一方法（如并发锁定不同 SKU 库存）时，会导致参数与应答完全错配（“张冠李戴”）；
+   - `pkg/agentproto.ExecuteReplayReq` 定义成对规则 `MockRuleDownstream{ReqPacket []byte, RspPackets [][]byte}`，新增 `IngressItems []ReplayIngressItem{RecordID, RawReq}` 与 `ScopedEgressMocks map[uint64][]MockRuleDownstream`（加 `GlobalFallbackMocks []MockRuleDownstream` 兜底，保留旧平铺字段向后兼容）；
+   - 主控 `diff.ReplayScheduler` 按 DOTR 子树（无 Trace 时回退时间包含窗）为每条选定 `INGRESS` 提取成对的出站请求帧 `RawReqPacket` 与应答帧切片 `RawRspPacket` 组装 `ScopedEgressMocks[recordID]`；
+   - Agent `ReplayExecutor` 在初始化时从 `rule.ReqPacket` 提取服务与方法名并计算实际 `ReqPayload` 的 SHA256 注册精确键，用 `rule.RspPackets` 应答；在注入每条 `IngressItem` 前调用 `matcher.SetActiveRecordID(item.RecordID)`，使运行时请求能够 100% 精确命中自身入参对应的应答，彻底消除事务内部并发/同方法错配。
 2. **重放闭包透明预览、前置状态依赖防呆与泳道图故障叠加**：
    - 新增 `GET /api/traffic-records/:id/replay-closure`：在重放抽屉启动前清晰列出本次自动挂载的专属下游 `EGRESS` Mock 清单；若检出当前事务消费了同批次前序事务产出的业务实体（如直接重放 `CancelOrder`），温和提示前置依赖链并提供复选框一键将 `[CreateOrder.id, CancelOrder.id]` 按序组合重放；
    - 重放完成后，支持一键在 `TransactionSequenceDrawer` 时序泳道图上叠加渲染 `SCOPED_HIT`、`MOCK_MISS` 或 `RSP_DIFF` 故障发生点。
@@ -98,7 +101,7 @@ flowchart LR
 | :--- | :--- | :--- |
 | **方案 A：后端保持平铺分页，仅在前端对当前页 25 条记录做内存建树** | 无需新增控制面调用树接口 | **分页割裂致命缺陷**：若某入口事务包含 6 条子调用且恰好跨越第 25/26 条分页边界，或父子因异步完成相隔数十条记录，前端将出现无父孤儿行或残缺假树；且无法支撑跨页的业务实体生命周期链分析。 |
 | **方案 B：新增独立物理表 `traefik_trace_trees` / `traefik_data_lineages` 落盘物化边** | 查询时可直接读物化表 | **破坏存储简洁性与分区 TTL 性能**：打破冻结的 15 张核心表架构，且与 `traefik_traffic_records` 按日 RANGE 分区 `DROP TABLE` 产生跨表清理耦合；单录制批次上限 `<= 100,000` 帧，依托轻量列投影 + `headers_json.meta` 摘要即可在 `< 30ms` 内实时构建树，单事务泳道血缘按需仅扫描 `<= 200` 行 `< 5ms`。 |
-| **方案 C：向 Agent 下发 JSON 路径规则做业务字段级动态 Mock 匹配** | 可按业务主键匹配下游 Mock | **触碰物理防腐红线**：迫使 `cmd/agent` 解析 Protobuf / JSON 载荷，严重违背「Agent 零 DB、零 `.pb`、Payload 纯不透明字节流」架构宪法；通过主控按 DOTR 因果树切分 `ScopedEgressMocks[recordID]` 已能在纯二进制层完美解决跨事务隔离。 |
+| **方案 C：向 Agent 下发 JSON 路径规则做业务字段级动态 Mock 匹配** | 可按业务主键匹配下游 Mock | **触碰物理防腐红线**：迫使 `cmd/agent` 解析 Protobuf / JSON 载荷，严重违背「Agent 零 DB、零 `.pb`、Payload 纯不透明字节流」架构宪法；通过主控按 DOTR 因果树下发成对二进制 `{ReqPacket, RspPackets}` 规则切分 `ScopedEgressMocks[recordID]`，既在纯二进制层实现了精确哈希匹配与防错配，又完全守住了 Agent 零 `.pb` 零 DB 红线。 |
 
 ---
 

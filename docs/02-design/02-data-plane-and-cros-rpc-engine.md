@@ -374,24 +374,30 @@ type ReplayIngressItem struct {
 	RawReq   []byte `json:"raw_req"`   // 原始入站 CROS RPC 请求帧
 }
 
+// MockRuleDownstream 下游出站 Mock 规则（成对请求与应答，纯二进制切片，零 .pb 依赖）
+type MockRuleDownstream struct {
+	ReqPacket  []byte   `json:"req_packet"`  // 录制时的出站请求帧（用于提取 Service/Operation 并计算 ReqPayload SHA256 精确匹配）
+	RspPackets [][]byte `json:"rsp_packets"` // 录制时的出站应答帧组（可含拼接 RSP_SEG+RSP，用于自愈并回包）
+}
+
 // ExecuteReplayReq 主控向 Agent 下发的离线隔离重放执行载荷（纯二进制切片，零 .pb 依赖）
 type ExecuteReplayReq struct {
-	TaskID              uint64              `json:"task_id"`
-	ProcessSpec         ProcessMonitorSpec  `json:"process_spec"`
-	TimeoutMs           int                 `json:"timeout_ms"`
-	IngressItems        []ReplayIngressItem `json:"ingress_items,omitempty"`         // 按发起序排列的待注入请求列表 (M13 主路径)
-	ScopedEgressMocks   map[uint64][][]byte `json:"scoped_egress_mocks,omitempty"`   // key = RecordID -> 专属下游原始应答帧组 (可含拼接 RSP_SEG+RSP)
-	GlobalFallbackMocks [][]byte            `json:"global_fallback_mocks,omitempty"` // 未归属孤儿下游应答兜底池
-	IngressRequests     [][]byte            `json:"ingress_requests,omitempty"`      // 兼容旧平铺注入列表
-	EgressMocks         [][]byte            `json:"egress_mocks,omitempty"`          // 兼容旧平铺下游 Mock 池
-	MngMocks            [][]byte            `json:"mng_mocks,omitempty"`
+	TaskID              uint64                          `json:"task_id"`
+	ProcessSpec         ProcessMonitorSpec              `json:"process_spec"`
+	TimeoutMs           int                             `json:"timeout_ms"`
+	IngressItems        []ReplayIngressItem             `json:"ingress_items,omitempty"`         // 按发起序排列的待注入请求列表 (M13 主路径)
+	ScopedEgressMocks   map[uint64][]MockRuleDownstream `json:"scoped_egress_mocks,omitempty"`   // key = RecordID -> 专属下游成对 Mock 规则列表
+	GlobalFallbackMocks []MockRuleDownstream            `json:"global_fallback_mocks,omitempty"` // 未归属孤儿下游 Mock 规则兜底池
+	IngressRequests     [][]byte                        `json:"ingress_requests,omitempty"`      // 兼容旧平铺注入列表
+	EgressMocks         [][]byte                        `json:"egress_mocks,omitempty"`          // 兼容旧平铺下游 Mock 池
+	MngMocks            [][]byte                        `json:"mng_mocks,omitempty"`
 }
 ```
 
 1. **局部作用域索引与切分**：
-   - 主控 `diff.ReplayScheduler` 在下发重放包时，优先依据 DOTR `TraceID` 与 `SpanID / FatherSpanID` 因果子树（无 `TraceID` 时回退录制期请求往返时间窗口 `[req_ns - 500μs, rsp_ns + 500μs]`），将每条选定入站请求所触发的合格下游 `EGRESS` 应答按发起序划归至 `ScopedEgressMocks[record_id]`；
-   - Agent 初始化 `ScopedMockMatcher` 时逐个注册 `AddScopedMock(recordID, rawRsp)`：每个局部池内部构建 `ExactMap[MethodKey + PayloadSHA256] -> []MockRspFrames` 及 `SeqQueue[MethodKey] -> []MockRspFrames`；
-   - 同时将批次内未被认领的合格 `EGRESS` 应答注册至全局兜底池 `GlobalFallbackMocks`。
+   - 主控 `diff.ReplayScheduler` 在下发重放包时，优先依据 DOTR `TraceID` 与 `SpanID / FatherSpanID` 因果子树（无 `TraceID` 时回退录制期请求往返时间窗口 `[req_ns - 500μs, rsp_ns + 500μs]`），将每条选定入站请求所触发的合格下游出站请求与应答帧成对提取为 `MockRuleDownstream`，按发起序划归至 `ScopedEgressMocks[record_id]`；
+   - Agent 初始化 `ScopedMockMatcher` 时逐个解析 `rule.ReqPacket` 提取服务与方法名并计算 `ReqPayload` 的 SHA256，将 `rule.RspPackets` 注册至每个局部池内部的 `ExactMap[MethodKey + ReqPayloadSHA256] -> []MockRspFrames`，同时以 `MethodKey` 挂入 `SeqQueue[MethodKey] -> []MockRspFrames` 兜底；
+   - 同时将批次内未被认领的合格下游成对规则注册至全局兜底池 `GlobalFallbackMocks`。
 
 ```mermaid
 flowchart TD
