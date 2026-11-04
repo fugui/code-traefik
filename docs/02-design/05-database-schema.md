@@ -1,11 +1,11 @@
 # 业务流量监控与重放 (`code-traefik`) 数据库物理模型与 GORM 建模字典
 
 - **文档编号**：`05-database-schema.md`
-- **文档版本**：v1.3.1
-- **更新日期**：2026-11-02
+- **文档版本**：v1.3.2
+- **更新日期**：2026-11-04
 - **归属阶段**：阶段二：系统架构与数据模型设计 (`02-design`)
-- **状态**：已批准待实施 (Approved for M10)
-- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.9.1)、[`01-system-architecture.md`](./01-system-architecture.md)、[`04-traffic-storage-partitioning-and-relational-normalization.md`](../05-adr/04-traffic-storage-partitioning-and-relational-normalization.md)、[`09-arch-process-ssot-and-ebpf-premount-standby-adr.md`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md) (ADR-09 v1.1.0)
+- **状态**：已批准待实施 (Approved for M13)
+- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.10.0)、[`01-system-architecture.md`](./01-system-architecture.md)、[`04-traffic-storage-partitioning-and-relational-normalization.md`](../05-adr/04-traffic-storage-partitioning-and-relational-normalization.md)、[`09-arch-process-ssot-and-ebpf-premount-standby-adr.md`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md) (ADR-09 v1.1.0)、[`12-packet-causality-call-tree-and-sequence-ux-adr.md`](../05-adr/12-packet-causality-call-tree-and-sequence-ux-adr.md) (ADR-12 v1.0.0)
 
 ---
 
@@ -460,8 +460,8 @@ func (RecordingSession) TableName() string { return config.TablePrefix + "record
 type TrafficRecord struct {
 	ID                    uint64            `gorm:"column:id;not null" json:"id"` // 复合主键之一，由全局序列生成
 	CreatedAt             time.Time         `gorm:"column:created_at;not null" json:"created_at"` // 分区键与复合主键之二
-	SessionID             uint64            `gorm:"not null;index:idx_traefik_tr_session_seq,priority:1;index:idx_traefik_tr_session_svc,priority:1;index:idx_traefik_tr_session_trace,priority:1" json:"session_id"`
-	SeqNo                 int64             `gorm:"not null;index:idx_traefik_tr_session_seq,priority:2" json:"seq_no"`
+	SessionID             uint64            `gorm:"not null;index:idx_traefik_tr_session_seq,priority:1;index:idx_traefik_tr_session_req_ns,priority:1;index:idx_traefik_tr_session_svc,priority:1;index:idx_traefik_tr_session_trace,priority:1" json:"session_id"`
+	SeqNo                 int64             `gorm:"not null;index:idx_traefik_tr_session_seq,priority:2" json:"seq_no"` // 在 REQ 到达瞬间按批次原子递增分配（发起序，ADR-12）
 	AgentID               uint64            `gorm:"not null;index:idx_traefik_tr_agent" json:"agent_id"`
 	ProcessID             uint64            `gorm:"not null;index:idx_traefik_tr_proc_dir,priority:1" json:"process_id"`
 	CapturedPID           uint32            `gorm:"not null" json:"captured_pid"`
@@ -470,7 +470,7 @@ type TrafficRecord struct {
 	ExchangeType          string            `gorm:"size:24;not null;default:'UNARY';index:idx_traefik_tr_exchange;check:chk_traefik_tr_ex_type,exchange_type IN ('UNARY','STREAM_RSP','ONEWAY','REQ_ONLY','RSP_ORPHAN','MNG')" json:"exchange_type"`
 	SrcAddr               string            `gorm:"size:64;not null" json:"src_addr"`
 	DstAddr               string            `gorm:"size:64;not null" json:"dst_addr"`
-	ReqCapturedAtNs       int64             `gorm:"not null;index:idx_traefik_tr_req_ns" json:"req_captured_at_ns"`
+	ReqCapturedAtNs       int64             `gorm:"not null;index:idx_traefik_tr_req_ns;index:idx_traefik_tr_session_req_ns,priority:2" json:"req_captured_at_ns"` // 请求帧首字节到达纳秒时间戳
 	RspCapturedAtNs       *int64            `json:"rsp_captured_at_ns,omitempty"`
 	LatencyUs             *int64            `json:"latency_us,omitempty"` // 往返微秒耗时 (rsp_captured_at_ns - req_captured_at_ns)/1000
 
@@ -495,7 +495,7 @@ type TrafficRecord struct {
 	DstModuleID           *uint64           `gorm:"index:idx_traefik_tr_dst_mod" json:"dst_module_id,omitempty"`
 
 	// 结构化 JSONB + 无损二进制 Bytea 双模持久化列
-	HeadersJSON           datatypes.JSON    `gorm:"column:headers_json;type:jsonb;not null" json:"headers_json"`                        // {"req": ParsedHead, "rsp": ParsedHead} 协议头快照
+	HeadersJSON           datatypes.JSON    `gorm:"column:headers_json;type:jsonb;not null" json:"headers_json"`                        // {"req": ParsedHead, "rsp": ParsedHead, "meta"?: CallGraphMeta} 协议头与轻量调用图摘要快照 (ADR-12)
 	SchemaID              *uint64           `gorm:"index:idx_traefik_tr_schema" json:"schema_id,omitempty"`
 	SchemaVersion         *int              `json:"schema_version,omitempty"`                                                           // 冗余保存解码版本号，切换生效版本不改写历史 (F-03.4)
 	DecodeStatus          string            `gorm:"size:32;not null" json:"decode_status"`
@@ -620,7 +620,8 @@ func (ReplayItem) TableName() string { return config.TablePrefix + "replay_items
 >        PRIMARY KEY (id, created_at)
 >    ) PARTITION BY RANGE (created_at);
 >    ```
-> 3. 每个月度/每日子分区自动继承局部索引并支持单独附加 `CREATE INDEX IF NOT EXISTS idx_traefik_tr_payload_gin ON traefik_traffic_records USING GIN (payload_json jsonb_path_ops)`。
+> 3. 每个月度/每日子分区自动继承局部索引（含幂等创建的 `idx_traefik_tr_session_req_ns (session_id, req_captured_at_ns, id)` 支撑发起序扫描与调用树构建）并支持单独附加 `CREATE INDEX IF NOT EXISTS idx_traefik_tr_payload_gin ON traefik_traffic_records USING GIN (payload_json jsonb_path_ops)`；
+> 4. **零 DDL 破坏的调用图轻量摘要约定 (`headers_json.meta`, [`ADR-12`](../05-adr/12-packet-causality-call-tree-and-sequence-ux-adr.md))**：慢轨落盘时在既有 `headers_json` 内写入可选 `meta: { peer_proc_name, biz_error, biz_status_summary, produced_entities, consumed_entities }`，使批次级事务树与实体生命线列表无需加载大体积 `payload_json` 或 `bytea` 列即可在 `< 30ms` 内完成聚合。
 
 ---
 
@@ -646,6 +647,7 @@ func (ReplayItem) TableName() string { return config.TablePrefix + "replay_items
 | `traefik_proto_operations` | `uk_traefik_active_proto_op` | `UNIQUE (service_name, operation) WHERE is_active = true` | **F-03.3**：所有生效描述集之间 `(service, operation)` 全局唯一，杜绝并发激活冲突 |
 | `traefik_replay_tasks` | `uk_traefik_replay_task_no` | `UNIQUE (task_no)` | F-12：重放任务流水号全局唯一 |
 | `traefik_replay_items` | `uk_traefik_replay_task_item` | `UNIQUE (task_id, record_id)` | F-12：单重放任务内同一条素材记录仅执行与断言一次 |
+| `traefik_traffic_records` | `idx_traefik_tr_session_req_ns` | `BTREE (session_id, req_captured_at_ns, id)` | **F-11 & F-15.6 (ADR-12)**：保障单批次报文严格按请求发起时刻 `O(log N)` 有序读取与事务调用树构建 |
 | `traefik_traffic_records` | `idx_traefik_tr_payload_gin` | `GIN (payload_json jsonb_path_ops)` | **F-11**：加速 `payload_json` 结构化请求/应答载荷的明文键值条件检索 |
 
 ---

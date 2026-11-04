@@ -1,11 +1,11 @@
 # 业务流量监控与重放 (`code-traefik`) 系统总体架构与主从协同设计
 
 - **文档编号**：`01-system-architecture.md`
-- **文档版本**：v1.3.2
-- **更新日期**：2026-11-03
+- **文档版本**：v1.4.0
+- **更新日期**：2026-11-04
 - **归属阶段**：阶段二：系统架构与数据模型设计 (`02-design`)
-- **状态**：已批准待实施 (Approved for M12)
-- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.9.3)、[`01-cros-rpc-protocol-spec.md`](../07-references/01-cros-rpc-protocol-spec.md) (v1.0.0)、[`02-ebpf-hook-and-dual-subsystem-adr.md`](../05-adr/02-ebpf-hook-and-dual-subsystem-adr.md)、[`03-control-plane-state-recovery-and-lease-reconciliation.md`](../05-adr/03-control-plane-state-recovery-and-lease-reconciliation.md)、[`09-arch-process-ssot-and-ebpf-premount-standby-adr.md`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md) (ADR-09 v1.1.0)、[`11-single-process-bidirectional-capture-and-recording-ux-adr.md`](../05-adr/11-single-process-bidirectional-capture-and-recording-ux-adr.md) (ADR-11 v1.0.0)
+- **状态**：已批准待实施 (Approved for M13)
+- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.10.0)、[`01-cros-rpc-protocol-spec.md`](../07-references/01-cros-rpc-protocol-spec.md) (v1.0.0)、[`02-ebpf-hook-and-dual-subsystem-adr.md`](../05-adr/02-ebpf-hook-and-dual-subsystem-adr.md)、[`03-control-plane-state-recovery-and-lease-reconciliation.md`](../05-adr/03-control-plane-state-recovery-and-lease-reconciliation.md)、[`09-arch-process-ssot-and-ebpf-premount-standby-adr.md`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md) (ADR-09 v1.1.0)、[`11-single-process-bidirectional-capture-and-recording-ux-adr.md`](../05-adr/11-single-process-bidirectional-capture-and-recording-ux-adr.md) (ADR-11 v1.0.0)、[`12-packet-causality-call-tree-and-sequence-ux-adr.md`](../05-adr/12-packet-causality-call-tree-and-sequence-ux-adr.md) (ADR-12 v1.0.0)
 
 ---
 
@@ -91,7 +91,8 @@ code-traefik/
 ├── internal/
 │   └── server/                      # Server 专属核心业务引擎
 │       ├── hub/                     # Agent 连接池、10s 心跳探活、WebSocket 接收器与 SSE 广播中心
-│       ├── recorder/                # 多进程协同录制编排器、REQ/RSP 配对器与异步批量落盘流水线
+│       ├── recorder/                # 多进程协同录制编排器、发起序 SeqNo + SNO 配对器与异步批量落盘流水线
+│       ├── callgraph/               # DOTR 事务调用树组装、跨进程 EGRESS⇔INGRESS 缝合、参数数据流血缘与跨事务实体链引擎
 │       ├── decoder/                 # .pb 描述集注册校验、版本切换与 dynamicpb 动态编解码中心
 │       ├── topology/                # 三级架构树治理、静态拓扑推导、报文穿透定位与架构一致性验证引擎
 │       └── diff/                    # 协议头级 + Protobuf 语义字段级双层回归 Diff 断言与重放调度器
@@ -183,7 +184,7 @@ stateDiagram-v2
 | `PUT` | `/agent/v1/monitors/sync` | 持 `RECORDING` 排他租约开启采集闸门（或兜底临时挂载） | 请求 `SyncMonitorReq{SessionID, MaxFrameBytes, MaxBufferBytes, Processes: []ProcessMonitorSpec}`；实时复检 `/proc` 后按序先开启 `EgressProxy` `CAPTURING` 分帧再预热 `ing_conn_map` 动态挂载入站读写钩子（0ms 零重启开录）；冲突返回 `409` |
 | `DELETE` | `/agent/v1/monitors/:sessionId/processes/:processId` | 录制中单独停止某进程的采集（不影响同机其他进程） | 将该进程从活跃录制集移除（若原为 `ARMED` 则不断连回退 `PASSTHROUGH` 待命，若为临时挂载则移除规则） |
 | `POST` | `/agent/v1/monitors/:sessionId/stop` | 录制批次正常结束或触发上限停止 | 先卸载入站读写钩子 -> `200ms` 在途应答排空 -> 将 `EgressProxy` 拨回 `PASSTHROUGH` **不断开底层 TCP 长连接** -> 发送 `EVENT_SESSION_DRAINED` 并释放本地租约；返回 `StopMonitorResp{CapturedFrames, DroppedFrames, BypassedSelfCount}` |
-| `POST` | `/agent/v1/replays/execute` | 下发单进程离线隔离重放任务 | 请求 `ExecuteReplayReq{TaskID, ProcessSpec, TimeoutMs, IngressRequests, EgressMocks, MngMocks}`；**前置校验若目标进程为 `WAITING_PROC` 或 `NEED_RECONNECT` (`established_conns > 0`) 立即返回 `409`**；就绪时原子将既有 `EgressProxy` 连接切入 `REPLAY_MOCK`（阻断真实下游 0 外泄）并返回 `200 {"status":"RUNNING"}` |
+| `POST` | `/agent/v1/replays/execute` | 下发单进程离线隔离重放任务 | 请求 `ExecuteReplayReq{TaskID, ProcessSpec, TimeoutMs, IngressItems, ScopedEgressMocks, GlobalFallbackMocks, MngMocks}`（向后兼容平铺 `IngressRequests/EgressMocks`）；**前置校验若目标进程为 `WAITING_PROC` 或 `NEED_RECONNECT` (`established_conns > 0`) 立即返回 `409`**；就绪时原子将既有 `EgressProxy` 连接切入 `REPLAY_MOCK`（阻断真实下游 0 外泄），每注入一条 `IngressItem` 前激活其专属 `RecordID` 局部 Mock 池并返回 `200 {"status":"RUNNING"}` |
 | `GET` | `/agent/v1/replays/:taskId/result` | 幂等轮询或重放完成后拉取任务最终汇总明细 | 返回 `ReplayTaskResultResp{TaskID, Status, TotalRequests, PassedRequests, MockHitCount, MockMissCount, Details}` |
 | `POST` | `/agent/v1/replays/:taskId/cancel` | 用户手动中止正在执行的重放任务 | 立即关闭注入连接、释放本地 Mock 监听器，恢复 `ARMED` 待命下游规则并释放本地租约 |
 | `POST` | `/agent/v1/purge` | 主控启动恢复、管理员强制解锁或紧急全卸载 | 幂等停录/停重放，关闭代理与 Mock 监听，调用 `link.Close()` 卸载全部探针，清空 BPF Maps 并置 `ActiveLease=NONE`、`ArmedDigest=""` |
@@ -450,12 +451,13 @@ sequenceDiagram
     Dev->>UI: 选定有权限的录制素材 (如公共 SHARED 批次)，指定投递至目标环境 Agent 的 LocalProcA
     UI->>Server: POST /api/replay-tasks (携带 source_process_id 与 target_process_id)
     Server->>Server: 校验素材可见性 + 基于 session.process_snapshots 校验同构兼容 + 校验 LocalProcA 已 READY (若 NEED_RECONNECT / WAITING_PROC 立即拒绝返 409!)
-    Server->>Server: 锁定 PrivAgent REPLAY 排他租约 + 单次扫描提取 raw_req_packet (INGRESS) 与 raw_rsp_packet (EGRESS Mock)
-    Server->>PrivAgent: POST /agent/v1/replays/execute (纯二进制重放包，零 .pb)
+    Server->>Server: 锁定 PrivAgent REPLAY 排他租约 + 按 DOTR 子树/时间窗切分 IngressItems 与 ScopedEgressMocks[recordID]
+    Server->>PrivAgent: POST /agent/v1/replays/execute (纯二进制分层作用域重放包，零 .pb)
     PrivAgent->>Kernel: 实时复检 established_conns==0 -> 将 EgressProxy 中 LocalProcA 既有长连接原子切入 REPLAY_MOCK (关闭/阻断真实下游 targetConn, 0字节外泄!) + connect4 置 MODE_REPLAY
     PrivAgent-->>Server: 200 OK (status="RUNNING"，已 READY 进程零手动重启直接启动注入!)
 
-    loop 按录制顺序逐条注入选定 raw_req_packet
+    loop 按请求发起序逐条注入选定 IngressItems[i]
+        PrivAgent->>PrivAgent: matcher.SetActiveRecordID(item.RecordID) 切换当前活跃局部 Mock 池
         PrivAgent->>LocalProcA: 建立 TCP 连接至 ListenPort，(若有 MNG 帧先原样发送)，写入原始请求帧
         LocalProcA->>LocalProcA: 执行待测新代码，生成全新随机 ullSNO'、新 TraceBuff' 与新 SendTimeStamp'
         LocalProcA->>PrivAgent: 经既有代理连接或新建重定向连接发送下游 EGRESS REQ'
@@ -493,6 +495,6 @@ sequenceDiagram
    - 数据库交互 100% 使用 GORM 参数化预编译查询，排序字段与状态枚举执行严格白名单校验，SQL 原始错误严禁透出至客户端响应。
 3. **浏览器安全响应头与前端防 XSS**：
    - 控制面全局注入 `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; frame-ancestors 'self'`（注：Vite 微前端样式注入需 `style-src 'unsafe-inline'`，`script-src` 严禁启用 `unsafe-inline` 或 `unsafe-eval`）、`X-Content-Type-Options: nosniff`、`X-Frame-Options: SAMEORIGIN`、`Permissions-Policy: camera=(), microphone=(), geolocation=()`，敏感 API 响应附加 `Cache-Control: no-store`，CORS 严格限定受信任门户域名白名单（严禁 `*`）并挂载 API 速率限制器。
-   - 来自网络报文的 `ascServiceName`、`ascOperation`、`acProcName` 及 Protobuf 解码字符串均视为不可信外部输入，前端 100% 依赖 React JSX 原生文本转义，严禁使用 `dangerouslySetInnerHTML`、`innerHTML` 或原生 `alert()` / `confirm()`。
+   - 来自网络报文的 `ascServiceName`、`ascOperation`、`acProcName`、业务实体键值及 Protobuf 解码字符串均视为不可信外部输入，前端（含 SVG 时序泳道图与树形表格）100% 依赖 React JSX 原生文本转义，严禁使用 `dangerouslySetInnerHTML`、`innerHTML` 或原生 `alert()` / `confirm()`；控制面调用树组装与参数血缘扫描强制实施有界递归与节点上限（`max_depth <= 16`、单事务返回子节点 `<= 200`、JSON 血缘递归 `<= 6` 层且标量上限 `<= 500`），防止恶意循环 `FatherSpanID` 或深层嵌套载荷引发 CPU/内存耗尽（DoS）。
 4. **测试绑定红线**：
    - 所有单元与集成测试中拉起的临时 `Server`、Mock `Agent`、模拟业务 TCP 服务及测试数据库均**强制仅监听 `127.0.0.1`**，严禁绑定 `0.0.0.0`；测试结束在 `t.Cleanup` 中确保端口与 eBPF 探针 100% 释放。

@@ -1,11 +1,11 @@
 # 业务流量监控与重放 (`code-traefik`) 数据面引擎与 CROS RPC 协议栈设计
 
 - **文档编号**：`02-data-plane-and-cros-rpc-engine.md`
-- **文档版本**：v1.4.0
-- **更新日期**：2026-11-03
+- **文档版本**：v1.5.0
+- **更新日期**：2026-11-04
 - **归属阶段**：阶段二：系统架构与数据模型设计 (`02-design`)
-- **状态**：已批准待实施 (Approved for M12)
-- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.9.3)、[`01-cros-rpc-protocol-spec.md`](../07-references/01-cros-rpc-protocol-spec.md) (v1.0.0)、[`01-system-architecture.md`](./01-system-architecture.md)、[`09-arch-process-ssot-and-ebpf-premount-standby-adr.md`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md) (ADR-09 v1.1.0)、[`11-single-process-bidirectional-capture-and-recording-ux-adr.md`](../05-adr/11-single-process-bidirectional-capture-and-recording-ux-adr.md) (ADR-11 v1.0.0)
+- **状态**：已批准待实施 (Approved for M13)
+- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.10.0)、[`01-cros-rpc-protocol-spec.md`](../07-references/01-cros-rpc-protocol-spec.md) (v1.0.0)、[`01-system-architecture.md`](./01-system-architecture.md)、[`09-arch-process-ssot-and-ebpf-premount-standby-adr.md`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md) (ADR-09 v1.1.0)、[`11-single-process-bidirectional-capture-and-recording-ux-adr.md`](../05-adr/11-single-process-bidirectional-capture-and-recording-ux-adr.md) (ADR-11 v1.0.0)、[`12-packet-causality-call-tree-and-sequence-ux-adr.md`](../05-adr/12-packet-causality-call-tree-and-sequence-ux-adr.md) (ADR-12 v1.0.0)
 
 ---
 
@@ -79,6 +79,9 @@ stateDiagram-v2
     EmitFrame --> SyncMagic: 若环形缓冲仍有剩余字节(粘包)，立即进入下一轮循环
 ```
 
+* **帧首字节到达定戳契约 (`FirstByteCapturedAtNs`, [`ADR-12`](../05-adr/12-packet-causality-call-tree-and-sequence-ux-adr.md))**：
+  当大报文跨越多个 TCP 分片（`ReadFullBody` 多次半包等待）时，若以末字节凑齐时刻作为采集时间戳，可能导致父 `INGRESS REQ` 因分片较长而在纳秒时间戳上晚于子 `EGRESS REQ`。因此 `StreamFramer` 提供带时间戳输入入口 `WriteAt(chunk []byte, arrivalNs int64) []StampedFrame`（`Write` 保留兼容测试入口）：在 `SyncMagic -> ReadCommHead` 定位到帧首字节瞬间锁存 `frameStartNs = arrivalNs`（粘包场景下后续紧邻帧继承当前分片 `arrivalNs`），`EmitFrame` 输出 `StampedFrame{Raw, CapturedAtNs: frameStartNs, IsTruncated}`，严格捍卫单机单调时钟下的因果不等式 `Parent.ReqNs <= Child.ReqNs <= Child.RspNs <= Parent.RspNs`。
+
 > [!TIP]
 > **合法超大包流式排空 (`DrainOversize`) 与中途挂载双重重同步防伪造机制**：
 > 1. 当 `uiLength` 符合 CROS RPC 规范（`<= 32MB`）但超过单帧落盘阈值（默认 `4MB`）时，绝不能直接清空缓冲重扫魔术字。`DrainOversize` 精确按 `remainingToDiscard` 计数丢弃尾部字节，保证内存峰值不超过 `4MB` 的同时，使下一条报文完美对齐偏移 `0`；
@@ -114,12 +117,12 @@ stateDiagram-v2
 
 为彻底消除解析端与重放自愈端因硬编码偏移导致的逻辑分歧，`pkg/crosrpc` 提供**权威表驱动布局结构体 (`RspLayout`)**：
 
-| 会话头长度 (`usRspHeadLen`) | 结构体版本 | `aucTraceBuff` 范围 | `ullClientSendTime` 范围 | `ascServiceName` 范围 | `ascOperation` 范围 | `ullStatusCode` / `usRspMsgNo` 范围 |
-| :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **`156 B`** | **V01 (兼容降级包)** | `[8..24]` | *无发送时间戳* | `[24..88]` (64B) | `[88..152]` (64B) | `usRspMsgNo`: `[152..154]` |
-| **`164 B`** | **V02 (服务实例过渡包)** | `[8..24]` | *无发送时间戳* | `[32..96]` (64B) | `[96..160]` (64B) | `usRspMsgNo`: `[160..162]` |
-| **`188 B`** | **V03 (定位性增强包)** | `[8..24]` | `[32..40]` (8B 大端) | `[56..120]` (64B) | `[120..184]` (64B) | `usRspMsgNo`: `[184..186]` |
-| **`200 B`** | **V04 (现代标准结构)** | `[8..24]` | `[32..40]` (8B 大端) | `[56..120]` (64B) | `[120..184]` (64B) | `ullStatusCode`: `[184..192]`, `usRspMsgNo`: `[192..194]` |
+| 会话头长度 (`usRspHeadLen`) | 结构体版本 | `aucTraceBuff` 范围 | `ullClientSendTime` 范围 | `ullServerRecvTime` / `ullServerSendTime` 范围 | `ascServiceName` 范围 | `ascOperation` 范围 | `ullStatusCode` / `usRspMsgNo` 范围 |
+| :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **`156 B`** | **V01 (兼容降级包)** | `[8..24]` | *无* | *无* | `[24..88]` (64B) | `[88..152]` (64B) | `usRspMsgNo`: `[152..154]` |
+| **`164 B`** | **V02 (服务实例过渡包)** | `[8..24]` | *无* | *无* | `[32..96]` (64B) | `[96..160]` (64B) | `usRspMsgNo`: `[160..162]` |
+| **`188 B`** | **V03 (定位性增强包)** | `[8..24]` | `[32..40]` (8B BE) | `Recv: [40..48]`, `Send: [48..56]` (各 8B BE) | `[56..120]` (64B) | `[120..184]` (64B) | `usRspMsgNo`: `[184..186]` |
+| **`200 B`** | **V04 (现代标准结构)** | `[8..24]` | `[32..40]` (8B BE) | `Recv: [40..48]`, `Send: [48..56]` (各 8B BE) | `[56..120]` (64B) | `[120..184]` (64B) | `ullStatusCode`: `[184..192]`, `usRspMsgNo`: `[192..194]` |
 
 `pkg/crosrpc` 统一导出 `LookupRspLayout(headLen int) (*RspLayout, error)`。若遇到未注册的非标长度，显式报错 `ErrUnknownRspLayout`，严禁使用盲目模糊推断。
 
@@ -147,7 +150,9 @@ type RspLayout struct {
 	HeadLen              int
 	TraceBuffOffset      int
 	TraceBuffLen         int
-	ClientSendTimeOffset int // 0 表示当前版本无此字段
+	ClientSendTimeOffset int // 0 表示当前版本无此字段 (V03/V04 为 32)
+	ServerRecvTimeOffset int // 0 表示当前版本无此字段 (V03/V04 为 40, 8B UINT64 BE)
+	ServerSendTimeOffset int // 0 表示当前版本无此字段 (V03/V04 为 48, 8B UINT64 BE)
 	ServiceNameOffset    int
 	OperationOffset      int
 	StatusCode64Offset   int // 0 表示当前版本仅有 32 位状态码
@@ -351,19 +356,42 @@ flowchart LR
    - **直连零容忍门禁 (`409 Conflict`)**：重放启动前实时核验目标进程：若进程未启动（`WAITING_PROC`）或存在任何绕过 `EgressProxy` 的预挂前直连长连接（`NEED_RECONNECT`, `established_conns > 0`），立即拒绝启动并返回 `409 Conflict`，杜绝未受控直连导致重放请求打穿真实下游；
    - **既有 `EgressProxy` 连接原地切入 `REPLAY_MOCK` + 新建连接本地 Mock 闭环（[`ADR-11`](../05-adr/11-single-process-bidirectional-capture-and-recording-ux-adr.md)）**：目标进程处于 `🟢 READY` 时无需手动重启！主控取「目标进程自身推导/登记的下游端点集合」与「源录制批次观测到的全部 `EGRESS` 原始 `dst_addr`（`IP:Port`）集合」的**并集**下发 Agent；Agent 一方面将 `EgressProxy` 中命中该并集的既有长连接原子切入 `REPLAY_MOCK`（立即关闭/物理阻断 `targetConn`，0 字节发往真实下游，直接由本地 `ScopedMockMatcher` 应答），并对同进程其余既有代理连接启用写前 `"CSE.TCP"` 魔术字守卫（检出 CROS RPC 帧即切断 `targetConn` 转入 `ScopedMockMatcher`），另一方面将 `target_pids_map[pid].mode` 置为 `MODE_REPLAY`，使目标进程一切新建出站连接统一由内核 `connect4` 重定向至物理零外拨的本地 `MockServer`（既保证 100% 零外泄，又能在 `SC-08` 多调未录制下游时精确提取服务与方法名记录 `MOCK_MISS`）；
    - **Mock 资产合格性门禁**：主控下发前严格剔除 `is_truncated == true`（超限截断帧）与 `exchange_type == 'REQ_ONLY'`（录制期挂起未等到应答帧）的记录，确保下发的下游 Mock 均为协议合规且分片完整的二进制数据。
-2. **连接注入与多连接会话还原**：
+2. **连接注入、按 `RecordID` 切换局部 Mock 池与多连接会话还原 (`ADR-12`)**：
    - Agent 注入器通过 `/proc/net/tcp` 探知目标进程绑定的实际监听地址（如特定网卡 IP 或 `127.0.0.1`）及 `ListenPort` 建立 TCP 注入连接（注入协程 `pid == agent_pid`，不受重定向影响）；
    - 若录制会话中存在前置 `MNG` 管理消息帧（A-08），注入器按原连接时序先发送入站 MNG 帧；
-   - 按选定顺序逐条发送 `IngressRequests` 原始切片；每发送一条同步/异步请求（`ucReqType != 3`），在连接上的 `StreamFramer` 中等待相同 `ullSNO` 的应答帧（若收到 `ucMsgType == 4 (RSP_SEG)` 则持续收集各分片直至收到终结帧，单请求最长等待 `TimeoutMs` 默认 `30s`）。
+   - 按 `ExecuteReplayReq.IngressItems` 顺序逐条执行注入（若旧调用方仅传入平铺 `IngressRequests` 则自动包装为虚拟递增 `RecordID` 保持 100% 向后兼容）：**每发送一条 `IngressItem` 前，立即调用 `matcher.SetActiveRecordID(item.RecordID)` 将局部 Mock 匹配焦点切换至当前入口请求的因果闭包**，随后写入 `item.RawReq` 并在连接 `StreamFramer` 中等待相同 `ullSNO` 的应答帧（若收到 `ucMsgType == 4 (RSP_SEG)` 则持续收集各分片直至收到终结帧，单请求最长等待 `TimeoutMs` 默认 `30s`）。
 
 ### 3.2 分层作用域与双级无 Schema 二进制 Mock 匹配算法 (`ScopedMockMatcher`)
 
-为杜绝单批次多请求因全局顺序兜底导致的“张冠李戴”（例如第 10 次请求因为带时间戳无法精确哈希命中，却意外弹出了第 1 次请求录制的旧应答），`pkg/replay` 采用**「因果链路局部优先 + 全局顺序兜底」**的分层匹配模型：
+为杜绝单批次多请求因全局顺序兜底导致的“张冠李戴”（例如第 10 次请求因为带时间戳无法精确哈希命中，却意外弹出了第 1 次请求录制的旧应答），`pkg/agentproto` 与 `pkg/replay` 端到端打通**「`RecordID` 因果闭包局部优先 + 全局顺序兜底」**的分层匹配契约（零 DB、零 `.pb` 依赖）：
+
+```go
+package agentproto
+
+// ReplayIngressItem 单条待重放入站请求及其不透明记录标识（供 Agent 切换 ScopedMocks 作用域）
+type ReplayIngressItem struct {
+	RecordID uint64 `json:"record_id"` // 对应主控 traefik_traffic_records.id
+	RawReq   []byte `json:"raw_req"`   // 原始入站 CROS RPC 请求帧
+}
+
+// ExecuteReplayReq 主控向 Agent 下发的离线隔离重放执行载荷（纯二进制切片，零 .pb 依赖）
+type ExecuteReplayReq struct {
+	TaskID              uint64              `json:"task_id"`
+	ProcessSpec         ProcessMonitorSpec  `json:"process_spec"`
+	TimeoutMs           int                 `json:"timeout_ms"`
+	IngressItems        []ReplayIngressItem `json:"ingress_items,omitempty"`         // 按发起序排列的待注入请求列表 (M13 主路径)
+	ScopedEgressMocks   map[uint64][][]byte `json:"scoped_egress_mocks,omitempty"`   // key = RecordID -> 专属下游原始应答帧组 (可含拼接 RSP_SEG+RSP)
+	GlobalFallbackMocks [][]byte            `json:"global_fallback_mocks,omitempty"` // 未归属孤儿下游应答兜底池
+	IngressRequests     [][]byte            `json:"ingress_requests,omitempty"`      // 兼容旧平铺注入列表
+	EgressMocks         [][]byte            `json:"egress_mocks,omitempty"`          // 兼容旧平铺下游 Mock 池
+	MngMocks            [][]byte            `json:"mng_mocks,omitempty"`
+}
+```
 
 1. **局部作用域索引与切分**：
-   - 主控在下发重放包时，基于入站请求的 `SpanID` 与出站请求的 `FatherSpanID`（或录制期请求往返时间窗口 `[req_ns, rsp_ns]`），将每条入站请求所引发的下游出站调用划归为该请求的专属局部池 `ScopedMocks[record_id]`；
-   - 每个局部池内部构建 `ExactMap[MethodKey + PayloadSHA256] -> []MockRspFrames` 及 `SeqQueue[MethodKey] -> []MockRspFrames`；
-   - 同时维护一个批次级只读全局兜底池 `GlobalFallbackMocks`。
+   - 主控 `diff.ReplayScheduler` 在下发重放包时，优先依据 DOTR `TraceID` 与 `SpanID / FatherSpanID` 因果子树（无 `TraceID` 时回退录制期请求往返时间窗口 `[req_ns - 500μs, rsp_ns + 500μs]`），将每条选定入站请求所触发的合格下游 `EGRESS` 应答按发起序划归至 `ScopedEgressMocks[record_id]`；
+   - Agent 初始化 `ScopedMockMatcher` 时逐个注册 `AddScopedMock(recordID, rawRsp)`：每个局部池内部构建 `ExactMap[MethodKey + PayloadSHA256] -> []MockRspFrames` 及 `SeqQueue[MethodKey] -> []MockRspFrames`；
+   - 同时将批次内未被认领的合格 `EGRESS` 应答注册至全局兜底池 `GlobalFallbackMocks`。
 
 ```mermaid
 flowchart TD

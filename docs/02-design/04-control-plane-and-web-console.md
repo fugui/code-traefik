@@ -1,11 +1,11 @@
 # 业务流量监控与重放 (`code-traefik`) 管理面服务、微前端控制台与回归断言设计
 
 - **文档编号**：`04-control-plane-and-web-console.md`
-- **文档版本**：v1.6.0
-- **更新日期**：2026-11-03
+- **文档版本**：v1.7.0
+- **更新日期**：2026-11-04
 - **归属阶段**：阶段二：系统架构与数据模型设计 (`02-design`)
-- **状态**：已批准待实施 (Approved for M12)
-- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.9.3)、[`01-system-architecture.md`](./01-system-architecture.md)、[`02-data-plane-and-cros-rpc-engine.md`](./02-data-plane-and-cros-rpc-engine.md)、[`03-architecture-elements-and-topology.md`](./03-architecture-elements-and-topology.md)、[`07-console-ia-restructuring-and-workflow-workbench-adr.md`](../05-adr/07-console-ia-restructuring-and-workflow-workbench-adr.md) (ADR-07)、[`08-recording-drawer-and-process-tree-selection-adr.md`](../05-adr/08-recording-drawer-and-process-tree-selection-adr.md) (ADR-08)、[`09-arch-process-ssot-and-ebpf-premount-standby-adr.md`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md) (ADR-09 v1.1.0)、[`10-enhanced-proto-schema-file-management-adr.md`](../05-adr/10-enhanced-proto-schema-file-management-adr.md) (ADR-10 v1.1.0)、[`11-single-process-bidirectional-capture-and-recording-ux-adr.md`](../05-adr/11-single-process-bidirectional-capture-and-recording-ux-adr.md) (ADR-11 v1.0.0)
+- **状态**：已批准待实施 (Approved for M13)
+- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.10.0)、[`01-system-architecture.md`](./01-system-architecture.md)、[`02-data-plane-and-cros-rpc-engine.md`](./02-data-plane-and-cros-rpc-engine.md)、[`03-architecture-elements-and-topology.md`](./03-architecture-elements-and-topology.md)、[`07-console-ia-restructuring-and-workflow-workbench-adr.md`](../05-adr/07-console-ia-restructuring-and-workflow-workbench-adr.md) (ADR-07)、[`08-recording-drawer-and-process-tree-selection-adr.md`](../05-adr/08-recording-drawer-and-process-tree-selection-adr.md) (ADR-08)、[`09-arch-process-ssot-and-ebpf-premount-standby-adr.md`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md) (ADR-09 v1.1.0)、[`10-enhanced-proto-schema-file-management-adr.md`](../05-adr/10-enhanced-proto-schema-file-management-adr.md) (ADR-10 v1.1.0)、[`11-single-process-bidirectional-capture-and-recording-ux-adr.md`](../05-adr/11-single-process-bidirectional-capture-and-recording-ux-adr.md) (ADR-11 v1.0.0)、[`12-packet-causality-call-tree-and-sequence-ux-adr.md`](../05-adr/12-packet-causality-call-tree-and-sequence-ux-adr.md) (ADR-12 v1.0.0)
 
 ---
 
@@ -26,8 +26,9 @@ flowchart TB
         TopoSvc["topology.Engine (架构树 / 静态推导 / 一致性验证)"]
         DecoderSvc["decoder.Registry (atomic 编译缓存 / dynamicpb 编解码)"]
         HubSvc["hub.Manager (10s 心跳 / WS 接收池 / SSE 广播总线)"]
-        RecSvc["recorder.Orchestrator (多进程协同编排 / SNO 配对 / 批量落盘)"]
-        ReplaySvc["diff.ReplayScheduler (重放包组装 / 优先级状态聚合)"]
+        RecSvc["recorder.Orchestrator (多进程协同编排 / 发起序 SeqNo + SNO 配对 / 批量落盘)"]
+        CallGraphSvc["callgraph.Engine (DOTR 调用树 / 跨跳缝合 / 参数与实体血缘)"]
+        ReplaySvc["diff.ReplayScheduler (ScopedMock 闭包组装 / 优先级状态聚合)"]
         DiffSvc["diff.AssertionEngine (协议头 + protoreflect 双层 Diff)"]
         Cleaner["recorder.RetentionCleaner (30天 TTL 分批清理)"]
     end
@@ -36,7 +37,9 @@ flowchart TB
     H_Proto --> DecoderSvc
     H_Agent --> HubSvc
     H_Rec --> RecSvc
+    H_Rec --> CallGraphSvc
     H_Replay --> ReplaySvc --> DiffSvc
+    ReplaySvc --> CallGraphSvc
     H_SSE --> HubSvc
     HubSvc -- "原始信封帧流" --> RecSvc
     HubSvc -- "重放结果帧" --> ReplaySvc
@@ -98,9 +101,11 @@ flowchart LR
    - 内存原子维护当前批次 `capturedFrames` 与启动定时器 `time.AfterFunc(MaxDuration)`（默认 `30 分钟` / `100,000 帧`）；任一阈值触发时自动向全部参与 Agent 发送 `/stop`、刷空配对窗口并释放租约，状态落盘为 **`COMPLETED_BY_LIMIT`**。
 3. **Track B 慢轨：连接内 `ullSNO` 往返配对与双模归档 (`ExchangeAssembler`)**：
    - **无锁分片亲和**：按 `(session_id, process_id, direction, conn_key)` 哈希路由至固定 Worker，保证同一 TCP 连接上的 `REQ`、`RSP_SEG` 与 `RSP` 100% 由同一协程串行处理；
-   - **单行往返聚合规则（Exchange-per-Row，目标吞吐 `>= 2000 帧/s`）**：
+   - **单行往返聚合与发起序锚定规则（Exchange-per-Row，目标吞吐 `>= 2000 帧/s`，[`ADR-12`](../05-adr/12-packet-causality-call-tree-and-sequence-ux-adr.md)）**：
+     - **请求到达瞬间原子分配发起序号 (`SeqNo`)**：每个活跃录制批次维护 `atomic.Int64` 序号器 `sessionSeq`；收到任意 `REQ` 首帧创建挂起项瞬间（以及 `ONEWAY`、`MNG`、`RSP_ORPHAN` 到达瞬间）立即执行 `seqNo = sessionSeq.Add(1)` 绑定至挂起上下文，彻底根治因下游 `EGRESS RSP` 先于父 `INGRESS RSP` 完成落盘而导致的列表父子倒挂；
+     - **连接级 `MNG.acProcName` 对端身份缓存**：当某 `(session_id, process_id, conn_key)` 捕获到 `ucMsgType ∈ {5, 6, 7}` (`MNG`) 握手管理帧且 `MngHead.ProcName` 非空时，在 Worker 本地连接字典 `connPeerProc[connKey]` 中记忆对端自报进程名，并注入同连接后续往返记录的 `headers_json.meta.peer_proc_name`；
      - **`ONEWAY` 单向请求**（`ucMsgType == 2 && ucReqType == 3`）：无需等待应答，直接组装 `raw_req_packet = frame`、`raw_rsp_packet = nil`、`payload_json = {"req": reqObj, "rsp": null}`；
-     - **标准 `UNARY` 与多段流式 `STREAM_RSP`**：收到 `REQ` 时暂存至 Worker 本地 `pendingMap[(process_id, direction, conn_key, sno)]`；后续收到 `ucMsgType == 4 (RSP_SEG)` 时按序追加分片字节至 `rspBuf` 并递增 `rsp_seg_count`；收到终结帧 `ucMsgType == 3 (RSP)` 时弹出配对项，无损拼接 `raw_rsp_packet`（可通过 `crosrpc.SplitFrames` 零歧义逐片还原），组装 `payload_json = {"req": reqObj, "rsp": rspObjOrSegArray}`，并精确计算微秒级往返耗时 `latency_us = (rspCapturedAtNs - reqCapturedAtNs) / 1000`；
+     - **标准 `UNARY` 与多段流式 `STREAM_RSP`**：收到 `REQ` 时携带已分配的 `seqNo` 暂存至 Worker 本地 `pendingMap[(process_id, direction, conn_key, sno)]`；后续收到 `ucMsgType == 4 (RSP_SEG)` 时按序追加分片字节至 `rspBuf` 并递增 `rsp_seg_count`；收到终结帧 `ucMsgType == 3 (RSP)` 时弹出配对项，无损拼接 `raw_rsp_packet`（可通过 `crosrpc.SplitFrames` 零歧义逐片还原），组装 `payload_json = {"req": reqObj, "rsp": rspObjOrSegArray}`，提取轻量调用图摘要 `headers_json.meta`（含 `peer_proc_name`、`biz_error`、`biz_status_summary` 及顶层实体主键摘要 `produced_entities / consumed_entities`），并精确计算微秒级往返耗时 `latency_us = (rspCapturedAtNs - reqCapturedAtNs) / 1000`；
      - **自适应配对超时与孤立帧兜底**：
        - 滑动配对超时时间基于报文会话头动态计算：取 `max(ReqHead.uiTimeOutSecondLimit, 30s)`；
        - 若收到 Agent 投递的 `EVENT_CONN_CLOSED` 连接关闭事件，立即刷空该连接的所有挂起请求，置为 `exchange_type = 'REQ_ONLY'` 落盘；
@@ -117,7 +122,7 @@ flowchart LR
    - 对目标进程所属 Agent 获取 `REPLAY` 排他租约（冲突立即返回 `409 Conflict`）。
 2. **重放生命周期状态机与既有代理连接零外泄 Mock 接管**：
    - **状态机流转**：`PENDING`（初始创建） -> `RUNNING`（目标进程已 `🟢 READY`，无需手动重启；Agent 将 `EgressProxy` 中该进程的既有长连接原子切入 `REPLAY_MOCK` 物理阻断真实下游写通道并按序注入请求切片） -> `COMPLETED / CANCELLED / FAILED`；
-   - **单次扫描流式组装**：直接从 `traefik_traffic_records` 提取选定记录的 `raw_req_packet` 作为注入帧，并关联对应的局部 ScopedMock 集合及全局兜底 Mock 集合（严格过滤截断帧与 REQ_ONLY 帧），采用二进制分片流下发 Agent；
+   - **按 `RecordID` 因果子树组装 `ScopedEgressMocks`（[`ADR-12`](../05-adr/12-packet-causality-call-tree-and-sequence-ux-adr.md)）**：从 `traefik_traffic_records` 按 `req_captured_at_ns ASC, seq_no ASC, id ASC` 提取选定 `INGRESS` 记录组装 `IngressItems: []ReplayIngressItem{RecordID, RawReq}`，并调用 `callgraph.BuildReplayClosure`：优先按同进程同 `trace_id` 的 DOTR `FatherSpanID` 子孙闭包（无 `trace_id` 时回退 `[req_ns - 500μs, rsp_ns + 500μs]` 包含时间窗）为每条 `INGRESS` 切分专属 `ScopedEgressMocks[recordID]`，将未归属合格 `EGRESS` 放入 `GlobalFallbackMocks`（严格剔除 `is_truncated == true`、`REQ_ONLY` 与空应答帧），纯二进制下发 Agent；
    - **双轨可靠回收与独立明细持久化**：
      - 重放执行进度与结果通过 WebSocket `EVENT_REPLAY_ITEM_DONE` 实时推送，同时支持通过 `GET /agent/v1/replays/:taskId/result` 幂等拉取；
      - 每条请求重放回收的实际原始应答帧（`actual_rsp_packet` bytea）及双层比对结果独立持久化至 **`traefik_replay_items`** 表，支持前端标准服务端分页查询与历史多次比对！
@@ -129,6 +134,27 @@ flowchart LR
 ### 1.4 历史流量保留期自动清理器 (`recorder.RetentionCleaner`)
 
 每 `6 小时` 巡检一次超过保留期（默认 `30 天`，配置项 `traffic.retention_days`）且非活跃状态的录制批次，按每批 `5000` 行分批删除关联流量记录与过期会话，避免长事务锁表，并通过 `commonAudit.Push` 写入一条系统级清理审计记录。
+
+### 1.5 DOTR 因果调用树、跨进程跳点缝合与数据流血缘引擎 (`internal/server/callgraph`, [`ADR-12`](../05-adr/12-packet-causality-call-tree-and-sequence-ux-adr.md))
+
+为支撑 `/debug` 默认「事务调用树 + 内联迷你甘特瀑布条」、交互式 UML 时序泳道图及有状态重放闭包预览，`internal/server/callgraph` 提供以下五大确定性纯算法能力：
+
+1. **批量架构水合与连接短编号消歧 (`HydrateRecordSummaries`)**：
+   - 一次性批量加载批次涉及的 `Module` 字典与 `RecordingSession.ProcessSnapshots`（辅以存活 `Process` 表兜底），`O(1)` 回填每条记录的 `src_module_name`、`dst_module_name`、`process_name`、`arch_process_name` 及 `headers_json.meta.peer_proc_name`（来自同连接 `MNG.acProcName`）；
+   - 按连接首次出现时序为批次内每个唯一 `(process_id, conn_key)` 生成紧凑短编号 `Conn#1, Conn#2, ...`，消除不同 TCP 长连接各自独立递增 `ullSNO`（如两条不同连接均出现 `SNO=1002`）引发的视觉混淆。
+2. **多进程 `EgressProxy` 跨跳合并缝合 (`StitchCrossProcessHops`)**：
+   - 当同一录制批次纳管了上下游多个业务进程（$P_1 \rightarrow \text{EgressProxy} \rightarrow P_2$）时，`EgressProxy` 代拨会产生新客户端临时端口，导致 $P_1.\text{EGRESS}$ 与 $P_2.\text{INGRESS}$ 四元组不同；
+   - **一级权威匹配 (`DOTR_EXACT`)**：在同一非空 `TraceID` 内，将满足 `i.Direction == INGRESS && i.ProcessID != e.ProcessID && (i.SpanID == e.SpanID || i.FatherSpanID == e.SpanID) && i.ServiceName == e.ServiceName && i.Operation == e.Operation` 且时间距离最近的单条未配对入站记录与出站记录 $e$ 双向缝合（记录 `linked_peer_record_id` 并估算单跳网络传输耗时 `net_hop_us = max(0, e.latency_us - i.latency_us)`）；
+   - **二级指纹兜底 (`FINGERPRINT_INFERRED`)**：针对无 `TraceID` 报文，按 `(ServiceName, Operation, ReqPayloadSHA256, DstPort)` 相等且 `|i.ReqCapturedAtNs - e.ReqCapturedAtNs| <= 50ms` 缝合。
+3. **DOTR 主路径调用树构建、同层兄弟分类与甘特坐标归一化 (`BuildTransactionTrees`)**：
+   - **父子挂载与安全边界**：优先在同一 `TraceID` 内依据 `child.FatherSpanID == parent.SpanID`（兼容同进程内 `EGRESS` 继承入口 `INGRESS` 上下文）挂载子孙节点；无 `TraceID` 的孤儿 `EGRESS` 回退在同 `(session_id, process_id)` 内寻找满足 `[parent.ReqNs - 500μs, parent.RspNs + 500μs]` 的最内层入口 `INGRESS` 挂载（标记 `TEMPORAL_INFERRED`）；强制执行 `visited` 破环保护、最大树深 `max_depth = 16` 与单根事务返回子节点上限 `max_children = 200`；
+   - **兄弟时序关系与软错误标记**：同父节点下按发起序比较相邻子调用区间，自动标注 `PARALLEL`（重叠 `> 50μs`）、`COMPENSATION`（位于前序异常或 `biz_error` 之后且方法名匹配 `Cancel* / Release* / Rollback* / Refund* / Unlock* / Compensate* / Revert*`）与 `SEQUENTIAL`；以根事务 `[rootStartNs, rootEndNs]` 为基准计算每个节点的 `waterfall_offset_pct (0..100)`、`waterfall_width_pct (0.5..100)`、净自身执行耗时 `self_exec_us` 与 `is_critical_path`；
+   - **筛选保树语义**：当用户在 `/debug` 传入方法名、异常或关键字过滤命中深层子节点时，引擎自动保留其所属根事务及完整祖先链路（非命中兄弟可折叠或标记弱化），并严格以**根业务事务**为单位进行分页切片，确保同一事务绝不跨页割裂。
+4. **单事务参数数据流血缘提取 (`ExtractParameterLineage`)**：
+   - 面向单事务时序泳道接口按需触发（节点上限 `<= 200`，单 JSON 递归深度 `<= 6`、标量叶节点上限 `<= 500`）：遍历事务内按发起序排列的已解码 `payload_json.{req, rsp}`，当上游输入或前序子调用应答产出的非噪声标量值（关键标识字段 `*_id / *_no / *_code / *_key / *_token / sku*` 或长度 `>= 4` 的高熵字符串/业务长整型）在后续调用入参或最终入口出参中精确复现时，生成有向参数血缘边 `ParameterLineageEdgeDTO`。
+5. **跨事务有状态业务实体生命线与重放闭包诊断 (`BuildEntityChains` & `BuildReplayClosurePreview`)**：
+   - 基于批次各根事务 `headers_json.meta`（历史无 `meta` 小批次受控回退扫描顶层载荷）：当某根事务在 `rsp` 中首次产出某业务主键（`req` 未携带而 `rsp` 出现，如 `CreateOrder.rsp.order_id = "ORD_9981"`，角色 `PRODUCER`），后续根事务在 `req` 中携带同一键值（如 `GetOrderDetail / CancelOrder`，角色 `CONSUMER`），自动串联为跨事务实体生命线；
+   - 当用户对任一 `CONSUMER` 入口记录请求 `GET /api/traffic-records/:id/replay-closure` 时，除返回其专属 `ScopedEgressMocks` 预览清单外，自动附带前置 `PRODUCER`（及中间状态变更事务）有序依赖链与一键连带回放推荐 `recommended_record_ids`。
 
 ---
 
@@ -250,7 +276,7 @@ type FieldDiff struct {
 | 菜单分组 | 菜单名称 | 子路由路径 (`MODULE_BASE_PATH = '/traefik'`) | 页面组件 | 可见角色 | URL Search Params 状态同步项 |
 | :--- | :--- | :--- | :--- | :---: | :--- |
 | **流量作业** *(置顶高频)* | **流量录制** *(默认首页)* | `/record` | `RecordingWorkbenchPage` | 全体登录用户 | `scope` (`SHARED` \| `PRIVATE`), `status`, `search`, `auto_start` (`1`), `agent_id`, `page`, `page_size` |
-| **流量作业** | **流量调试** | `/debug` | `TrafficDebugWorkbenchPage` | 全体登录用户 | `session_id`, `live` (`1`), `direction`, `exchange_type`, `service_name`, `operation`, `sno`, `trace_id`, `has_error` (`true`), `is_replayable`, `keyword`, `page`, `page_size` |
+| **流量作业** | **流量调试** | `/debug` | `TrafficDebugWorkbenchPage` | 全体登录用户 | `session_id`, `view` (`tree` \| `flat`, 默认 `tree`), `live` (`1`), `direction`, `exchange_type`, `service_name`, `operation`, `sno`, `trace_id`, `entity_key`, `has_error` (`true`), `is_replayable`, `keyword`, `seq_root_id`, `page`, `page_size` |
 | **流量作业** | **流量重放** | `/replay` | `ReplayWorkbenchPage` | 全体登录用户 | `session_id`, `auto_create` (`1`), `target_process_id`, `status`, `page`, `page_size` |
 | **架构与契约** *(静态基线)* | **架构拓扑** | `/topology` | `TopologyWorkbenchPage` | 全体登录用户 | `view` (`LOGICAL` \| `PHYSICAL`), `env_agent_id`, `depth`, `session_id`, `focus` |
 | **架构与契约** | **架构元素** | `/architecture` | `ArchitectureWorkbenchPage` | 全体登录用户 | `tree` (`logical` \| `physical`), `subsystem_id`, `group_id`, `module_id`, `proc_group_id`, `arch_process_id` |
@@ -302,11 +328,16 @@ src/
 │   │   ├── ActiveRecordingBanner.tsx       # 活跃录制状态卡: 实时帧计数、A-01 存量长连接重连告警、一键停录与【实时跟流调试】
 │   │   ├── RecordingStartDrawer.tsx        # 发起协同录制抽屉(680px Drawer): 卡片式作用域、Agent 在线/租约防呆与预挂就绪分组进程树
 │   │   └── RecordingSessionTable.tsx       # 录制素材分页台账表: 展示进程/帧数/归属，内置 [去调试] [发起重放] [架构验证] [发布共享] [删除]
-│   ├── TrafficDebugWorkbenchPage/          # 2. [流量作业] 流量调试工作台 (/debug - 兼容 /traffic 重定向)
-│   │   ├── DebugSessionContextBar.tsx      # 调试上下文顶栏: 录制批次切换、活跃批次脉冲提示与 SSE 实时跟流暂停/继续控制
-│   │   ├── LiveTrafficFilterForm.tsx       # 多维 URL 筛选器: Service/Operation/ullSNO/TraceID/方向/has_error(仅看异常)/关键字
-│   │   ├── TrafficRecordTable.tsx          # 往返报文主表: 点击唤起四段解剖，可重放 INGRESS 行挂载【单包调试】快捷入口
-│   │   └── SinglePacketReplayDrawer.tsx    # 单包快速重放调试抽屉: 过滤同构目标进程 -> 一键触发单条 ReplayTask -> 原地呈现双层 Diff 与 Mock 明细
+│   ├── TrafficDebugWorkbenchPage/          # 2. [流量作业] 流量调试工作台 (/debug - 默认可折叠事务调用树 + 内联甘特瀑布)
+│   │   ├── DebugSessionContextBar.tsx      # 调试上下文顶栏: 录制批次切换、[🌳 事务调用树 | 📋 原始时序平铺] 视图切换与 SSE 实时跟流控制
+│   │   ├── LiveTrafficFilterForm.tsx       # 多维 URL 筛选器: Service/Operation/ullSNO/TraceID/方向/has_error(含软错误)/关键字
+│   │   ├── EntityLifecycleFilterStrip.tsx  # 跨事务有状态业务实体生命线快捷胶囊条 (如 order_id=ORD_9981 [创建➔详情➔取消])
+│   │   ├── TransactionCallTreeTable.tsx    # [默认主表 ?view=tree] 按根事务不割裂分页的多级可折叠因果调用树 (跨跳合并/并发/补偿徽章)
+│   │   ├── InlineWaterfallBar.tsx          # 行内迷你甘特瀑布条 (以根事务跨度为 100% 轨道，--color-* 语义着色与关键路径高亮)
+│   │   ├── TrafficRecordTable.tsx          # [平铺备选视图 ?view=flat] 按请求发起序排列的平铺报文表 (#Seq + Conn#k·SNO + 水合架构链路)
+│   │   ├── TransactionSequenceDrawer.tsx   # 全链路时序泳道 + 四段解剖双栏联动宽屏抽屉 (支持叠加重放 Diff / MOCK_MISS 图层)
+│   │   ├── SequenceSwimlaneCanvas.tsx      # 纯原生 React SVG 交互式 UML 时序泳道画布 (三段耗时柱 + 可开关参数传递血缘弧线)
+│   │   └── SinglePacketReplayDrawer.tsx    # 事务闭包快速重放抽屉: 专属下游 ScopedMock 闭包透明预览、前置状态依赖链勾选回放与原地 Diff
 │   ├── ReplayWorkbenchPage/                # 3. [流量作业] 流量重放工作台 (/replay)
 │   │   ├── ReplayTaskCreatorModal.tsx      # 批量同构重放创建弹窗 (支持 URL ?session_id=X&auto_create=1 自动预选唤起)
 │   │   ├── ReplayTaskTable.tsx             # 重放任务台账表 (PASS/FAILED/MOCK_MISS/TIMEOUT/ERROR 全序裁决)
@@ -379,9 +410,12 @@ export interface SessionHeadAnatomyDTO {
   ullStatusCode?: string;
   rspMsgNo?: number;
   traceBuffHex?: string;     // 16B aucTraceBuff Hex
-  timingBreakdownUs?: {      // V3+ RSP 自动拆解的微秒级耗时
+  timingBreakdownUs?: {      // V3+ RSP 联合 TIME_STAMP 扩展头自动拆解的微秒级阶段耗时 (ADR-12)
     clientToServerUs?: number;
-    serverProcessUs?: number; // ullServerSendTime - ullServerRecvTime
+    networkAndFramingUs?: number; // max(0, roundTripLatencyUs - serverProcessUs)
+    queueWaitUs?: number;         // ullServerEnqueueTime - ullServerRecvTime
+    serverExecUs?: number;        // ullServerSendTime - ullServerEnqueueTime
+    serverProcessUs?: number;     // ullServerSendTime - ullServerRecvTime (服务端总驻留)
   };
   fields: Array<{ name: string; offsetRange: string; value: string }>;
 }
@@ -650,10 +684,178 @@ export interface AgentProcessMountDTO {
 - **从 `流量录制` (`/record`) 出发**：
   - 活跃录制进行中时，点击顶部状态卡【实时跟流调试】$\rightarrow$ 跳转 `/debug?session_id=<id>&live=1`，自动开启 SSE `traffic.persisted` 实时订阅；
   - 在录制素材台账表任一行点击 `[去调试]` $\rightarrow$ 跳转 `/debug?session_id=<id>`；点击 `[发起重放]` $\rightarrow$ 跳转 `/replay?session_id=<id>&auto_create=1` 自动唤起 `ReplayTaskCreatorModal`；点击 `[架构验证]` $\rightarrow$ 跳转 `/topology?session_id=<id>` 自动叠加六分类架构一致性报告。
-- **在 `流量调试` (`/debug`) 执行单包快速重放调试 (`SinglePacketReplayDrawer`)**：
-  - **触发条件**：仅当 `record.direction === 'INGRESS'` 且 `record.is_replayable === true` 时，在表格操作列与 `PacketAnatomyDrawer` 顶栏激活【单包重放调试】按钮；
-  - **同构进程智能匹配**：根据该报文来源进程的 `arch_process_id` 或目标模块 `dst_module_id`，从当前用户可见的 `Process` 挂载列表中自动筛选挂载相同 `ArchProcess`（或承载相同公共模块）且有效 `listen_port > 0` 的同构目标进程（优先推荐本人在线空闲 `PRIVATE` Agent 进程，亦支持空闲 `SHARED` Agent 进程）；
-  - **零新协议原地闭环**：直接复用 `POST /api/replay-tasks`（`selected_record_ids: [record.id]`），执行完毕后在同一抽屉内原地渲染 `HeaderAssertionCard`、`ProtoFieldDiffTable` 与 `MockHitMissTimeline`。
+- **在 `流量调试` (`/debug`) 执行事务因果检视、时序泳道联动与闭包重放调试 (`ADR-12`)**：
+  - **默认可折叠事务调用树与内联迷你甘特瀑布 (`?view=tree`)**：默认按根事务分页呈现入口请求及其多级子孙 `EGRESS` / 跨进程缝合跳 `[P1 ➔ P2]`，内联渲染归一化甘特瀑布条、兄弟 `串行/并发/补偿` 徽章与协议+业务双态状态码；支持一键切换 `?view=flat` 查看严格按发起时刻升序排列的平铺表，或点击顶部 `EntityLifecycleFilterStrip` 实体胶囊筛选某业务单据（如 `order_id=ORD_9981`）的完整增删查改生命线；
+  - **全链路时序泳道与四段解剖双栏联动 (`TransactionSequenceDrawer`)**：点击任意事务的 `[📊 时序泳道]` 滑出宽屏抽屉，左栏通过纯原生 React SVG 渲染 UML 参与者泳道、三段阶段耗时柱与可开关的参数传递血缘弧线（如 `rsp.lock_id ➔ req.lock_id`），点击任意一跳箭头即在右栏零延迟联动刷新四段报文解剖并高亮关联字段；
+  - **事务闭包重放与前置状态依赖链回放 (`SinglePacketReplayDrawer`)**：
+    - **触发条件**：当入口或已缝合入站记录 `direction === 'INGRESS'` 且 `is_replayable === true` 时，激活【事务重放】按钮；
+    - **下游闭包预览与前置实体防呆**：自动请求 `GET /api/traffic-records/:id/replay-closure`，透明列出本事务绑定的专属 `ScopedEgressMocks` 清单；若检出当前请求消费了同批次前序事务产出的业务实体主键（如直接重放 `CancelOrder` 依赖前序 `CreateOrder`），醒目提示前置依赖链并支持勾选 **`[☑ 按序连带回放前置依赖事务链]`**；
+    - **同构投递与泳道故障叠加**：筛选承载同构模块且 `listen_port > 0` 的 `READY` 目标进程调用 `POST /api/replay-tasks`（下发 `RecordID` 级隔离 `ScopedEgressMocks`），完成后除原地渲染双层 Diff 外，支持一键在时序泳道图上叠加定位 `SCOPED_HIT`、`MOCK_MISS` 或 `RSP_DIFF` 故障跳点。
+
+### 4.6 流量调试调用树、时序泳道、数据血缘与闭包重放 TypeScript DTO 契约（`ADR-12`，零 `any`）
+
+```typescript
+// frontend/src/types/traffic.ts
+
+export type CallLinkConfidence = 'DOTR_EXACT' | 'FINGERPRINT_INFERRED' | 'TEMPORAL_INFERRED' | 'ROOT';
+export type SiblingRelationKind = 'ROOT' | 'SEQUENTIAL' | 'PARALLEL' | 'COMPENSATION';
+
+/** 水合增强后的单条往返记录摘要（平铺列表与调用树节点共用基座） */
+export interface TrafficRecordSummary {
+  id: string;
+  session_id: string;
+  seq_no: number;                 // 请求到达瞬间原子分配的发起序号 (#1, #2, ...)
+  process_id: string;
+  process_name?: string;
+  arch_process_name?: string;
+  peer_proc_name?: string;        // 来自同连接 MNG.acProcName 的对端自报进程名
+  conn_key: string;
+  conn_index: number;             // 批次内紧凑连接短编号 (展示为 Conn#1 · SNO)
+  direction: 'INGRESS' | 'EGRESS';
+  exchange_type: 'UNARY' | 'STREAM_RSP' | 'ONEWAY' | 'REQ_ONLY' | 'RSP_ORPHAN' | 'MNG';
+  src_addr: string;
+  dst_addr: string;
+  req_captured_at_ns: string;     // 64位纳秒时间戳统一使用十进制字符串防精度丢失
+  rsp_captured_at_ns?: string;
+  sno: string;
+  service_name: string;
+  operation: string;
+  latency_us?: number;
+  status_code: string;
+  biz_error: boolean;             // 协议头 status_code==0 但业务载荷返回非零错误码
+  biz_status_summary?: string;    // 如 "code=4009"
+  trace_id: string;
+  span_id: string;
+  father_span_id: string;
+  src_module_id?: string;
+  src_module_name?: string;
+  dst_module_id?: string;
+  dst_module_name?: string;
+  decode_status: string;
+  is_truncated: boolean;
+  is_replayable: boolean;
+  created_at: string;
+}
+
+/** 事务调用树递归节点（支持多进程 EGRESS ⇔ INGRESS 跨跳缝合与内联瀑布百分比） */
+export interface TransactionTreeNodeDTO {
+  record: TrafficRecordSummary;
+  stitched_ingress_record?: TrafficRecordSummary; // 多进程协同录制下缝合的下游对端 INGRESS 记录
+  net_hop_us?: number;                            // 跨进程缝合估算的单跳网络开销
+  depth: number;                                  // 0..16
+  link_confidence: CallLinkConfidence;
+  sibling_relation: SiblingRelationKind;
+  waterfall_offset_pct: number;                   // 相对根事务起点的百分比偏移 [0, 100]
+  waterfall_width_pct: number;                    // 相对根事务总耗时的百分比宽度 [0.5, 100]
+  self_exec_us?: number;                          // 扣除子调用并集耗时后的自身净耗时
+  is_critical_path: boolean;
+  matched_filter: boolean;                        // 搜索命中深层子节点时标记高亮
+  children: TransactionTreeNodeDTO[];
+}
+
+/** 跨事务业务实体生命周期摘要项（如 order_id="ORD_9981"） */
+export interface EntityLifecycleChainDTO {
+  entity_key: string;             // 如 "order_id:ORD_9981"
+  field_name: string;             // "order_id"
+  entity_value: string;           // "ORD_9981"
+  producer_root_record_id?: string;
+  steps: Array<{
+    root_record_id: string;
+    seq_no: number;
+    operation: string;
+    role: 'PRODUCER' | 'CONSUMER';
+  }>;
+}
+
+/** GET /api/recording-sessions/:id/transactions 单页根事务组 */
+export interface TransactionTreeGroupDTO {
+  root_record_id: string;
+  trace_id: string;
+  total_node_count: number;
+  truncated_children_count: number; // 超出 max_children=200 上限被折叠的尾部节点数
+  total_duration_us: number;
+  has_protocol_error: boolean;
+  has_biz_error: boolean;
+  has_compensation: boolean;
+  entity_tags: string[];            // 关联的业务实体键值标签
+  root: TransactionTreeNodeDTO;
+}
+
+/** 单事务内参数数据流传递血缘有向边 */
+export interface ParameterLineageEdgeDTO {
+  from_record_id: string;
+  from_side: 'REQ' | 'RSP';
+  from_field_path: string;          // 如 "rsp.lock_id"
+  to_record_id: string;
+  to_side: 'REQ' | 'RSP';
+  to_field_path: string;            // 如 "req.lock_id"
+  sample_value: string;             // 截断脱敏展示摘要 (<= 64 字符)
+}
+
+/** 交互式 UML 全链路时序泳道与可选重放叠加 DTO */
+export interface SequenceParticipantDTO {
+  participant_key: string;          // 如 "ext:api-gateway" | "proc:12" | "svc:demo.inventory.InventoryService"
+  title: string;                    // 泳道主标题 (模块名或服务名)
+  subtitle: string;                 // 进程名 / IP:Port
+  kind: 'EXTERNAL_CALLER' | 'MONITORED_PROCESS' | 'EXTERNAL_DOWNSTREAM';
+}
+
+export interface SequenceStepDTO {
+  step_index: number;
+  record: TrafficRecordSummary;
+  stitched_ingress_record?: TrafficRecordSummary;
+  from_participant: string;
+  to_participant: string;
+  sibling_relation: SiblingRelationKind;
+  offset_us: number;
+  duration_us: number;
+  stage_timing?: {
+    network_and_framing_us?: number;
+    queue_wait_us?: number;
+    server_exec_us?: number;
+  };
+  replay_overlay?: {                // 传入 replay_task_id 时叠加的实际回放裁决
+    status: 'PASS' | 'FAILED' | 'MOCK_MISS' | 'SCOPED_HIT' | 'GLOBAL_FALLBACK_HIT' | 'TIMEOUT' | 'ERROR';
+    diff_count?: number;
+    summary?: string;
+  };
+}
+
+export interface TransactionSequenceDTO {
+  root_record_id: string;
+  trace_id: string;
+  total_duration_us: number;
+  participants: SequenceParticipantDTO[];
+  steps: SequenceStepDTO[];
+  parameter_lineages: ParameterLineageEdgeDTO[];
+  entity_chains: EntityLifecycleChainDTO[];
+}
+
+/** GET /api/traffic-records/:id/replay-closure 事务闭包重放预览与前置依赖诊断 */
+export interface ReplayClosurePreviewDTO {
+  ingress_record: TrafficRecordSummary;
+  scoped_egress_mocks: Array<{
+    record_id: string;
+    seq_no: number;
+    service_name: string;
+    operation: string;
+    exchange_type: string;
+    status_code: string;
+    link_confidence: CallLinkConfidence;
+    usable_as_mock: boolean;
+    warning?: string;               // 如录制期为 REQ_ONLY 无应答时提示重放可能触发超时
+  }>;
+  prerequisite_chain: Array<{
+    record_id: string;
+    seq_no: number;
+    service_name: string;
+    operation: string;
+    shared_entity_key: string;      // 如 "order_id=ORD_9981"
+    role: 'PRODUCER' | 'STATE_MUTATOR';
+  }>;
+  recommended_record_ids: string[]; // 包含前置依赖 + 当前入口记录的发起序列表
+}
+```
 
 ---
 
