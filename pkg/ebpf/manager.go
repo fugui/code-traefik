@@ -640,10 +640,14 @@ func (m *Manager) purgeLocked() {
 	}
 
 	// 2. 脱落所有 bpf_link (内核零残留)
+	linkCount := len(m.links)
 	for _, l := range m.links {
 		_ = l.Close()
 	}
 	m.links = nil
+	if linkCount > 0 {
+		log.Printf("[eBPF] 探针卸载完成，已清理 %d 个常驻内核链接 (内核零残留)", linkCount)
+	}
 
 	// 3. 关闭 eBPF Maps & Programs
 	if m.objs != nil {
@@ -740,13 +744,29 @@ func (m *Manager) attachLocked() error {
 	}
 
 	m.links = links
-	log.Printf("[eBPF] 探针待命钩子挂载完成，共挂载 %d 个常驻内核链接", len(links))
+	log.Printf("[eBPF] 探针待命状态就绪 (ARMED)，已挂载 %d/3 个常驻内核钩子 (Cgroup: %s):", len(links), m.cfg.CgroupPath)
+	if cgroupLink != nil {
+		log.Printf("[eBPF]   ├── [✓] [cgroup/connect4] cros_connect4 -> 出站连接劫持与 NAT 转发 (EgressProxy 端口: %d)", proxy.ProxyPort())
+	} else {
+		log.Printf("[eBPF]   ├── [✗] [cgroup/connect4] cros_connect4 -> 挂载失败")
+	}
+	if sockopsLink != nil {
+		log.Printf("[eBPF]   ├── [✓] [cgroup/sock_ops] cros_sock_ops -> TCP 握手与连接元数据跟踪 (Socket Cookie)")
+	} else {
+		log.Printf("[eBPF]   ├── [✗] [cgroup/sock_ops] cros_sock_ops -> 挂载失败")
+	}
+	if tpSchedExec != nil {
+		log.Printf("[eBPF]   └── [✓] [sched:sched_process_exec] cros_sched_exec -> 进程生命周期与重启感知 (PID 动态对账)")
+	} else {
+		log.Printf("[eBPF]   └── [✗] [sched:sched_process_exec] cros_sched_exec -> 挂载失败")
+	}
 
 	// 启动 RingBuf Reader
 	rb, err := ringbuf.NewReader(objs.IngRingbuf)
 	if err == nil {
 		m.ringbufReader = rb
 		m.startRingbufConsumer(rb)
+		log.Printf("[eBPF] 环形事件缓冲 (RingBuf) 消费协程与 2s 进程巡检协程已启动")
 	}
 
 	m.attached = true
@@ -785,15 +805,20 @@ func (m *Manager) attachCaptureTracepointsLocked() {
 	attachTP("syscalls", "sys_enter_close", m.objs.TraceSysEnterClose)
 
 	m.rwLinks = rwLinks
-	log.Printf("[eBPF] 录制阶段动态挂载 %d 个大流量 tracepoints", len(rwLinks))
+	log.Printf("[eBPF] 录制阶段动态挂载 %d 个读写 tracepoints (read/write/recvfrom/sendto/accept4/accept/close)", len(rwLinks))
 }
 
 // detachCaptureTracepointsLocked 停录阶段立即卸载大流量读写 Tracepoint (恢复 0 CPU 损耗)
 func (m *Manager) detachCaptureTracepointsLocked() {
+	if len(m.rwLinks) == 0 {
+		return
+	}
+	count := len(m.rwLinks)
 	for _, l := range m.rwLinks {
 		_ = l.Close()
 	}
 	m.rwLinks = nil
+	log.Printf("[eBPF] 停录完成，已卸载 %d 个动态读写 tracepoints，恢复 ARMED 零损耗待命状态", count)
 }
 
 func (m *Manager) backgroundProcessWatcher() {
