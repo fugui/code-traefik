@@ -1,7 +1,35 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
+import { Bug, Network, RotateCcw, Share2, Trash2, type LucideIcon } from 'lucide-react';
 import { Modal, Pagination } from '@code/common';
+import { useModulePath } from '../../hooks/useModulePath';
 import type { RecordingSession } from '../../types';
+
+const debugPath = (sessionId: string) => `/debug?session_id=${encodeURIComponent(sessionId)}`;
+
+interface SessionNavAction {
+  key: string;
+  label: string;
+  Icon: LucideIcon;
+  buildPath: (sessionId: string) => string;
+}
+
+/** 快捷工作流跳转动作（图标 + Tips），路径为模块内相对路径，渲染时经 useModulePath 统一解析 */
+const navActions: SessionNavAction[] = [
+  { key: 'debug', label: '进入流量调试', Icon: Bug, buildPath: debugPath },
+  {
+    key: 'replay',
+    label: '发起流量重放',
+    Icon: RotateCcw,
+    buildPath: (id) => `/replay?session_id=${encodeURIComponent(id)}&auto_create=1`,
+  },
+  {
+    key: 'topology',
+    label: '架构拓扑验证',
+    Icon: Network,
+    buildPath: (id) => `/topology?session_id=${encodeURIComponent(id)}`,
+  },
+];
 
 export interface RecordingSessionTableProps {
   sessions: RecordingSession[];
@@ -40,6 +68,7 @@ export const RecordingSessionTable: React.FC<RecordingSessionTableProps> = ({
 }) => {
   const [deleteModalSession, setDeleteModalSession] = useState<RecordingSession | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const modulePath = useModulePath();
 
   const confirmDelete = async () => {
     if (!deleteModalSession) return;
@@ -129,7 +158,16 @@ export const RecordingSessionTable: React.FC<RecordingSessionTableProps> = ({
 
                   return (
                     <tr key={sess.id} data-testid={`session-row-${sess.id}`}>
-                      <td className="code-font-mono code-color-primary">{sess.session_no}</td>
+                      <td>
+                        <Link
+                          to={modulePath(debugPath(sess.id))}
+                          className="code-session-no-link"
+                          title="进入该批次录制数据流"
+                          data-testid={`session-no-link-${sess.id}`}
+                        >
+                          {sess.session_no}
+                        </Link>
+                      </td>
                       <td>
                         <strong>{sess.name}</strong>
                         {sess.description && (
@@ -158,48 +196,41 @@ export const RecordingSessionTable: React.FC<RecordingSessionTableProps> = ({
                         {sess.created_at ? new Date(sess.created_at).toLocaleString() : '-'}
                       </td>
                       <td>
-                        <div className="code-action-links">
-                          <Link
-                            to={`/debug?session_id=${sess.id}`}
-                            className="code-action-link"
-                            data-testid={`action-debug-${sess.id}`}
-                          >
-                            去调试
-                          </Link>
-                          <Link
-                            to={`/replay?session_id=${sess.id}&auto_create=1`}
-                            className="code-action-link"
-                            data-testid={`action-replay-${sess.id}`}
-                          >
-                            发起重放
-                          </Link>
-                          <Link
-                            to={`/topology?session_id=${sess.id}`}
-                            className="code-action-link"
-                            data-testid={`action-topology-${sess.id}`}
-                          >
-                            架构验证
-                          </Link>
+                        <div className="code-icon-actions">
+                          {navActions.map(({ key, label, Icon, buildPath }) => (
+                            <Link
+                              key={key}
+                              to={modulePath(buildPath(sess.id))}
+                              className="code-icon-action"
+                              data-tip={label}
+                              aria-label={label}
+                              data-testid={`action-${key}-${sess.id}`}
+                            >
+                              <Icon size={15} />
+                            </Link>
+                          ))}
                           {canPublish && (
                             <button
                               type="button"
-                              className="code-btn-link code-color-warning"
+                              className="code-icon-action code-icon-action--warning"
                               onClick={() => void onPublish(sess.id)}
+                              data-tip="发布为团队共享素材"
+                              aria-label="发布为团队共享素材"
                               data-testid={`action-publish-${sess.id}`}
-                              title="发布为团队公共素材"
                             >
-                              发布共享
+                              <Share2 size={15} />
                             </button>
                           )}
                           {canDelete && (
                             <button
                               type="button"
-                              className="code-btn-link code-color-danger"
+                              className="code-icon-action code-icon-action--danger"
                               onClick={() => setDeleteModalSession(sess)}
+                              data-tip="删除此录制批次"
+                              aria-label="删除此录制批次"
                               data-testid={`action-delete-${sess.id}`}
-                              title="删除此录制素材批次"
                             >
-                              删除
+                              <Trash2 size={15} />
                             </button>
                           )}
                         </div>

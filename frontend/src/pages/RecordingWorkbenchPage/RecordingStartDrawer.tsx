@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams, useInRouterContext } from 'react-router-d
 import { Drawer } from '@code/common';
 import { Search, ChevronDown, ChevronRight, AlertCircle, Sparkles } from 'lucide-react';
 import { useToast } from '../../utils/toast';
+import { useModulePath } from '../../hooks/useModulePath';
 import * as trafficApi from '../../api/traffic';
 import type { RecordingSession, Process, Agent } from '../../types';
 import './recording_drawer.css';
@@ -69,6 +70,7 @@ const RecordingStartInner: React.FC<RecordingStartInnerProps> = ({
   navigate,
 }) => {
   const toast = useToast();
+  const modulePath = useModulePath();
 
   // 1. 基础信息状态
   const [name, setName] = useState(() => urlSessionNo || '');
@@ -769,7 +771,7 @@ const RecordingStartInner: React.FC<RecordingStartInnerProps> = ({
                     data-testid="goto-mount-process-btn"
                     onClick={() => {
                       onClose();
-                      const targetUrl = `/agents?scope=${currentAgent?.scope || 'SHARED'}&agent_id=${selectedAgentId}&open_mount=1`;
+                      const targetUrl = modulePath(`/agents?scope=${currentAgent?.scope || 'SHARED'}&agent_id=${selectedAgentId}&open_mount=1`);
                       if (navigate) {
                         navigate(targetUrl);
                       } else if (typeof window !== 'undefined') {

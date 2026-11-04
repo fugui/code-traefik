@@ -16,6 +16,7 @@ import {
   Edit3,
 } from 'lucide-react';
 import { Drawer } from '@code/common';
+import { useModulePath } from '../../hooks/useModulePath';
 import * as archApi from '../../api/arch';
 import type {
   Module,
@@ -85,6 +86,7 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
   onBindProcess,
 }) => {
   // 内联编辑忽略路径状态
+  const modulePath = useModulePath();
   const [editingServiceId, setEditingServiceId] = useState<string | null>(null);
   const [ignorePathInput, setIgnorePathInput] = useState<string>('');
 
@@ -473,7 +475,9 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
                     <span className="code-module-form-field__val">
                       {selectedModule.process ? (
                         <Link
-                          to={`/agents?scope=${selectedModule.process.agent?.scope || 'PRIVATE'}&agent_id=${selectedModule.process.agent_id || selectedModule.process.agent?.id || ''}&process_id=${selectedModule.process.id}`}
+                          to={modulePath(
+                            `/agents?scope=${selectedModule.process.agent?.scope || 'PRIVATE'}&agent_id=${selectedModule.process.agent_id || selectedModule.process.agent?.id || ''}&process_id=${selectedModule.process.id}`
+                          )}
                           className="code-process-link code-badge-link"
                           data-testid="link-process-bloodline"
                           title="前往 Agent 与进程中心查阅并管理该业务进程"
@@ -586,7 +590,7 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
                     <tr key={svc.id}>
                       <td>
                         <Link
-                          to={`/schemas?active_only=true&search=${encodeURIComponent(svc.service_name)}`}
+                          to={modulePath(`/schemas?active_only=true&search=${encodeURIComponent(svc.service_name)}`)}
                           className="code-font-mono code-color-primary code-service-contract-link"
                           style={{ fontWeight: 600 }}
                           data-testid={`link-service-${svc.id}`}

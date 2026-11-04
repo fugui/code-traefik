@@ -5,6 +5,7 @@ import { useToast } from '../../utils/toast';
 import { useModuleUser } from '../../context/ModuleUserContext';
 import * as agentApi from '../../api/agent';
 import type { Agent, Process } from '../../types';
+import { useModulePath } from '../../hooks/useModulePath';
 import { AgentScopeTabs } from './AgentScopeTabs';
 import { AgentLeaseStatusBadge } from './AgentLeaseStatusBadge';
 import { AgentProcessMountDrawer } from './AgentProcessMountDrawer';
@@ -19,6 +20,7 @@ export const AgentManagementPage: React.FC<AgentManagementPageProps> = ({
   initialProcesses = [],
 }) => {
   const navigate = useNavigate();
+  const modulePath = useModulePath();
   const [searchParams, setSearchParams] = useSearchParams();
   const { user } = useModuleUser();
   const toast = useToast();
@@ -554,7 +556,7 @@ export const AgentManagementPage: React.FC<AgentManagementPageProps> = ({
                     }
                     onClick={() => {
                       if (selectedAgent.status === 'ONLINE' && !selectedAgent.lease_type && processes.length > 0) {
-                        navigate(`/record?auto_start=1&agent_id=${selectedAgent.id}`);
+                        navigate(modulePath(`/record?auto_start=1&agent_id=${selectedAgent.id}`));
                       }
                     }}
                   >

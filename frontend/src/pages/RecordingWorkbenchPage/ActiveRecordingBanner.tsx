@@ -1,5 +1,6 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
+import { useModulePath } from '../../hooks/useModulePath';
 import type { RecordingSession } from '../../types';
 
 export interface ActiveRecordingBannerProps {
@@ -13,6 +14,7 @@ export const ActiveRecordingBanner: React.FC<ActiveRecordingBannerProps> = ({
   onStop,
   stopping = false,
 }) => {
+  const modulePath = useModulePath();
   if (!session || session.status !== 'RECORDING') {
     return null;
   }
@@ -53,7 +55,7 @@ export const ActiveRecordingBanner: React.FC<ActiveRecordingBannerProps> = ({
 
         <div className="code-recording-banner-actions">
           <Link
-            to={`/debug?session_id=${session.id}&live=1`}
+            to={modulePath(`/debug?session_id=${encodeURIComponent(session.id)}&live=1`)}
             className="code-btn code-btn--primary code-btn--sm"
             data-testid="btn-live-debug"
           >

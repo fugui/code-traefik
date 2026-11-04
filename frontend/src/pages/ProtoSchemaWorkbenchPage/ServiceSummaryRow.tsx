@@ -1,5 +1,6 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
+import { useModulePath } from '../../hooks/useModulePath';
 import type { ServiceContractGroupDTO } from '../../types/schema_tree';
 
 export interface ServiceSummaryRowProps {
@@ -18,6 +19,7 @@ export const ServiceSummaryRow: React.FC<ServiceSummaryRowProps> = ({
   renderHighlight,
   onInspectSchema,
 }) => {
+  const modulePath = useModulePath();
   const serviceName = group.serviceName || group.service_name || '';
   const protoFile = group.protoFile || group.proto_file || '';
   const protoPackage = group.protoPackage || group.proto_package || '';
@@ -104,7 +106,9 @@ export const ServiceSummaryRow: React.FC<ServiceSummaryRowProps> = ({
       <td>
         {claimed ? (
           <Link
-            to={`/architecture?subsystem_id=${claimed.subsystemId ?? ''}&group_id=${claimed.groupId ?? ''}&module_id=${claimed.id}`}
+            to={modulePath(
+              `/architecture?subsystem_id=${claimed.subsystemId ?? ''}&group_id=${claimed.groupId ?? ''}&module_id=${claimed.id}`
+            )}
             className="code-badge-link"
             data-testid={`link-claimed-module-${claimed.id}`}
             title={`前往逻辑架构中心定位认领模块: ${claimed.name}`}

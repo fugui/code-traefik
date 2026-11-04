@@ -630,6 +630,97 @@ body {
   text-decoration: underline;
 }
 
+/* 表格行内图标操作组（图标 + 悬浮 Tips），Tips 文案取自 data-tip 属性 */
+.code-icon-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.code-icon-action {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--color-border-primary);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-surface);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  text-decoration: none;
+  transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+}
+
+.code-icon-action:hover,
+.code-icon-action:focus-visible {
+  color: var(--color-primary);
+  background: var(--color-primary-subtle);
+  border-color: var(--color-primary-border);
+  transform: translateY(-1px);
+  outline: none;
+}
+
+.code-icon-action:active {
+  transform: translateY(0);
+}
+
+.code-icon-action--warning:hover,
+.code-icon-action--warning:focus-visible {
+  color: var(--color-warning);
+  background: var(--color-warning-subtle);
+  border-color: var(--color-warning-border);
+}
+
+.code-icon-action--danger:hover,
+.code-icon-action--danger:focus-visible {
+  color: var(--color-danger);
+  background: var(--color-danger-subtle);
+  border-color: var(--color-danger-border);
+}
+
+.code-icon-action[data-tip]::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translate(-50%, 4px);
+  padding: 0.25rem 0.5rem;
+  border-radius: var(--radius-sm);
+  background: var(--color-text-primary);
+  color: var(--color-bg-surface);
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1.4;
+  white-space: nowrap;
+  box-shadow: var(--shadow-md);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+  z-index: 10;
+}
+
+.code-icon-action[data-tip]:hover::after,
+.code-icon-action[data-tip]:focus-visible::after {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+/* 可点击的批次流水号：进入该批次录制数据流 */
+.code-session-no-link {
+  font-family: var(--font-family-mono);
+  color: var(--color-primary);
+  text-decoration: none;
+}
+
+.code-session-no-link:hover,
+.code-session-no-link:focus-visible {
+  color: var(--color-primary-hover);
+  text-decoration: underline;
+}
+
 /* 徽章与标签 */
 .code-badge {
   display: inline-flex;

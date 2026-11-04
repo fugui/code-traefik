@@ -4,6 +4,8 @@ import { MemoryRouter } from 'react-router-dom';
 import type { RecordingSession } from '../types';
 import { ActiveRecordingBanner } from '../pages/RecordingWorkbenchPage/ActiveRecordingBanner';
 import { RecordingSessionTable } from '../pages/RecordingWorkbenchPage/RecordingSessionTable';
+import { ModuleUserProvider } from '../context/ModuleUserContext';
+import { resolveModulePath } from '../hooks/useModulePath';
 
 export function testSessionLedger_ActionsAndCrossWorkbenchLinks(): void {
   const activeSession: RecordingSession = {
@@ -131,8 +133,73 @@ export function testSessionLedger_ActionsAndCrossWorkbenchLinks(): void {
   expect(tableHtml).not.toContain('data-testid="action-delete-sess-private-other"');
 }
 
+export function testSessionLedger_EmbeddedModulePrefixLinks(): void {
+  const session: RecordingSession = {
+    id: 'sess-embed',
+    session_no: 'REC-EMBED-001',
+    name: '嵌入模式批次',
+    scope: 'PRIVATE',
+    owner_id: '100',
+    status: 'COMPLETED',
+    target_process_ids: ['p1'],
+    max_duration_sec: 600,
+    max_frames: 1000,
+    captured_frames: 1,
+  };
+  const noop = () => {};
+  const asyncNoop = async () => {};
+
+  const html = renderToString(
+    <ModuleUserProvider
+      value={{ user: null, loadingUser: false, isEmbedded: true, reloadUser: asyncNoop }}
+    >
+      <MemoryRouter>
+        <RecordingSessionTable
+          sessions={[session]}
+          total={1}
+          page={1}
+          pageSize={25}
+          onPageChange={noop}
+          onPageSizeChange={noop}
+          scopeFilter=""
+          onScopeFilterChange={noop}
+          search=""
+          onSearchChange={noop}
+          currentUserId={100}
+          isAdmin={false}
+          onPublish={asyncNoop}
+          onDelete={asyncNoop}
+        />
+      </MemoryRouter>
+    </ModuleUserProvider>
+  );
+
+  // 嵌入宿主门户时，所有模块内跳转必须携带 /traefik 前缀
+  expect(html).toContain('href="/traefik/debug?session_id=sess-embed"');
+  expect(html).toContain('href="/traefik/replay?session_id=sess-embed&amp;auto_create=1"');
+  expect(html).toContain('href="/traefik/topology?session_id=sess-embed"');
+  expect(html).not.toContain('href="/debug');
+
+  // 批次流水号可点击，直达该批次录制数据流
+  expect(html).toContain('data-testid="session-no-link-sess-embed"');
+
+  // 操作列统一为图标 + Tips 模式
+  expect(html).toContain('data-tip="进入流量调试"');
+  expect(html).toContain('data-tip="发布为团队共享素材"');
+  expect(html).toContain('data-tip="删除此录制批次"');
+}
+
 describe('RecordingWorkbench Test Suite', () => {
   it('TC-RECORD-01: 活跃录制横幅、素材台账操作列与跨页深链校验', () => {
     testSessionLedger_ActionsAndCrossWorkbenchLinks();
+  });
+
+  it('TC-RECORD-02: 嵌入模式下批次流水号与快捷操作跳转携带模块前缀', () => {
+    testSessionLedger_EmbeddedModulePrefixLinks();
+  });
+
+  it('TC-RECORD-03: resolveModulePath 按运行模式解析模块内路径', () => {
+    expect(resolveModulePath('/debug?session_id=s1', true)).toBe('/traefik/debug?session_id=s1');
+    expect(resolveModulePath('/debug?session_id=s1', false)).toBe('/debug?session_id=s1');
   });
 });

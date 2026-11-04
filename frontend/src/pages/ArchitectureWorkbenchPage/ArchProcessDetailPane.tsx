@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useModulePath } from '../../hooks/useModulePath';
 import {
   Server,
   Layers,
@@ -56,6 +57,7 @@ export const ArchProcessDetailPane: React.FC<ArchProcessDetailPaneProps> = ({
   onBindModule,
 }) => {
   const navigate = useNavigate();
+  const modulePath = useModulePath();
   const [activeTab, setActiveTab] = useState<'modules' | 'contracts' | 'mounts'>('modules');
   const [bindDrawerOpen, setBindDrawerOpen] = useState(false);
   const [selectedModuleIdToBind, setSelectedModuleIdToBind] = useState('');
@@ -768,9 +770,11 @@ export const ArchProcessDetailPane: React.FC<ArchProcessDetailPaneProps> = ({
                               className="code-btn code-btn--secondary code-btn--xs"
                               onClick={() =>
                                 navigate(
-                                  `/agents?agent_id=${m.agent_id}&process_id=${m.id}&scope=${
-                                    m.agent?.scope || 'SHARED'
-                                  }`
+                                  modulePath(
+                                    `/agents?agent_id=${m.agent_id}&process_id=${m.id}&scope=${
+                                      m.agent?.scope || 'SHARED'
+                                    }`
+                                  )
                                 )
                               }
                               title="前往该 Agent 管理页查看探针并实施运维"

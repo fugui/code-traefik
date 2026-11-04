@@ -31,6 +31,7 @@ import {
   MODULE_TITLE,
 } from './constants';
 import { ModuleUserProvider, useModuleUser } from './context/ModuleUserContext';
+import { resolveModulePath } from './hooks/useModulePath';
 import { traefikMenuConfig } from './menu';
 import RecordingWorkbenchPage from './pages/RecordingWorkbenchPage';
 import TrafficDebugWorkbenchPage from './pages/TrafficDebugWorkbenchPage';
@@ -86,9 +87,8 @@ export const ArchitectureRouteWrapper: React.FC<{ isEmbedded?: boolean }> = ({ i
     } else if (tab === 'topology') {
       nextParams.set('view', 'LOGICAL');
     }
-    const basePath = isEmbedded ? MODULE_BASE_PATH : '';
     const qs = nextParams.toString();
-    const target = `${basePath}/topology${qs ? `?${qs}` : ''}`;
+    const target = resolveModulePath(`/topology${qs ? `?${qs}` : ''}`, Boolean(isEmbedded));
     return (
       <>
         <div data-testid="legacy-redirect" data-target={target} style={{ display: 'none' }} />
