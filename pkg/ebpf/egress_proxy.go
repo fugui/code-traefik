@@ -373,10 +373,11 @@ func (p *EgressProxy) relayBidirectional(
 						if framer == nil {
 							framer = crosrpc.NewStreamFramer(crosrpc.DefaultMaxCaptureBytes)
 						}
+						origAddr := net.JoinHostPort(origIP.String(), strconv.Itoa(int(origPort)))
 						frames, fErr := framer.Feed(buf[:n])
 						if fErr == nil && len(frames) > 0 {
 							for _, f := range frames {
-								matchRes, mErr := matcher.MatchAndHeal(f.Data)
+								matchRes, mErr := matcher.MatchAndHealWithDst(f.Data, origAddr)
 								if mErr == nil && matchRes != nil && len(matchRes.ResponseFrames) > 0 {
 									for _, rsp := range matchRes.ResponseFrames {
 										if _, wErr := src.Write(rsp); wErr != nil {
@@ -473,8 +474,9 @@ func (p *EgressProxy) handleMockConnection(clientConn net.Conn, origIP net.IP, o
 				p.mu.RUnlock()
 
 				if matcher != nil {
+					origAddr := net.JoinHostPort(origIP.String(), strconv.Itoa(int(origPort)))
 					for _, f := range frames {
-						matchRes, mErr := matcher.MatchAndHeal(f.Data)
+						matchRes, mErr := matcher.MatchAndHealWithDst(f.Data, origAddr)
 						if mErr == nil && matchRes != nil && len(matchRes.ResponseFrames) > 0 {
 							for _, rsp := range matchRes.ResponseFrames {
 								if _, wErr := clientConn.Write(rsp); wErr != nil {

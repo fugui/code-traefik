@@ -30,6 +30,8 @@ var (
 	ErrTaskNotFound    = errors.New("404 Not Found: 重放任务不存在")
 	ErrTaskAlreadyDone = errors.New("409 Conflict: 重放任务已结束")
 	ErrRecordNotReplay = errors.New("400 Bad Request: 选定记录包含不可重放或已被截断的报文")
+	ErrAgentOffline    = errors.New("503 Service Unavailable: 目标 Agent 处于离线状态")
+	ErrEnvBusy         = errors.New("503 Service Unavailable: GATED_ENV_BUSY: 测试环境排他租约等待超时")
 )
 
 // CreateReplayTaskReq 创建并下发重放任务请求
@@ -557,13 +559,23 @@ EVALUATE:
 		}
 	}
 
+	var observedCalls []agentproto.ObservedEgressCall
+	if result != nil && len(result.ObservedEgressCalls) > 0 {
+		observedCalls = result.ObservedEgressCalls
+	}
+	observedBytes, _ := json.Marshal(observedCalls)
+	violations, _ := topology.VerifyProcessObservedCalls(ctx, s.db, task.ArchProcessID, observedCalls)
+	violationCount := len(violations)
+
 	s.db.Model(&models.ReplayTask{}).Where("id = ?", task.ID).Updates(map[string]interface{}{
-		"lifecycle_state": "COMPLETED",
-		"result_status":   finalStatus,
-		"passed_requests": passedCount,
-		"mock_hit_count":  mockHitCount,
-		"mock_miss_count": mockMissCount,
-		"finished_at":     &finishedAt,
+		"lifecycle_state":       "COMPLETED",
+		"result_status":         finalStatus,
+		"passed_requests":       passedCount,
+		"mock_hit_count":        mockHitCount,
+		"mock_miss_count":       mockMissCount,
+		"violation_count":       violationCount,
+		"observed_egress_calls": datatypes.JSON(observedBytes),
+		"finished_at":           &finishedAt,
 	})
 }
 
@@ -940,6 +952,148 @@ func (s *ReplayScheduler) ExecuteGoldenSuite(
 	return task, nil
 }
 
+// ExecuteGoldenSuiteSync 同步阻塞式执行黄金契约套件回归，支持排他租约有界排队 (ADR-14, M17, F-27)
+func (s *ReplayScheduler) ExecuteGoldenSuiteSync(
+	ctx context.Context,
+	suiteID uint64,
+	envAgentID uint64,
+	triggerSource string,
+	userID uint,
+	isAdmin bool,
+	timeoutMs int,
+	waitLeaseSec int,
+) (*models.ReplayTask, error) {
+	// 1. 加载套件及用例
+	var suite models.GoldenSuite
+	if err := s.db.WithContext(ctx).Preload("ArchProcess").Preload("Items", func(db *gorm.DB) *gorm.DB {
+		return db.Order("order_no ASC")
+	}).Where("id = ?", suiteID).First(&suite).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("404 Not Found: 黄金契约套件不存在")
+		}
+		return nil, fmt.Errorf("查询黄金套件失败: %w", err)
+	}
+
+	if len(suite.Items) == 0 {
+		return nil, errors.New("400 Bad Request: 黄金套件中无可用用例")
+	}
+
+	// 2. 加载目标 Agent 并进行 Anti-IDOR 校验
+	var agent models.Agent
+	if err := s.db.WithContext(ctx).Where("id = ?", envAgentID).First(&agent).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("404 Not Found: 目标环境 Agent 不存在")
+		}
+		return nil, fmt.Errorf("查询目标 Agent 失败: %w", err)
+	}
+	if agent.Scope == models.ScopePrivate && (agent.OwnerID == nil || *agent.OwnerID != userID) && !isAdmin {
+		return nil, ErrForbiddenPrivateAgent
+	}
+	if agent.Status != models.AgentStatusOnline {
+		return nil, ErrAgentOffline
+	}
+
+	// 3. 查找该 Agent 上绑定的与 suite.ArchProcessID 匹配的目标进程
+	var targetProc models.Process
+	if err := s.db.WithContext(ctx).Preload("ArchProcess").
+		Where("agent_id = ? AND arch_process_id = ?", envAgentID, suite.ArchProcessID).
+		First(&targetProc).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("400 Bad Request: 目标环境 Agent 未挂载该黄金套件对应的标准架构进程")
+		}
+		return nil, fmt.Errorf("查询目标进程失败: %w", err)
+	}
+	targetProc.Agent = &agent
+
+	// 4. 检查进程就绪状态
+	if targetProc.ProbeStatus == models.ProbeStatusDisarmed || targetProc.NeedReconnect {
+		return nil, errors.New("503 Service Unavailable: GATED_ENV_NOT_READY: 目标进程探针未就绪 (NEED_RECONNECT)")
+	}
+
+	if timeoutMs <= 0 {
+		timeoutMs = 30000
+	}
+	if triggerSource == "" {
+		triggerSource = models.TriggerSourceCIGate
+	}
+
+	// 5. 创建 ReplayTask
+	now := time.Now()
+	taskNo := fmt.Sprintf("REP_GATE_%s_%d", now.Format("20060102150405"), now.UnixNano()%1000)
+	tgtPID := targetProc.ID
+
+	task := &models.ReplayTask{
+		TaskNo:            taskNo,
+		Name:              fmt.Sprintf("[CI/CD Gate] %s 脱机回归", suite.Name),
+		TriggerSource:     triggerSource,
+		OwnerID:           userID,
+		SessionID:         nil,
+		GoldenSuiteID:     &suite.ID,
+		ArchProcessID:     suite.ArchProcessID,
+		TargetProcessID:   &tgtPID,
+		AgentID:           envAgentID,
+		SelectedRecordIDs: datatypes.JSON([]byte("[]")),
+		ExtraIgnorePaths:  suite.ExtraIgnorePaths,
+		TimeoutMs:         timeoutMs,
+		LifecycleState:    "ARMED",
+		TotalRequests:     len(suite.Items),
+		CreatedBy:         userID,
+		CreatedAt:         now,
+		UpdatedAt:         now,
+	}
+
+	if err := s.db.WithContext(ctx).Create(task).Error; err != nil {
+		return nil, fmt.Errorf("创建门禁回归任务失败: %w", err)
+	}
+
+	// 6. 排他锁有界排队申请 (wait_lease_seconds)
+	if waitLeaseSec < 0 {
+		waitLeaseSec = 0
+	}
+	if waitLeaseSec > 300 {
+		waitLeaseSec = 300
+	}
+	leaseTTL := time.Duration(timeoutMs/1000+120) * time.Second
+	deadline := time.Now().Add(time.Duration(waitLeaseSec) * time.Second)
+	backoff := 50 * time.Millisecond
+
+	for {
+		leaseErr := hub.AcquireAgentLeases(ctx, s.db, []uint64{envAgentID}, models.AgentLeaseReplay, task.ID, userID, leaseTTL)
+		if leaseErr == nil {
+			break
+		}
+		var conflictErr *hub.LeaseConflictError
+		if !errors.As(leaseErr, &conflictErr) {
+			s.markTaskFailed(task.ID, leaseErr.Error())
+			return nil, leaseErr
+		}
+		if time.Now().After(deadline) {
+			s.markTaskFailed(task.ID, "等待 Agent 排他租约超时")
+			return nil, ErrEnvBusy
+		}
+		select {
+		case <-ctx.Done():
+			s.markTaskFailed(task.ID, "等待租约上下文取消")
+			return nil, ctx.Err()
+		case <-time.After(backoff):
+			backoff *= 2
+			if backoff > 500*time.Millisecond {
+				backoff = 500 * time.Millisecond
+			}
+		}
+	}
+
+	// 7. 同步执行重放与回归断言
+	procCopy := targetProc
+	suiteCopy := suite
+	err := s.runGoldenSuiteReplay(ctx, task, &procCopy, &suiteCopy, suite.Items)
+	if err != nil {
+		return nil, err
+	}
+
+	return task, nil
+}
+
 func (s *ReplayScheduler) executeGoldenSuiteAsync(
 	task *models.ReplayTask,
 	targetProc *models.Process,
@@ -948,7 +1102,16 @@ func (s *ReplayScheduler) executeGoldenSuiteAsync(
 ) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(task.TimeoutMs+10000)*time.Millisecond)
 	defer cancel()
+	_ = s.runGoldenSuiteReplay(ctx, task, targetProc, suite, items)
+}
 
+func (s *ReplayScheduler) runGoldenSuiteReplay(
+	ctx context.Context,
+	task *models.ReplayTask,
+	targetProc *models.Process,
+	suite *models.GoldenSuite,
+	items []models.GoldenSuiteItem,
+) error {
 	defer func() {
 		_ = hub.ReleaseAgentLeases(context.Background(), s.db, []uint64{task.AgentID}, models.AgentLeaseReplay, task.ID)
 	}()
@@ -1021,7 +1184,7 @@ func (s *ReplayScheduler) executeGoldenSuiteAsync(
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		s.markTaskFailed(task.ID, err.Error())
-		return
+		return err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	if targetProc.Agent.ClaimCode != "" {
@@ -1031,7 +1194,7 @@ func (s *ReplayScheduler) executeGoldenSuiteAsync(
 	resp, err := s.httpClient.Do(httpReq)
 	if err != nil {
 		s.markTaskFailed(task.ID, fmt.Sprintf("调用 Agent 失败: %v", err))
-		return
+		return err
 	}
 	defer resp.Body.Close()
 
@@ -1045,7 +1208,7 @@ func (s *ReplayScheduler) executeGoldenSuiteAsync(
 			msg = fmt.Sprintf("Agent 返回状态码 %d", resp.StatusCode)
 		}
 		s.markTaskFailed(task.ID, msg)
-		return
+		return errors.New(msg)
 	}
 
 	startedAt := time.Now()
@@ -1064,7 +1227,7 @@ func (s *ReplayScheduler) executeGoldenSuiteAsync(
 		select {
 		case <-ctx.Done():
 			s.markTaskFailed(task.ID, "等待重放执行超时")
-			return
+			return ctx.Err()
 		case <-ticker.C:
 			pReq, _ := http.NewRequestWithContext(ctx, http.MethodGet, pollURL, nil)
 			if targetProc.Agent.ClaimCode != "" {
@@ -1207,13 +1370,35 @@ EVALUATE_SUITE:
 		}
 	}
 
+	var observedCalls []agentproto.ObservedEgressCall
+	if result != nil && len(result.ObservedEgressCalls) > 0 {
+		observedCalls = result.ObservedEgressCalls
+	}
+	observedBytes, _ := json.Marshal(observedCalls)
+	violations, _ := topology.VerifyProcessObservedCalls(ctx, s.db, task.ArchProcessID, observedCalls)
+	violationCount := len(violations)
+
+	task.LifecycleState = "COMPLETED"
+	task.ResultStatus = finalStatus
+	task.FinishedAt = &finishedAt
+	task.TotalRequests = len(items)
+	task.PassedRequests = passedCount
+	task.MockHitCount = mockHitCount
+	task.MockMissCount = mockMissCount
+	task.ViolationCount = violationCount
+	task.ObservedEgressCalls = datatypes.JSON(observedBytes)
+
 	s.db.Model(&models.ReplayTask{}).Where("id = ?", task.ID).Updates(map[string]interface{}{
-		"lifecycle_state": "FINISHED",
-		"result_status":   finalStatus,
-		"finished_at":     &finishedAt,
-		"total_requests":  len(items),
-		"passed_requests": passedCount,
-		"mock_hit_count":  mockHitCount,
-		"mock_miss_count": mockMissCount,
+		"lifecycle_state":       "COMPLETED",
+		"result_status":         finalStatus,
+		"finished_at":           &finishedAt,
+		"total_requests":        len(items),
+		"passed_requests":       passedCount,
+		"mock_hit_count":        mockHitCount,
+		"mock_miss_count":       mockMissCount,
+		"violation_count":       violationCount,
+		"observed_egress_calls": datatypes.JSON(observedBytes),
 	})
+
+	return nil
 }

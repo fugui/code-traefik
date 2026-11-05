@@ -274,13 +274,14 @@ func (e *ReplayExecutor) ExecuteWithMatcher(ctx context.Context, req agentproto.
 	}
 
 	result := &agentproto.ReplayTaskResultResp{
-		TaskID:         req.TaskID,
-		Status:         status,
-		TotalRequests:  total,
-		PassedRequests: passed,
-		MockHitCount:   matcher.MockHitCount(),
-		MockMissCount:  matcher.MockMissCount(),
-		Details:        fmt.Sprintf("重放完成: 总计 %d, 成功 %d, Mock命中 %d, Mock未命中 %d", total, passed, matcher.MockHitCount(), matcher.MockMissCount()),
+		TaskID:              req.TaskID,
+		Status:              status,
+		TotalRequests:       total,
+		PassedRequests:      passed,
+		MockHitCount:        matcher.MockHitCount(),
+		MockMissCount:       matcher.MockMissCount(),
+		ObservedEgressCalls: matcher.ObservedEgressCalls(),
+		Details:             fmt.Sprintf("重放完成: 总计 %d, 成功 %d, Mock命中 %d, Mock未命中 %d", total, passed, matcher.MockHitCount(), matcher.MockMissCount()),
 	}
 	e.saveResult(req.TaskID, result)
 	return result, nil
@@ -288,6 +289,10 @@ func (e *ReplayExecutor) ExecuteWithMatcher(ctx context.Context, req agentproto.
 
 func (e *ReplayExecutor) handleMockConn(ctx context.Context, conn net.Conn, matcher *ScopedMockMatcher) {
 	defer conn.Close()
+	dstAddr := ""
+	if conn.LocalAddr() != nil {
+		dstAddr = conn.LocalAddr().String()
+	}
 	framer := crosrpc.NewStreamFramer(crosrpc.MaxPayloadLen)
 	buf := make([]byte, 32768)
 
@@ -310,7 +315,7 @@ func (e *ReplayExecutor) handleMockConn(ctx context.Context, conn net.Conn, matc
 		}
 
 		for _, frame := range frames {
-			matchRes, mErr := matcher.MatchAndHeal(frame.Data)
+			matchRes, mErr := matcher.MatchAndHealWithDst(frame.Data, dstAddr)
 			if mErr != nil || matchRes == nil {
 				continue
 			}

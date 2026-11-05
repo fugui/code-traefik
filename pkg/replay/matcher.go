@@ -121,6 +121,13 @@ func (p *scopedPool) cleanExactMap(exactKey string) {
 	p.exactMap[exactKey] = cleaned
 }
 
+type observedCallKey struct {
+	serviceName string
+	operation   string
+	dstAddr     string
+	matchStatus string
+}
+
 // ScopedMockMatcher 零 .pb 纯二进制 Mock 分层匹配器
 type ScopedMockMatcher struct {
 	mu             sync.Mutex
@@ -131,6 +138,8 @@ type ScopedMockMatcher struct {
 	mockHitCount   int
 	mockMissCount  int
 	missRecords    []MockMissRecord
+	observedCalls  map[observedCallKey]int
+	observedOrder  []observedCallKey
 }
 
 // NewScopedMockMatcher 创建匹配器
@@ -139,6 +148,7 @@ func NewScopedMockMatcher() *ScopedMockMatcher {
 		scopedMocks:    make(map[uint64]*scopedPool),
 		globalFallback: newScopedPool(),
 		mngMocks:       make(map[uint8][]byte),
+		observedCalls:  make(map[observedCallKey]int),
 	}
 }
 
@@ -242,6 +252,11 @@ func (m *ScopedMockMatcher) AddMngMock(msgType uint8, rawMng []byte) {
 
 // MatchAndHeal 针对 liveReq 执行匹配与表驱动头部自愈
 func (m *ScopedMockMatcher) MatchAndHeal(liveReq []byte) (*MatchResult, error) {
+	return m.MatchAndHealWithDst(liveReq, "")
+}
+
+// MatchAndHealWithDst 针对 liveReq 附带目的地址执行匹配与表驱动头部自愈，并记录 ObservedEgressCall (ADR-14, M17)
+func (m *ScopedMockMatcher) MatchAndHealWithDst(liveReq []byte, dstAddr string) (*MatchResult, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -289,6 +304,9 @@ func (m *ScopedMockMatcher) MatchAndHeal(liveReq []byte) (*MatchResult, error) {
 	// 单向调用 (Oneway) 仅记录, 不回包
 	if reqType == crosrpc.ReqTypeOneway {
 		m.mockHitCount++
+		if serviceName != "" {
+			m.recordObservedCallLocked(serviceName, operation, dstAddr, string(MatchOneway))
+		}
 		return &MatchResult{
 			Result:      MatchOneway,
 			ServiceName: serviceName,
@@ -343,6 +361,9 @@ func (m *ScopedMockMatcher) MatchAndHeal(liveReq []byte) (*MatchResult, error) {
 			return nil, err
 		}
 		m.mockHitCount++
+		if serviceName != "" {
+			m.recordObservedCallLocked(serviceName, operation, dstAddr, string(hitType))
+		}
 		return &MatchResult{
 			Result:         hitType,
 			ServiceName:    serviceName,
@@ -358,12 +379,46 @@ func (m *ScopedMockMatcher) MatchAndHeal(liveReq []byte) (*MatchResult, error) {
 		Operation:   operation,
 		PayloadHash: hex.EncodeToString(hash[:]),
 	})
+	if serviceName != "" {
+		m.recordObservedCallLocked(serviceName, operation, dstAddr, string(MatchMiss))
+	}
 
 	return &MatchResult{
 		Result:      MatchMiss,
 		ServiceName: serviceName,
 		Operation:   operation,
 	}, nil
+}
+
+func (m *ScopedMockMatcher) recordObservedCallLocked(serviceName, operation, dstAddr, matchStatus string) {
+	key := observedCallKey{
+		serviceName: serviceName,
+		operation:   operation,
+		dstAddr:     dstAddr,
+		matchStatus: matchStatus,
+	}
+	if _, exists := m.observedCalls[key]; !exists {
+		m.observedOrder = append(m.observedOrder, key)
+	}
+	m.observedCalls[key]++
+}
+
+// ObservedEgressCalls 导出重放期间观测到的所有出站调用汇总 (ADR-14, M17)
+func (m *ScopedMockMatcher) ObservedEgressCalls() []agentproto.ObservedEgressCall {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	calls := make([]agentproto.ObservedEgressCall, 0, len(m.observedOrder))
+	for _, k := range m.observedOrder {
+		calls = append(calls, agentproto.ObservedEgressCall{
+			ServiceName: k.serviceName,
+			Operation:   k.operation,
+			DstAddr:     k.dstAddr,
+			CallCount:   m.observedCalls[k],
+			MatchStatus: k.matchStatus,
+		})
+	}
+	return calls
 }
 
 // MockHitCount 命中计数

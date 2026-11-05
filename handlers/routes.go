@@ -64,6 +64,8 @@ func RegisterAPIRoutes(r *gin.Engine) {
 		{
 			admin.GET("/settings", GetModuleSettings)
 			admin.PUT("/settings", UpdateModuleSettings)
+			admin.POST("/ci-token/rotate", RotateCIToken)
+			admin.DELETE("/ci-token", RevokeCIToken)
 		}
 
 		// 4. 三级架构元素与静态拓扑域 (F-01, F-02, F-04)
@@ -189,5 +191,13 @@ func RegisterAPIRoutes(r *gin.Engine) {
 		protected.DELETE("/golden-suites/:id/items/:itemId", requireAdmin, DeleteGoldenSuiteItem)
 		protected.DELETE("/golden-suites/:id", requireAdmin, DeleteGoldenSuite)
 		protected.POST("/golden-suites/:id/execute", ExecuteGoldenSuite)
+	}
+
+	// 13. CI/CD 自动化强阻断质量门禁评估 (F-27, ADR-14, SC-10)
+	gates := r.Group("/api/gates")
+	gates.Use(CIOrAdminGuard())
+	gates.Use(commonAudit.Middleware(config.ServiceName))
+	{
+		gates.POST("/evaluate", EvaluateGate)
 	}
 }

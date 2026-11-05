@@ -4,7 +4,7 @@
 - **文档版本**：v1.6.2
 - **更新日期**：2026-11-05
 - **归属阶段**：阶段三/四：TDD 实施路线图与全局门禁 (`04-tasks`)
-- **状态**：M1~M16 已交付；M17 自动化门禁待实施 (M17 Next)
+- **状态**：M1~M17 全量已交付 (100% Completed)
 - **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.12.1)、[`01-system-architecture.md`](../02-design/01-system-architecture.md)、[`05-database-schema.md`](../02-design/05-database-schema.md) (v1.4.0)、[`01-http-api-contract.md`](../03-api/01-http-api-contract.md) (v1.4.0)、[`12-packet-causality-call-tree-and-sequence-ux-adr.md`](../05-adr/12-packet-causality-call-tree-and-sequence-ux-adr.md) (ADR-12 v1.0.0)、[`14-governance-dashboard-golden-suite-and-ci-gate-adr.md`](../05-adr/14-governance-dashboard-golden-suite-and-ci-gate-adr.md) (ADR-14 v1.1.0)
 
 ---
@@ -80,7 +80,7 @@ flowchart LR
 | **M14** | ✅ 已交付 | [`15-m14-governance-dashboard-and-ia-restructuring.md`](./15-m14-governance-dashboard-and-ia-restructuring.md) | 平台级契约治理全景大盘与信息架构分步升维（ADR-14 v1.1.0）：`menu.ts` 先行重构为 4 组 9 项（置顶 `/dashboard` 默认落地，零死链空壳页）；实现公私域隔离的**三维封顶健康评分模型（`40+30+30`）**、去重架构漂移雷达、Proto 孤儿清零看板、防劣化回归防线及 `GET /api/dashboard/overview` 聚合 API | `TEST_DB_DSN=... make test` (公私域隔离与子分封顶单测) + `make lint` 全绿 + 大盘组件与深链 Vitest 单测覆盖率 `≥ 90%` |
 | **M15** | ✅ 已交付 | [`16-m15-golden-contract-suites-and-curation-workbench.md`](./16-m15-golden-contract-suites-and-curation-workbench.md) | 黄金契约套件自包含快照库与双源重放解耦（ADR-14 v1.1.0）：升级至 **17 张业务表**（`traefik_golden_suites` + **完全自包含深拷贝 `traefik_golden_suite_items`** 免疫 30 天分区 `DROP TABLE`），解耦 `ReplayTask` 双源外键；`/debug` 事务树【🌟 沉淀为黄金契约】抽屉；构建 `/golden-suites` 工作台（补齐第 10 项菜单）、动态掩码清洗与套件一键脱机回归 | `testdb` 17 表迁移与**源分区清理后套件独立回放存活单测**全绿 + 前端套件工作台单测通过 + `make lint && make build` 零警告 |
 | **M16** | ✅ 已交付 | [`17-m16-design-time-breaking-change-radar.md`](./17-m16-design-time-breaking-change-radar.md) | 设计态契约破坏性变更阻断雷达与回滚逃生舱（ADR-14 v1.1.0）：基于 `FileDescriptorSet` 实现全维度 AST 比对引擎（覆盖 Service/Method 删改、字段 Tag/类型/`oneof`/`map` 变异、`DescriptorProto.GetReservedRange()` 数字区间核验与枚举篡改）；默认返回结构化 `409 BREAKING_CHANGE_DETECTED` 与下游消费者血缘清单；支持管理员 `allow_breaking + breaking_reason` 紧急回滚逃生与 `P1` 审计 | AST 全规则比对单测覆盖率 `100%` + 下游消费者推导与 `allow_breaking` 回滚审计单测全绿 + 拦截抽屉 Vitest 通过 |
-| **M17** | 📋 规划中 | [`18-m17-ci-cd-quality-gate-and-automated-enforcement.md`](./18-m17-ci-cd-quality-gate-and-automated-enforcement.md) | CI/CD 自动化强阻断门禁、实测边回传与排他锁有界排队（ADR-14 v1.1.0）：Agent 重放回传 `ObservedEgressCalls` 支撑控制面单次闭环判定 `GATED_VIOLATION`；实现 `X-Traefik-CI-Token` SHA-256 `ConstantTimeCompare` 机器鉴权与轮换 API；实现 `POST /api/gates/evaluate`（内置 `wait_lease_seconds` 排队防并发踩踏，正交区分 `503` 环境忙/未就绪 vs `422` 违规/劣化红阻 vs `200` 准出）及 Markdown PR/MR 报告 | 重放实测边 `422 GATED_VIOLATION` / `GATED_BREAKING_DIFF`、并发排队零误杀、`503` 环境隔离及 CI Token 安全单测全绿 |
+| **M17** | ✅ 已交付 | [`18-m17-ci-cd-quality-gate-and-automated-enforcement.md`](./18-m17-ci-cd-quality-gate-and-automated-enforcement.md) | CI/CD 自动化强阻断门禁、实测边回传与排他锁有界排队（ADR-14 v1.1.0）：Agent 重放回传 `ObservedEgressCalls` 支撑控制面单次闭环判定 `GATED_VIOLATION`；实现 `X-Traefik-CI-Token` SHA-256 `ConstantTimeCompare` 机器鉴权与轮换 API；实现 `POST /api/gates/evaluate`（内置 `wait_lease_seconds` 排队防并发踩踏，正交区分 `503` 环境忙/未就绪 vs `422` 违规/劣化红阻 vs `200` 准出）及 Markdown PR/MR 报告 | 重放实测边 `422 GATED_VIOLATION` / `GATED_BREAKING_DIFF`、并发排队零误杀、`503` 环境隔离及 CI Token 安全单测全绿 |
 
 ---
 

@@ -1,7 +1,7 @@
 # M17 作战卡：CI/CD 自动化强阻断质量门禁、实测边回传与排他锁有界排队
 
 - **里程碑编号**：`M17`
-- **状态**：📋 规划中 (Planned)
+- **状态**：✅ 已交付 (Completed)
 - **前置依赖**：`M16` 已交付
 - **关联特性**：`F-27`、`SC-10`
 - **关联设计规范**：[`14-governance-dashboard-golden-suite-and-ci-gate-adr.md`](../05-adr/14-governance-dashboard-golden-suite-and-ci-gate-adr.md) (ADR-14 v1.1.0)、[`05-database-schema.md`](../02-design/05-database-schema.md) (v1.4.0)、[`01-http-api-contract.md`](../03-api/01-http-api-contract.md) (v1.4.0)
@@ -43,4 +43,17 @@ go list -deps ./cmd/agent | grep -E "gorm|dynamicpb|protoregistry" && exit 1 || 
 TEST_DB_DSN="host=127.0.0.1 port=5432 user=postgres password=PWD dbname=postgres sslmode=disable" make test
 make lint && make build && make clean
 ```
+
+---
+
+## 4. 交付验证结果 (Verification Summary)
+
+- ✅ **Agent 零 DB / 零 .pb 依赖隔离**：`go list -deps ./cmd/agent` 校验通过，无 `gorm`、`dynamicpb`、`protoregistry` 依赖；重放出站调用汇总仅依赖 `pkg/crosrpc` 二进制头解析。
+- ✅ **CI 机器 Token 常量时间鉴权**：通过 `TestCITokenRotate_ConstantTimeAuth_RejectQueryToken_AndRevoke` 验证高熵凭据生成（`ctk_...`）、DB 仅存 SHA-256 哈希、常量时间防时序攻击比对、严格拒绝 URL Query 传参、以及注销后 401 拦截。
+- ✅ **实测出站边第一关强阻断 (422 GATED_VIOLATION)**：通过 `TestGateEvaluate_ObservedEgressCallsBlocksViolationWith422` 验证未报备调用即刻阻断。
+- ✅ **契约劣化第二关强阻断 (422 GATED_BREAKING_DIFF)**：通过 `TestGateEvaluate_BlocksBreakingDiffWith422` 验证状态码异常与字段级 Diff 阻断。
+- ✅ **排他锁有界排队与正交 503**：通过 `TestGateEvaluate_ConcurrentPipelinesQueueSmoothly_AndTimeoutReturns503` 验证并发等待退避顺利获锁（零 409 误伤）以及超时返回 503 `GATED_ENV_BUSY` 与未就绪返回 503 `GATED_ENV_NOT_READY`。
+- ✅ **SC-10 端到端全通与绿牌准出 (200 OK PASSED)**：通过 `TestSC10_CICDQualityGateHardEvaluationAndReport` 验证零违规、100% 通过、结构化 Markdown 报告生成及 `/traefik/debug?replay_task_id=` 直达链接。
+- ✅ **前端治理卡片与工作台单测**：`/admin/settings` CI 凭据治理卡片、轮换与吊销模态框就绪，`AdminSettingsPage.test.tsx` 校验通过，`make lint` 零警告零错误。
+- ✅ **单二进制打包验证**：`make build && make clean` 100% 成功。
 

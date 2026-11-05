@@ -5,7 +5,10 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
+	"fmt"
 	"net"
+	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -361,5 +364,165 @@ func TestReplayExecutorEndToEnd(t *testing.T) {
 	}
 	if result.TotalRequests != 2 || result.PassedRequests != 2 {
 		t.Errorf("expected 2/2 passed, got %d/%d", result.PassedRequests, result.TotalRequests)
+	}
+}
+
+// TestReplayExecutor_CollectsObservedEgressCalls_HitAndMiss 验证 Agent 零 .pb 实测出站边汇总回传与防腐依赖 (M17, F-27)
+func TestReplayExecutor_CollectsObservedEgressCalls_HitAndMiss(t *testing.T) {
+	// 1. 物理防腐依赖核验：断言 cmd/agent, pkg/replay 零 gorm、零 dynamicpb、零 protoregistry
+	cmd := exec.Command("go", "list", "-deps", "./cmd/agent", "./pkg/replay")
+	cmd.Dir = "../.." // code-traefik root
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("go list -deps 失败: %v, out: %s", err, string(out))
+	}
+	outStr := string(out)
+	for _, forbidden := range []string{"gorm.io", "dynamicpb", "protoregistry"} {
+		if strings.Contains(outStr, forbidden) {
+			t.Fatalf("Agent 违反物理防腐红线，检测到非法依赖: %s", forbidden)
+		}
+	}
+
+	executor := NewReplayExecutor()
+
+	// 2. 启动模拟被测进程 (SUT): 接收重放入站请求后，主动向 MockPort 发起出站调用
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen on 127.0.0.1: %v", err)
+	}
+	defer ln.Close()
+	targetPort := uint16(ln.Addr().(*net.TCPAddr).Port)
+
+	go func() {
+		for {
+			conn, acceptErr := ln.Accept()
+			if acceptErr != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				framer := crosrpc.NewStreamFramer(crosrpc.MaxPayloadLen)
+				buf := make([]byte, 32768)
+				for {
+					n, rErr := c.Read(buf)
+					if rErr != nil {
+						return
+					}
+					frames, fErr := framer.Feed(buf[:n])
+					if fErr != nil {
+						continue
+					}
+					for _, f := range frames {
+						if len(f.Data) >= 24 && f.Data[22] == crosrpc.MsgTypeReq {
+							sno := binary.BigEndian.Uint64(f.Data[8:16])
+
+							// 被测进程向 executor.MockPort 发送两次出站调用:
+							// 1) 命中出站: com.demo.Payment:Pay
+							// 2) 未命中出站: com.demo.FraudService:Check
+							mockPort := executor.MockPort()
+							if mockPort > 0 {
+								mockConn, mErr := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", mockPort))
+								if mErr == nil {
+									hitReq := buildTestReqPacket(5001, "com.demo.Payment", "Pay", crosrpc.ReqTypeSync, [16]byte{}, 0, []byte("pay_payload"))
+									_, _ = mockConn.Write(hitReq)
+
+									// 等待并读取自愈应答
+									rspBuf := make([]byte, 4096)
+									_ = mockConn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+									_, _ = mockConn.Read(rspBuf)
+
+									// 发送第二笔未配置 Mock 的出站请求 (MOCK_MISS)
+									missReq := buildTestReqPacket(5002, "com.demo.FraudService", "Check", crosrpc.ReqTypeSync, [16]byte{}, 0, []byte("fraud_check"))
+									_, _ = mockConn.Write(missReq)
+									time.Sleep(30 * time.Millisecond)
+									_ = mockConn.Close()
+								}
+							}
+
+							time.Sleep(30 * time.Millisecond)
+							// 回写主入站应答
+							rsp := buildTestRspPacket(sno, crosrpc.MsgTypeRsp, 200, "com.demo.OrderService", "CreateOrder", 0, []byte("order_created"))
+							_, _ = c.Write(rsp)
+						}
+					}
+				}
+			}(conn)
+		}
+	}()
+
+	ingressReq := buildTestReqPacket(1001, "com.demo.OrderService", "CreateOrder", crosrpc.ReqTypeSync, [16]byte{}, 0, []byte("create_order_data"))
+	downstreamReq := buildTestReqPacket(5001, "com.demo.Payment", "Pay", crosrpc.ReqTypeSync, [16]byte{}, 0, []byte("pay_payload"))
+	downstreamRsp := buildTestRspPacket(5001, crosrpc.MsgTypeRsp, 200, "com.demo.Payment", "Pay", 0, []byte("paid_ok"))
+
+	execReq := agentproto.ExecuteReplayReq{
+		TaskID: 9901,
+		ProcessSpec: agentproto.ProcessMonitorSpec{
+			ProcessID:  1,
+			ListenPort: targetPort,
+		},
+		TimeoutMs: 3000,
+		IngressItems: []agentproto.ReplayIngressItem{
+			{
+				RecordID: 101,
+				RawReq:   ingressReq,
+			},
+		},
+		ScopedEgressMocks: map[uint64][]agentproto.MockRuleDownstream{
+			101: {
+				{
+					ReqPacket:  downstreamReq,
+					RspPackets: [][]byte{downstreamRsp},
+				},
+			},
+		},
+	}
+
+	result, err := executor.Execute(context.Background(), execReq)
+	if err != nil {
+		t.Fatalf("executor.Execute failed: %v", err)
+	}
+
+	if result.Status != "MOCK_MISS" {
+		t.Errorf("expected result status MOCK_MISS, got %s", result.Status)
+	}
+	if result.MockHitCount < 1 {
+		t.Errorf("expected MockHitCount >= 1, got %d", result.MockHitCount)
+	}
+	if result.MockMissCount < 1 {
+		t.Errorf("expected MockMissCount >= 1, got %d", result.MockMissCount)
+	}
+
+	// 3. 断言 ObservedEgressCalls 包含命中与未命中调用
+	if len(result.ObservedEgressCalls) == 0 {
+		t.Fatalf("expected ObservedEgressCalls not empty")
+	}
+
+	var foundHit, foundMiss bool
+	for _, call := range result.ObservedEgressCalls {
+		if call.ServiceName == "com.demo.Payment" && call.Operation == "Pay" {
+			foundHit = true
+			if call.MatchStatus != "SCOPED_HIT" {
+				t.Errorf("expected Payment:Pay match status SCOPED_HIT, got %s", call.MatchStatus)
+			}
+			if call.CallCount < 1 {
+				t.Errorf("expected Payment:Pay call count >= 1, got %d", call.CallCount)
+			}
+		}
+		if call.ServiceName == "com.demo.FraudService" && call.Operation == "Check" {
+			foundMiss = true
+			if call.MatchStatus != "MOCK_MISS" {
+				t.Errorf("expected FraudService:Check match status MOCK_MISS, got %s", call.MatchStatus)
+			}
+			if call.CallCount < 1 {
+				t.Errorf("expected FraudService:Check call count >= 1, got %d", call.CallCount)
+			}
+		}
+	}
+
+	if !foundHit {
+		t.Errorf("expected to observe Payment:Pay in ObservedEgressCalls")
+	}
+	if !foundMiss {
+		t.Errorf("expected to observe FraudService:Check in ObservedEgressCalls")
 	}
 }

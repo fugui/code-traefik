@@ -37,4 +37,11 @@ export interface ModuleSettingItem {
 
 export interface ModuleSettingsResponse {
   settings: ModuleSettingItem[];
+  ci_token_configured?: boolean;
+}
+
+export interface CITokenRotateResponse {
+  ci_token: string;
+  rotated_at: string;
+  message?: string;
 }

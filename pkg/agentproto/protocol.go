@@ -206,13 +206,23 @@ type ReplayItemDetail struct {
 	ErrorMessage string `json:"error_message,omitempty"`
 }
 
+// ObservedEgressCall 重放期实测出站调用汇总 (ADR-14, M17)
+type ObservedEgressCall struct {
+	ServiceName string `json:"service_name"`
+	Operation   string `json:"operation"`
+	DstAddr     string `json:"dst_addr"`
+	CallCount   int    `json:"call_count"`
+	MatchStatus string `json:"match_status"`
+}
+
 // ReplayTaskResultResp 重放任务汇总结果
 type ReplayTaskResultResp struct {
-	TaskID         uint64 `json:"task_id"`
-	Status         string `json:"status"` // PASS | FAILED | MOCK_MISS | TIMEOUT | ERROR
-	TotalRequests  int    `json:"total_requests"`
-	PassedRequests int    `json:"passed_requests"`
-	MockHitCount   int    `json:"mock_hit_count"`
-	MockMissCount  int    `json:"mock_miss_count"`
-	Details        string `json:"details"`
+	TaskID              uint64               `json:"task_id"`
+	Status              string               `json:"status"` // PASS | FAILED | MOCK_MISS | TIMEOUT | ERROR
+	TotalRequests       int                  `json:"total_requests"`
+	PassedRequests      int                  `json:"passed_requests"`
+	MockHitCount        int                  `json:"mock_hit_count"`
+	MockMissCount       int                  `json:"mock_miss_count"`
+	ObservedEgressCalls []ObservedEgressCall `json:"observed_egress_calls"`
+	Details             string               `json:"details"`
 }

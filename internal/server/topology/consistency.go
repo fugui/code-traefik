@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"code-traefik/models"
+	"code-traefik/pkg/agentproto"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
@@ -485,4 +486,94 @@ func VerifySessionTopology(ctx context.Context, db *gorm.DB, sessionID uint64, r
 	}
 
 	return report, nil
+}
+
+// ObservedViolationDTO 实测出站边违规明细 DTO (ADR-14, F-27)
+type ObservedViolationDTO struct {
+	ServiceName string `json:"service_name"`
+	Operation   string `json:"operation"`
+	DstAddr     string `json:"dst_addr"`
+	CallCount   int    `json:"call_count"`
+	MatchStatus string `json:"match_status"`
+	Reason      string `json:"reason"`
+}
+
+// VerifyProcessObservedCalls 校验目标标准架构进程在重放实测期间捕获的出站调用是否合规 (ADR-14, M17, F-27)
+// 比对目标 ArchProcess 所装载模块的静态 DEPEND 契约，识别所有未报备的违规出站调用并写入 ReplayTask.ViolationCount
+func VerifyProcessObservedCalls(
+	ctx context.Context,
+	db *gorm.DB,
+	archProcessID uint64,
+	observedCalls []agentproto.ObservedEgressCall,
+) ([]ObservedViolationDTO, error) {
+	if len(observedCalls) == 0 {
+		return nil, nil
+	}
+
+	// 1. 加载目标标准架构进程所属全部功能模块
+	var modules []models.Module
+	if err := db.WithContext(ctx).Where("arch_process_id = ?", archProcessID).Find(&modules).Error; err != nil {
+		return nil, fmt.Errorf("查询架构进程所属模块失败: %w", err)
+	}
+
+	modIDs := make([]uint64, 0, len(modules))
+	for _, m := range modules {
+		modIDs = append(modIDs, m.ID)
+	}
+
+	allowedServices := make(map[string]bool)
+	if len(modIDs) > 0 {
+		// 2. 加载模块所声明的静态依赖服务 (DEPEND)
+		var deps []models.ModuleDependency
+		if err := db.WithContext(ctx).Preload("Service").Where("consumer_module_id IN ?", modIDs).Find(&deps).Error; err != nil {
+			return nil, fmt.Errorf("查询模块依赖关系失败: %w", err)
+		}
+		for _, dep := range deps {
+			if dep.Service != nil {
+				svc := strings.TrimSpace(dep.Service.ServiceName)
+				if svc != "" {
+					allowedServices[svc] = true
+				}
+			}
+			if dep.IsExternal && dep.ExternalService != "" {
+				svc := strings.TrimSpace(dep.ExternalService)
+				if svc != "" {
+					allowedServices[svc] = true
+				}
+			}
+		}
+
+		// 3. 同时也允许本进程所属模块自身对外供给的服务 (PROVIDE，进程内自我调用)
+		var provs []models.ModuleService
+		if err := db.WithContext(ctx).Where("module_id IN ?", modIDs).Find(&provs).Error; err != nil {
+			return nil, fmt.Errorf("查询模块供给服务失败: %w", err)
+		}
+		for _, p := range provs {
+			svc := strings.TrimSpace(p.ServiceName)
+			if svc != "" {
+				allowedServices[svc] = true
+			}
+		}
+	}
+
+	// 4. 比对实测出站调用，检出未报备违规调用 (VIOLATION)
+	var violations []ObservedViolationDTO
+	for _, c := range observedCalls {
+		svc := strings.TrimSpace(c.ServiceName)
+		if svc == "" {
+			continue
+		}
+		if !allowedServices[svc] {
+			violations = append(violations, ObservedViolationDTO{
+				ServiceName: c.ServiceName,
+				Operation:   c.Operation,
+				DstAddr:     c.DstAddr,
+				CallCount:   c.CallCount,
+				MatchStatus: c.MatchStatus,
+				Reason:      fmt.Sprintf("未在标准进程装载模块的静态 DEPEND 契约中报备下游服务 [%s]", c.ServiceName),
+			})
+		}
+	}
+
+	return violations, nil
 }
