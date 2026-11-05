@@ -1,4 +1,4 @@
-# 业务流量监控与重放 (`code-traefik`) 数据库物理模型与 GORM 建模字典
+# 业务流量与接口契约治理 (`code-traefik`) 数据库物理模型与 GORM 建模字典
 
 - **文档编号**：`05-database-schema.md`
 - **文档版本**：v1.3.2

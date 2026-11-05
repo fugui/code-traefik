@@ -1,4 +1,4 @@
-# 业务流量监控与重放 (`code-traefik`) 联调验证与生产部署手册
+# 业务流量与接口契约治理 (`code-traefik`) 联调验证与生产部署手册
 
 - **文档编号**：`01-verification-and-deployment-guide.md`
 - **文档版本**：v1.0.0
@@ -45,12 +45,12 @@ cd frontend && npm run dev
 gateways:
   traefik:
     url: "http://127.0.0.1:8091"
-    title: "业务流量监控与重放"
+    title: "业务流量与接口契约治理"
     icon: "Activity"
-    description: "业务流量监控与重放 业务子系统"
+    description: "基于真实流量的活体契约、架构一致性与防劣化自愈业务子系统"
 ```
 
-重启 `code-bench` 后，访问 `http://192.168.56.18:8000` 即可在工作台首页与左侧导航栏看到 **「业务流量监控与重放」** 模块。
+重启 `code-bench` 后，访问 `http://192.168.56.18:8000` 即可在工作台首页与左侧导航栏看到 **「业务流量与接口契约治理」** 模块。
 
 ---
 
