@@ -9,6 +9,7 @@ import (
 	"code-traefik/config"
 	"code-traefik/internal/server/decoder"
 	"code-traefik/models"
+	"code-traefik/pkg/version"
 
 	"gorm.io/datatypes"
 )
@@ -45,7 +46,6 @@ func main() {
 			traefik_processes,
 			traefik_module_dependencies,
 			traefik_module_services,
-			traefik_module_interfaces,
 			traefik_modules,
 			traefik_functional_groups,
 			traefik_subsystems,
@@ -70,7 +70,7 @@ func main() {
 		KernelVersion:   "Linux",
 		HasEbpfCap:      true,
 		CapDetail:       "EUID=0 (Full root privileges)",
-		AgentVersion:    "1.0.0",
+		AgentVersion:    version.Short(),
 		ProtocolVersion: "1.0",
 		MountsRevision:  1,
 		CreatedBy:       1,
@@ -366,6 +366,7 @@ func main() {
 
 	schema, ops, _, err := decoderReg.UploadSchema(decoder.UploadSchemaInput{
 		Name:         "demo-ecommerce",
+		Category:     models.ProtoCategoryBusiness,
 		VersionTag:   "v1.0.0",
 		FileName:     "demo.pb",
 		RawBytes:     rawBytes,
