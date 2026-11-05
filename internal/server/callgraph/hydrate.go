@@ -13,6 +13,7 @@ import (
 type HydrationCache struct {
 	ProcessNames     map[uint64]string
 	ArchProcessNames map[uint64]string
+	ProcToArchID     map[uint64]uint64
 	ModuleNames      map[uint64]string
 	ConnIndices      map[string]int
 	nextConnIndex    int
@@ -23,6 +24,7 @@ func NewHydrationCache() *HydrationCache {
 	return &HydrationCache{
 		ProcessNames:     make(map[uint64]string),
 		ArchProcessNames: make(map[uint64]string),
+		ProcToArchID:     make(map[uint64]uint64),
 		ModuleNames:      make(map[uint64]string),
 		ConnIndices:      make(map[string]int),
 		nextConnIndex:    1,
@@ -43,6 +45,9 @@ func (c *HydrationCache) LoadFromSession(session *models.RecordingSession) {
 			if s.ArchProcessID > 0 && s.Name != "" {
 				c.ArchProcessNames[s.ArchProcessID] = s.Name
 			}
+			if s.ProcessID > 0 && s.ArchProcessID > 0 {
+				c.ProcToArchID[s.ProcessID] = s.ArchProcessID
+			}
 		}
 	}
 }
@@ -59,6 +64,7 @@ func (c *HydrationCache) LoadFromDB(db *gorm.DB, procIDs []uint64, modIDs []uint
 			for _, p := range procs {
 				if p.ArchProcessID > 0 {
 					archIDs = append(archIDs, p.ArchProcessID)
+					c.ProcToArchID[p.ID] = p.ArchProcessID
 				}
 			}
 			if len(archIDs) > 0 {
@@ -124,7 +130,12 @@ func (c *HydrationCache) HydrateRecord(r *models.TrafficRecord) TrafficRecordSum
 	procName := c.ProcessNames[r.ProcessID]
 	archProcName := ""
 	if r.ProcessID > 0 {
-		archProcName = c.ArchProcessNames[r.ProcessID]
+		if archID, ok := c.ProcToArchID[r.ProcessID]; ok {
+			archProcName = c.ArchProcessNames[archID]
+		}
+		if archProcName == "" {
+			archProcName = c.ArchProcessNames[r.ProcessID]
+		}
 	}
 
 	var srcModIDStr, dstModIDStr *string

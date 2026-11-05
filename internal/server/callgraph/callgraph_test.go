@@ -3,10 +3,13 @@ package callgraph
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
 
+	"code-common/backend/testdb"
+	"code-traefik/config"
 	"code-traefik/models"
 	"gorm.io/datatypes"
 )
@@ -102,7 +105,7 @@ func TestCallGraph_DOTR_BuildTree_Parallel_Compensation_AndCycleProtection(t *te
 		},
 	}
 
-	trees := BuildTransactionTrees(records, nil, nil)
+	trees := BuildTransactionTrees(nil, records, nil, nil)
 	if len(trees) != 1 {
 		t.Fatalf("expected 1 tree group, got %d", len(trees))
 	}
@@ -207,7 +210,7 @@ func TestCallGraph_DOTR_BuildTree_Parallel_Compensation_AndCycleProtection(t *te
 
 	// 执行建树，必须在毫秒内返回且不崩溃、不无限递归
 	start := time.Now()
-	loopTrees := BuildTransactionTrees(loopRecords, nil, nil)
+	loopTrees := BuildTransactionTrees(nil, loopRecords, nil, nil)
 	duration := time.Since(start)
 
 	if duration > 1*time.Second {
@@ -481,5 +484,136 @@ func TestCallGraph_ParameterLineage_AndEntityLifecycleChains(t *testing.T) {
 	}
 	if orderChain.Steps[2].Role != "CONSUMER" || orderChain.Steps[2].Operation != "CancelOrder" {
 		t.Errorf("step 2 expected CONSUMER CancelOrder, got role=%s op=%s", orderChain.Steps[2].Role, orderChain.Steps[2].Operation)
+	}
+}
+
+// AC-01: 树构建水合透传真实 db 实例，断言 Record.SrcModuleName 与 DstModuleName 正确填充
+func TestBuildTransactionTrees_WithDBHydration(t *testing.T) {
+	db := testdb.SetupIsolatedDB(t, config.ServiceName)
+	if err := models.SetupWithDB(db); err != nil {
+		t.Fatalf("SetupWithDB 失败: %v", err)
+	}
+
+	// 1. 创建子系统与功能组
+	subsystem := models.Subsystem{Code: "COMMERCE", Name: "电商交易子系统"}
+	if err := db.Create(&subsystem).Error; err != nil {
+		t.Fatalf("创建子系统失败: %v", err)
+	}
+	fnGroup := models.FunctionalGroup{SubsystemID: subsystem.ID, Code: "COMM_FN", Name: "电商功能组"}
+	if err := db.Create(&fnGroup).Error; err != nil {
+		t.Fatalf("创建功能组失败: %v", err)
+	}
+
+	// 2. 创建进程组与架构进程蓝图
+	pgrp := models.ArchProcessGroup{Code: "PGRP_TEST", Name: "测试进程组"}
+	if err := db.Create(&pgrp).Error; err != nil {
+		t.Fatalf("创建进程组失败: %v", err)
+	}
+	archOrder := models.ArchProcess{GroupID: pgrp.ID, Code: "order-svc", Name: "订单交易服务"}
+	if err := db.Create(&archOrder).Error; err != nil {
+		t.Fatalf("创建架构进程失败: %v", err)
+	}
+
+	// 3. 创建测试模块
+	modOrder := models.Module{SubsystemID: subsystem.ID, GroupID: fnGroup.ID, Code: "MOD_ORDER", Name: "订单交易核心模块", ArchProcessID: &archOrder.ID}
+	modStock := models.Module{SubsystemID: subsystem.ID, GroupID: fnGroup.ID, Code: "MOD_STOCK", Name: "仓储库存履约模块"}
+	if err := db.Create(&modOrder).Error; err != nil {
+		t.Fatalf("创建模块 modOrder 失败: %v", err)
+	}
+	if err := db.Create(&modStock).Error; err != nil {
+		t.Fatalf("创建模块 modStock 失败: %v", err)
+	}
+
+	// 4. 创建物理 Agent 与 Process 实例
+	agent := models.Agent{Name: "agt-test", Endpoint: "127.0.0.1:8090", Status: models.AgentStatusOnline, Scope: models.ScopeShared}
+	if err := db.Create(&agent).Error; err != nil {
+		t.Fatalf("创建 Agent 失败: %v", err)
+	}
+	procOrder := models.Process{AgentID: agent.ID, ArchProcessID: archOrder.ID, EffectiveListenPort: 9001}
+	if err := db.Create(&procOrder).Error; err != nil {
+		t.Fatalf("创建 Process 失败: %v", err)
+	}
+
+	targetProcIDs, _ := json.Marshal([]uint64{procOrder.ID})
+	session := models.RecordingSession{
+		SessionNo:        "REC_TEST_HYDRATE",
+		Name:             "水合测试会话",
+		Scope:            models.ScopeShared,
+		Status:           models.SessionStatusCompleted,
+		TargetProcessIDs: datatypes.JSON(targetProcIDs),
+	}
+	if err := db.Create(&session).Error; err != nil {
+		t.Fatalf("创建 Session 失败: %v", err)
+	}
+
+	// 5. 构造 records
+	lat := int64(15000)
+	rspT := int64(1700000000015000000)
+	records := []models.TrafficRecord{
+		{
+			ID:              201,
+			SessionID:       session.ID,
+			ProcessID:       procOrder.ID,
+			TraceID:         "trace-hydrate-01",
+			SpanID:          "span-root",
+			Direction:       "INGRESS",
+			ServiceName:     "demo.order.OrderService",
+			Operation:       "CreateOrder",
+			SrcModuleID:     nil, // 外部请求
+			DstModuleID:     &modOrder.ID,
+			ReqCapturedAtNs: 1700000000000000000,
+			RspCapturedAtNs: &rspT,
+			LatencyUs:       &lat,
+			StatusCode:      models.U64Numeric(0),
+			CreatedAt:       time.Now(),
+		},
+		{
+			ID:              202,
+			SessionID:       session.ID,
+			ProcessID:       procOrder.ID,
+			TraceID:         "trace-hydrate-01",
+			SpanID:          "span-child",
+			FatherSpanID:    "span-root",
+			Direction:       "EGRESS",
+			ServiceName:     "demo.inventory.InventoryService",
+			Operation:       "LockStock",
+			SrcModuleID:     &modOrder.ID,
+			DstModuleID:     &modStock.ID,
+			ReqCapturedAtNs: 1700000000005000000,
+			RspCapturedAtNs: &rspT,
+			LatencyUs:       &lat,
+			StatusCode:      models.U64Numeric(0),
+			CreatedAt:       time.Now(),
+		},
+	}
+
+	trees := BuildTransactionTrees(db, records, &session, nil)
+	if len(trees) != 1 {
+		t.Fatalf("expected 1 tree, got %d", len(trees))
+	}
+
+	root := trees[0].Root
+
+	// 断言根节点 (INGRESS)
+	if root.Record.DstModuleName != "订单交易核心模块" {
+		t.Errorf("expected DstModuleName '订单交易核心模块', got '%s'", root.Record.DstModuleName)
+	}
+	if root.Record.ProcessName != "订单交易服务" {
+		t.Errorf("expected ProcessName '订单交易服务', got '%s'", root.Record.ProcessName)
+	}
+	if root.Record.ArchProcessName != "订单交易服务" {
+		t.Errorf("expected ArchProcessName '订单交易服务', got '%s'", root.Record.ArchProcessName)
+	}
+
+	// 断言子节点 (EGRESS)
+	if len(root.Children) != 1 {
+		t.Fatalf("expected 1 child, got %d", len(root.Children))
+	}
+	child := root.Children[0]
+	if child.Record.SrcModuleName != "订单交易核心模块" {
+		t.Errorf("expected child SrcModuleName '订单交易核心模块', got '%s'", child.Record.SrcModuleName)
+	}
+	if child.Record.DstModuleName != "仓储库存履约模块" {
+		t.Errorf("expected child DstModuleName '仓储库存履约模块', got '%s'", child.Record.DstModuleName)
 	}
 }

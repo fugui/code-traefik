@@ -374,7 +374,7 @@ func GetRecordingSessionTransactions(c *gin.Context) {
 		Keyword:      query.Keyword,
 	}
 
-	trees := callgraph.BuildTransactionTrees(records, &session, filter)
+	trees := callgraph.BuildTransactionTrees(db.WithContext(c.Request.Context()), records, &session, filter)
 	entityChains := callgraph.BuildEntityChains(records)
 	if entityChains == nil {
 		entityChains = []callgraph.EntityLifecycleChainDTO{}

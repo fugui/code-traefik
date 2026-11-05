@@ -6,12 +6,14 @@ import (
 	"strconv"
 
 	"code-traefik/models"
+	"gorm.io/gorm"
 )
 
 var compensationRegex = regexp.MustCompile(`(?i)^(Cancel|Release|Rollback|Refund|Unlock|Compensate|Revert)`)
 
 // BuildTransactionTrees 构建调用树全流程
 func BuildTransactionTrees(
+	db *gorm.DB,
 	records []models.TrafficRecord,
 	session *models.RecordingSession,
 	filter *TreeFilterOptions,
@@ -21,7 +23,7 @@ func BuildTransactionTrees(
 	}
 
 	// 1. 批量水合
-	hydratedList := HydrateRecords(nil, session, records)
+	hydratedList := HydrateRecords(db, session, records)
 	hydratedMap := make(map[uint64]*TrafficRecordSummary, len(records))
 	recByID := make(map[uint64]*models.TrafficRecord, len(records))
 	for i := range records {

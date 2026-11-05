@@ -113,18 +113,18 @@ func (o *Orchestrator) StartSession(
 
 	// 2. 权限校验与收集 Agent
 	agentMap := make(map[uint64]*models.Agent)
-	for _, p := range procs {
-		p.FillFromArchProcess()
-		if p.Agent == nil {
-			return nil, fmt.Errorf("400 Bad Request: 进程 %s 未关联有效 Agent", p.Name)
+	for i := range procs {
+		procs[i].FillFromArchProcess()
+		if procs[i].Agent == nil {
+			return nil, fmt.Errorf("400 Bad Request: 进程 %s 未关联有效 Agent", procs[i].Name)
 		}
-		if p.Agent.Scope == models.ScopePrivate && (p.Agent.OwnerID == nil || *p.Agent.OwnerID != userID) && !isAdmin {
+		if procs[i].Agent.Scope == models.ScopePrivate && (procs[i].Agent.OwnerID == nil || *procs[i].Agent.OwnerID != userID) && !isAdmin {
 			return nil, ErrForbiddenPrivateAgent
 		}
-		if p.Agent.Status != models.AgentStatusOnline {
-			return nil, fmt.Errorf("400 Bad Request: 目标 Agent [%s] 处于离线状态", p.Agent.Name)
+		if procs[i].Agent.Status != models.AgentStatusOnline {
+			return nil, fmt.Errorf("400 Bad Request: 目标 Agent [%s] 处于离线状态", procs[i].Agent.Name)
 		}
-		agentMap[p.AgentID] = p.Agent
+		agentMap[procs[i].AgentID] = procs[i].Agent
 	}
 
 	var agentIDs []uint64

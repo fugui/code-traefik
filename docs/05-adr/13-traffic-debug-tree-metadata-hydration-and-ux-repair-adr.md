@@ -1,9 +1,9 @@
 # ADR-13：独立流量调试台因果树元数据水合缺陷与链路展示降级修复决策
 
-- **状态**：提议中 / 待评审 (Proposed / Under Review)
+- **状态**：已批准 (Accepted)
 - **日期**：2026-11-05
 - **决策者**：CodeBench 架构委员会 / `code-traefik` 核心研发组
-- **文档版本**：v1.0.0
+- **文档版本**：v1.1.0
 - **关联基线**：[`12-packet-causality-call-tree-and-sequence-ux-adr.md`](./12-packet-causality-call-tree-and-sequence-ux-adr.md) (ADR-12)、[`04-control-plane-and-web-console.md`](../02-design/04-control-plane-and-web-console.md)、[`14-m13-packet-causality-call-tree-and-sequence-workbench.md`](../04-tasks/14-m13-packet-causality-call-tree-and-sequence-workbench.md)
 
 ---
@@ -34,7 +34,7 @@
 
 ### 1.3 缺陷 3：前端架构链路缺少外部调用与网络端点的兜底降级
 - **现象**：前端在渲染无缝合链路时，直接写死为 `{src_module_name || peer_proc_name || '-'} ➔ {dst_module_name || process_name || '-'}`。
-- **根因**：根事务（外部调用打入微服务）属于外部客户端调用，外部客户端不是拓扑中已注册的微服务模块，且未走探针内部管理握手（无 `peer_proc_name`）。此时左侧直接显示 `-`，缺乏对“外部客户端/调用源 IP”的语义化降级，最终形成生硬的 `- ➔ -`。
+- **根因**：根事务（外部调用打入微服务）属于外部客户端调用，外部客户端不是拓扑中已注册的微服务模块，且未走探针内部管理握手（无 `peer_proc_name`）。此时左侧直接显示 `-`，缺乏对“外部客户端/调用源 IP”的语义化降级；且未区分 `INGRESS` 与 `EGRESS` 的主被调反向关系，最终形成生硬的 `- ➔ -`。
 
 ### 1.4 采集边界：单进程录制模式下的客观物理限制
 - **现象**：未产生带有 `🔗` 标识与网络跳耗时高亮的跨进程缝合（`stitched_ingress_record` 为空）。
@@ -63,11 +63,13 @@
          hydratedList := HydrateRecords(db, session, records)
          ...
      ```
-2. **联动更新上层 Controller 与调用点**：
+2. **联动更新上层 Controller 与全流程调用点**：
    - `handlers/traffic_handler.go:377`：将 Handler 持有的 `db` 传入 `callgraph.BuildTransactionTrees(db, records, &session, filter)`；
-   - `internal/server/callgraph/sequence.go:30`：同步补齐 `BuildTransactionTrees(db, records, &session, nil)`；
-   - `internal/server/callgraph/closure.go:56`：同步补齐 `BuildTransactionTrees(db, sessionRecords, &session, nil)`；
+   - `internal/server/callgraph/sequence.go:30`：同步补齐 `BuildTransactionTrees(db, records, &session, nil)`，**彻底激活时序泳道图 (Sequence Diagram) 的参与者生命线水合**，消除匿名占位符；
+   - `internal/server/callgraph/closure.go:56`：同步补齐 `BuildTransactionTrees(db, sessionRecords, &session, nil)`，激活事务闭包重放的节点元数据水合；
    - 保持兼容性：在单测（`callgraph_test.go`）中允许传入 `nil`，确保纯内存测试用例不受阻碍。
+3. **修复 `HydrationCache` 中架构进程索引映射缺陷 (`hydrate.go`)**：
+   - 在 `HydrationCache` 中增加 `ProcToArchID map[uint64]uint64` 关系映射。在 `LoadFromDB` 与 `LoadFromSession` 中记录 `proc.ID ➔ proc.ArchProcessID` 关系，使 `HydrateRecord` 中 `c.ArchProcessNames[c.ProcToArchID[r.ProcessID]]` 正确取得架构进程名，杜绝键名混淆。
 
 **决策收益**：**零数据迁移成本**！无需重新录制流量，所有历史录制素材在前端打开时，立刻能根据已有的 `src_module_id` / `dst_module_id` 从数据库自动查出真实的中文模块名。
 
@@ -97,32 +99,52 @@
 
 ---
 
-### 2.3 决策三：前端架构链路引入多级优雅降级策略，彻底消灭 `- ➔ -`
+### 2.3 决策三：前端架构链路引入基于方向的双向自适应优雅降级策略
 
-在 `TransactionCallTreeTable.tsx` 与 `TrafficRecordTable.tsx` 中抽象统一的格式化辅助函数，遵循自顶向下的层级兜底策略：
+在 `TransactionCallTreeTable.tsx` 与 `TrafficRecordTable.tsx` 中抽象统一的格式化辅助函数 `resolveTopologyEndpoints(record)`。
+
+#### 物理视角对齐法则：
+`models.TrafficRecord` 的 `process_name` 物理上永远是**被测本地监控进程**：
+- **`INGRESS`（入口请求）**：本地进程是**被调方（服务端）**，即目标端 `DST`；调用源 `SRC` 为外部客户端或上游微服务；
+- **`EGRESS`（出站调用）**：本地进程是**主调方（客户端）**，即源端 `SRC`；目标端 `DST` 为下游微服务、被调契约服务或下游套接字。
+
+#### 双向降级优先级决策树：
 
 ```text
-调用方 (SRC) 优先级：
-  [1] src_module_name (如: 订单交易核心模块)
-  ➔ [2] peer_proc_name (探针握手自报进程名)
-  ➔ [3] 若 direction == 'INGRESS' ➔ "外部客户端" (或 "外部客户端 (127.0.0.1)")
-  ➔ [4] src_addr (如: 127.0.0.1:45184)
-  ➔ [5] "未知源端"
+【方向一：INGRESS 入口报文】
+  调用方 (SRC)：
+    [1] src_module_name (若已明确归属微服务模块)
+    ➔ [2] peer_proc_name (握手自报进程名)
+    ➔ [3] 提取纯净 IP: "外部客户端 (127.0.0.1)" (若 src_addr 存在) 或 "外部客户端"
+    ➔ [4] "未知源端"
+  接收方 (DST)：
+    [1] dst_module_name (如: 订单交易核心模块)
+    ➔ [2] process_name / arch_process_name (当前承载进程名，如: demo.order.OrderService)
+    ➔ [3] dst_addr (如: 127.0.0.1:9001)
+    ➔ [4] "本地服务"
 
-接收方 (DST) 优先级：
-  [1] dst_module_name (如: 仓储库存履约模块)
-  ➔ [2] process_name (当前承载进程名，如: demo.order.OrderService)
-  ➔ [3] dst_addr (如: 127.0.0.1:9001)
-  ➔ [4] "未知目标"
+【方向二：EGRESS 出站报文】
+  调用方 (SRC)：
+    [1] src_module_name (如: 订单交易核心模块)
+    ➔ [2] process_name / arch_process_name (发起出站的本地进程名，如: demo.order.OrderService)
+    ➔ [3] src_addr (如: 127.0.0.1:45184)
+    ➔ [4] "本地服务"
+  接收方 (DST)：
+    [1] dst_module_name (如: 仓储库存履约模块)
+    ➔ [2] peer_proc_name (若对端已识别)
+    ➔ [3] service_name (调用的目标接口服务名，如: demo.inventory.InventoryService)
+    ➔ [4] dst_addr (如: 127.0.0.1:9002)
+    ➔ [5] "下游服务"
 ```
 
 #### 视觉呈现效果对比：
-| 场景 | 当前现状（缺陷） | 修复后呈现效果 |
-| :--- | :--- | :--- |
-| **外部请求打入订单服务** (`#1`, `#4`) | `- ➔ -` | `外部客户端 ➔ 订单交易核心模块`（次文本显示 `demo.order.OrderService`） |
-| **订单服务调用库存查询** (`#2`, `#5`) | `- ➔ -` | `订单交易核心模块 ➔ 仓储库存履约模块` |
-| **订单服务调用账户扣减** (`#3`) | `- ➔ -` | `订单交易核心模块 ➔ 账户资产核心模块` |
-| **同时录制双端（跨跳缝合）** | `- ➔ -` | `🔗 OrderService ➔ InventoryService`（蓝底高亮 + 悬浮网络跳时延） |
+| 场景 | 当前现状（缺陷） | 修复后呈现效果 | 悬浮 Tooltip 细节 |
+| :--- | :--- | :--- | :--- |
+| **外部请求打入订单服务** (`#1`, `#4`) | `- ➔ -` | `外部客户端 (127.0.0.1) ➔ 订单交易核心模块` | `源端: 127.0.0.1:45184 \| 目标进程: demo.order.OrderService (127.0.0.1:9001)` |
+| **订单服务调用库存查询** (`#2`, `#5`) | `- ➔ -` | `订单交易核心模块 ➔ 仓储库存履约模块` | `源端: demo.order.OrderService \| 目标服务: demo.inventory.InventoryService` |
+| **订单服务调用账户扣减** (`#3`) | `- ➔ -` | `订单交易核心模块 ➔ 账户资产核心模块` | `源端: demo.order.OrderService \| 目标服务: demo.account.AccountService` |
+| **同时录制双端（跨跳缝合）** | `- ➔ -` | `🔗 OrderService ➔ InventoryService` | `跨进程缝合成功 (单跳网络时延: 420µs)` |
+| **未归属模块的第三方出站** | `- ➔ -` | `订单交易核心模块 ➔ demo.thirdparty.PaymentService` | `目标端点: 10.0.0.5:8080` |
 
 ---
 
@@ -130,30 +152,33 @@
 
 针对用户反馈第一列 `▼ #1 Conn#1 • 1001` 初见难以理解的问题，保持高密度紧凑排版优势的同时，增加交互引导：
 1. **表头 Tooltip 指南**：在表头 `层级 / 发起序 / 连接` 增加信息提示图标 `ℹ️`，鼠标悬浮展示清晰图例：
-   - `▼ / ▶ / •`：事务层级与子调用折叠；
-   - `#seq_no`：按物理捕获时间严格递增的全局发起序；
-   - `Conn#k`：网络 Socket 连接紧凑短编号（便于识别多路复用与跨连接）；
-   - `sno`：协议请求序列号。
+   ```text
+   • ▼ / ▶ / • : 事务调用层级展开、折叠与叶子节点
+   • #seq_no   : 全局单调递增的物理捕获先后序号 (起因 ➔ 经过 ➔ 结果)
+   • Conn#k    : TCP 连接短编号 (同号表示同一长连接多路复用)
+   • sno       : CROS 协议请求序列号 (连接内自增流水号)
+   ```
 2. **单元格细节气泡**：鼠标悬停在 `Conn#1 · 1001` 上时展示系统提示：`网络连接序号: 1 (长连接)，报文流水号: 1001`。
 
 ---
 
 ## 3. 验收标准与质量门禁 (Acceptance Criteria)
 
-- [ ] **AC-01（后端树水合单测）**：在 `internal/server/callgraph/callgraph_test.go` 中编写用例，传入带有非空 `db` 的测试上下文，断言 `BuildTransactionTrees` 返回结果中每个节点的 `Record.SrcModuleName` 与 `Record.DstModuleName` 正确填充，不为 `""`。
-- [ ] **AC-02（快照值拷贝单测）**：在 `internal/server/recorder/recorder_test.go` 中验证会话创建逻辑，断言固化到 `ProcessSnapshots` 中的每个条目其 `Code` 与 `Name` 必须非空。
-- [ ] **AC-03（前端兜底与零 `- ➔ -` 保证）**：在前端单元测试中模拟无 `src_module_name` 的根事务报文，断言界面渲染包含 `外部客户端`，严禁出现 `- ➔ -` 字符串。
-- [ ] **AC-04（构建全绿门禁）**：`make test && make lint && make build` 100% 零警告通过。
+- [x] **AC-01（后端树水合单测）**：在 `internal/server/callgraph/callgraph_test.go` 中编写用例，传入带有非空 `db` 的测试上下文，断言 `BuildTransactionTrees` 返回结果中每个节点的 `Record.SrcModuleName` 与 `Record.DstModuleName` 正确填充，不为 `""`。
+- [x] **AC-02（快照值拷贝单测）**：在 `internal/server/recorder/recorder_test.go` 中验证会话创建逻辑，断言固化到 `ProcessSnapshots` 中的每个条目其 `Code` 与 `Name` 必须非空。
+- [x] **AC-03（前端双向兜底与零 `- ➔ -` 保证）**：在前端单元测试中覆盖 `INGRESS`（外部调用）与 `EGRESS`（下游出站）场景，断言界面渲染包含 `外部客户端` 与目标服务/模块，严禁出现 `- ➔ -` 字符串，且出站调用的主调方不得误置为目标端。
+- [x] **AC-04（时序泳道图与闭包重放水合断言）**：验证 `GenerateSequenceDiagram` 与 `BuildSubtreeClosure` 经由 `BuildTransactionTrees(db, ...)` 调用后，泳道参与者与重放预览的模块名均正确填充。
+- [x] **AC-05（构建全绿门禁）**：`make test && make lint && make build` 100% 零警告通过。
 
 ---
 
-## 4. 评审重点与待确认事项 (Review Checklist & Feedback Requested)
+## 4. 评审结论与决策固化 (Review Consensus & Resolution)
 
-请核心团队与同事在评审本 ADR 时重点确认以下三项：
+经核心团队与架构委员会评审，对提议问题形成正式决议：
 
 1. **关于外部客户端的命名**：
-   - 根事务 INGRESS 缺少源模块时，建议直接显示为 **`外部客户端`**（或附带 `src_addr`，如 `外部客户端 (127.0.0.1)`）。大家更倾向于简洁的 `外部客户端` 还是带 IP 的 `外部客户端 (IP:Port)`？
-2. **是否需要写一次性历史会话快照修复脚本**：
-   - 由于决策一实施后，历史批次已经可以通过 DB 实时水合出正确的中文模块名，历史快照中的空名字已被完全遮蔽覆盖。建议**无需执行数据库历史快照更新脚本**，保持历史表数据不可变，新录制批次天然生效。
-3. **表头提示交互**：
-   - 是否赞同在第一列表头增加 `ℹ️` 图标及悬浮解释 Tooltip？
+   - **决议**：表格主视图采用 **`外部客户端 (IP)`** 格式（若有 IP 则去除高位临时端口，无 IP 则纯 `外部客户端`）；鼠标悬停展示完整原始套接字 `IP:Port`。既保持界面清爽，又保留关键网络区隔。
+2. **关于历史会话快照数据库修复脚本**：
+   - **决议**：**不执行** 历史表原地修复脚本。`HydrateRecords` 会根据最新拓扑库表动态补偿水合，无需侵入性修改不可变会话审计历史，新录制批次天然生效。
+3. **关于表头图例引导**：
+   - **决议**：**全票赞同**。在表头第一列增设 `ℹ️` 图标与 Tooltip 浮层，直观指引四个符号的物理含义。

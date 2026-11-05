@@ -583,3 +583,80 @@ func TestPacketAnatomyBuilderAndRedecode(t *testing.T) {
 		t.Errorf("数据库中更新后的 SchemaVersion 应为 %d，实际: %v", s2.Version, recAfter.SchemaVersion)
 	}
 }
+
+// AC-02: 验证会话创建逻辑，断言固化到 ProcessSnapshots 中的每个条目其 Code 与 Name 必须非空
+func TestOrchestrator_ProcessSnapshotHydration(t *testing.T) {
+	db := setupIsolatedRecorderDB(t)
+
+	// 1. 创建三级架构及架构进程
+	subsystem := models.Subsystem{Code: "TEST_SUB", Name: "测试子系统"}
+	db.Create(&subsystem)
+	fnGroup := models.FunctionalGroup{SubsystemID: subsystem.ID, Code: "TEST_GRP", Name: "测试功能组"}
+	db.Create(&fnGroup)
+	pgrp := models.ArchProcessGroup{Code: "PGRP_SNAP", Name: "快照测试组"}
+	db.Create(&pgrp)
+	archProc := models.ArchProcess{GroupID: pgrp.ID, Code: "order-srv", Name: "订单交易服务", DefaultListenPort: 9001}
+	db.Create(&archProc)
+	mod := models.Module{SubsystemID: subsystem.ID, GroupID: fnGroup.ID, Code: "MOD_ORDER", Name: "订单模块", ArchProcessID: &archProc.ID}
+	db.Create(&mod)
+
+	// 2. Mock Agent 服务器
+	agentServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPut && r.URL.Path == "/agent/v1/monitors/sync" {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"diagnostics": []interface{}{}})
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer agentServer.Close()
+
+	agent := models.Agent{
+		Name:     "agent-snap-test",
+		Endpoint: agentServer.URL,
+		Scope:    models.ScopeShared,
+		Status:   models.AgentStatusOnline,
+	}
+	db.Create(&agent)
+
+	proc := models.Process{
+		AgentID:             agent.ID,
+		ArchProcessID:       archProc.ID,
+		EffectiveListenPort: 9001,
+	}
+	db.Create(&proc)
+
+	orch := NewOrchestrator(db, nil)
+
+	req := StartSessionReq{
+		Name:             "快照固化验证会话",
+		Scope:            models.ScopeShared,
+		TargetProcessIDs: []uint64{proc.ID},
+		MaxDurationSec:   60,
+	}
+
+	session, err := orch.StartSession(context.Background(), req, 1, true)
+	if err != nil {
+		t.Fatalf("StartSession 失败: %v", err)
+	}
+
+	var snapshots []models.ProcessSnapshotItem
+	if err := json.Unmarshal(session.ProcessSnapshots, &snapshots); err != nil {
+		t.Fatalf("反序列化 ProcessSnapshots 失败: %v", err)
+	}
+
+	if len(snapshots) != 1 {
+		t.Fatalf("期望 1 个快照条目，实际为: %d", len(snapshots))
+	}
+
+	snap := snapshots[0]
+	if snap.Code != "order-srv" {
+		t.Errorf("期望 Code 为 'order-srv'，实际为 '%s'", snap.Code)
+	}
+	if snap.Name != "订单交易服务" {
+		t.Errorf("期望 Name 为 '订单交易服务'，实际为 '%s'", snap.Name)
+	}
+	if snap.ListenPort != 9001 {
+		t.Errorf("期望 ListenPort 为 9001，实际为 %d", snap.ListenPort)
+	}
+}

@@ -1,5 +1,6 @@
 import React from 'react';
 import type { TrafficRecordSummary } from '../../types';
+import { resolveTopologyEndpoints } from './topologyUtils';
 
 export interface TrafficRecordTableProps {
   records: TrafficRecordSummary[];
@@ -47,6 +48,7 @@ export const TrafficRecordTable: React.FC<TrafficRecordTableProps> = ({
                 const isSelected = selectedRecordId === r.id;
                 const isIngressReplayable = r.direction === 'INGRESS' && r.is_replayable;
                 const isProtoSuccess = r.status_code === 0 || r.status_code === '0';
+                const endpoints = resolveTopologyEndpoints(r);
 
                 return (
                   <tr
@@ -118,8 +120,8 @@ export const TrafficRecordTable: React.FC<TrafficRecordTableProps> = ({
                       </div>
                     </td>
                     <td>
-                      <span className="code-text-xs">
-                        {`${r.src_module_name || r.peer_proc_name || '-'} → ${r.dst_module_name || r.process_name || '-'}`}
+                      <span className="code-text-xs" title={endpoints.tooltip}>
+                        {`${endpoints.srcName} ➔ ${endpoints.dstName}`}
                       </span>
                     </td>
                     <td>

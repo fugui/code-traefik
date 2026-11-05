@@ -53,7 +53,7 @@ func BuildReplayClosurePreview(
 	ingressSummary := hydratedList[0]
 
 	// 3. 构建调用树以找出当前 INGRESS 节点的全部下游子孙 EGRESS 记录
-	trees := BuildTransactionTrees(sessionRecords, &session, nil)
+	trees := BuildTransactionTrees(db, sessionRecords, &session, nil)
 
 	var targetNode *TransactionTreeNodeDTO
 	for i := range trees {

@@ -27,7 +27,7 @@ func BuildTransactionSequence(
 	_ = db.Where("id = ?", sessionID).First(&session).Error
 
 	// 2. 建树并找到指定根事务
-	trees := BuildTransactionTrees(records, &session, nil)
+	trees := BuildTransactionTrees(db, records, &session, nil)
 	var rootGroup *TransactionTreeGroupDTO
 	for i := range trees {
 		if trees[i].RootRecordID == strconv.FormatUint(rootRecordID, 10) {

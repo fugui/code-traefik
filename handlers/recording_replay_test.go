@@ -398,6 +398,20 @@ func TestSC05_SC07_SC08_EndToEndRecordingAndReplayPipeline(t *testing.T) {
 		t.Fatalf("会话状态异常: ID=%d, Status=%s", sessionResp.ID, sessionResp.Status)
 	}
 
+	// 断言 ProcessSnapshots 固化质量 (AC-02: 杜绝值拷贝失效导致的空 Code/Name)
+	var snapshots []models.ProcessSnapshotItem
+	if err := json.Unmarshal(sessionResp.ProcessSnapshots, &snapshots); err != nil {
+		t.Fatalf("反序列化 ProcessSnapshots 失败: %v", err)
+	}
+	if len(snapshots) != 2 {
+		t.Fatalf("期望 2 个快照项，实际为: %d", len(snapshots))
+	}
+	for _, s := range snapshots {
+		if s.Code == "" || s.Name == "" {
+			t.Fatalf("ProcessSnapshotItem Code/Name 为空: %+v", s)
+		}
+	}
+
 	// 检查 Agent 1 租约已被占用
 	var checkAgent1 models.Agent
 	if err := db.First(&checkAgent1, agent1.ID).Error; err != nil {

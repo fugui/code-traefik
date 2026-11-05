@@ -14,6 +14,7 @@ import { TrafficRecordTable } from '../TrafficRecordTable';
 import { EntityLifecycleFilterStrip } from '../EntityLifecycleFilterStrip';
 import { SequenceSwimlaneCanvas } from '../SequenceSwimlaneCanvas';
 import { SinglePacketReplayContent } from '../SinglePacketReplayDrawer';
+import { resolveTopologyEndpoints, extractPureIP } from '../topologyUtils';
 
 describe('M13 Frontend Test Suite: Transaction Call Tree and Sequence Workbench', () => {
   const mockRootSummary: TrafficRecordSummary = {
@@ -416,5 +417,139 @@ describe('M13 Frontend Test Suite: Transaction Call Tree and Sequence Workbench'
     );
     expect(stripHtml).toContain('order_id=ORD_9981');
     expect(stripHtml).toContain('2 笔');
+  });
+
+  // T-M13-13: 验证因果树与平铺表拓扑端点自适应双向降级与零 - ➔ - 保证 (AC-03)
+  it('T-M13-13: 验证自适应双向降级兜底逻辑与零 - ➔ - 呈现 (AC-03)', () => {
+    // 1. 测试纯 IP 提取
+    expect(extractPureIP('127.0.0.1:45184')).toBe('127.0.0.1');
+    expect(extractPureIP('[::1]:8080')).toBe('::1');
+    expect(extractPureIP('192.168.1.100')).toBe('192.168.1.100');
+    expect(extractPureIP('')).toBe('');
+
+    // 2. 测试 INGRESS 报文缺少源模块时的降级 (外部客户端)
+    const ingressEp1 = resolveTopologyEndpoints({
+      direction: 'INGRESS',
+      src_addr: '127.0.0.1:45184',
+      process_name: 'demo.order.OrderService',
+    });
+    expect(ingressEp1.srcName).toBe('外部客户端 (127.0.0.1)');
+    expect(ingressEp1.dstName).toBe('demo.order.OrderService');
+
+    const ingressEp2 = resolveTopologyEndpoints({
+      direction: 'INGRESS',
+      dst_module_name: '订单交易核心模块',
+    });
+    expect(ingressEp2.srcName).toBe('外部客户端');
+    expect(ingressEp2.dstName).toBe('订单交易核心模块');
+
+    // 3. 测试 EGRESS 报文缺少下游模块时的降级 (主调方为本地进程，被调方为目标接口)
+    const egressEp = resolveTopologyEndpoints({
+      direction: 'EGRESS',
+      process_name: 'demo.order.OrderService',
+      service_name: 'demo.inventory.InventoryService',
+      dst_addr: '127.0.0.1:9002',
+    });
+    expect(egressEp.srcName).toBe('demo.order.OrderService');
+    expect(egressEp.dstName).toBe('demo.inventory.InventoryService');
+
+    // 4. 模拟无元数据的降级报文在树表和流水表中的真实渲染
+    const degradedRoot: TrafficRecordSummary = {
+      id: '201',
+      session_id: '1',
+      seq_no: 1,
+      process_id: '10',
+      process_name: 'demo.order.OrderService',
+      src_addr: '127.0.0.1:52134',
+      dst_addr: '127.0.0.1:9001',
+      direction: 'INGRESS',
+      exchange_type: 'UNARY',
+      sno: '1001',
+      service_name: 'demo.order.OrderService',
+      operation: 'CreateOrder',
+      status_code: 0,
+      decode_status: 'SUCCESS',
+      is_replayable: true,
+    };
+
+    const degradedChild: TrafficRecordSummary = {
+      id: '202',
+      session_id: '1',
+      seq_no: 2,
+      process_id: '10',
+      process_name: 'demo.order.OrderService',
+      src_addr: '127.0.0.1:52136',
+      dst_addr: '127.0.0.1:9002',
+      direction: 'EGRESS',
+      exchange_type: 'UNARY',
+      sno: '1002',
+      service_name: 'demo.inventory.InventoryService',
+      operation: 'GetItemStock',
+      status_code: 0,
+      decode_status: 'SUCCESS',
+      is_replayable: false,
+    };
+
+    const treeHtml = renderToString(
+      <TransactionCallTreeTable
+        groups={[
+          {
+            root_record_id: '201',
+            trace_id: 'trace-m13-002',
+            total_node_count: 2,
+            truncated_children_count: 0,
+            total_duration_us: 10000,
+            has_protocol_error: false,
+            has_biz_error: false,
+            has_compensation: false,
+            entity_tags: [],
+            root: {
+              record: degradedRoot,
+              depth: 0,
+              link_confidence: 'ROOT',
+              sibling_relation: 'ROOT',
+              waterfall_offset_pct: 0,
+              waterfall_width_pct: 100,
+              is_critical_path: true,
+              matched_filter: false,
+              children: [
+                {
+                  record: degradedChild,
+                  depth: 1,
+                  link_confidence: 'DOTR_EXACT',
+                  sibling_relation: 'SEQUENTIAL',
+                  waterfall_offset_pct: 10,
+                  waterfall_width_pct: 30,
+                  is_critical_path: false,
+                  matched_filter: false,
+                  children: [],
+                },
+              ],
+            },
+          },
+        ]}
+        onSelectRecordForAnatomy={() => {}}
+        onOpenSequenceDrawer={() => {}}
+        forceExpandAll={true}
+      />
+    );
+
+    // 绝对严禁出现生硬的 - ➔ -
+    expect(treeHtml).not.toContain('- ➔ -');
+    expect(treeHtml).toContain('外部客户端 (127.0.0.1) ➔ demo.order.OrderService');
+    expect(treeHtml).toContain('demo.order.OrderService ➔ demo.inventory.InventoryService');
+    // 断言表头指南图例
+    expect(treeHtml).toContain('图例指南');
+    expect(treeHtml).toContain('ℹ️');
+
+    // 验证平铺表
+    const flatHtml = renderToString(
+      <TrafficRecordTable
+        records={[degradedRoot, degradedChild]}
+        onSelectRecord={() => {}}
+      />
+    );
+    expect(flatHtml).not.toContain('- ➔ -');
+    expect(flatHtml).toContain('外部客户端 (127.0.0.1) ➔ demo.order.OrderService');
   });
 });

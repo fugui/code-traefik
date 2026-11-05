@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import type { TransactionTreeGroupDTO, TransactionTreeNodeDTO, TrafficRecordSummary } from '../../types';
 import { InlineWaterfallBar } from './InlineWaterfallBar';
+import { resolveTopologyEndpoints } from './topologyUtils';
 
 interface TransactionCallTreeTableProps {
   groups: TransactionTreeGroupDTO[];
@@ -172,6 +173,7 @@ export const TransactionCallTreeTable: React.FC<TransactionCallTreeTableProps> =
     const hasChildren = node.children && node.children.length > 0;
     const isRoot = node.depth === 0;
     const isError = node.record.status_code !== '0' && node.record.status_code !== 0 || node.record.biz_error;
+    const endpoints = resolveTopologyEndpoints(node.record);
 
     return (
       <React.Fragment key={node.record.id}>
@@ -207,15 +209,18 @@ export const TransactionCallTreeTable: React.FC<TransactionCallTreeTableProps> =
                 <span style={{ display: 'inline-block', width: '16px', textAlign: 'center', color: '#cbd5e1' }}>•</span>
               )}
               <span
+                title={`全局物理捕获发起序: #${node.record.seq_no ?? '-'}`}
                 style={{
                   fontSize: '11px',
                   color: 'var(--color-text-secondary, #64748b)',
                   fontFamily: 'monospace',
+                  cursor: 'help',
                 }}
               >
                 {`#${node.record.seq_no ?? '-'}`}
               </span>
               <span
+                title={`网络连接序号: ${node.record.conn_index ?? 1} (长连接)，报文流水号: ${node.record.sno}`}
                 style={{
                   fontSize: '11px',
                   padding: '1px 5px',
@@ -223,6 +228,7 @@ export const TransactionCallTreeTable: React.FC<TransactionCallTreeTableProps> =
                   backgroundColor: 'var(--color-bg-secondary, #f1f5f9)',
                   color: 'var(--color-text-secondary, #475569)',
                   fontFamily: 'monospace',
+                  cursor: 'help',
                 }}
               >
                 {`Conn#${node.record.conn_index ?? 1} · ${node.record.sno}`}
@@ -249,8 +255,8 @@ export const TransactionCallTreeTable: React.FC<TransactionCallTreeTableProps> =
                 {`🔗 ${node.record.process_name || `Proc#${node.record.process_id}`} ➔ ${node.stitched_ingress_record.process_name || `Proc#${node.stitched_ingress_record.process_id}`}`}
               </span>
             ) : (
-              <span>
-                {`${node.record.src_module_name || node.record.peer_proc_name || '-'} ➔ ${node.record.dst_module_name || node.record.process_name || '-'}`}
+              <span title={endpoints.tooltip}>
+                {`${endpoints.srcName} ➔ ${endpoints.dstName}`}
               </span>
             )}
           </td>
@@ -407,7 +413,19 @@ export const TransactionCallTreeTable: React.FC<TransactionCallTreeTableProps> =
               fontSize: '12px',
             }}
           >
-            <th style={{ padding: '10px 12px' }}>层级 / 发起序 / 连接</th>
+            <th style={{ padding: '10px 12px' }}>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                层级 / 发起序 / 连接
+                <span
+                  role="img"
+                  aria-label="图例指南"
+                  title={'• ▼ / ▶ / • : 事务调用层级展开、折叠与叶子节点\n• #seq_no   : 全局单调递增的物理捕获先后序号 (起因 ➔ 经过 ➔ 结果)\n• Conn#k    : TCP 连接短编号 (同号表示同一长连接多路复用)\n• sno       : CROS 协议请求序列号 (连接内自增流水号)'}
+                  style={{ cursor: 'help', fontSize: '12px' }}
+                >
+                  ℹ️
+                </span>
+              </span>
+            </th>
             <th style={{ padding: '10px 12px' }}>架构链路</th>
             <th style={{ padding: '10px 12px' }}>服务契约 & 接口方法</th>
             <th style={{ padding: '10px 12px' }}>方向 / 关系</th>
