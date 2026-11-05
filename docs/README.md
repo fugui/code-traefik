@@ -27,7 +27,7 @@ docs/
 ├── 03-api/          # 接口与数据契约：RESTful / SSE API 签名、主从信道契约、RBAC 权限与审计规范
 │   └── 01-http-api-contract.md                    # 【API 契约】控制面 REST/SSE 字典、主从 HTTP/WS 契约、RBAC 守卫与 AuditAction
 ├── 04-tasks/        # TDD 实施规划与验收：Milestone 1~13 依赖拓扑、任务作战卡与自动化验收标准 (AC)
-│   ├── 01-roadmap.md                              # 【工程路线图】模板清理策略、M1~M13 DAG 拓扑、F/SC 覆盖矩阵与安全质量门禁
+│   ├── 01-roadmap.md                              # 【工程路线图】模板清理策略、M1~M17 DAG 拓扑、F/SC 覆盖矩阵与安全质量门禁
 │   ├── 02-m1-crosrpc-and-domain-models.md         # 【M1 作战卡】协议栈 (pkg/crosrpc)、信封协议与 13 张表/分区管理器
 │   ├── 03-m2-arch-proto-and-agent-control.md      # 【M2 作战卡】三级架构元素、.pb 动态编解码与公私域 Agent 排他租约管控
 │   ├── 04-m3-agent-dataplane-ebpf-and-replay.md   # 【M3 作战卡】数据面 Agent 信道、cilium/ebpf 采集与零 .pb 二进制自愈重放
@@ -54,7 +54,8 @@ docs/
 │   ├── 10-enhanced-proto-schema-file-management-adr.md                # ADR-10：增强 Protobuf 描述集管理：多 .pb 资产台账、跨集依赖闭包解析与全局单一生效池
 │   ├── 11-single-process-bidirectional-capture-and-recording-ux-adr.md # ADR-11：单进程开箱即用出入站双向采集、数据面链路修复与双工作台协同录制体验优化
 │   ├── 12-packet-causality-call-tree-and-sequence-ux-adr.md            # ADR-12：报文时序因果树、内联甘特瀑布、全链路时序泳道与事务闭包重放架构决策
-│   └── 13-traffic-debug-tree-metadata-hydration-and-ux-repair-adr.md   # ADR-13：独立流量调试台因果树元数据水合缺陷与链路展示降级修复决策
+│   ├── 13-traffic-debug-tree-metadata-hydration-and-ux-repair-adr.md   # ADR-13：独立流量调试台因果树元数据水合缺陷与链路展示降级修复决策
+│   └── 14-governance-dashboard-golden-suite-and-ci-gate-adr.md        # ADR-14：契约治理全景大盘、黄金用例套件与 CI/CD 发布强阻断门禁架构决策
 ├── 06-ops/          # 交付与验证：双模联调、物理隔离数据库测试与生产环境单二进制部署手册
 │   └── 01-verification-and-deployment-guide.md    # 联调验证、自动化回归测试与生产部署操作指南
 └── 07-references/   # 外部参考与上位契约基准：协议包规范、字节字典与领域标准文档

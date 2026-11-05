@@ -1,10 +1,10 @@
 # 业务流量与接口契约治理 (`code-traefik`) 特性清单与需求范围界定规范 (Feature Matrix & Scope)
 
 - **文档编号**：`01-feature-matrix.md`
-- **文档版本**：v2.11.0
+- **文档版本**：v2.12.0
 - **更新日期**：2026-11-05
 - **当前阶段**：阶段一：特性清单与边界明确
-- **状态**：已批准待实施 (Approved for M10~M13)
+- **状态**：已批准待实施 (Approved for M10~M17)
 - **协议依据**：详见项目内置参考文档 [`docs/07-references/01-cros-rpc-protocol-spec.md`](../07-references/01-cros-rpc-protocol-spec.md)（文档编号：`01-cros-rpc-protocol-spec.md` v1.0.0，基于 DOPHI 平台 `cros_rpccore.ph` / `cros_rpctcp` 规范，本文所有字段名、偏移与取值均以该规范原文为准）
 
 ### 修订记录
@@ -27,6 +27,7 @@
 | v2.9.3 | 2026-11-03 | 依据 ADR-11 (v1.0.0) 修订：1. **单进程开箱即用双录 (`INGRESS + EGRESS`) 与重放自动闭环**：`F-09` / `F-11` 升级目标 PID 默认全出站透明代理拦截（零下游拓扑前置即可同时采集入站与出站往返，非 CROS RPC 连接基于 `bytes.Index` SIMD 滑窗零副作用透传）与存量 `ESTABLISHED` 入站 Socket FD 预热；`F-08` 修正存量连接诊断为严格按 `/proc/<pid>/fd` 自有 Socket Inode 求交集并剔除已受控代理连接；`F-12` 自动合并历史 `EGRESS` 目的地址构建重放 Mock 端点集并增加写前 `"CSE.TCP"` 零外泄守卫；2. **双工作台职责消歧与零额外勾选体验**：`F-15.4` / `F-15.5` 明确 `/agents` 常驻待命与 `/record` 按次圈选文案，新增可用进程 `1..5` 自动预勾选、`[🔗 勾选关联下游]` 及 `/agents` ⇄ `/record` 双向一键深链闭环 |
 | v2.10.0 | 2026-11-04 | 依据 ADR-12 (v1.0.0) 修订（对应 M13）：1. **协议阶段耗时补齐与发起序锚定**：`F-10` 补齐 V03/V04 `RPC_RSP_HEAD_S` 偏移 `40..47` (`ullServerRecvTime`) 与 `48..55` (`ullServerSendTime`) 解析及帧首字节到达定戳；`F-11` 在 `REQ` 到达瞬间原子分配单调发起 `SeqNo` 并记忆同连接 `MNG.acProcName` 对端身份；2. **DOTR 权威事务调用树、时序泳道与参数/实体血缘**：新增 `F-15.6`（`/debug` 默认采用「可折叠事务调用树 + 内联迷你甘特瀑布条」按根事务不割裂分页，提供平铺切换、多进程 `EGRESS ⇔ INGRESS` 跨跳缝合、同层兄弟 `串行/并发/补偿` 分类、业务软错误码透视、交互式 SVG 时序泳道 + 四段解剖联动抽屉、单事务参数传递血缘与跨事务有状态业务实体生命线）；3. **`RecordID` 级 `ScopedMock` 事务闭包重放打通**：`F-12` / `F-13` / `F-15.2` 端到端打通 `ScopedEgressMocks[recordID]` 局部因果池隔离、重放前下游闭包预览与跨事务前置状态依赖链一键连带回放 |
 | v2.11.0 | 2026-11-05 | **战略定位升维**：将“业务流量监控与重放”升维为“**基于真实流量的活体契约、架构一致性与防劣化自愈平台**”；确立“接口资产治理”、“架构漂移雷达”与“无依赖自愈防劣化”三大支柱，将“录制与重放”准确界定为底层零侵入数据手段 |
+| v2.12.0 | 2026-11-05 | **契约治理功能体系全景扩充**：依据治理深化研讨定稿，新增 `F-24`（契约治理全景大盘）、`F-25`（黄金契约套件资产库）、`F-26`（设计态契约破坏性变更阻断）与 `F-27`（CI/CD 自动化强阻断质量门禁），收敛 `F-20` 至 `F-25`，规划 M14~M17 工程作战与 `SC-09`~`SC-10` 验收场景 |
 
 
 ---
@@ -278,14 +279,25 @@ erDiagram
 
 ---
 
-### 3.6 演进规划 (P1 / P2 Backlog)
+### 3.6 契约治理升维、黄金资产与自动化门禁领域
+
+| 编号 | 特性名称 | 涉及组件 | 优先级 | 功能描述与技术规范 | TDD 验收指标 |
+| :--- | :--- | :---: | :---: | :--- | :--- |
+| **F-24** | **平台级契约治理全景大盘**（`/dashboard` 默认首页，聚合健康评分、漂移雷达、孤儿清零与防劣化防线） | `Server`<br>`Frontend` | **P0** | 1. **默认置顶落地大盘 (`/dashboard`)**：重构导航结构将 `/dashboard` 设为全局第一入口（更新 `DEFAULT_ENTRY_PATH`），面向架构师与治理负责人呈现活体契约宏观态势；<br>2. **四大核心视窗**：<br>   - ① **契约健康指数 (Health Score, 0~100 分)**：基于漂移违规率、孤儿契约率与最近 CI/CD 回归成功率动态加权计算，并呈现场景优化建议；<br>   - ② **架构漂移雷达 (Drift Radar)**：实时汇总实测调用 `Verified` vs `Violation`（未声明调用）数量与环比趋势，红牌透视违规进程 TOP 5 与未申报旁路详情，支持一键穿透拓扑画布；<br>   - ③ **契约资产清零看板**：实时汇总全景 Proto 服务数、架构认领率、未认领“孤儿契约”总数，支持一键直达 `/schemas` 批量认领；<br>   - ④ **防劣化回归防线**：展示近 30 天门禁拦截次数、破坏性 Diff 分布与各微服务模块的回归稳定性分布；<br>3. **聚合 OpenAPI (`GET /api/dashboard/overview`)**：单次高效输出指标聚合，支持按子系统筛选。 | 1. 访问根路由或 `/dashboard` 正常加载四大看板卡片，零 N+1 慢查询；<br>2. 健康分算法单测：模拟无违规/全部认领返回 100 分；增加 1 个 `Violation` 扣分精准生效；<br>3. 点击孤儿契约或漂移告警卡片，带参无缝跳转对应工作台下钻治理。 |
+| **F-25** | **黄金契约套件资产库与事务固化治理**（`traefik_golden_suites` / `traefik_golden_suite_items`，原 F-20 升维） | `Server`<br>`Frontend` | **P0** | 1. **事务一键沉淀为黄金契约**：在 `/debug` 事务树中，研发可勾选单笔或链路事务点击【沉淀为黄金契约】，选择加入既有套件或新建套件；<br>2. **黄金套件台账与模型**：`traefik_golden_suites` 维护套件编码、名称、归属 `arch_process_id`、描述与版本标签（如 `v1.0-release-baseline`）；子项 `traefik_golden_suite_items` 关联源记录并支持清洗动态掩码（如 token、动态时间戳）；<br>3. **开箱即用一键回归验证**：在 `/golden-suites` 资产台账中支持一键向指定目标环境触发套件全量回归，产出套件级通过率汇总报告，并作为 F-27 CI/CD 门禁的权威基线。 | 1. 事务树勾选事务创建黄金套件成功，单测验证关联关系与 items 隔离；<br>2. 黄金套件列表 CRUD、分页与关联架构进程过滤单测全绿；<br>3. 触发黄金套件回归重放，准确执行因果闭包自愈并产出双层 Diff 汇总断言。 |
+| **F-26** | **设计态契约破坏性变更阻断雷达**（`FileDescriptorSet` 语义 AST 比对与下游影响面推导） | `Server`<br>`Frontend` | **P0** | 1. **AST 语义版本比对引擎**：在上传 `.pb` 新版本或激活候选版本时，自动与当前生效版本反向比对 `FileDescriptorProto`：<br>   - **Tag 冲突/篡改**：既有字段 Tag 编号变更或被新字段复用；<br>   - **类型不兼容**：字段标量类型变异（如 `string` ➔ `int64`、单值 ➔ `repeated`）；<br>   - **未保留删除**：删除字段但未在原 proto 声明 `reserved <tag>`；<br>   - **枚举值窜改**：既有枚举项数字 index 发生变动；<br>2. **破坏性改动强阻断**：检出上述任意违规时标记为 `BREAKING_CHANGE`，硬性拒绝激活并返回结构化 `409 Conflict`；<br>3. **下游受影响消费者推导**：基于 `traefik_module_dependencies` 自动提取受影响的下游微服务模块与负责人，弹窗可视化呈现影响面。 | 1. 上传删减 Tag 或修改字段类型的同名新版 `.pb`，精确返回 `409 BREAKING_CHANGE` 并标明违规字段路径与规则名；<br>2. 合法的向后兼容变更（如仅新增 optional 字段且 Tag 唯一）正常通过；<br>3. 精准列出依赖被改动接口的下游模块名称。 |
+| **F-27** | **CI/CD 自动化强阻断质量门禁**（`POST /api/gates/evaluate` 与结构化发布阻断报告） | `Server` | **P0** | 1. **门禁评估 OpenAPI (`POST /api/gates/evaluate`)**：面向流水线（GitLab CI / Jenkins / GitHub Actions）提供高可信 API，入参指定 `target_arch_process_id`、`env_agent_id`、可选 `suite_id`（默认自动匹配该进程绑定的最新生效黄金套件）；<br>2. **双重强阻断判定逻辑**：<br>   - **判定 1（契约一致性）**：若实测交互存在未经报备的 `Violation`（未声明调用），判定为 `GATED_VIOLATION`，立即以 HTTP 422 阻断构建；<br>   - **判定 2（防劣化断言）**：黄金套件重放产生协议状态码非零或 Protobuf 字段 Diff（且未命中忽略路径），判定为 `GATED_BREAKING_DIFF`，立即阻断；<br>   - **通过条件**：`Violation == 0` 且 `ReplayResult == PASS` 时返回 HTTP 200 `PASSED`；<br>3. **结构化 Markdown 报告生成**：响应体附带格式化 Markdown 报告（含健康分、拦截明细、字段级 Diff 表格与跳转调试链接），流水线可直接回贴至 MR/PR Comment。 | 1. 模拟注入含 `Violation` 调用的环境，门禁接口返回 `422 GATED_VIOLATION` 并附带违规调用边详情；<br>2. 模拟被测进程字段返回值篡改，门禁接口返回 `422 GATED_BREAKING_DIFF` 并列出字段预期与实际值；<br>3. 正常进程验证返回 `200 PASSED` 且响应耗时可控。 |
+
+---
+
+### 3.7 演进规划 (P1 / P2 Backlog)
 
 | 编号 | 特性名称 | 优先级 | 说明 |
 | :--- | :--- | :---: | :--- |
 | **F-17** | **Agent Token 鉴权加固** | **P1** | Agent 从环境变量或安全配置加载高强度 Token（禁止硬编码）；HTTP 指令与 WebSocket 握手校验 `X-Traefik-Agent-Token`（`subtle.ConstantTimeCompare`）。验收：Token 缺失或错误时返回 `401`。 |
 | **F-18** | **结构化接口文档浏览** | **P1** | 基于 `.pb` 反射展示接口清单、入参 / 出参 Message 嵌套树、字段 Tag、类型（含 `repeated`、`map`、`enum`）及注释，可从模块详情跳转。与 `code-proto` 的区别：以运行时 `(ascServiceName, ascOperation)` 为视角，并与功能模块、流量记录关联，不管理 `.proto` 源码与 MR。 |
 | **F-19** | **报文敏感字段脱敏与查看权限细分** | **P1** | 按字段路径配置脱敏规则；Payload 明文查看可限定角色。 |
-| **F-20** | **录制批次一键回归套件** | **P2** | 把一个录制批次的多个进程、多条请求组织为回归套件批量重放，并汇总报告。 |
+| **F-20** | **录制批次一键回归套件** | - | **已收敛 (SUPERSEDED)**：已升维融入 `F-25` 黄金契约套件资产库。 |
 | **F-21** | **从 `code-proto` 导入 `.pb`** | - | **已取消 (CANCELLED)** | 因兄弟模块 `code-proto` 排期推迟，取消联动强依赖。`code-traefik` 转为由自身闭环提供多 `.pb` 描述集资产台账管理与 OpenAPI CI/CD 直推能力（详见 ADR-10）。 | - |
 | **F-22** | **无特权用户态代理降级模式** | **P2** | 不具备 eBPF 特权时，由业务方把下游地址配置为 Agent 代理端口完成采集与重放。 |
 | **F-23** | **基于 `.pb` 契约的在线构造参数主动发包调试** | **P2** | 在 `流量调试` 台不依赖既有录制包，选定已激活 `.pb` 的 `(ascServiceName, ascOperation)` 在线填写/编辑 JSON 请求体，由主控 `dynamicpb` 编码并封装 CROS RPC 帧下发目标 Agent 注入业务进程，类似 CROS RPC 版 `grpcurl` / Postman。 |
@@ -294,7 +306,7 @@ erDiagram
 
 ## 4. 核心业务验收场景矩阵 (Verification Scenarios)
 
-为阶段四 TDD 提供端到端验收基线，定义以下 **8 个核心场景（`SC-01` ~ `SC-08`）**：
+为阶段四 TDD 提供端到端验收基线，定义以下 **10 个核心场景（`SC-01` ~ `SC-10`）**：
 
 | 场景编号 | 场景名称 | 触发条件与输入 | 预期行为与断言 |
 | :--- | :--- | :--- | :--- |
@@ -306,6 +318,8 @@ erDiagram
 | **SC-06** | **架构一致性验证** | 使用 SC-05 的录制结果，静态模型中 `Module_A` 未声明对 `Module_B` 接口的依赖，另有一个已声明但未触发的依赖、一条同进程内依赖与一条指向未监控目标进程的依赖 | `A → B` 标为 `Violation`；未触发依赖标为 `Uncovered`；同进程内依赖标为 `Not Observable`；指向未监控进程依赖标为 `Not Monitored` |
 | **SC-07** | **跨环境 Agent 同构进程零 `.pb` 重放、事务级 `ScopedMock` 隔离、既有长连接接管与头部自愈** | 将 SC-05 公共环境 A 录制批次中 `Process_A` 的多笔入口事务投递到公共环境 B（另一 `SHARED` Agent）或个人 `PRIVATE` Agent 上同样挂载该 `ArchProcess`（且处于 `READY` 态、持有既有代理长连接）的目标进程重放 | 同构校验与零直连校验通过并锁定目标 Agent 租约；目标进程复用既有 `EgressProxy` 长连接发出的下游请求被 `REPLAY_MOCK` 帧级接管（0 字节外泄至真实下游），每笔入口事务按各自 `ScopedEgressMocks[recordID]` 局部因果池精准命中对应下游应答（零跨事务串包），应答 `ullSNO`、`aucTraceBuff` 与 `ullClientSendTime` 正确自愈，结果为 `PASS` |
 | **SC-08** | **业务突变与 Mock 未命中检出** | ① 修改目标进程使 `uiStatusCode` 非零或 `discount_cents` 变化；② 修改目标进程使其多调用一次下游接口 | ① 结果为 `FAILED`，定位到状态码或字段路径，服务端时间戳差异被忽略；② 结果为 `MOCK_MISS`，明细中包含多出的那次调用，且没有流量流向真实下游 |
+| **SC-09** | **设计态破坏性变更阻断与下游影响面透视** | 尝试上传/激活篡改既有字段 Tag 编号、或将 `string` 改为 `int64` 的同名新版 `.pb` | 服务端 AST 比对精准检出 `BREAKING_CHANGE`，返回结构化 `409 Conflict` 阻断激活；返回体包含受破坏的字段路径、规则描述及所有在 `traefik_module_dependencies` 中依赖该接口的下游模块名称与负责人 |
+| **SC-10** | **CI/CD 质量门禁端到端评估与自动化红阻** | 流水线调用 `POST /api/gates/evaluate`：① 针对含未声明调用（`Violation`）的目标进程；② 针对回包破坏了黄金套件基准预期（`FAILED Diff`）的目标进程；③ 针对合规被测进程 | ① 返回 `422 GATED_VIOLATION` 并附带未报备调用边详情；② 返回 `422 GATED_BREAKING_DIFF` 并附带破坏性字段 Diff；③ 返回 `200 PASSED` 并携带格式化 Markdown 发布凭据报告 |
 
 ---
 

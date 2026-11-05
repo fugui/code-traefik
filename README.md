@@ -113,7 +113,7 @@ code-traefik/
 ## 4. SDD + TDD 研发路线图 (Lifecycle Checklist)
 
 - [x] **阶段一：特性清单与边界明确** (`docs/01-features/`)
-  - [x] [`01-feature-matrix.md`](./docs/01-features/01-feature-matrix.md)（活体契约愿景、三层治理矩阵 `F-01~F-16`、验收场景 `SC-01~SC-08` 与 `Non-Goals`）
+  - [x] [`01-feature-matrix.md`](./docs/01-features/01-feature-matrix.md)（活体契约愿景、三层治理矩阵 `F-01~F-27`、验收场景 `SC-01~SC-10` 与 `Non-Goals`）
 - [x] **阶段二：系统架构与模型设计** (`docs/02-design/`)
   - [x] [`01-system-architecture.md`](./docs/02-design/01-system-architecture.md)（主从协同、双模运行架构、微前端接入规范）
   - [x] [`02-data-plane-and-cros-rpc-engine.md`](./docs/02-design/02-data-plane-and-cros-rpc-engine.md)（CROS RPC 协议栈、eBPF 采集与二进制 Mock 引擎）
@@ -122,10 +122,11 @@ code-traefik/
   - [x] [`05-database-schema.md`](./docs/02-design/05-database-schema.md)（15 张 `traefik_*` 物理表字典与按日范围分区设计）
 - [x] **阶段三：接口契约与 TDD 任务分解** (`docs/03-api/`, `docs/04-tasks/`)
   - [x] [`01-http-api-contract.md`](./docs/03-api/01-http-api-contract.md)（RESTful API 契约、主从 HTTP/WS 信道协议与 RBAC 权限矩阵）
-  - [x] [`01-roadmap.md`](./docs/04-tasks/01-roadmap.md)（Milestone 1~13 DAG 拓扑、特性矩阵覆盖与全局质量门禁）
+  - [x] [`01-roadmap.md`](./docs/04-tasks/01-roadmap.md)（Milestone 1~17 DAG 拓扑、特性矩阵覆盖与全局质量门禁）
   - [x] [`02-m1-crosrpc-and-domain-models.md`](./docs/04-tasks/02-m1-crosrpc-and-domain-models.md) ~ [`14-m13-packet-causality-call-tree-and-sequence-workbench.md`](./docs/04-tasks/14-m13-packet-causality-call-tree-and-sequence-workbench.md)
+  - [ ] [`15-m14-governance-dashboard-and-ia-restructuring.md`](./docs/04-tasks/15-m14-governance-dashboard-and-ia-restructuring.md) ~ `18-m17-*.md`（M14~M17 规划中）
 - [x] **阶段四：工程实施、架构决策与运维验证** (`docs/05-adr/`, `docs/06-ops/`)
-  - [x] [`docs/05-adr/`](./docs/05-adr/)（ADR-01 ~ ADR-13 架构决策全景记录）
+  - [x] [`docs/05-adr/`](./docs/05-adr/)（ADR-01 ~ ADR-14 架构决策全景记录，含 ADR-14 大盘/黄金套件/CI门禁）
   - [x] [`01-verification-and-deployment-guide.md`](./docs/06-ops/01-verification-and-deployment-guide.md)（联调测试与生产部署手册）
   - [x] [`02-e2e-browser-test-and-ux-review.md`](./docs/06-ops/02-e2e-browser-test-and-ux-review.md)（E2E 黑盒走查与交互走查记录）
 
