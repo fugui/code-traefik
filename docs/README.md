@@ -51,7 +51,8 @@ docs/
 │   ├── 09-arch-process-ssot-and-ebpf-premount-standby-adr.md          # ADR-09：架构物理进程蓝图 SSOT 解耦、Agent 1:1 挂载覆盖与 eBPF 默认自动预挂待命架构
 │   ├── 10-enhanced-proto-schema-file-management-adr.md                # ADR-10：增强 Protobuf 描述集管理：多 .pb 资产台账、跨集依赖闭包解析与全局单一生效池
 │   ├── 11-single-process-bidirectional-capture-and-recording-ux-adr.md # ADR-11：单进程开箱即用出入站双向采集、数据面链路修复与双工作台协同录制体验优化
-│   └── 12-packet-causality-call-tree-and-sequence-ux-adr.md            # ADR-12：报文时序因果树、内联甘特瀑布、全链路时序泳道与事务闭包重放架构决策
+│   ├── 12-packet-causality-call-tree-and-sequence-ux-adr.md            # ADR-12：报文时序因果树、内联甘特瀑布、全链路时序泳道与事务闭包重放架构决策
+│   └── 13-traffic-debug-tree-metadata-hydration-and-ux-repair-adr.md   # ADR-13：独立流量调试台因果树元数据水合缺陷与链路展示降级修复决策
 ├── 06-ops/          # 交付与验证：双模联调、物理隔离数据库测试与生产环境单二进制部署手册
 │   └── 01-verification-and-deployment-guide.md    # 联调验证、自动化回归测试与生产部署操作指南
 └── 07-references/   # 外部参考与上位契约基准：协议包规范、字节字典与领域标准文档
