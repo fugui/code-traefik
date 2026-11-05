@@ -40,9 +40,10 @@ flowchart LR
 ```mermaid
 flowchart TB
     subgraph Portal["CodeBench 微前端门户 (:8000 / :5181)"]
-        UI_Flow["流量作业台: 流量录制 / 事务调试 (因果树+泳道) / 流量重放"]
+        UI_Dash["全局概览台: 治理全景大盘 (/dashboard 默认落地 · 三维封顶健康分)"]
+        UI_Flow["契约核验与回归台: 契约采集 / 事务分析 / 防劣化回归 / 黄金用例库"]
         UI_Arch["架构与契约台: 架构拓扑 / 架构元素 (逻辑|物理) / Proto 契约资产"]
-        UI_Env["环境治理台: Agent 与进程纳管 / 治理参数配置"]
+        UI_Env["环境治理台: Agent 与进程纳管 / 治理参数与 CI 凭据"]
     end
 
     subgraph ControlPlane["code-traefik-server 控制面 (:8091)"]
@@ -119,12 +120,12 @@ code-traefik/
   - [x] [`02-data-plane-and-cros-rpc-engine.md`](./docs/02-design/02-data-plane-and-cros-rpc-engine.md)（CROS RPC 协议栈、eBPF 采集与二进制 Mock 引擎）
   - [x] [`03-architecture-elements-and-topology.md`](./docs/02-design/03-architecture-elements-and-topology.md)（三级架构模型 SSOT、模块服务契约与拓扑一致性核验）
   - [x] [`04-control-plane-and-web-console.md`](./docs/02-design/04-control-plane-and-web-console.md)（控制面调度、Protobuf 编解码与回归 Diff）
-  - [x] [`05-database-schema.md`](./docs/02-design/05-database-schema.md)（15 张 `traefik_*` 物理表字典与按日范围分区设计）
+  - [x] [`05-database-schema.md`](./docs/02-design/05-database-schema.md)（17 张 `traefik_*` 物理表字典、黄金套件自包含快照与按日范围分区设计）
 - [x] **阶段三：接口契约与 TDD 任务分解** (`docs/03-api/`, `docs/04-tasks/`)
-  - [x] [`01-http-api-contract.md`](./docs/03-api/01-http-api-contract.md)（RESTful API 契约、主从 HTTP/WS 信道协议与 RBAC 权限矩阵）
+  - [x] [`01-http-api-contract.md`](./docs/03-api/01-http-api-contract.md)（RESTful API 契约、CI 门禁鉴权、主从 HTTP/WS 信道协议与 RBAC 权限矩阵）
   - [x] [`01-roadmap.md`](./docs/04-tasks/01-roadmap.md)（Milestone 1~17 DAG 拓扑、特性矩阵覆盖与全局质量门禁）
-  - [x] [`02-m1-crosrpc-and-domain-models.md`](./docs/04-tasks/02-m1-crosrpc-and-domain-models.md) ~ [`14-m13-packet-causality-call-tree-and-sequence-workbench.md`](./docs/04-tasks/14-m13-packet-causality-call-tree-and-sequence-workbench.md)
-  - [ ] [`15-m14-governance-dashboard-and-ia-restructuring.md`](./docs/04-tasks/15-m14-governance-dashboard-and-ia-restructuring.md) ~ `18-m17-*.md`（M14~M17 规划中）
+  - [x] [`02-m1-crosrpc-and-domain-models.md`](./docs/04-tasks/02-m1-crosrpc-and-domain-models.md) ~ [`14-m13-packet-causality-call-tree-and-sequence-workbench.md`](./docs/04-tasks/14-m13-packet-causality-call-tree-and-sequence-workbench.md)（M1~M13 已交付）
+  - [x] [`15-m14-governance-dashboard-and-ia-restructuring.md`](./docs/04-tasks/15-m14-governance-dashboard-and-ia-restructuring.md) ~ [`18-m17-ci-cd-quality-gate-and-automated-enforcement.md`](./docs/04-tasks/18-m17-ci-cd-quality-gate-and-automated-enforcement.md)（M14~M17 作战卡已冻结待实施）
 - [x] **阶段四：工程实施、架构决策与运维验证** (`docs/05-adr/`, `docs/06-ops/`)
   - [x] [`docs/05-adr/`](./docs/05-adr/)（ADR-01 ~ ADR-14 架构决策全景记录，含 ADR-14 大盘/黄金套件/CI门禁）
   - [x] [`01-verification-and-deployment-guide.md`](./docs/06-ops/01-verification-and-deployment-guide.md)（联调测试与生产部署手册）

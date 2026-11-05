@@ -17,16 +17,16 @@ docs/
 │   ├── 04-tdd-implementation-prompt.md            # 阶段四：TDD 红-绿-重构编码实施与全链路交付验证提示词
 │   └── 05-e2e-browser-test-and-ux-review-goal-prompt.md # 阶段四/验收：微前端全链路端到端黑盒测试与产品交互体验走查 Goal 提示词
 ├── 01-features/     # 特性与需求边界：特性清单矩阵 (Feature Matrix)、P0~P2 优先级与 Non-Goals
-│   └── 01-feature-matrix.md                       # 阶段一：需求范围、核心特性矩阵 (F-01~F-16 含子特性) 与验收场景 (SC-01~SC-08)
+│   └── 01-feature-matrix.md                       # 阶段一：需求范围、核心特性矩阵 (F-01~F-27 含子特性) 与验收场景 (SC-01~SC-10)
 ├── 02-design/       # 系统技术架构 (SDD)：双子系统边界、数据面引擎、业务拓扑与数据模型
 │   ├── 01-system-architecture.md                  # 【总览篇】系统总体架构、双模拓扑、主从信道与全链路时序
 │   ├── 02-data-plane-and-cros-rpc-engine.md       # 【数据面篇】CROS RPC 协议栈、Agent eBPF 采集与自愈重放引擎
 │   ├── 03-architecture-elements-and-topology.md   # 【业务篇】架构元素建模 (SSOT)、模块接口契约与拓扑验证
 │   ├── 04-control-plane-and-web-console.md        # 【管理面篇】Server 控制面、微前端控制台、Protobuf 编解码与回归 Diff
-│   └── 05-database-schema.md                      # 【数据模型篇】15 张 traefik_* 物理表 GORM 字典、分区表与索引设计
+│   └── 05-database-schema.md                      # 【数据模型篇】17 张 traefik_* 物理表 GORM 字典、黄金套件快照、分区表与索引设计
 ├── 03-api/          # 接口与数据契约：RESTful / SSE API 签名、主从信道契约、RBAC 权限与审计规范
-│   └── 01-http-api-contract.md                    # 【API 契约】控制面 REST/SSE 字典、主从 HTTP/WS 契约、RBAC 守卫与 AuditAction
-├── 04-tasks/        # TDD 实施规划与验收：Milestone 1~13 依赖拓扑、任务作战卡与自动化验收标准 (AC)
+│   └── 01-http-api-contract.md                    # 【API 契约】控制面 REST/SSE 字典、CI 门禁契约、主从 HTTP/WS 契约与 RBAC 守卫
+├── 04-tasks/        # TDD 实施规划与验收：Milestone 1~17 依赖拓扑、任务作战卡与自动化验收标准 (AC)
 │   ├── 01-roadmap.md                              # 【工程路线图】模板清理策略、M1~M17 DAG 拓扑、F/SC 覆盖矩阵与安全质量门禁
 │   ├── 02-m1-crosrpc-and-domain-models.md         # 【M1 作战卡】协议栈 (pkg/crosrpc)、信封协议与 13 张表/分区管理器
 │   ├── 03-m2-arch-proto-and-agent-control.md      # 【M2 作战卡】三级架构元素、.pb 动态编解码与公私域 Agent 排他租约管控
@@ -40,7 +40,11 @@ docs/
 │   ├── 11-m10-arch-process-blueprint-and-premount-workflow.md        # 【M10 作战卡】架构物理进程蓝图解耦、Agent 1:1 挂载覆盖与 eBPF 默认自动预挂待命工作流
 │   ├── 12-m11-enhanced-proto-schema-asset-management.md              # 【M11 作战卡】增强 Protobuf 描述集资产管理、跨集依赖闭包解析与双模契约工作台
 │   ├── 13-m12-bidirectional-capture-and-agent-recording-ux.md        # 【M12 作战卡】单进程开箱即用出入站双录、数据面链路修复与双工作台协同录制体验优化
-│   └── 14-m13-packet-causality-call-tree-and-sequence-workbench.md   # 【M13 作战卡】报文时序因果树、内联甘特瀑布、全链路时序泳道与事务闭包重放
+│   ├── 14-m13-packet-causality-call-tree-and-sequence-workbench.md   # 【M13 作战卡】报文时序因果树、内联甘特瀑布、全链路时序泳道与事务闭包重放
+│   ├── 15-m14-governance-dashboard-and-ia-restructuring.md           # 【M14 作战卡】平台级契约治理全景大盘、三维封顶健康指数与信息架构升维
+│   ├── 16-m15-golden-contract-suites-and-curation-workbench.md       # 【M15 作战卡】黄金契约套件自包含快照库、双源重放解耦与事务固化工作台
+│   ├── 17-m16-design-time-breaking-change-radar.md                   # 【M16 作战卡】设计态契约破坏性变更阻断雷达、下游血缘推导与回滚逃生舱
+│   └── 18-m17-ci-cd-quality-gate-and-automated-enforcement.md        # 【M17 作战卡】CI/CD 自动化强阻断质量门禁、实测边回传与排他锁有界排队
 ├── 05-adr/          # 架构决策记录 (ADR)：重大技术选型与权衡记录 (Architecture Decision Records)
 │   ├── 01-microfrontend-and-table-prefix-isolation.md                  # ADR-01：微前端集成、共享库表前缀隔离与 TDD 测试策略
 │   ├── 02-ebpf-hook-and-dual-subsystem-adr.md                          # ADR-02：eBPF 入站旁路钩子、Cookie 原目的还原与无 Schema 数据面解耦

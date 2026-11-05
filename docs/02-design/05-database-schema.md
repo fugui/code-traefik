@@ -1,26 +1,26 @@
 # 业务流量与接口契约治理 (`code-traefik`) 数据库物理模型与 GORM 建模字典
 
 - **文档编号**：`05-database-schema.md`
-- **文档版本**：v1.3.2
-- **更新日期**：2026-11-04
+- **文档版本**：v1.4.0
+- **更新日期**：2026-11-05
 - **归属阶段**：阶段二：系统架构与数据模型设计 (`02-design`)
-- **状态**：已批准待实施 (Approved for M13)
-- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.10.0)、[`01-system-architecture.md`](./01-system-architecture.md)、[`04-traffic-storage-partitioning-and-relational-normalization.md`](../05-adr/04-traffic-storage-partitioning-and-relational-normalization.md)、[`09-arch-process-ssot-and-ebpf-premount-standby-adr.md`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md) (ADR-09 v1.1.0)、[`12-packet-causality-call-tree-and-sequence-ux-adr.md`](../05-adr/12-packet-causality-call-tree-and-sequence-ux-adr.md) (ADR-12 v1.0.0)
+- **状态**：已批准待实施 (Approved for M14~M17)
+- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.12.1)、[`01-system-architecture.md`](./01-system-architecture.md)、[`04-traffic-storage-partitioning-and-relational-normalization.md`](../05-adr/04-traffic-storage-partitioning-and-relational-normalization.md)、[`09-arch-process-ssot-and-ebpf-premount-standby-adr.md`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md) (ADR-09 v1.1.0)、[`12-packet-causality-call-tree-and-sequence-ux-adr.md`](../05-adr/12-packet-causality-call-tree-and-sequence-ux-adr.md) (ADR-12 v1.0.0)、[`14-governance-dashboard-golden-suite-and-ci-gate-adr.md`](../05-adr/14-governance-dashboard-golden-suite-and-ci-gate-adr.md) (ADR-14 v1.1.0)
 
 ---
 
 ## 1. 数据库共享隔离原则、分区规范与类型安全约定
 
-1. **共享库表名前缀强制隔离**：`code-traefik-server` 与宿主门户 `code-bench` 共享同一 PostgreSQL 实例，直接复用 `code-common/backend/models` 中的 `users`、`departments`、`audit_logs` 公共表；本子系统全部 **15 张核心业务实体表**（及平台治理参数表 `traefik_settings`）必须显式实现 `TableName() string` 并冠以 `config.TablePrefix`（**`traefik_`**）前缀。
+1. **共享库表名前缀强制隔离**：`code-traefik-server` 与宿主门户 `code-bench` 共享同一 PostgreSQL 实例，直接复用 `code-common/backend/models` 中的 `users`、`departments`、`audit_logs` 公共表；本子系统全部 **17 张核心业务实体表**（及平台治理参数表 `traefik_settings`）必须显式实现 `TableName() string` 并冠以 `config.TablePrefix`（**`traefik_`**）前缀。
 2. **架构物理进程蓝图解耦与「单 Agent 单环境」关系规范化（[`ADR-09`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md)）**：
    - 将全局架构物理进程蓝图独立建模为 **`traefik_arch_process_groups`** 与 **`traefik_arch_processes`**，通过 `traefik_modules.arch_process_id` 唯一表达 `1 ArchProcess : N Module` 组装关系（守护 `A-03` 单模块单标准进程归属）；
    - **1 台 `Agent` 即代表 1 套独立运行环境**（支持多套 `SHARED` 公共测试环境与多套 `PRIVATE` 个人环境对等并存，不同 `SHARED` Agent 允许各自挂载同一 `ArchProcess`；`traefik_agents.fallback_agent_id` 支持可选关联某套公共基准环境用于混合下游推导）；
    - 将 **`traefik_processes`** 收敛为环境 Agent `1:1` 挂载实例表，通过强唯一索引 **`UNIQUE(agent_id, arch_process_id)`** 保障单环境单实例约束、通过部分唯一索引 **`UNIQUE(agent_id, effective_listen_port) WHERE effective_listen_port > 0`** 保障同机非零监听端口互斥（`A-02`）并兼容多纯客户端进程（端口 `0`），内置本地覆盖列与统一 **7 态探针就绪快照列**；
-   - **运行期录制快照与历史挂载解耦**：`traefik_recording_sessions.process_snapshots` (`jsonb`) 固化录制时刻各参与进程的 `arch_process_id` 与装载 `module_ids` 快照，`traefik_replay_tasks` 冗余记录 `arch_process_id` 并将 `source_process_id / target_process_id` 设为 `ON DELETE SET NULL`，确保后续卸载空闲挂载进程不被历史任务死锁，同时历史录制素材永久可做同构校验与重放；
+   - **运行期录制快照、黄金套件自包含快照与历史挂载解耦（[`ADR-14`](../05-adr/14-governance-dashboard-golden-suite-and-ci-gate-adr.md)）**：`traefik_recording_sessions.process_snapshots` (`jsonb`) 固化录制时刻各参与进程的 `arch_process_id` 与装载 `module_ids` 快照；**`traefik_golden_suites` / `traefik_golden_suite_items`** 将沉淀事务的入站/应答二进制帧与下游 `ScopedMocks` 完整深拷贝持久化，彻底脱离 `traefik_traffic_records` 30 天分区生命周期；`traefik_replay_tasks` 将 `session_id` 设为可空并支持 `golden_suite_id` 双源驱动，同时将 `source_process_id / target_process_id` 设为 `ON DELETE SET NULL`，确保后续卸载空闲挂载进程或清理过期流量分区后，黄金套件与历史任务永久独立可回放；
    - **`traefik_replay_items`** 物理条目表为每条被测请求独立一行持久化 `raw_actual_packet`（`bytea`）与 `field_diffs`（`jsonb`），支持标准服务端分页查询与历史多次 Diff 重跑。
 3. **新系统免历史数据迁移的干净重建策略 (`Clean Schema Rebuild`)**：
    - 本项目尚处上线前新系统阶段，无历史生产数据兼容包袱，**不编写旧版单层表历史数据回填迁移脚本**；
-   - 在 `models/db.go` `SetupWithDB` 启动迁移前，若检测到旧版表结构（如存在 `traefik_process_modules` 表，或 `traefik_processes` 表尚未包含 `arch_process_id` 列），直接执行一次性幂等清理：`DROP TABLE IF EXISTS traefik_replay_items, traefik_replay_tasks, traefik_recording_sessions, traefik_process_modules, traefik_processes CASCADE`、清空 `traefik_traffic_records` 并执行 `ALTER TABLE traefik_modules DROP COLUMN IF EXISTS process_id`、重置 `traefik_agents` 残留租约列，随后干净创建最新 15 表结构与完整约束。
+   - 在 `models/db.go` `SetupWithDB` 启动迁移前，若检测到旧版表结构（如存在 `traefik_process_modules` 表，或 `traefik_processes` 表尚未包含 `arch_process_id` 列），直接执行一次性幂等清理：`DROP TABLE IF EXISTS traefik_replay_items, traefik_replay_tasks, traefik_recording_sessions, traefik_process_modules, traefik_processes CASCADE`、清空 `traefik_traffic_records` 并执行 `ALTER TABLE traefik_modules DROP COLUMN IF EXISTS process_id`、重置 `traefik_agents` 残留租约列，随后干净创建最新 17 表结构与完整约束。
 4. **海量流量时间范围物理分区 (`Range Partitioning`)**：
    - 核心流量往返表 **`traefik_traffic_records`** 采用 PostgreSQL 原生 **`PARTITION BY RANGE (created_at)`** 按日（或按周）自动建表；
    - 30 天保留期清理流水线采用轻量级 **`DROP TABLE traefik_traffic_records_yYYYYmMMdDD`**，实现磁盘空间毫秒级无锁释放。
@@ -63,17 +63,21 @@ erDiagram
     TRAEFIK_PROCESSES ||--o{ TRAEFIK_TRAFFIC_RECORDS : "process_id (分区逻辑关联)"
     TRAEFIK_PROTO_SCHEMAS ||--o{ TRAEFIK_TRAFFIC_RECORDS : "schema_id (分区逻辑关联)"
 
-    TRAEFIK_RECORDING_SESSIONS ||--o{ TRAEFIK_REPLAY_TASKS : "session_id (RESTRICT)"
+    TRAEFIK_RECORDING_SESSIONS |o--o{ TRAEFIK_REPLAY_TASKS : "session_id (SET NULL, 可选批次源)"
+    TRAEFIK_ARCH_PROCESSES ||--o{ TRAEFIK_GOLDEN_SUITES : "arch_process_id (RESTRICT)"
+    TRAEFIK_GOLDEN_SUITES ||--o{ TRAEFIK_GOLDEN_SUITE_ITEMS : "suite_id (CASCADE, 自包含报文快照)"
+    TRAEFIK_GOLDEN_SUITES |o--o{ TRAEFIK_REPLAY_TASKS : "golden_suite_id (SET NULL, 可选套件源)"
     TRAEFIK_ARCH_PROCESSES ||--o{ TRAEFIK_REPLAY_TASKS : "arch_process_id (RESTRICT)"
     TRAEFIK_PROCESSES |o--o{ TRAEFIK_REPLAY_TASKS : "source/target_process_id (SET NULL)"
     TRAEFIK_AGENTS ||--o{ TRAEFIK_REPLAY_TASKS : "agent_id (RESTRICT)"
     TRAEFIK_REPLAY_TASKS ||--o{ TRAEFIK_REPLAY_ITEMS : "task_id (CASCADE)"
-    TRAEFIK_TRAFFIC_RECORDS ||--o{ TRAEFIK_REPLAY_ITEMS : "record_id (逻辑关联)"
+    TRAEFIK_TRAFFIC_RECORDS |o--o{ TRAEFIK_REPLAY_ITEMS : "record_id (弱引用)"
+    TRAEFIK_GOLDEN_SUITE_ITEMS |o--o{ TRAEFIK_REPLAY_ITEMS : "suite_item_id (SET NULL)"
 ```
 
 ---
 
-## 3. 15 张 `traefik_*` 核心业务表完整 GORM 模型定义
+## 3. 17 张 `traefik_*` 核心业务表完整 GORM 模型定义
 
 ### 3.1 逻辑架构元素领域表（表 1 ~ 表 3）
 
@@ -510,38 +514,44 @@ type TrafficRecord struct {
 func (TrafficRecord) TableName() string { return config.TablePrefix + "traffic_records" }
 
 // 14. ReplayTask 跨 Agent 同构离线自愈重放任务头表 (traefik_replay_tasks)
+// 支持「基于录制批次 (SessionID)」与「基于黄金契约套件 (GoldenSuiteID)」双源驱动 (ADR-14)
 type ReplayTask struct {
-	ID                uint64            `gorm:"primaryKey;autoIncrement" json:"id"`
-	TaskNo            string            `gorm:"size:64;not null;uniqueIndex:uk_traefik_replay_task_no" json:"task_no"`
-	Name              string            `gorm:"size:128;not null" json:"name"`
-	OwnerID           uint              `gorm:"not null;index:idx_traefik_replay_owner" json:"owner_id"`
-	Owner             *User             `gorm:"foreignKey:OwnerID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"owner,omitempty"`
-	SessionID         uint64            `gorm:"not null;index:idx_traefik_replay_session" json:"session_id"`
-	Session           *RecordingSession `gorm:"foreignKey:SessionID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"session,omitempty"`
-	ArchProcessID     uint64            `gorm:"not null;index:idx_traefik_replay_arch_proc" json:"arch_process_id"` // 重放目标对应的标准架构进程蓝图 ID
-	ArchProcess       *ArchProcess      `gorm:"foreignKey:ArchProcessID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"arch_process,omitempty"`
-	SourceProcessID   *uint64           `gorm:"index:idx_traefik_replay_src_proc" json:"source_process_id,omitempty"` // 录制素材中的源挂载实例 ID（卸载后自动置 NULL，由 Session.ProcessSnapshots 保底）
-	SourceProcess     *Process          `gorm:"foreignKey:SourceProcessID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"source_process,omitempty"`
-	TargetProcessID   *uint64           `gorm:"index:idx_traefik_replay_tgt_proc" json:"target_process_id,omitempty"` // 实际执行重放的同构目标挂载实例 ID（卸载后自动置 NULL）
-	TargetProcess     *Process          `gorm:"foreignKey:TargetProcessID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"target_process,omitempty"`
-	AgentID           uint64            `gorm:"not null;index:idx_traefik_replay_agent" json:"agent_id"`              // TargetProcess 所属的目标环境 Agent ID (任务期间持有排他租约)
-	Agent             *Agent            `gorm:"foreignKey:AgentID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"agent,omitempty"`
-	SelectedRecordIDs datatypes.JSON    `gorm:"type:jsonb;not null" json:"selected_record_ids"`                      // []uint64 选定注入的 INGRESS 往返记录 ID
-	ExtraIgnorePaths  datatypes.JSON    `gorm:"type:jsonb;not null;default:'[]'" json:"extra_ignore_paths"`          // 任务级临时追加忽略字段路径 []string
-	TimeoutMs         int               `gorm:"not null;default:30000" json:"timeout_ms"`                            // 单请求等待超时默认 30s
-	LifecycleState    string            `gorm:"size:32;not null;default:'PENDING';index:idx_traefik_replay_state" json:"lifecycle_state"`
-	ResultStatus      string            `gorm:"size:32;not null;default:'';index:idx_traefik_replay_result" json:"result_status"` // PASS | FAILED | MOCK_MISS | TIMEOUT | ERROR
-	TotalRequests     int               `gorm:"not null;default:0" json:"total_requests"`
-	PassedRequests    int               `gorm:"not null;default:0" json:"passed_requests"`
-	MockHitCount      int               `gorm:"not null;default:0" json:"mock_hit_count"`
-	MockMissCount     int               `gorm:"not null;default:0" json:"mock_miss_count"`
-	MockEvents        datatypes.JSON    `gorm:"type:jsonb;not null;default:'[]'" json:"mock_events"`                 // Mock 命中/自愈回写详情与 MOCK_MISS 诊断明细
-	ErrorMessage      string            `gorm:"type:text" json:"error_message"`
-	StartedAt         *time.Time        `json:"started_at"`
-	FinishedAt        *time.Time        `json:"finished_at"`
-	CreatedBy         uint              `gorm:"not null;default:0;index:idx_traefik_replay_creator" json:"created_by"`
-	CreatedAt         time.Time         `gorm:"index:idx_traefik_replay_created_at" json:"created_at"`
-	UpdatedAt         time.Time         `json:"updated_at"`
+	ID                  uint64            `gorm:"primaryKey;autoIncrement" json:"id"`
+	TaskNo              string            `gorm:"size:64;not null;uniqueIndex:uk_traefik_replay_task_no" json:"task_no"`
+	Name                string            `gorm:"size:128;not null" json:"name"`
+	TriggerSource       string            `gorm:"size:24;not null;default:'MANUAL';index:idx_traefik_replay_trigger;check:chk_traefik_replay_trigger,trigger_source IN ('MANUAL','SINGLE_DEBUG','GOLDEN_SUITE','CI_GATE')" json:"trigger_source"` // 区分人工调试与权威套件/CI门禁 (F-24 健康分过滤依据)
+	OwnerID             uint              `gorm:"not null;index:idx_traefik_replay_owner" json:"owner_id"`
+	Owner               *User             `gorm:"foreignKey:OwnerID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"owner,omitempty"`
+	SessionID           *uint64           `gorm:"index:idx_traefik_replay_session" json:"session_id,omitempty"` // 录制批次源（套件回归时为 nil；源批次删除后置 NULL）
+	Session             *RecordingSession `gorm:"foreignKey:SessionID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"session,omitempty"`
+	GoldenSuiteID       *uint64           `gorm:"index:idx_traefik_replay_suite" json:"golden_suite_id,omitempty"` // 黄金契约套件源 (F-25, F-27)
+	GoldenSuite         *GoldenSuite      `gorm:"foreignKey:GoldenSuiteID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"golden_suite,omitempty"`
+	ArchProcessID       uint64            `gorm:"not null;index:idx_traefik_replay_arch_proc" json:"arch_process_id"` // 重放目标对应的标准架构进程蓝图 ID
+	ArchProcess         *ArchProcess      `gorm:"foreignKey:ArchProcessID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"arch_process,omitempty"`
+	SourceProcessID     *uint64           `gorm:"index:idx_traefik_replay_src_proc" json:"source_process_id,omitempty"` // 录制素材中的源挂载实例 ID（卸载后自动置 NULL，由 Session.ProcessSnapshots 保底）
+	SourceProcess       *Process          `gorm:"foreignKey:SourceProcessID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"source_process,omitempty"`
+	TargetProcessID     *uint64           `gorm:"index:idx_traefik_replay_tgt_proc" json:"target_process_id,omitempty"` // 实际执行重放的同构目标挂载实例 ID（卸载后自动置 NULL）
+	TargetProcess       *Process          `gorm:"foreignKey:TargetProcessID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"target_process,omitempty"`
+	AgentID             uint64            `gorm:"not null;index:idx_traefik_replay_agent" json:"agent_id"`              // TargetProcess 所属的目标环境 Agent ID (任务期间持有排他租约)
+	Agent               *Agent            `gorm:"foreignKey:AgentID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"agent,omitempty"`
+	SelectedRecordIDs   datatypes.JSON    `gorm:"type:jsonb;not null;default:'[]'" json:"selected_record_ids"`          // []uint64 选定注入的 INGRESS 往返记录 ID（套件源时为空或存 suite_item_id）
+	ExtraIgnorePaths    datatypes.JSON    `gorm:"type:jsonb;not null;default:'[]'" json:"extra_ignore_paths"`           // 任务级临时追加忽略字段路径 []string
+	TimeoutMs           int               `gorm:"not null;default:30000" json:"timeout_ms"`                             // 单请求等待超时默认 30s
+	LifecycleState      string            `gorm:"size:32;not null;default:'PENDING';index:idx_traefik_replay_state" json:"lifecycle_state"`
+	ResultStatus        string            `gorm:"size:32;not null;default:'';index:idx_traefik_replay_result" json:"result_status"` // PASS | FAILED | MOCK_MISS | TIMEOUT | ERROR
+	ViolationCount      int               `gorm:"not null;default:0" json:"violation_count"`                                        // 重放期实测未声明 DEPEND 违规调用边数量 (F-27)
+	TotalRequests       int               `gorm:"not null;default:0" json:"total_requests"`
+	PassedRequests      int               `gorm:"not null;default:0" json:"passed_requests"`
+	MockHitCount        int               `gorm:"not null;default:0" json:"mock_hit_count"`
+	MockMissCount       int               `gorm:"not null;default:0" json:"mock_miss_count"`
+	ObservedEgressCalls datatypes.JSON    `gorm:"type:jsonb;not null;default:'[]'" json:"observed_egress_calls"` // []ObservedEgressCall 重放期 Agent 实测捕获的全部出站调用摘要，供门禁 Violation 核验 (ADR-14)
+	MockEvents          datatypes.JSON    `gorm:"type:jsonb;not null;default:'[]'" json:"mock_events"`           // Mock 命中/自愈回写详情与 MOCK_MISS 诊断明细
+	ErrorMessage        string            `gorm:"type:text" json:"error_message"`
+	StartedAt           *time.Time        `json:"started_at"`
+	FinishedAt          *time.Time        `json:"finished_at"`
+	CreatedBy           uint              `gorm:"not null;default:0;index:idx_traefik_replay_creator" json:"created_by"`
+	CreatedAt           time.Time         `gorm:"index:idx_traefik_replay_created_at" json:"created_at"`
+	UpdatedAt           time.Time         `json:"updated_at"`
 }
 
 func (ReplayTask) TableName() string { return config.TablePrefix + "replay_tasks" }
@@ -549,30 +559,89 @@ func (ReplayTask) TableName() string { return config.TablePrefix + "replay_tasks
 // 15. ReplayItem 重放任务单请求独立执行结果与双层 Diff 明细表 (traefik_replay_items)
 // 规范化拆解原 JSONB 大字段，支持明细项并发流式更新、分页检索与实际响应切片归档
 type ReplayItem struct {
-	ID              uint64         `gorm:"primaryKey;autoIncrement" json:"id"`
-	TaskID          uint64         `gorm:"not null;uniqueIndex:uk_traefik_replay_task_item,priority:1;index:idx_traefik_replay_item_task" json:"task_id"`
-	Task            *ReplayTask    `gorm:"foreignKey:TaskID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
-	RecordID        uint64         `gorm:"not null;uniqueIndex:uk_traefik_replay_task_item,priority:2;index:idx_traefik_replay_item_rec" json:"record_id"`
-	SeqNo           int64          `gorm:"not null;index:idx_traefik_replay_item_seq" json:"seq_no"`
-	ServiceName     string         `gorm:"size:128;not null" json:"service_name"`
-	Operation       string         `gorm:"size:128;not null" json:"operation"`
-	ResultStatus    string         `gorm:"size:32;not null;index:idx_traefik_replay_item_status" json:"result_status"` // PASS | FAILED | MOCK_MISS | TIMEOUT | ERROR
-	LatencyUs       int64          `gorm:"not null;default:0" json:"latency_us"`
-	ActualStatus    uint64         `gorm:"type:numeric(20,0);not null;default:0" json:"actual_status,string"`
-	BaselineStatus  uint64         `gorm:"type:numeric(20,0);not null;default:0" json:"baseline_status,string"`
-	FieldDiffs      datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"field_diffs"` // []FieldDiff 双层对比差异
-	ActualPayload   datatypes.JSON `gorm:"type:jsonb" json:"actual_payload,omitempty"`
-	RawActualPacket []byte         `gorm:"type:bytea" json:"-"`                                 // 实际捕获响应切片
-	MockTrace       datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"mock_trace"`  // 本条请求相关的 Mock 命中或未命中轨迹
-	ErrorMessage    string         `gorm:"type:text" json:"error_message"`
-	CreatedAt       time.Time      `json:"created_at"`
+	ID              uint64           `gorm:"primaryKey;autoIncrement" json:"id"`
+	TaskID          uint64           `gorm:"not null;uniqueIndex:uk_traefik_replay_task_seq,priority:1;index:idx_traefik_replay_item_task" json:"task_id"`
+	Task            *ReplayTask      `gorm:"foreignKey:TaskID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
+	RecordID        *uint64          `gorm:"index:idx_traefik_replay_item_rec" json:"record_id,omitempty"` // 批次源记录 ID（可空，防分区 DROP 断链）
+	SuiteItemID     *uint64          `gorm:"index:idx_traefik_replay_item_suite_item" json:"suite_item_id,omitempty"` // 黄金套件源明细 ID (F-25)
+	SuiteItem       *GoldenSuiteItem `gorm:"foreignKey:SuiteItemID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"-"`
+	SeqNo           int64            `gorm:"not null;uniqueIndex:uk_traefik_replay_task_seq,priority:2;index:idx_traefik_replay_item_seq" json:"seq_no"`
+	ServiceName     string           `gorm:"size:128;not null" json:"service_name"`
+	Operation       string           `gorm:"size:128;not null" json:"operation"`
+	ResultStatus    string           `gorm:"size:32;not null;index:idx_traefik_replay_item_status" json:"result_status"` // PASS | FAILED | MOCK_MISS | TIMEOUT | ERROR
+	LatencyUs       int64            `gorm:"not null;default:0" json:"latency_us"`
+	ActualStatus    uint64           `gorm:"type:numeric(20,0);not null;default:0" json:"actual_status,string"`
+	BaselineStatus  uint64           `gorm:"type:numeric(20,0);not null;default:0" json:"baseline_status,string"`
+	FieldDiffs      datatypes.JSON   `gorm:"type:jsonb;not null;default:'[]'" json:"field_diffs"` // []FieldDiff 双层对比差异
+	ActualPayload   datatypes.JSON   `gorm:"type:jsonb" json:"actual_payload,omitempty"`
+	RawActualPacket []byte           `gorm:"type:bytea" json:"-"`                                 // 实际捕获响应切片
+	MockTrace       datatypes.JSON   `gorm:"type:jsonb;not null;default:'[]'" json:"mock_trace"`  // 本条请求相关的 Mock 命中或未命中轨迹
+	ErrorMessage    string           `gorm:"type:text" json:"error_message"`
+	CreatedAt       time.Time        `json:"created_at"`
 }
 
 func (ReplayItem) TableName() string { return config.TablePrefix + "replay_items" }
 ```
 
+### 3.6 黄金契约套件自包含快照资产库表（表 16 ~ 表 17，`F-25`, `ADR-14`）
+
+```go
+const (
+	GoldenSuiteStatusActive   = "ACTIVE"   // 权威生效态（参与 CI/CD 默认门禁匹配）
+	GoldenSuiteStatusArchived = "ARCHIVED" // 已归档历史基线
+)
+
+// 16. GoldenSuite 黄金契约测试套件资产主表 (traefik_golden_suites)
+type GoldenSuite struct {
+	ID               uint64            `gorm:"primaryKey;autoIncrement" json:"id"`
+	Code             string            `gorm:"size:64;not null;uniqueIndex:uk_traefik_golden_suite_code" json:"code"` // 全局唯一套件编码，如 "GS_SUT_ORDER_CORE"
+	Name             string            `gorm:"size:128;not null;index:idx_traefik_golden_suite_name" json:"name"`
+	ArchProcessID    uint64            `gorm:"not null;index:idx_traefik_golden_suite_arch_proc,priority:1" json:"arch_process_id"` // 绑定的标准架构进程蓝图 SSOT
+	ArchProcess      *ArchProcess      `gorm:"foreignKey:ArchProcessID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"arch_process,omitempty"`
+	Version          string            `gorm:"size:64;not null;default:'v1.0.0'" json:"version"`
+	Status           string            `gorm:"size:24;not null;default:'ACTIVE';index:idx_traefik_golden_suite_arch_proc,priority:2;check:chk_traefik_golden_suite_status,status IN ('ACTIVE','ARCHIVED')" json:"status"`
+	ExtraIgnorePaths datatypes.JSON    `gorm:"type:jsonb;not null;default:'[]'" json:"extra_ignore_paths"` // 套件级默认 Diff 忽略字段路径 []string
+	ItemCount        int               `gorm:"not null;default:0" json:"item_count"`                       // 冗余用例总数，零 N+1 列表展示
+	Description      string            `gorm:"type:text" json:"description"`
+	Items            []GoldenSuiteItem `gorm:"foreignKey:SuiteID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"items,omitempty"`
+	CreatedBy        uint              `gorm:"not null;default:0;index:idx_traefik_golden_suite_creator" json:"created_by"`
+	UpdatedBy        uint              `gorm:"not null;default:0" json:"updated_by"`
+	CreatedAt        time.Time         `json:"created_at"`
+	UpdatedAt        time.Time         `json:"updated_at"`
+}
+
+func (GoldenSuite) TableName() string { return config.TablePrefix + "golden_suites" }
+
+// 17. GoldenSuiteItem 黄金契约套件完全自包含事务快照表 (traefik_golden_suite_items)
+// 关键防腐设计：完整深拷贝固化入站请求帧、基线应答帧及下游成对 ScopedMocks 闭包，
+// 100% 免疫 traefik_traffic_records 30 天按日分区 DROP TABLE 物理清理与源 RecordingSession 删除！
+type GoldenSuiteItem struct {
+	ID              uint64         `gorm:"primaryKey;autoIncrement" json:"id"`
+	SuiteID         uint64         `gorm:"not null;uniqueIndex:uk_traefik_golden_item_order,priority:1;index:idx_traefik_golden_item_suite" json:"suite_id"`
+	Suite           *GoldenSuite   `gorm:"foreignKey:SuiteID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
+	OrderNo         int            `gorm:"not null;uniqueIndex:uk_traefik_golden_item_order,priority:2" json:"order_no"` // 套件内严格串行执行序 (1, 2, 3...)
+	Name            string         `gorm:"size:128;not null" json:"name"`                                                // 用例业务语义名称
+	SourceSessionID *uint64        `gorm:"index:idx_traefik_golden_item_src_sess" json:"source_session_id,omitempty"`    // 可空溯源批次弱引用
+	SourceRecordID  *uint64        `gorm:"index:idx_traefik_golden_item_src_rec" json:"source_record_id,omitempty"`      // 可空溯源流量行弱引用（绝不强依赖回查）
+	ServiceName     string         `gorm:"size:128;not null;index:idx_traefik_golden_item_svc,priority:1" json:"service_name"`
+	Operation       string         `gorm:"size:128;not null;index:idx_traefik_golden_item_svc,priority:2" json:"operation"`
+	BaselineStatus  uint64         `gorm:"type:numeric(20,0);not null;default:0" json:"baseline_status,string"`
+	RspSegCount     int            `gorm:"not null;default:1" json:"rsp_seg_count"`
+	RawReqPacket    []byte         `gorm:"type:bytea;not null" json:"-"`                                         // 深拷贝固化的无损入站请求 CROS RPC 帧
+	RawRspPacket    []byte         `gorm:"type:bytea;not null" json:"-"`                                         // 深拷贝固化的无损预期应答 CROS RPC 帧
+	ScopedMocks     datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"scoped_mocks"`                 // []agentproto.MockRuleDownstream 固化的专属下游请求+应答闭包
+	EgressEndpoints datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"egress_endpoints"`             // []agentproto.DownstreamEndpoint 固化的历史下游端点集
+	MaskRulesJSON   datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"mask_rules_json"`              // []MaskRule 用例级动态掩码与忽略路径规则
+	CreatedBy       uint           `gorm:"not null;default:0" json:"created_by"`
+	CreatedAt       time.Time      `json:"created_at"`
+	UpdatedAt       time.Time      `json:"updated_at"`
+}
+
+func (GoldenSuiteItem) TableName() string { return config.TablePrefix + "golden_suite_items" }
+```
+
 > **附：治理配置表与自定义 GIN 索引迁移说明**：
-> 1. 工程初始化模板自带的 `TraefikSetting`（`traefik_settings`）保留用于持久化管理员可调模块治理参数（含 `traffic_retention_days`、`default_max_frames`、`default_max_duration_sec` 以及新挂载进程默认预挂策略 `default_probe_desired_state_shared='ARMED'`、`default_probe_desired_state_private='ARMED'`），而模板示例占位表 `traefik_items` 在阶段四 M1 迁移时已彻底移除；
+> 1. 工程初始化模板自带的 `TraefikSetting`（`traefik_settings`）保留用于持久化管理员可调模块治理参数（含 `traffic_retention_days`、`default_max_frames`、`default_max_duration_sec`、新挂载进程默认预挂策略 `default_probe_desired_state_shared='ARMED'` / `default_probe_desired_state_private='ARMED'`，以及 `F-27` CI 门禁机器凭据摘要 `ci_gate_token_sha256` —— **仅存 SHA-256 哈希，永不存明文且不在通用配置列表中回显**），而模板示例占位表 `traefik_items` 在阶段四 M1 迁移时已彻底移除；
 > 2. `traefik_traffic_records` 分区母表 DDL 由独立 SQL 执行：
 >    ```sql
 >    CREATE TABLE IF NOT EXISTS traefik_traffic_records (
@@ -646,7 +715,9 @@ func (ReplayItem) TableName() string { return config.TablePrefix + "replay_items
 | `traefik_proto_operations` | `uk_traefik_proto_op_schema` | `UNIQUE (schema_id, service_name, operation)` | F-03：单个 `.pb` 版本内部接口映射唯一 |
 | `traefik_proto_operations` | `uk_traefik_active_proto_op` | `UNIQUE (service_name, operation) WHERE is_active = true` | **F-03.3**：所有生效描述集之间 `(service, operation)` 全局唯一，杜绝并发激活冲突 |
 | `traefik_replay_tasks` | `uk_traefik_replay_task_no` | `UNIQUE (task_no)` | F-12：重放任务流水号全局唯一 |
-| `traefik_replay_items` | `uk_traefik_replay_task_item` | `UNIQUE (task_id, record_id)` | F-12：单重放任务内同一条素材记录仅执行与断言一次 |
+| `traefik_replay_items` | `uk_traefik_replay_task_seq` | `UNIQUE (task_id, seq_no)` | **F-12 & F-25**：单重放任务内请求执行序号唯一（同时兼容录制批次源 `record_id` 与黄金套件源 `suite_item_id`） |
+| `traefik_golden_suites` | `uk_traefik_golden_suite_code` | `UNIQUE (code)` | **F-25 (ADR-14)**：黄金契约套件编码全局唯一 |
+| `traefik_golden_suite_items` | `uk_traefik_golden_item_order` | `UNIQUE (suite_id, order_no)` | **F-25 (ADR-14)**：同一黄金套件内事务执行顺序严格唯一不冲突 |
 | `traefik_traffic_records` | `idx_traefik_tr_session_req_ns` | `BTREE (session_id, req_captured_at_ns, id)` | **F-11 & F-15.6 (ADR-12)**：保障单批次报文严格按请求发起时刻 `O(log N)` 有序读取与事务调用树构建 |
 | `traefik_traffic_records` | `idx_traefik_tr_payload_gin` | `GIN (payload_json jsonb_path_ops)` | **F-11**：加速 `payload_json` 结构化请求/应答载荷的明文键值条件检索 |
 
@@ -671,9 +742,11 @@ func (ReplayItem) TableName() string { return config.TablePrefix + "replay_items
 | 并发租用 `Agent`（录制/重放） | 目标 `Agent`（无论 `SHARED` 还是 `PRIVATE`）存在未过期的活跃租约（`lease_type != '' && now < lease_expires_at`） | `409 Conflict` | 升序 `SELECT ... FOR UPDATE` 行锁 + Agent 内存 `SingleTenantGuard` |
 | 删除 `Agent` | 仍纳管任何 `Process` 挂载实例或持有活跃排他租约（`lease_type != ''`） | `409 Conflict` | `ON DELETE RESTRICT`（被引用的 `fallback_agent_id` 自动 `SET NULL`） |
 | 删除/卸载 `Process` | 所属 Agent 当前持有涉及该进程的活跃排他租约（空闲态允许随时卸载，不受历史录制/重放阻碍） | `409 Conflict` | 流量母表逻辑解耦；`RecordingSession` 保存 `ProcessSnapshots` 快照，历史 `ReplayTask` 外键自动 `ON DELETE SET NULL`；Agent 在线时递增 `mounts_revision` 热卸载规则 |
-| 激活 / 批量激活 / 停用 `ProtoSchema` | 与生效池其他描述集存在 `(service_name, operation)` 冲突，或 `CompileTrialPool` 预编译检测到缺失前置依赖 / 破坏下游已生效描述集闭包（`broken_dependents`） | `409 Conflict` | `pg_advisory_xact_lock` 事务咨询锁串行化 + `uk_traefik_active_proto_op` 部分唯一索引兜底 |
+| 激活 / 批量激活 / 停用 `ProtoSchema` | 1. 与生效池其他描述集存在 `(service_name, operation)` 冲突或 `CompileTrialPool` 预编译破坏反向依赖闭包；<br>2. **F-26 (ADR-14)**：同名版本升级检出 `FATAL` 级 AST 破坏性变更且未携带管理员 `allow_breaking=true` + `breaking_reason` | `409 Conflict` | `pg_advisory_xact_lock` 事务咨询锁串行化 + `uk_traefik_active_proto_op` 部分唯一索引兜底 + 强制逃生 `P1` 审计 |
 | 删除 `ProtoSchema` | 当前处于 `is_active = true` 生效态（须先执行 `deactivate` 停用或切换至新版本） | `409 Conflict` | 非生效历史版本允许删除：`ProtoOperation` 级联 `CASCADE` 删除 |
-| 删除 `RecordingSession` | 当前处于 `RECORDING` / `STOPPING` 态，或仍被 `ReplayTask` 引用 | `409 Conflict` | 删除已完成且无重放引用的批次时，关联清理相关子表 |
+| 删除 `RecordingSession` | 当前处于 `RECORDING` / `STOPPING` 态，或存在未结束 `ReplayTask` 引用 | `409 Conflict` | 已完成批次删除时历史 `ReplayTask.session_id` 自动 `ON DELETE SET NULL`，已沉淀的 `GoldenSuiteItem` 因自包含深拷贝毫发无损 |
+| 删除 `ArchProcess`（补充黄金套件守卫） | 存在关联的 `GoldenSuite` 黄金契约套件（`traefik_golden_suites`） | `409 Conflict` | `ON DELETE RESTRICT`（防止误删权威门禁绑定的架构标准进程） |
+| CI/CD 门禁评估 `POST /api/gates/evaluate` | 1. 目标 Agent 离线、进程 `NEED_RECONNECT` 或排他锁等待超过 `wait_lease_seconds` 仍繁忙；<br>2. 重放检出未报备 `Violation` 或套件 `FAILED Diff / MOCK_MISS` | `503` (环境忙/未就绪)<br>`422` (质量门禁阻断) | 服务端有界退避排队获取 `REPLAY` 租约，区分环境瞬态不可用 (`503`) 与代码违规红牌 (`422`) |
 
 ---
 
