@@ -1,7 +1,7 @@
 # M16 作战卡：设计态契约破坏性变更阻断雷达、下游血缘推导与回滚逃生舱
 
 - **里程碑编号**：`M16`
-- **状态**：📋 规划中 (Planned)
+- **状态**：✅ 已交付 (Completed)
 - **前置依赖**：`M15` 已交付
 - **关联特性**：`F-26`、`SC-09`
 - **关联设计规范**：[`14-governance-dashboard-golden-suite-and-ci-gate-adr.md`](../05-adr/14-governance-dashboard-golden-suite-and-ci-gate-adr.md) (ADR-14 v1.1.0)、[`01-http-api-contract.md`](../03-api/01-http-api-contract.md) (v1.4.0)

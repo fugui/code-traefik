@@ -76,11 +76,17 @@ export async function updateProtoSchema(
   });
 }
 
-export async function activateProtoSchema(id: string | number) {
-  return apiRequest<{ schema: ProtoSchemaLedgerItemDTO; activated_operations: number }>(
+export interface ActivateOptions {
+  allow_breaking?: boolean;
+  breaking_reason?: string;
+}
+
+export async function activateProtoSchema(id: string | number, options?: ActivateOptions) {
+  return apiRequest<{ schema: ProtoSchemaLedgerItemDTO; activated_operations: number; forced_breaking?: boolean }>(
     `/proto-schemas/${id}/activate`,
     {
       method: 'POST',
+      body: options ? JSON.stringify(options) : undefined,
     }
   );
 }
@@ -94,10 +100,13 @@ export async function deactivateProtoSchema(id: string | number) {
   );
 }
 
-export async function batchActivateProtoSchemas(ids: (string | number)[]) {
-  return apiRequest<{ message: string; activated_count: number }>(`/proto-schemas/batch-activate`, {
+export async function batchActivateProtoSchemas(ids: (string | number)[], options?: ActivateOptions) {
+  return apiRequest<{ message: string; activated_count: number; forced_breaking?: boolean }>(`/proto-schemas/batch-activate`, {
     method: 'POST',
-    body: JSON.stringify({ schema_ids: ids.map((id) => Number(id)) }),
+    body: JSON.stringify({
+      schema_ids: ids.map((id) => Number(id)),
+      ...(options || {}),
+    }),
   });
 }
 

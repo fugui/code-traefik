@@ -5,5 +5,6 @@ export * from './SchemaAssetLedgerTable';
 export * from './SchemaAssetInspectDrawer';
 export * from './OperationMappingTable';
 export * from './OperationDocDrawer';
+export * from '../ProtoSchemasPage/BreakingChangeAlertDrawer';
 export * from './ProtoSchemaWorkbenchPage';
 export { default } from './ProtoSchemaWorkbenchPage';

@@ -11,12 +11,15 @@ import type {
   ConflictOrBrokenResponse,
   ProtoOperation,
   ServiceContractGroupDTO,
+  BreakingRuleViolation,
+  AffectedDependent,
 } from '../../types';
 import { SchemaPoolSummaryBar } from './SchemaPoolSummaryBar';
 import { SchemaAssetLedgerTable } from './SchemaAssetLedgerTable';
 import { SchemaAssetInspectDrawer } from './SchemaAssetInspectDrawer';
 import { SchemaUploadModal } from './SchemaUploadModal';
 import { SchemaConflictModal } from './SchemaConflictModal';
+import { BreakingChangeAlertDrawer } from '../ProtoSchemasPage/BreakingChangeAlertDrawer';
 import { OperationMappingTable } from './OperationMappingTable';
 import { OperationDocDrawer } from './OperationDocDrawer';
 
@@ -87,6 +90,15 @@ export const ProtoSchemaWorkbenchPage: React.FC = () => {
 
   const [conflictModalOpen, setConflictModalOpen] = useState(false);
   const [conflictData, setConflictData] = useState<ConflictOrBrokenResponse | null>(null);
+
+  const [breakingDrawerOpen, setBreakingDrawerOpen] = useState(false);
+  const [breakingDrawerData, setBreakingDrawerData] = useState<{
+    schemaId: string | number | null;
+    batchIds: (string | number)[] | null;
+    breakingRules: BreakingRuleViolation[];
+    affectedDependents: AffectedDependent[];
+  } | null>(null);
+  const [isOverriding, setIsOverriding] = useState(false);
 
   const [docDrawerOpen, setDocDrawerOpen] = useState(false);
   const [selectedOp, setSelectedOp] = useState<ProtoOperation | null>(null);
@@ -210,6 +222,16 @@ export const ProtoSchemaWorkbenchPage: React.FC = () => {
       }
     } catch (err: unknown) {
       const respData = (err as unknown as { responseData?: ConflictOrBrokenResponse })?.responseData;
+      if (respData && (respData.code === 'BREAKING_CHANGE_DETECTED' || (respData.breaking_rules && respData.breaking_rules.length > 0))) {
+        setBreakingDrawerData({
+          schemaId: s.id,
+          batchIds: null,
+          breakingRules: respData.breaking_rules || [],
+          affectedDependents: respData.affected_dependents || [],
+        });
+        setBreakingDrawerOpen(true);
+        return;
+      }
       if (respData && (respData.conflicts || respData.broken_dependents)) {
         setConflictData(respData);
         setConflictModalOpen(true);
@@ -249,12 +271,51 @@ export const ProtoSchemaWorkbenchPage: React.FC = () => {
       if (activeTab === 'catalog') void loadCatalogServices();
     } catch (err: unknown) {
       const respData = (err as unknown as { responseData?: ConflictOrBrokenResponse })?.responseData;
+      if (respData && (respData.code === 'BREAKING_CHANGE_DETECTED' || (respData.breaking_rules && respData.breaking_rules.length > 0))) {
+        setBreakingDrawerData({
+          schemaId: null,
+          batchIds: selectedIds,
+          breakingRules: respData.breaking_rules || [],
+          affectedDependents: respData.affected_dependents || [],
+        });
+        setBreakingDrawerOpen(true);
+        return;
+      }
       if (respData && (respData.conflicts || respData.broken_dependents)) {
         setConflictData(respData);
         setConflictModalOpen(true);
         return;
       }
       toast.error(err instanceof Error ? err.message : '批量激活失败');
+    }
+  };
+
+  // 管理员强制放行破坏性变更
+  const handleConfirmBreakingOverride = async (reason: string) => {
+    if (!breakingDrawerData) return;
+    setIsOverriding(true);
+    try {
+      if (breakingDrawerData.schemaId) {
+        const res = await schemaApi.activateProtoSchema(breakingDrawerData.schemaId, {
+          allow_breaking: true,
+          breaking_reason: reason,
+        });
+        toast.success(`已强制激活破坏性版本，生效 ${res.activated_operations} 个服务契约 (已记录 P1 审计)`);
+      } else if (breakingDrawerData.batchIds) {
+        const res = await schemaApi.batchActivateProtoSchemas(breakingDrawerData.batchIds, {
+          allow_breaking: true,
+          breaking_reason: reason,
+        });
+        toast.success(res.message || `已强制批量激活 ${res.activated_count} 个描述集 (已记录 P1 审计)`);
+      }
+      setBreakingDrawerOpen(false);
+      setBreakingDrawerData(null);
+      void loadAssetLedger();
+      if (activeTab === 'catalog') void loadCatalogServices();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : '强制激活操作失败');
+    } finally {
+      setIsOverriding(false);
     }
   };
 
@@ -505,6 +566,20 @@ export const ProtoSchemaWorkbenchPage: React.FC = () => {
           setConflictData(null);
         }}
         conflictData={conflictData}
+      />
+
+      {/* 破坏性契约变更拦截与影响面透视抽屉 */}
+      <BreakingChangeAlertDrawer
+        isOpen={breakingDrawerOpen}
+        onClose={() => {
+          setBreakingDrawerOpen(false);
+          setBreakingDrawerData(null);
+        }}
+        breakingRules={breakingDrawerData?.breakingRules || []}
+        affectedDependents={breakingDrawerData?.affectedDependents || []}
+        isAdmin={isAdmin}
+        onConfirmOverride={handleConfirmBreakingOverride}
+        isSubmitting={isOverriding}
       />
 
       {/* 680px 描述集多版本透视抽屉 */}

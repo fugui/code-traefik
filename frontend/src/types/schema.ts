@@ -98,10 +98,29 @@ export interface BrokenDependentItemDTO {
   reason: string;
 }
 
+export interface BreakingRuleViolation {
+  rule: string;
+  proto_file: string;
+  symbol: string;
+  message: string;
+  service_name?: string;
+}
+
+export interface AffectedDependent {
+  module_id: number;
+  module_code: string;
+  module_name: string;
+  arch_process_code: string;
+  owner_name: string;
+}
+
 export interface ConflictOrBrokenResponse {
   error: string;
+  code?: string;
   conflicts?: ConflictItem[];
   broken_dependents?: BrokenDependentItemDTO[];
+  breaking_rules?: BreakingRuleViolation[];
+  affected_dependents?: AffectedDependent[];
 }
 
 export interface ClaimedModuleDTO {

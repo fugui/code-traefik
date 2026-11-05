@@ -1069,6 +1069,19 @@ func TestCompileTrialPool_BatchActivate_DeactivateReverseDep_AndUnifiedRuntimeDe
 	if err == nil {
 		t.Fatalf("激活破坏下游依赖的 trade-base v2 期望被拦截，但成功执行了！")
 	}
+	var actBreaking *SchemaBreakingError
+	if !errors.As(err, &actBreaking) {
+		t.Fatalf("未携带 allow_breaking 期望先被 M16 AST 破坏性门禁拦截，实际: %v", err)
+	}
+
+	// 携带 allow_breaking 强制放行 Gate 1，但仍被 Gate 3 CompileTrialPool 反向依赖保护拦截
+	_, _, _, err = reg.ActivateSchemaVersion(tradeBaseV2.ID, BatchActivateOptions{
+		AllowBreaking:  true,
+		BreakingReason: "测试管理员逃生舱放行破坏性变更后 CompileTrialPool 反向依赖阻断",
+	})
+	if err == nil {
+		t.Fatalf("反向依赖被破坏期望被 CompileTrialPool 拦截，但成功执行了！")
+	}
 	var actBroken *SchemaBrokenDependentsError
 	if !errors.As(err, &actBroken) {
 		t.Fatalf("激活期望返回 SchemaBrokenDependentsError，实际: %v", err)

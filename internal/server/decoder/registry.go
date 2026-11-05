@@ -136,14 +136,16 @@ type CompiledRegistry struct {
 
 // UploadSchemaInput 上传 .pb 描述集参数
 type UploadSchemaInput struct {
-	Name         string
-	Category     string // BASE_LIB | BUSINESS | GATEWAY
-	VersionTag   string
-	FileName     string
-	Description  string
-	RawBytes     []byte
-	AutoActivate bool
-	OperatorID   uint
+	Name           string
+	Category       string // BASE_LIB | BUSINESS | GATEWAY
+	VersionTag     string
+	FileName       string
+	Description    string
+	RawBytes       []byte
+	AutoActivate   bool
+	AllowBreaking  bool
+	BreakingReason string
+	OperatorID     uint
 }
 
 // DecodeResult 单次 Payload 动态反序列化结果
@@ -926,8 +928,29 @@ func (r *Registry) UploadSchema(in UploadSchemaInput) (*models.ProtoSchema, []mo
 			insertedOps[i] = op
 		}
 
-		// 若指定自动激活，在此事务中执行 CompileTrialPool 预演
+		// 若指定自动激活，在此事务中先执行同名版本破坏性变更检测门禁，再执行 CompileTrialPool 预演
 		if in.AutoActivate {
+			var activeSchema models.ProtoSchema
+			if err := tx.Where("name = ? AND is_active = true AND id != ?", name, schema.ID).First(&activeSchema).Error; err == nil {
+				activeOwn, err := ExtractOwnFilesFromSchema(&activeSchema)
+				if err == nil {
+					violations := DetectBreakingChanges(activeOwn, ownFiles)
+					if len(violations) > 0 {
+						if !in.AllowBreaking {
+							affected := FindAffectedDependents(tx, violations)
+							return &SchemaBreakingError{
+								BreakingRules:      violations,
+								AffectedDependents: affected,
+							}
+						}
+						reason := strings.TrimSpace(in.BreakingReason)
+						if len(reason) < 8 {
+							return errors.New("强制放行破坏性变更必须填写不少于 8 个字符的原因 (breaking_reason)")
+						}
+					}
+				}
+			}
+
 			var activeSchemas []models.ProtoSchema
 			_ = tx.Where("is_active = true AND name != ?", name).Find(&activeSchemas).Error
 			sNext := append(activeSchemas, schema)
@@ -973,9 +996,15 @@ func (r *Registry) UploadSchema(in UploadSchemaInput) (*models.ProtoSchema, []mo
 	return &schema, insertedOps, inheritedOpCount, nil
 }
 
+// BatchActivateOptions 批量或单描述集激活控制参数
+type BatchActivateOptions struct {
+	AllowBreaking  bool
+	BreakingReason string
+}
+
 // ActivateSchemaVersion 切换单个描述集为生效态
-func (r *Registry) ActivateSchemaVersion(schemaID uint64) (*models.ProtoSchema, *models.ProtoSchema, int, error) {
-	schemas, count, err := r.BatchActivate([]uint64{schemaID})
+func (r *Registry) ActivateSchemaVersion(schemaID uint64, opts ...BatchActivateOptions) (*models.ProtoSchema, *models.ProtoSchema, int, error) {
+	schemas, count, err := r.BatchActivate([]uint64{schemaID}, opts...)
 	if err != nil {
 		return nil, nil, 0, err
 	}
@@ -986,12 +1015,19 @@ func (r *Registry) ActivateSchemaVersion(schemaID uint64) (*models.ProtoSchema, 
 }
 
 // BatchActivate 批量原子激活多个描述集 (单事务咨询锁 + CompileTrialPool 预编译仲裁)
-func (r *Registry) BatchActivate(schemaIDs []uint64) ([]models.ProtoSchema, int, error) {
+func (r *Registry) BatchActivate(schemaIDs []uint64, opts ...BatchActivateOptions) ([]models.ProtoSchema, int, error) {
 	if len(schemaIDs) == 0 {
 		return nil, 0, errors.New("待激活描述集列表不能为空")
 	}
 	if len(schemaIDs) > 100 {
 		return nil, 0, errors.New("单次批量激活不能超过 100 个描述集")
+	}
+
+	var allowBreaking bool
+	var breakingReason string
+	if len(opts) > 0 {
+		allowBreaking = opts[0].AllowBreaking
+		breakingReason = opts[0].BreakingReason
 	}
 
 	var activatedSchemas []models.ProtoSchema
@@ -1018,6 +1054,36 @@ func (r *Registry) BatchActivate(schemaIDs []uint64) ([]models.ProtoSchema, int,
 				return errors.New("同一批次激活请求中不能包含同名描述集的不同版本")
 			}
 			targetNamesMap[t.Name] = t.ID
+		}
+
+		// 检查候选版本与同名当前生效版本的 AST 破坏性变更 (F-26 / M16)
+		var allViolations []BreakingRuleViolation
+		for _, t := range targets {
+			var active models.ProtoSchema
+			if err := tx.Where("name = ? AND is_active = true AND id != ?", t.Name, t.ID).First(&active).Error; err == nil {
+				activeOwn, err := ExtractOwnFilesFromSchema(&active)
+				if err == nil {
+					targetOwn, err := ExtractOwnFilesFromSchema(&t)
+					if err == nil {
+						v := DetectBreakingChanges(activeOwn, targetOwn)
+						allViolations = append(allViolations, v...)
+					}
+				}
+			}
+		}
+
+		if len(allViolations) > 0 {
+			if !allowBreaking {
+				affected := FindAffectedDependents(tx, allViolations)
+				return &SchemaBreakingError{
+					BreakingRules:      allViolations,
+					AffectedDependents: affected,
+				}
+			}
+			reason := strings.TrimSpace(breakingReason)
+			if len(reason) < 8 {
+				return errors.New("强制放行破坏性变更必须填写不少于 8 个字符的原因 (breaking_reason)")
+			}
 		}
 
 		// 构造 S_next = 当前生效池中不包含 targets 同名项目的 Schema ∪ targets
@@ -1184,6 +1250,31 @@ func (r *Registry) DeleteSchemaVersion(schemaID uint64) (*models.ProtoSchema, er
 	}
 
 	return &schema, nil
+}
+
+// DetectBreakingChangesAgainstActive 对比指定描述集名称的当前生效版本与候选描述集二进制，检出破坏性改动
+func (r *Registry) DetectBreakingChangesAgainstActive(name string, candidateBytes []byte) ([]BreakingRuleViolation, error) {
+	var active models.ProtoSchema
+	err := r.db.Where("name = ? AND is_active = true", name).First(&active).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	activeOwn, err := ExtractOwnFilesFromSchema(&active)
+	if err != nil {
+		return nil, err
+	}
+	candidateSchema := &models.ProtoSchema{
+		Name:            name,
+		DescriptorBytes: candidateBytes,
+	}
+	candidateOwn, err := ExtractOwnFilesFromSchema(candidateSchema)
+	if err != nil {
+		return nil, err
+	}
+	return DetectBreakingChanges(activeOwn, candidateOwn), nil
 }
 
 // LookupOperation 检索已编译生效的接口元数据
