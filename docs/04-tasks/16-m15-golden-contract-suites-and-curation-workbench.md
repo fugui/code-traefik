@@ -1,7 +1,7 @@
 # M15 作战卡：黄金契约套件自包含快照库、双源重放解耦与事务固化工作台
 
 - **里程碑编号**：`M15`
-- **状态**：📋 规划中 (Planned)
+- **状态**：✅ 已交付 (Delivered)
 - **前置依赖**：`M14` 已交付
 - **关联特性**：`F-15`（补齐第 10 项菜单）、`F-25`
 - **关联设计规范**：[`14-governance-dashboard-golden-suite-and-ci-gate-adr.md`](../05-adr/14-governance-dashboard-golden-suite-and-ci-gate-adr.md) (ADR-14 v1.1.0)、[`05-database-schema.md`](../02-design/05-database-schema.md) (v1.4.0)、[`01-http-api-contract.md`](../03-api/01-http-api-contract.md) (v1.4.0)

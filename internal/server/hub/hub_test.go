@@ -441,7 +441,7 @@ func TestAcquireAgentLeasesMutexAndHeartbeatReconcile(t *testing.T) {
 			TaskNo:            "REP-TEST-001",
 			Name:              "Active-Replay-Task",
 			OwnerID:           userA.ID,
-			SessionID:         session.ID,
+			SessionID:         &session.ID,
 			ArchProcessID:     archProc.ID,
 			AgentID:           agent1.ID,
 			LifecycleState:    "RUNNING",

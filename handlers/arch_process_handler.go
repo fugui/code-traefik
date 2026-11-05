@@ -789,6 +789,17 @@ func DeleteArchProcess(c *gin.Context) {
 		return
 	}
 
+	// 校验是否被黄金契约套件引用 (F-25, ADR-14)
+	var suiteCount int64
+	if err := models.DB.Model(&models.GoldenSuite{}).Where("arch_process_id = ?", id).Count(&suiteCount).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "检查黄金套件引用失败"})
+		return
+	}
+	if suiteCount > 0 {
+		c.JSON(http.StatusConflict, gin.H{"error": "该标准架构进程已被黄金契约套件引用，禁止删除"})
+		return
+	}
+
 	// 级联解绑已装载模块
 	_ = models.DB.Model(&models.Module{}).Where("arch_process_id = ?", id).Update("arch_process_id", nil).Error
 

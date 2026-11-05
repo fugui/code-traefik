@@ -35,7 +35,7 @@ func SetupWithDB(db *gorm.DB) error {
 		return fmt.Errorf("检测并清理旧版表结构失败: %w", err)
 	}
 
-	// 1. 自动迁移标准实体表（15 张核心 traefik_* 表 + 平台公共审计/用户表）
+	// 1. 自动迁移标准实体表（17 张核心 traefik_* 表 + 平台公共审计/用户表，ADR-14）
 	if err := DB.AutoMigrate(
 		&Department{},
 		&User{},
@@ -55,6 +55,8 @@ func SetupWithDB(db *gorm.DB) error {
 		&RecordingSession{},
 		&ReplayTask{},
 		&ReplayItem{},
+		&GoldenSuite{},
+		&GoldenSuiteItem{},
 	); err != nil {
 		return fmt.Errorf("迁移数据表结构失败: %w", err)
 	}
@@ -122,6 +124,15 @@ BEGIN
         ALTER TABLE traefik_proto_schemas DROP CONSTRAINT chk_traefik_proto_category;
     END IF;
     ALTER TABLE traefik_proto_schemas ADD CONSTRAINT chk_traefik_proto_category CHECK (category IN ('BASE_LIB', 'BUSINESS', 'GATEWAY'));
+
+    -- traefik_golden_suites 状态检查约束 (F-25, ADR-14)
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_traefik_golden_suite_status') THEN
+        ALTER TABLE traefik_golden_suites DROP CONSTRAINT chk_traefik_golden_suite_status;
+    END IF;
+    ALTER TABLE traefik_golden_suites ADD CONSTRAINT chk_traefik_golden_suite_status CHECK (status IN ('ACTIVE', 'ARCHIVED'));
+
+    -- 移除旧版 uk_traefik_replay_task_item 索引（若存在），由 uk_traefik_replay_task_seq 替代
+    DROP INDEX IF EXISTS uk_traefik_replay_task_item;
 END $$;`
 	if err := DB.Exec(protoConstraintSQL).Error; err != nil {
 		return fmt.Errorf("更新描述集检查约束失败: %w", err)
@@ -133,6 +144,9 @@ END $$;`
 		`CREATE INDEX IF NOT EXISTS idx_traefik_proto_schemas_cat_active ON traefik_proto_schemas (category, is_active);`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS uk_traefik_proc_agent_port ON traefik_processes (agent_id, effective_listen_port) WHERE effective_listen_port > 0;`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS uk_traefik_proc_agent_arch ON traefik_processes (agent_id, arch_process_id);`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uk_traefik_golden_suite_code ON traefik_golden_suites (code);`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uk_traefik_golden_item_order ON traefik_golden_suite_items (suite_id, order_no);`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uk_traefik_replay_task_seq ON traefik_replay_items (task_id, seq_no);`,
 	}
 	for _, idxSQL := range partialIndexes {
 		if err := DB.Exec(idxSQL).Error; err != nil {
@@ -256,11 +270,37 @@ BEGIN
         FOREIGN KEY (schema_id) REFERENCES traefik_proto_schemas(id)
         ON UPDATE CASCADE ON DELETE CASCADE;
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_traefik_replay_task_session') THEN
-        ALTER TABLE traefik_replay_tasks
-        ADD CONSTRAINT fk_traefik_replay_task_session
-        FOREIGN KEY (session_id) REFERENCES traefik_recording_sessions(id)
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_traefik_replay_task_session') THEN
+        ALTER TABLE traefik_replay_tasks DROP CONSTRAINT fk_traefik_replay_task_session;
+    END IF;
+    ALTER TABLE traefik_replay_tasks
+    ADD CONSTRAINT fk_traefik_replay_task_session
+    FOREIGN KEY (session_id) REFERENCES traefik_recording_sessions(id)
+    ON UPDATE CASCADE ON DELETE SET NULL;
+
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_traefik_golden_suites_arch_proc') THEN
+        ALTER TABLE traefik_golden_suites
+        ADD CONSTRAINT fk_traefik_golden_suites_arch_proc
+        FOREIGN KEY (arch_process_id) REFERENCES traefik_arch_processes(id)
         ON UPDATE CASCADE ON DELETE RESTRICT;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_traefik_golden_suite_items_suite') THEN
+        ALTER TABLE traefik_golden_suite_items
+        ADD CONSTRAINT fk_traefik_golden_suite_items_suite
+        FOREIGN KEY (suite_id) REFERENCES traefik_golden_suites(id)
+        ON UPDATE CASCADE ON DELETE CASCADE;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_traefik_replay_task_suite') THEN
+        ALTER TABLE traefik_replay_tasks
+        ADD CONSTRAINT fk_traefik_replay_task_suite
+        FOREIGN KEY (golden_suite_id) REFERENCES traefik_golden_suites(id)
+        ON UPDATE CASCADE ON DELETE SET NULL;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_traefik_replay_item_suite_item') THEN
+        ALTER TABLE traefik_replay_items
+        ADD CONSTRAINT fk_traefik_replay_item_suite_item
+        FOREIGN KEY (suite_item_id) REFERENCES traefik_golden_suite_items(id)
+        ON UPDATE CASCADE ON DELETE SET NULL;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_traefik_replay_task_arch_proc') THEN
         ALTER TABLE traefik_replay_tasks
@@ -332,6 +372,8 @@ func cleanLegacyTablesIfNeeded(db *gorm.DB) error {
 		cleanSQL := `
 			DROP TABLE IF EXISTS traefik_replay_items CASCADE;
 			DROP TABLE IF EXISTS traefik_replay_tasks CASCADE;
+			DROP TABLE IF EXISTS traefik_golden_suite_items CASCADE;
+			DROP TABLE IF EXISTS traefik_golden_suites CASCADE;
 			DROP TABLE IF EXISTS traefik_traffic_records CASCADE;
 			DROP TABLE IF EXISTS traefik_recording_sessions CASCADE;
 			DROP TABLE IF EXISTS traefik_process_modules CASCADE;

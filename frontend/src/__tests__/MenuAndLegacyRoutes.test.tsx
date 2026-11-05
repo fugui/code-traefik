@@ -9,7 +9,7 @@ function getRedirectTarget(html: string): string | null {
   return match ? match[1].replace(/&amp;/g, '&') : null;
 }
 
-export function testMenuStructure_FourGroupsNineItems(): void {
+export function testMenuStructure_FourGroupsTenItems(): void {
   // 1. 严格包含 全局概览、契约核验与回归、架构与契约、环境与治理 4 个分组
   expect(traefikMenuConfig.groups.length).toBe(4);
   expect(traefikMenuConfig.groups[0].title).toBe('全局概览');
@@ -18,18 +18,19 @@ export function testMenuStructure_FourGroupsNineItems(): void {
   expect(traefikMenuConfig.groups[3].title).toBe('环境与治理');
 
   const allItems = traefikMenuConfig.groups.flatMap((g) => g.items);
-  // 严格共 9 个子项（第 10 项 /golden-suites 留待 M15 挂载，严禁在 M14 暴露空壳）
-  expect(allItems.length).toBe(9);
+  // 严格共 10 个子项（第 10 项 /golden-suites 已在 M15 正式挂载交付）
+  expect(allItems.length).toBe(10);
 
   const group0Paths = traefikMenuConfig.groups[0].items.map((i) => i.path);
   expect(group0Paths).toEqual(['/dashboard']);
   expect(traefikMenuConfig.groups[0].items[0].label).toBe('治理大盘');
 
   const group1Paths = traefikMenuConfig.groups[1].items.map((i) => i.path);
-  expect(group1Paths).toEqual(['/record', '/debug', '/replay']);
+  expect(group1Paths).toEqual(['/record', '/debug', '/replay', '/golden-suites']);
   expect(traefikMenuConfig.groups[1].items[0].label).toBe('契约采集');
   expect(traefikMenuConfig.groups[1].items[1].label).toBe('事务分析');
   expect(traefikMenuConfig.groups[1].items[2].label).toBe('防劣化回归');
+  expect(traefikMenuConfig.groups[1].items[3].label).toBe('黄金用例库');
 
   const group2Paths = traefikMenuConfig.groups[2].items.map((i) => i.path);
   expect(group2Paths).toEqual(['/topology', '/architecture', '/schemas']);
@@ -42,8 +43,8 @@ export function testMenuStructure_FourGroupsNineItems(): void {
   expect(traefikMenuConfig.groups[3].items[0].label).toBe('Agent 与进程');
   expect(traefikMenuConfig.groups[3].items[1].label).toBe('模块参数配置');
 
-  // 严禁存在 /golden-suites 空壳项
-  expect(allItems.some((i) => i.path === '/golden-suites')).toBe(false);
+  // 必须存在 /golden-suites
+  expect(allItems.some((i) => i.path === '/golden-suites')).toBe(true);
 
   // 2. 模块根默认路径 path === '/traefik/dashboard'
   expect(DEFAULT_ENTRY_PATH).toBe('/traefik/dashboard');
@@ -103,8 +104,8 @@ export function testLegacyDeepLinks_LosslessRedirect(): void {
 }
 
 describe('MenuAndLegacyRoutes Test Suite', () => {
-  it('TC-MENU-01: 四组九项菜单结构与 /dashboard 默认落地路径校验', () => {
-    testMenuStructure_FourGroupsNineItems();
+  it('TC-MENU-01: 四组十项菜单结构与 /dashboard 默认落地路径校验', () => {
+    testMenuStructure_FourGroupsTenItems();
   });
 
   it('TC-MENU-02: 历史旧路由带参无损平滑重定向校验', () => {

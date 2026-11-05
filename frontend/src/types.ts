@@ -4,6 +4,7 @@ export * from './types/schema';
 export * from './types/schema_tree';
 export * from './types/traffic';
 export * from './types/replay';
+export * from './types/golden_suite';
 
 export interface PaginatedResponse<T> {
   items: T[];

@@ -340,17 +340,35 @@ func GetReplayItemDetail(c *gin.Context) {
 	dec := GlobalDecoderRegistry
 	db := models.DB
 	if db != nil {
-		var baseRec models.TrafficRecord
-		if err := db.WithContext(c.Request.Context()).Where("id = ?", item.RecordID).First(&baseRec).Error; err == nil {
-			if len(baseRec.RawRspPacket) > 0 {
-				segCount := baseRec.RspSegCount
-				if segCount <= 0 {
-					segCount = 1
-				}
-				baseAnatomy, bErr := recorder.BuildSingleFrameSide(baseRec.RawRspPacket, baseRec.IsTruncated, baseRec.IsReplayable, true, segCount, dec)
-				if bErr == nil {
-					resp.BaselineRspAnatomy = baseAnatomy
-				}
+		var baseRsp []byte
+		var segCount int = 1
+		var isTruncated, isReplayable bool = false, true
+
+		if item.RecordID != nil {
+			var baseRec models.TrafficRecord
+			if err := db.WithContext(c.Request.Context()).Where("id = ?", *item.RecordID).First(&baseRec).Error; err == nil {
+				baseRsp = baseRec.RawRspPacket
+				segCount = baseRec.RspSegCount
+				isTruncated = baseRec.IsTruncated
+				isReplayable = baseRec.IsReplayable
+			}
+		} else if item.SuiteItemID != nil {
+			var suiteItem models.GoldenSuiteItem
+			if err := db.WithContext(c.Request.Context()).Where("id = ?", *item.SuiteItemID).First(&suiteItem).Error; err == nil {
+				baseRsp = suiteItem.RawRspPacket
+				segCount = suiteItem.RspSegCount
+				isTruncated = false
+				isReplayable = true
+			}
+		}
+
+		if len(baseRsp) > 0 {
+			if segCount <= 0 {
+				segCount = 1
+			}
+			baseAnatomy, bErr := recorder.BuildSingleFrameSide(baseRsp, isTruncated, isReplayable, true, segCount, dec)
+			if bErr == nil {
+				resp.BaselineRspAnatomy = baseAnatomy
 			}
 		}
 	}

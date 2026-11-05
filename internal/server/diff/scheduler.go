@@ -41,11 +41,13 @@ type CreateReplayTaskReq struct {
 	SelectedRecordIDs []uint64 `json:"selected_record_ids" binding:"required"`
 	ExtraIgnorePaths  []string `json:"extra_ignore_paths"`
 	TimeoutMs         int      `json:"timeout_ms"`
+	TriggerSource     string   `json:"trigger_source"`
 }
 
 // ReplayTaskListQuery 任务列表筛选
 type ReplayTaskListQuery struct {
 	SessionID       uint64 `form:"session_id"`
+	GoldenSuiteID   uint64 `form:"golden_suite_id"`
 	TargetProcessID uint64 `form:"target_process_id"`
 	AgentID         uint64 `form:"agent_id"`
 	LifecycleState  string `form:"lifecycle_state"`
@@ -211,11 +213,18 @@ func (s *ReplayScheduler) CreateAndExecuteTask(
 		archPID = sourceSnap.ArchProcessID
 	}
 
+	triggerSource := req.TriggerSource
+	if triggerSource == "" {
+		triggerSource = models.TriggerSourceManual
+	}
+	sessID := req.SessionID
+
 	task := &models.ReplayTask{
 		TaskNo:            taskNo,
 		Name:              req.Name,
+		TriggerSource:     triggerSource,
 		OwnerID:           userID,
-		SessionID:         req.SessionID,
+		SessionID:         &sessID,
 		ArchProcessID:     archPID,
 		SourceProcessID:   srcPIDPtr,
 		TargetProcessID:   tgtPIDPtr,
@@ -520,9 +529,10 @@ EVALUATE:
 			actualStatusVal = models.U64Numeric(diffResult.ActualStatus)
 		}
 
+		recID := rec.ID
 		replayItem := models.ReplayItem{
 			TaskID:          task.ID,
-			RecordID:        rec.ID,
+			RecordID:        &recID,
 			SeqNo:           int64(i + 1),
 			ServiceName:     rec.ServiceName,
 			Operation:       rec.Operation,
@@ -634,14 +644,24 @@ func (s *ReplayScheduler) RediffTask(
 	passedCount := 0
 
 	for _, item := range items {
-		// 查询关联 Baseline 记录
-		var baseRec models.TrafficRecord
-		_ = s.db.WithContext(ctx).Where("id = ?", item.RecordID).First(&baseRec).Error
+		// 查询关联 Baseline 记录或黄金用例自包含快照
+		var baseRsp []byte
+		if item.RecordID != nil {
+			var baseRec models.TrafficRecord
+			if err := s.db.WithContext(ctx).Where("id = ?", *item.RecordID).First(&baseRec).Error; err == nil {
+				baseRsp = baseRec.RawRspPacket
+			}
+		} else if item.SuiteItemID != nil {
+			var suiteItem models.GoldenSuiteItem
+			if err := s.db.WithContext(ctx).Where("id = ?", *item.SuiteItemID).First(&suiteItem).Error; err == nil {
+				baseRsp = suiteItem.RawRspPacket
+			}
+		}
 
 		itemStatus := models.ReplayResultPass
 		var fieldDiffs []FieldDiff
 
-		diffResult, payloadIdentical, err := DiffLayer1Header(baseRec.RawRspPacket, item.RawActualPacket)
+		diffResult, payloadIdentical, err := DiffLayer1Header(baseRsp, item.RawActualPacket)
 		if err != nil || (diffResult != nil && diffResult.Status == models.ReplayResultFailed) {
 			itemStatus = models.ReplayResultFailed
 			if diffResult != nil {
@@ -649,10 +669,10 @@ func (s *ReplayScheduler) RediffTask(
 			}
 		} else if !payloadIdentical && s.dec != nil {
 			op := s.dec.LookupOperation(item.ServiceName, item.Operation)
-			parsedExp, _ := crosrpc.ParsePacket(baseRec.RawRspPacket)
+			parsedExp, _ := crosrpc.ParsePacket(baseRsp)
 			parsedAct, _ := crosrpc.ParsePacket(item.RawActualPacket)
 			if parsedExp != nil && parsedAct != nil {
-				expPl := baseRec.RawRspPacket[parsedExp.PayloadOffset:]
+				expPl := baseRsp[parsedExp.PayloadOffset:]
 				actPl := item.RawActualPacket[parsedAct.PayloadOffset:]
 				fd, _ := DiffLayer2ProtoSemantic(expPl, actPl, op, extraIgnorePaths)
 				if len(fd) > 0 {
@@ -696,7 +716,7 @@ func (s *ReplayScheduler) RediffTask(
 // GetTask 获取单个任务
 func (s *ReplayScheduler) GetTask(ctx context.Context, taskID uint64, userID uint, isAdmin bool) (*models.ReplayTask, error) {
 	var task models.ReplayTask
-	if err := s.db.WithContext(ctx).Preload("Session").Preload("TargetProcess").Where("id = ?", taskID).First(&task).Error; err != nil {
+	if err := s.db.WithContext(ctx).Preload("Session").Preload("GoldenSuite").Preload("TargetProcess").Where("id = ?", taskID).First(&task).Error; err != nil {
 		return nil, ErrTaskNotFound
 	}
 	if task.OwnerID != userID && !isAdmin {
@@ -713,6 +733,9 @@ func (s *ReplayScheduler) ListTasks(ctx context.Context, query ReplayTaskListQue
 	}
 	if query.SessionID > 0 {
 		db = db.Where("session_id = ?", query.SessionID)
+	}
+	if query.GoldenSuiteID > 0 {
+		db = db.Where("golden_suite_id = ?", query.GoldenSuiteID)
 	}
 	if query.TargetProcessID > 0 {
 		db = db.Where("target_process_id = ?", query.TargetProcessID)
@@ -793,4 +816,404 @@ func (s *ReplayScheduler) GetItem(ctx context.Context, taskID, itemID uint64, us
 		return nil, errors.New("403 Forbidden")
 	}
 	return &item, nil
+}
+
+// ExecuteGoldenSuite 触发黄金契约套件脱机回归执行 (F-25, ADR-14)
+func (s *ReplayScheduler) ExecuteGoldenSuite(
+	ctx context.Context,
+	suiteID uint64,
+	envAgentID uint64,
+	triggerSource string,
+	userID uint,
+	isAdmin bool,
+	timeoutMs int,
+) (*models.ReplayTask, error) {
+	// 1. 加载套件及用例
+	var suite models.GoldenSuite
+	if err := s.db.WithContext(ctx).Preload("ArchProcess").Preload("Items", func(db *gorm.DB) *gorm.DB {
+		return db.Order("order_no ASC")
+	}).Where("id = ?", suiteID).First(&suite).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("404 Not Found: 黄金契约套件不存在")
+		}
+		return nil, fmt.Errorf("查询黄金套件失败: %w", err)
+	}
+
+	if len(suite.Items) == 0 {
+		return nil, errors.New("400 Bad Request: 黄金套件中无可用用例")
+	}
+
+	// 2. 加载目标 Agent 并进行 Anti-IDOR 校验
+	var agent models.Agent
+	if err := s.db.WithContext(ctx).Where("id = ?", envAgentID).First(&agent).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("404 Not Found: 目标环境 Agent 不存在")
+		}
+		return nil, fmt.Errorf("查询目标 Agent 失败: %w", err)
+	}
+	if agent.Scope == models.ScopePrivate && (agent.OwnerID == nil || *agent.OwnerID != userID) && !isAdmin {
+		return nil, ErrForbiddenPrivateAgent
+	}
+
+	// 3. 查找该 Agent 上绑定的与 suite.ArchProcessID 匹配的目标进程
+	var targetProc models.Process
+	if err := s.db.WithContext(ctx).Preload("ArchProcess").
+		Where("agent_id = ? AND arch_process_id = ?", envAgentID, suite.ArchProcessID).
+		First(&targetProc).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("400 Bad Request: 目标环境 Agent 未挂载该黄金套件对应的标准架构进程")
+		}
+		return nil, fmt.Errorf("查询目标进程失败: %w", err)
+	}
+	targetProc.Agent = &agent
+
+	// 4. 检查进程就绪状态
+	if targetProc.ProbeStatus == models.ProbeStatusDisarmed || targetProc.NeedReconnect {
+		return nil, errors.New("409 Conflict: 目标进程探针未就绪 (NEED_RECONNECT)")
+	}
+
+	if timeoutMs <= 0 {
+		timeoutMs = 30000
+	}
+	if triggerSource == "" {
+		triggerSource = models.TriggerSourceGoldenSuite
+	}
+
+	// 5. 创建 ReplayTask
+	now := time.Now()
+	taskNo := fmt.Sprintf("REP_GS_%s_%d", now.Format("20060102150405"), now.UnixNano()%1000)
+	tgtPID := targetProc.ID
+
+	task := &models.ReplayTask{
+		TaskNo:            taskNo,
+		Name:              fmt.Sprintf("[%s] %s 脱机回归", suite.Code, suite.Name),
+		TriggerSource:     triggerSource,
+		OwnerID:           userID,
+		SessionID:         nil,
+		GoldenSuiteID:     &suite.ID,
+		ArchProcessID:     suite.ArchProcessID,
+		TargetProcessID:   &tgtPID,
+		AgentID:           envAgentID,
+		SelectedRecordIDs: datatypes.JSON([]byte("[]")),
+		ExtraIgnorePaths:  suite.ExtraIgnorePaths,
+		TimeoutMs:         timeoutMs,
+		LifecycleState:    "ARMED",
+		TotalRequests:     len(suite.Items),
+		CreatedBy:         userID,
+		CreatedAt:         now,
+		UpdatedAt:         now,
+	}
+
+	if err := s.db.WithContext(ctx).Create(task).Error; err != nil {
+		return nil, fmt.Errorf("创建脱机回归任务失败: %w", err)
+	}
+
+	// 6. 获取目标 Agent 的排他租约
+	leaseTTL := time.Duration(timeoutMs/1000+120) * time.Second
+	if err := hub.AcquireAgentLeases(ctx, s.db, []uint64{envAgentID}, models.AgentLeaseReplay, task.ID, userID, leaseTTL); err != nil {
+		s.db.WithContext(ctx).Model(task).Updates(map[string]interface{}{
+			"lifecycle_state": "FAILED",
+			"error_message":   err.Error(),
+		})
+		return nil, err
+	}
+
+	// 7. 异步执行重放与回归断言
+	procCopy := targetProc
+	suiteCopy := suite
+	go s.executeGoldenSuiteAsync(task, &procCopy, &suiteCopy, suite.Items)
+
+	commonAudit.Push(&models.SysAuditLog{
+		CreatedAt:  time.Now(),
+		Service:    config.ServiceName,
+		Module:     config.ModuleKey,
+		Action:     "execute_golden_suite",
+		Level:      "P2",
+		Summary:    fmt.Sprintf("发起黄金契约套件脱机回归: suite=%s, items=%d, targetProc=%s", suite.Code, len(suite.Items), targetProc.Name),
+		TargetType: "golden_suite",
+		TargetID:   fmt.Sprintf("%d", suite.ID),
+		UserID:     userID,
+		Username:   fmt.Sprintf("user_%d", userID),
+		StatusCode: 201,
+	})
+
+	return task, nil
+}
+
+func (s *ReplayScheduler) executeGoldenSuiteAsync(
+	task *models.ReplayTask,
+	targetProc *models.Process,
+	suite *models.GoldenSuite,
+	items []models.GoldenSuiteItem,
+) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(task.TimeoutMs+10000)*time.Millisecond)
+	defer cancel()
+
+	defer func() {
+		_ = hub.ReleaseAgentLeases(context.Background(), s.db, []uint64{task.AgentID}, models.AgentLeaseReplay, task.ID)
+	}()
+
+	var ingressRequests [][]byte
+	var ingressItems []agentproto.ReplayIngressItem
+	scopedEgressMocks := make(map[uint64][]agentproto.MockRuleDownstream)
+	var historyEgressEndpoints []agentproto.DownstreamEndpoint
+	seenHistoryEP := make(map[string]bool)
+	var egressMocks [][]byte
+
+	for _, item := range items {
+		ingressRequests = append(ingressRequests, item.RawReqPacket)
+		ingressItems = append(ingressItems, agentproto.ReplayIngressItem{
+			RecordID: item.ID,
+			RawReq:   item.RawReqPacket,
+		})
+
+		if len(item.ScopedMocks) > 0 {
+			var mocks []agentproto.MockRuleDownstream
+			if err := json.Unmarshal(item.ScopedMocks, &mocks); err == nil && len(mocks) > 0 {
+				scopedEgressMocks[item.ID] = mocks
+				for _, m := range mocks {
+					if len(m.RspPackets) > 0 {
+						for _, rp := range m.RspPackets {
+							egressMocks = append(egressMocks, rp)
+						}
+					} else if len(m.ReqPacket) > 0 {
+						egressMocks = append(egressMocks, m.ReqPacket)
+					}
+				}
+			}
+		}
+
+		if len(item.EgressEndpoints) > 0 {
+			var eps []agentproto.DownstreamEndpoint
+			if err := json.Unmarshal(item.EgressEndpoints, &eps); err == nil {
+				for _, ep := range eps {
+					key := fmt.Sprintf("%s:%d", ep.IP, ep.Port)
+					if !seenHistoryEP[key] {
+						seenHistoryEP[key] = true
+						historyEgressEndpoints = append(historyEgressEndpoints, ep)
+					}
+				}
+			}
+		}
+	}
+
+	downstreams, _ := topology.CompileProcessDownstreams(s.db, targetProc.ID, nil, historyEgressEndpoints)
+	targetProc.FillFromArchProcess()
+	spec := agentproto.ProcessMonitorSpec{
+		ProcessID:   targetProc.ID,
+		ListenPort:  uint16(targetProc.EffectiveListenPort),
+		CmdPattern:  targetProc.CmdPattern,
+		Downstreams: downstreams,
+	}
+
+	execReq := agentproto.ExecuteReplayReq{
+		TaskID:            task.ID,
+		ProcessSpec:       spec,
+		TimeoutMs:         task.TimeoutMs,
+		IngressRequests:   ingressRequests,
+		EgressMocks:       egressMocks,
+		IngressItems:      ingressItems,
+		ScopedEgressMocks: scopedEgressMocks,
+	}
+
+	body, _ := json.Marshal(execReq)
+	url := fmt.Sprintf("%s/agent/v1/replays/execute", targetProc.Agent.Endpoint)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		s.markTaskFailed(task.ID, err.Error())
+		return
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	if targetProc.Agent.ClaimCode != "" {
+		httpReq.Header.Set(agentproto.HeaderClaimCode, targetProc.Agent.ClaimCode)
+	}
+
+	resp, err := s.httpClient.Do(httpReq)
+	if err != nil {
+		s.markTaskFailed(task.ID, fmt.Sprintf("调用 Agent 失败: %v", err))
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		var errResp struct {
+			Error string `json:"error"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&errResp)
+		msg := errResp.Error
+		if msg == "" {
+			msg = fmt.Sprintf("Agent 返回状态码 %d", resp.StatusCode)
+		}
+		s.markTaskFailed(task.ID, msg)
+		return
+	}
+
+	startedAt := time.Now()
+	s.db.Model(&models.ReplayTask{}).Where("id = ?", task.ID).Updates(map[string]interface{}{
+		"lifecycle_state": "INJECTING",
+		"started_at":      &startedAt,
+	})
+
+	ticker := time.NewTicker(200 * time.Millisecond)
+	defer ticker.Stop()
+
+	var result *agentproto.ReplayTaskResultResp
+	pollURL := fmt.Sprintf("%s/agent/v1/replays/%d/result", targetProc.Agent.Endpoint, task.ID)
+
+	for {
+		select {
+		case <-ctx.Done():
+			s.markTaskFailed(task.ID, "等待重放执行超时")
+			return
+		case <-ticker.C:
+			pReq, _ := http.NewRequestWithContext(ctx, http.MethodGet, pollURL, nil)
+			if targetProc.Agent.ClaimCode != "" {
+				pReq.Header.Set(agentproto.HeaderClaimCode, targetProc.Agent.ClaimCode)
+			}
+			pResp, pErr := s.httpClient.Do(pReq)
+			if pErr == nil && pResp.StatusCode == http.StatusOK {
+				var res agentproto.ReplayTaskResultResp
+				if decErr := json.NewDecoder(pResp.Body).Decode(&res); decErr == nil {
+					_ = pResp.Body.Close()
+					result = &res
+					goto EVALUATE_SUITE
+				}
+				_ = pResp.Body.Close()
+			}
+		}
+	}
+
+EVALUATE_SUITE:
+	var itemStatuses []string
+	var mockHitCount, mockMissCount int
+	if result != nil {
+		mockHitCount = result.MockHitCount
+		mockMissCount = result.MockMissCount
+	}
+
+	detailMap := make(map[uint64]agentproto.ReplayItemDetail)
+	if result != nil && result.Details != "" {
+		var details []agentproto.ReplayItemDetail
+		if err := json.Unmarshal([]byte(result.Details), &details); err == nil {
+			for _, d := range details {
+				detailMap[d.RecordID] = d
+			}
+		}
+	}
+
+	var suiteIgnorePaths []string
+	if len(suite.ExtraIgnorePaths) > 0 {
+		_ = json.Unmarshal(suite.ExtraIgnorePaths, &suiteIgnorePaths)
+	}
+
+	for i, item := range items {
+		itemStatus := models.ReplayResultPass
+		var fieldDiffs []FieldDiff
+		var diffResult *DiffResult
+
+		expectedRsp := item.RawRspPacket
+		actualRsp := item.RawRspPacket
+
+		if d, ok := detailMap[item.ID]; ok {
+			if len(d.ActualRspHex) > 0 {
+				if hBytes, hErr := hex.DecodeString(d.ActualRspHex); hErr == nil && len(hBytes) > 0 {
+					actualRsp = hBytes
+				}
+			}
+			if d.Status != "" {
+				itemStatus = d.Status
+			}
+		}
+
+		if itemStatus != models.ReplayResultMockMiss && itemStatus != models.ReplayResultTimeout && itemStatus != models.ReplayResultError {
+			// 第一层协议头断言
+			diffRes, payloadIdentical, dErr := DiffLayer1Header(expectedRsp, actualRsp)
+			diffResult = diffRes
+			if dErr != nil || (diffResult != nil && diffResult.Status == models.ReplayResultFailed) {
+				itemStatus = models.ReplayResultFailed
+				if diffResult != nil {
+					fieldDiffs = diffResult.FieldDiffs
+				}
+			} else if !payloadIdentical && s.dec != nil {
+				// 第二层语义树比对
+				var itemMaskRules []models.MaskRule
+				if len(item.MaskRulesJSON) > 0 {
+					_ = json.Unmarshal(item.MaskRulesJSON, &itemMaskRules)
+				}
+				combinedIgnore := append([]string{}, suiteIgnorePaths...)
+				for _, mr := range itemMaskRules {
+					p := strings.TrimSpace(mr.Path)
+					if p != "" {
+						combinedIgnore = append(combinedIgnore, p)
+						if strings.HasPrefix(p, "rsp.") {
+							combinedIgnore = append(combinedIgnore, strings.TrimPrefix(p, "rsp."))
+						}
+					}
+				}
+
+				op := s.dec.LookupOperation(item.ServiceName, item.Operation)
+				parsedExp, _ := crosrpc.ParsePacket(expectedRsp)
+				parsedAct, _ := crosrpc.ParsePacket(actualRsp)
+				if parsedExp != nil && parsedAct != nil {
+					expPl := expectedRsp[parsedExp.PayloadOffset:]
+					actPl := actualRsp[parsedAct.PayloadOffset:]
+					fd, fErr := DiffLayer2ProtoSemantic(expPl, actPl, op, combinedIgnore)
+					if len(fd) > 0 || fErr != nil {
+						itemStatus = models.ReplayResultFailed
+						fieldDiffs = append(fieldDiffs, fd...)
+					}
+				}
+			}
+		}
+
+		if _, ok := detailMap[item.ID]; !ok && result != nil && result.Status == models.ReplayResultMockMiss {
+			itemStatus = models.ReplayResultMockMiss
+		}
+
+		itemStatuses = append(itemStatuses, itemStatus)
+		diffBytes, _ := json.Marshal(fieldDiffs)
+
+		actualStatusVal := models.U64Numeric(0)
+		baselineStatusVal := item.BaselineStatus
+		if diffResult != nil {
+			actualStatusVal = models.U64Numeric(diffResult.ActualStatus)
+		}
+
+		curItemID := item.ID
+		replayItem := models.ReplayItem{
+			TaskID:          task.ID,
+			SuiteItemID:     &curItemID,
+			RecordID:        nil,
+			SeqNo:           int64(i + 1),
+			ServiceName:     item.ServiceName,
+			Operation:       item.Operation,
+			ResultStatus:    itemStatus,
+			LatencyUs:       100,
+			ActualStatus:    actualStatusVal,
+			BaselineStatus:  baselineStatusVal,
+			FieldDiffs:      datatypes.JSON(diffBytes),
+			RawActualPacket: actualRsp,
+			CreatedAt:       time.Now(),
+		}
+		_ = s.db.Create(&replayItem).Error
+	}
+
+	finalStatus := AggregateReplayStatus(itemStatuses)
+	finishedAt := time.Now()
+	passedCount := 0
+	for _, st := range itemStatuses {
+		if st == models.ReplayResultPass {
+			passedCount++
+		}
+	}
+
+	s.db.Model(&models.ReplayTask{}).Where("id = ?", task.ID).Updates(map[string]interface{}{
+		"lifecycle_state": "FINISHED",
+		"result_status":   finalStatus,
+		"finished_at":     &finishedAt,
+		"total_requests":  len(items),
+		"passed_requests": passedCount,
+		"mock_hit_count":  mockHitCount,
+		"mock_miss_count": mockMissCount,
+	})
 }

@@ -13,6 +13,7 @@ import {
   LogOut,
   Moon,
   Sun,
+  Sparkles,
 } from 'lucide-react';
 import {
   AUTH_TOKEN_KEY,
@@ -43,6 +44,7 @@ import ArchitectureWorkbenchPage from './pages/ArchitectureWorkbenchPage';
 import ProtoSchemaWorkbenchPage from './pages/ProtoSchemaWorkbenchPage';
 import AgentManagementPage from './pages/AgentManagementPage';
 import AdminSettingsPage from './pages/AdminSettingsPage';
+import { GoldenSuitesWorkbenchPage } from './pages/GoldenSuitesWorkbenchPage';
 import type { CurrentUserProfile } from './types';
 import './index.css';
 
@@ -117,6 +119,8 @@ const renderNavIcon = (path: string) => {
       return <Layers size={16} />;
     case '/schemas':
       return <FileCode size={16} />;
+    case '/golden-suites':
+      return <Sparkles size={16} />;
     case '/agents':
       return <Server size={16} />;
     case '/admin/settings':
@@ -154,6 +158,8 @@ export const EmbeddedRoutes: React.FC = () => {
       <Route path={`${MODULE_BASE_PATH}/debug`} element={<TrafficDebugWorkbenchPage />} />
       <Route path="/replay" element={<ReplayWorkbenchPage />} />
       <Route path={`${MODULE_BASE_PATH}/replay`} element={<ReplayWorkbenchPage />} />
+      <Route path="/golden-suites" element={<GoldenSuitesWorkbenchPage />} />
+      <Route path={`${MODULE_BASE_PATH}/golden-suites`} element={<GoldenSuitesWorkbenchPage />} />
       <Route path="/topology" element={<TopologyWorkbenchPage />} />
       <Route path={`${MODULE_BASE_PATH}/topology`} element={<TopologyWorkbenchPage />} />
       <Route path="/architecture" element={<ArchitectureRouteWrapper isEmbedded />} />
@@ -291,6 +297,7 @@ export const StandaloneShell: React.FC<{ onLogout: () => void }> = ({ onLogout }
             <Route path="/traffic" element={<LegacyRouteRedirect to="/debug" />} />
             <Route path="/debug" element={<TrafficDebugWorkbenchPage />} />
             <Route path="/replay" element={<ReplayWorkbenchPage />} />
+            <Route path="/golden-suites" element={<GoldenSuitesWorkbenchPage />} />
             <Route path="/topology" element={<TopologyWorkbenchPage />} />
             <Route path="/architecture" element={<ArchitectureRouteWrapper />} />
             <Route path="/schemas" element={<ProtoSchemaWorkbenchPage />} />

@@ -9,6 +9,7 @@ interface TransactionCallTreeTableProps {
   onSelectRecordForAnatomy: (record: TrafficRecordSummary) => void;
   onOpenSequenceDrawer: (rootRecordId: string) => void;
   onSinglePacketReplay?: (record: TrafficRecordSummary) => void;
+  onCurateRecord?: (record: TrafficRecordSummary, relatedIds: number[]) => void;
   forceExpandAll?: boolean;
 }
 
@@ -18,6 +19,7 @@ export const TransactionCallTreeTable: React.FC<TransactionCallTreeTableProps> =
   onSelectRecordForAnatomy,
   onOpenSequenceDrawer,
   onSinglePacketReplay,
+  onCurateRecord,
   forceExpandAll,
 }) => {
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(() => {
@@ -365,6 +367,34 @@ export const TransactionCallTreeTable: React.FC<TransactionCallTreeTableProps> =
                   }}
                 >
                   🔁 事务重放
+                </button>
+              )}
+              {node.record.direction === 'INGRESS' && node.record.is_replayable && onCurateRecord && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const ids: number[] = [];
+                    const collect = (curr: TransactionTreeNodeDTO) => {
+                      ids.push(Number(curr.record.id));
+                      curr.children?.forEach(collect);
+                    };
+                    collect(node);
+                    onCurateRecord(node.record, ids);
+                  }}
+                  className="code-btn code-btn-warning"
+                  style={{
+                    padding: '3px 8px',
+                    fontSize: '12px',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    backgroundColor: 'var(--color-warning, #d97706)',
+                    border: 'none',
+                    color: '#ffffff',
+                    fontWeight: 500,
+                  }}
+                  data-testid={`btn-curate-record-${node.record.id}`}
+                >
+                  🌟 沉淀为黄金契约
                 </button>
               )}
             </div>

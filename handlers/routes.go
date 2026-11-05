@@ -179,5 +179,15 @@ func RegisterAPIRoutes(r *gin.Engine) {
 
 		// 11. SSE 实时事件流 (GET /api/events)
 		protected.GET("/events", HandleEventsSSE)
+
+		// 12. 黄金契约套件自包含快照库 (F-25, ADR-14)
+		protected.GET("/golden-suites", ListGoldenSuites)
+		protected.GET("/golden-suites/:id", GetGoldenSuite)
+		protected.POST("/golden-suites/curate", CurateGoldenSuite)
+		protected.PUT("/golden-suites/:id", requireAdmin, UpdateGoldenSuite)
+		protected.PUT("/golden-suites/:id/items/:itemId", requireAdmin, UpdateGoldenSuiteItem)
+		protected.DELETE("/golden-suites/:id/items/:itemId", requireAdmin, DeleteGoldenSuiteItem)
+		protected.DELETE("/golden-suites/:id", requireAdmin, DeleteGoldenSuite)
+		protected.POST("/golden-suites/:id/execute", ExecuteGoldenSuite)
 	}
 }

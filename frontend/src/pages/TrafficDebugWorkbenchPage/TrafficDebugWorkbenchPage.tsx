@@ -21,6 +21,7 @@ import { TransactionCallTreeTable } from './TransactionCallTreeTable';
 import { EntityLifecycleFilterStrip } from './EntityLifecycleFilterStrip';
 import { TransactionSequenceDrawer } from './TransactionSequenceDrawer';
 import { SinglePacketReplayDrawer } from './SinglePacketReplayDrawer';
+import { GoldenCurateDrawer } from './GoldenCurateDrawer';
 import { PacketAnatomyDrawer } from '../../components/PacketAnatomyDrawer';
 import './TrafficDebugWorkbenchPage.css';
 
@@ -77,6 +78,11 @@ export const TrafficDebugWorkbenchPage: React.FC = () => {
 
   const [singleReplayDrawerOpen, setSingleReplayDrawerOpen] = useState(false);
   const [recordForReplay, setRecordForReplay] = useState<TrafficRecordSummary | null>(null);
+
+  // 黄金契约沉淀抽屉
+  const [curateDrawerOpen, setCurateDrawerOpen] = useState(false);
+  const [recordForCurate, setRecordForCurate] = useState<TrafficRecordSummary | null>(null);
+  const [curateRelatedIds, setCurateRelatedIds] = useState<number[]>([]);
 
   // 1. 初始化拉取录制批次
   useEffect(() => {
@@ -240,6 +246,12 @@ export const TrafficDebugWorkbenchPage: React.FC = () => {
     setSingleReplayDrawerOpen(true);
   };
 
+  const handleOpenCurate = (record: TrafficRecordSummary, relatedIds: number[]) => {
+    setRecordForCurate(record);
+    setCurateRelatedIds(relatedIds);
+    setCurateDrawerOpen(true);
+  };
+
   const handleOpenSequenceDrawer = (rootRecordId: string) => {
     setSequenceRootRecordId(rootRecordId);
     setSequenceReplayTaskId(undefined);
@@ -304,6 +316,7 @@ export const TrafficDebugWorkbenchPage: React.FC = () => {
             onSelectRecordForAnatomy={(r) => void handleOpenAnatomy(r)}
             onOpenSequenceDrawer={handleOpenSequenceDrawer}
             onSinglePacketReplay={handleOpenSingleReplay}
+            onCurateRecord={handleOpenCurate}
             forceExpandAll={forceExpandAll}
           />
         ) : (
@@ -383,6 +396,16 @@ export const TrafficDebugWorkbenchPage: React.FC = () => {
         allAgents={allAgents}
         currentUserId={user?.id}
         onOpenSequenceWithTask={handleOpenSequenceWithTask}
+      />
+
+      {/* 黄金契约自包含快照沉淀抽屉 */}
+      <GoldenCurateDrawer
+        open={curateDrawerOpen}
+        onClose={() => setCurateDrawerOpen(false)}
+        record={recordForCurate}
+        sessionId={Number(selectedSessionId)}
+        allProcesses={allProcesses}
+        relatedRecordIds={curateRelatedIds}
       />
     </div>
   );

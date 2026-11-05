@@ -106,7 +106,9 @@ func BuildTransactionSequence(
 		var replayItems []models.ReplayItem
 		if err := db.Where("task_id = ?", replayTaskID).Find(&replayItems).Error; err == nil {
 			for i := range replayItems {
-				replayItemMap[replayItems[i].RecordID] = &replayItems[i]
+				if replayItems[i].RecordID != nil {
+					replayItemMap[*replayItems[i].RecordID] = &replayItems[i]
+				}
 			}
 		}
 	}

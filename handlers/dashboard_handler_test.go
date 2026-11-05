@@ -292,7 +292,7 @@ func TestGetDashboardOverview_ExcludesPrivateSessionsAndSingleDebugReplays(t *te
 		Name:              "Alice 单包临时调试重放",
 		TriggerSource:     models.TriggerSourceSingleDebug,
 		OwnerID:           alice.ID,
-		SessionID:         privSession.ID,
+		SessionID:         &privSession.ID,
 		ArchProcessID:     archProc.ID,
 		AgentID:           agent.ID,
 		SelectedRecordIDs: datatypes.JSON(`[1]`),

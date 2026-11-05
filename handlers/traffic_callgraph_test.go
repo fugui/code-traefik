@@ -385,7 +385,7 @@ func TestTrafficCallGraph_AntiIDOR_Security(t *testing.T) {
 		TaskNo:            "REP_ALICE_SEC_01",
 		Name:              "Alice 私有重放任务",
 		OwnerID:           alice.ID,
-		SessionID:         pubSession.ID,
+		SessionID:         &pubSession.ID,
 		ArchProcessID:     archProc.ID,
 		AgentID:           agent.ID,
 		SelectedRecordIDs: datatypes.JSON([]byte(`[1]`)),
