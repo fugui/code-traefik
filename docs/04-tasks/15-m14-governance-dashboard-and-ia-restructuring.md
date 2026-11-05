@@ -1,7 +1,7 @@
 # M14 作战卡：平台级契约治理全景大盘、三维封顶健康指数与信息架构升维
 
 - **里程碑编号**：`M14`
-- **状态**：📋 待实施 (Ready for TDD)
+- **状态**：✅ 已交付 (Completed)
 - **前置依赖**：`M1 ~ M13` 已交付
 - **关联特性**：`F-15`、`F-24`
 - **关联设计规范**：[`14-governance-dashboard-golden-suite-and-ci-gate-adr.md`](../05-adr/14-governance-dashboard-golden-suite-and-ci-gate-adr.md) (ADR-14 v1.1.0)、[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.12.1)、[`01-http-api-contract.md`](../03-api/01-http-api-contract.md) (v1.4.0)

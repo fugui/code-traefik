@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { BrowserRouter, Link, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import {
+  LayoutDashboard,
   Radio,
   Bug,
   RotateCcw,
@@ -33,6 +34,7 @@ import {
 import { ModuleUserProvider, useModuleUser } from './context/ModuleUserContext';
 import { resolveModulePath } from './hooks/useModulePath';
 import { traefikMenuConfig } from './menu';
+import DashboardWorkbenchPage from './pages/DashboardWorkbenchPage';
 import RecordingWorkbenchPage from './pages/RecordingWorkbenchPage';
 import TrafficDebugWorkbenchPage from './pages/TrafficDebugWorkbenchPage';
 import ReplayWorkbenchPage from './pages/ReplayWorkbenchPage';
@@ -101,6 +103,8 @@ export const ArchitectureRouteWrapper: React.FC<{ isEmbedded?: boolean }> = ({ i
 
 const renderNavIcon = (path: string) => {
   switch (path) {
+    case '/dashboard':
+      return <LayoutDashboard size={16} />;
     case '/record':
       return <Radio size={16} />;
     case '/debug':
@@ -126,12 +130,16 @@ const renderNavIcon = (path: string) => {
  * 嵌入模式路由视图：无独立侧边栏与顶栏，同时兼容相对子路径与带模块前缀的完整路径
  */
 export const EmbeddedRoutes: React.FC = () => {
-  const defaultTarget = `${MODULE_BASE_PATH}/record`;
+  const defaultTarget = `${MODULE_BASE_PATH}/dashboard`;
   return (
     <Routes>
       <Route path="/" element={<LegacyRouteRedirect to={defaultTarget} />} />
       <Route path={MODULE_BASE_PATH} element={<LegacyRouteRedirect to={defaultTarget} />} />
       <Route path={`${MODULE_BASE_PATH}/`} element={<LegacyRouteRedirect to={defaultTarget} />} />
+
+      {/* 4 组 9 项置顶概览大盘 */}
+      <Route path="/dashboard" element={<DashboardWorkbenchPage />} />
+      <Route path={`${MODULE_BASE_PATH}/dashboard`} element={<DashboardWorkbenchPage />} />
 
       {/* 历史旧路由无损兼容重定向 */}
       <Route path="/sessions" element={<LegacyRouteRedirect to={`${MODULE_BASE_PATH}/record`} />} />
@@ -139,7 +147,7 @@ export const EmbeddedRoutes: React.FC = () => {
       <Route path="/traffic" element={<LegacyRouteRedirect to={`${MODULE_BASE_PATH}/debug`} />} />
       <Route path={`${MODULE_BASE_PATH}/traffic`} element={<LegacyRouteRedirect to={`${MODULE_BASE_PATH}/debug`} />} />
 
-      {/* 3 组 8 项标准路由 */}
+      {/* 4 组 9 项业务路由 */}
       <Route path="/record" element={<RecordingWorkbenchPage />} />
       <Route path={`${MODULE_BASE_PATH}/record`} element={<RecordingWorkbenchPage />} />
       <Route path="/debug" element={<TrafficDebugWorkbenchPage />} />
@@ -269,14 +277,15 @@ export const StandaloneShell: React.FC<{ onLogout: () => void }> = ({ onLogout }
             <span className="code-tpl-breadcrumb-parent">{MODULE_TITLE}</span>
             <span className="code-tpl-breadcrumb-sep">/</span>
             <span className="code-tpl-breadcrumb-current">
-              {currentMenuItem?.label || '流量录制'}
+              {currentMenuItem?.label || '治理大盘'}
             </span>
           </div>
         </header>
 
         <div className="code-tpl-content-scroll">
           <Routes>
-            <Route path="/" element={<LegacyRouteRedirect to="/record" />} />
+            <Route path="/" element={<LegacyRouteRedirect to="/dashboard" />} />
+            <Route path="/dashboard" element={<DashboardWorkbenchPage />} />
             <Route path="/sessions" element={<LegacyRouteRedirect to="/record" />} />
             <Route path="/record" element={<RecordingWorkbenchPage />} />
             <Route path="/traffic" element={<LegacyRouteRedirect to="/debug" />} />
@@ -287,7 +296,7 @@ export const StandaloneShell: React.FC<{ onLogout: () => void }> = ({ onLogout }
             <Route path="/schemas" element={<ProtoSchemaWorkbenchPage />} />
             <Route path="/agents" element={<AgentManagementPage />} />
             <Route path="/admin/settings" element={<AdminSettingsPage />} />
-            <Route path="*" element={<Navigate to="/record" replace />} />
+            <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
         </div>
       </main>

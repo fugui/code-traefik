@@ -53,6 +53,9 @@ func RegisterAPIRoutes(r *gin.Engine) {
 		protected.PATCH("/password", UpdatePassword)
 		protected.GET("/users", SearchUsers)
 
+		// 2.1 平台级契约治理全景大盘 (F-24, ADR-14)
+		protected.GET("/dashboard/overview", GetDashboardOverview)
+
 		requireAdmin := commonAuth.RequireAdmin(config.AdminRole)
 
 		// 3. 模块管理员专属路由 (Settings)

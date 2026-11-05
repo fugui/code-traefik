@@ -7,32 +7,43 @@ export interface TraefikMenuConfig extends ModuleMenuConfig {
   defaultPath?: string;
 }
 
-export const DEFAULT_ENTRY_PATH = `${MODULE_BASE_PATH}/record`;
-export const DEFAULT_STANDALONE_PATH = '/record';
+export const DEFAULT_ENTRY_PATH = `${MODULE_BASE_PATH}/dashboard`;
+export const DEFAULT_STANDALONE_PATH = '/dashboard';
 
 // 标准侧边栏菜单契约（由 CodeBench 宿主在运行时通过 remoteEntry.js -> ./menu 动态拉取）
-// 按照 ADR-07 重构为「流量作业 ➔ 架构与契约 ➔ 环境与治理」3 组 8 项高频到低频金字塔
+// 按照 ADR-14 升维为「全局概览 ➔ 契约核验与回归 ➔ 架构与契约 ➔ 环境与治理」4 组 9 项金字塔
+// 第 10 项 /golden-suites 留待 M15 挂载，严禁在 M14 暴露空壳页
 export const traefikMenuConfig: TraefikMenuConfig = {
   moduleKey: MODULE_KEY,
   moduleName: MODULE_TITLE,
   defaultPath: DEFAULT_ENTRY_PATH,
   groups: [
     {
-      title: '流量作业',
+      title: '全局概览',
+      items: [
+        {
+          path: '/dashboard',
+          label: '治理大盘',
+          icon: 'M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z',
+        },
+      ],
+    },
+    {
+      title: '契约核验与回归',
       items: [
         {
           path: '/record',
-          label: '流量录制',
+          label: '契约采集',
           icon: 'M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z',
         },
         {
           path: '/debug',
-          label: '流量调试',
+          label: '事务分析',
           icon: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z',
         },
         {
           path: '/replay',
-          label: '流量重放',
+          label: '防劣化回归',
           icon: 'M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15',
         },
       ],

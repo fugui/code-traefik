@@ -7,11 +7,19 @@ import (
 	"gorm.io/datatypes"
 )
 
+const (
+	TriggerSourceManual      = "MANUAL"
+	TriggerSourceSingleDebug = "SINGLE_DEBUG"
+	TriggerSourceGoldenSuite = "GOLDEN_SUITE"
+	TriggerSourceCIGate      = "CI_GATE"
+)
+
 // 14. ReplayTask 跨 Agent 同构离线自愈重放任务头表 (traefik_replay_tasks)
 type ReplayTask struct {
 	ID                uint64            `gorm:"primaryKey;autoIncrement" json:"id"`
 	TaskNo            string            `gorm:"size:64;not null;uniqueIndex:uk_traefik_replay_task_no" json:"task_no"`
 	Name              string            `gorm:"size:128;not null" json:"name"`
+	TriggerSource     string            `gorm:"size:24;not null;default:'MANUAL';index:idx_traefik_replay_trigger;check:chk_traefik_replay_trigger,trigger_source IN ('MANUAL','SINGLE_DEBUG','GOLDEN_SUITE','CI_GATE')" json:"trigger_source"`
 	OwnerID           uint              `gorm:"not null;index:idx_traefik_replay_owner" json:"owner_id"`
 	Owner             *User             `gorm:"foreignKey:OwnerID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"owner,omitempty"`
 	SessionID         uint64            `gorm:"not null;index:idx_traefik_replay_session" json:"session_id"`

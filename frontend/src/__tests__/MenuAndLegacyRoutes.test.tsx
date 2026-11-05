@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { renderToString } from 'react-dom/server';
 import { MemoryRouter } from 'react-router-dom';
-import { traefikMenuConfig, DEFAULT_ENTRY_PATH } from '../menu';
+import { traefikMenuConfig, DEFAULT_ENTRY_PATH, DEFAULT_STANDALONE_PATH } from '../menu';
 import { EmbeddedRoutes } from '../App';
 
 function getRedirectTarget(html: string): string | null {
@@ -9,29 +9,46 @@ function getRedirectTarget(html: string): string | null {
   return match ? match[1].replace(/&amp;/g, '&') : null;
 }
 
-export function testMenuStructure_ThreeGroupsEightItems(): void {
-  // 1. 严格包含 流量作业、架构与契约、环境与治理 3 个分组
-  expect(traefikMenuConfig.groups.length).toBe(3);
-  expect(traefikMenuConfig.groups[0].title).toBe('流量作业');
-  expect(traefikMenuConfig.groups[1].title).toBe('架构与契约');
-  expect(traefikMenuConfig.groups[2].title).toBe('环境与治理');
+export function testMenuStructure_FourGroupsNineItems(): void {
+  // 1. 严格包含 全局概览、契约核验与回归、架构与契约、环境与治理 4 个分组
+  expect(traefikMenuConfig.groups.length).toBe(4);
+  expect(traefikMenuConfig.groups[0].title).toBe('全局概览');
+  expect(traefikMenuConfig.groups[1].title).toBe('契约核验与回归');
+  expect(traefikMenuConfig.groups[2].title).toBe('架构与契约');
+  expect(traefikMenuConfig.groups[3].title).toBe('环境与治理');
 
   const allItems = traefikMenuConfig.groups.flatMap((g) => g.items);
-  // 严格共 8 个子项
-  expect(allItems.length).toBe(8);
+  // 严格共 9 个子项（第 10 项 /golden-suites 留待 M15 挂载，严禁在 M14 暴露空壳）
+  expect(allItems.length).toBe(9);
 
   const group0Paths = traefikMenuConfig.groups[0].items.map((i) => i.path);
-  expect(group0Paths).toEqual(['/record', '/debug', '/replay']);
+  expect(group0Paths).toEqual(['/dashboard']);
+  expect(traefikMenuConfig.groups[0].items[0].label).toBe('治理大盘');
 
   const group1Paths = traefikMenuConfig.groups[1].items.map((i) => i.path);
-  expect(group1Paths).toEqual(['/topology', '/architecture', '/schemas']);
+  expect(group1Paths).toEqual(['/record', '/debug', '/replay']);
+  expect(traefikMenuConfig.groups[1].items[0].label).toBe('契约采集');
+  expect(traefikMenuConfig.groups[1].items[1].label).toBe('事务分析');
+  expect(traefikMenuConfig.groups[1].items[2].label).toBe('防劣化回归');
 
   const group2Paths = traefikMenuConfig.groups[2].items.map((i) => i.path);
-  expect(group2Paths).toEqual(['/agents', '/admin/settings']);
+  expect(group2Paths).toEqual(['/topology', '/architecture', '/schemas']);
+  expect(traefikMenuConfig.groups[2].items[0].label).toBe('架构拓扑');
+  expect(traefikMenuConfig.groups[2].items[1].label).toBe('架构元素');
+  expect(traefikMenuConfig.groups[2].items[2].label).toBe('Proto 契约');
 
-  // 2. 模块根默认路径 path === '/traefik/record'
-  expect(DEFAULT_ENTRY_PATH).toBe('/traefik/record');
-  expect(traefikMenuConfig.defaultPath).toBe('/traefik/record');
+  const group3Paths = traefikMenuConfig.groups[3].items.map((i) => i.path);
+  expect(group3Paths).toEqual(['/agents', '/admin/settings']);
+  expect(traefikMenuConfig.groups[3].items[0].label).toBe('Agent 与进程');
+  expect(traefikMenuConfig.groups[3].items[1].label).toBe('模块参数配置');
+
+  // 严禁存在 /golden-suites 空壳项
+  expect(allItems.some((i) => i.path === '/golden-suites')).toBe(false);
+
+  // 2. 模块根默认路径 path === '/traefik/dashboard'
+  expect(DEFAULT_ENTRY_PATH).toBe('/traefik/dashboard');
+  expect(traefikMenuConfig.defaultPath).toBe('/traefik/dashboard');
+  expect(DEFAULT_STANDALONE_PATH).toBe('/dashboard');
 
   // 仅 /admin/settings (或 /traefik/admin/settings) 标记 adminOnly: true
   allItems.forEach((item) => {
@@ -64,14 +81,14 @@ export function testLegacyDeepLinks_LosslessRedirect(): void {
     expect(getRedirectTarget(html)).toBe('/traefik/topology?session_id=s1&view=PHYSICAL');
   }
 
-  // 3. / 自动落地至 /record (嵌入模式下为 /traefik/record)
+  // 3. / 自动落地至 /dashboard (嵌入模式下为 /traefik/dashboard)
   {
     const html = renderToString(
       <MemoryRouter initialEntries={['/']}>
         <EmbeddedRoutes />
       </MemoryRouter>
     );
-    expect(getRedirectTarget(html)).toBe('/traefik/record');
+    expect(getRedirectTarget(html)).toBe('/traefik/dashboard');
   }
 
   // 4. /sessions?page=1 自动落地至 /record (保留 query 参数)
@@ -86,8 +103,8 @@ export function testLegacyDeepLinks_LosslessRedirect(): void {
 }
 
 describe('MenuAndLegacyRoutes Test Suite', () => {
-  it('TC-MENU-01: 三层菜单结构与默认路径校验', () => {
-    testMenuStructure_ThreeGroupsEightItems();
+  it('TC-MENU-01: 四组九项菜单结构与 /dashboard 默认落地路径校验', () => {
+    testMenuStructure_FourGroupsNineItems();
   });
 
   it('TC-MENU-02: 历史旧路由带参无损平滑重定向校验', () => {

@@ -170,6 +170,7 @@ func RegisterRoutesForTest(r *gin.Engine) {
 	{
 		protected.GET("/me", handlers.GetMe)
 		protected.GET("/users", handlers.SearchUsers)
+		protected.GET("/dashboard/overview", handlers.GetDashboardOverview)
 
 		requireAdmin := commonAuth.RequireAdmin(config.AdminRole)
 
