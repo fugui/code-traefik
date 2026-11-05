@@ -521,6 +521,190 @@ func TestSC01_HealthAuthAndPublicPrivateRBAC(t *testing.T) {
 			t.Fatalf("审计日志中未包含完整的 create 或 force_unlock_lease 动作: %+v", auditLogs)
 		}
 	})
+
+	// 5. ListAgents 公私域范围与本人私有隔离及管理员全量视角
+	t.Run("ListAgentsScopeAndOwnerIsolation", func(t *testing.T) {
+		// 先为用户 B 注册一个私有 Agent
+		mockAgentB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/agent/v1/health" {
+				resp := agentproto.HandshakeResp{
+					AgentVersion:    "1.0.0",
+					ProtocolVersion: "1.0",
+					BootID:          "boot-uuid-bob",
+					KernelVersion:   "5.15.0",
+					HasEbpfCap:      true,
+					CapDetail:       "ebpf_trace",
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(resp)
+				return
+			}
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer mockAgentB.Close()
+
+		createReqBodyB, _ := json.Marshal(map[string]interface{}{
+			"name":     "Bob-Private-Host-For-Isolation",
+			"scope":    "PRIVATE",
+			"endpoint": mockAgentB.URL,
+		})
+		reqB := httptest.NewRequest(http.MethodPost, "/api/agents", bytes.NewReader(createReqBodyB))
+		reqB.Header.Set("Authorization", "Bearer "+userBToken)
+		reqB.Header.Set("Content-Type", "application/json")
+		wB := httptest.NewRecorder()
+		r.ServeHTTP(wB, reqB)
+		if wB.Code != http.StatusCreated {
+			t.Fatalf("用户 B 注册私有 Agent 失败: %d (body: %s)", wB.Code, wB.Body.String())
+		}
+
+		// 再由管理员注册一个团队公共 Agent
+		mockAgentShared := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/agent/v1/health" {
+				resp := agentproto.HandshakeResp{
+					AgentVersion:    "1.0.0",
+					ProtocolVersion: "1.0",
+					BootID:          "boot-uuid-shared",
+					KernelVersion:   "5.15.0",
+					HasEbpfCap:      true,
+					CapDetail:       "ebpf_trace",
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(resp)
+				return
+			}
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer mockAgentShared.Close()
+
+		createReqBodyShared, _ := json.Marshal(map[string]interface{}{
+			"name":     "Shared-Team-Host-For-Isolation",
+			"scope":    "SHARED",
+			"endpoint": mockAgentShared.URL,
+		})
+		reqShared := httptest.NewRequest(http.MethodPost, "/api/agents", bytes.NewReader(createReqBodyShared))
+		reqShared.Header.Set("Authorization", "Bearer "+adminToken)
+		reqShared.Header.Set("Content-Type", "application/json")
+		wShared := httptest.NewRecorder()
+		r.ServeHTTP(wShared, reqShared)
+		if wShared.Code != http.StatusCreated {
+			t.Fatalf("管理员注册公共 Agent 失败: %d (body: %s)", wShared.Code, wShared.Body.String())
+		}
+
+		type agentListResp struct {
+			Items []models.Agent `json:"items"`
+			Total int64          `json:"total"`
+		}
+
+		// (1) 用户 A 查询 scope=PRIVATE: 必须仅包含 Alice 的 Agent，严禁包含 Bob 的私有 Agent 或团队公共 Agent
+		{
+			req := httptest.NewRequest(http.MethodGet, "/api/agents?scope=PRIVATE", nil)
+			req.Header.Set("Authorization", "Bearer "+userAToken)
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
+			if w.Code != http.StatusOK {
+				t.Fatalf("用户 A 查询私有 Agent 失败: %d", w.Code)
+			}
+			var list agentListResp
+			_ = json.Unmarshal(w.Body.Bytes(), &list)
+			if len(list.Items) != 1 || list.Items[0].Name != "Alice-Private-Host" {
+				t.Fatalf("用户 A 查询私有 Agent 越权泄露或未隔离: %+v", list.Items)
+			}
+		}
+
+		// (2) 用户 A 查询 scope=SHARED: 必须仅包含公共 Agent，严禁混入任何私有 Agent
+		{
+			req := httptest.NewRequest(http.MethodGet, "/api/agents?scope=SHARED", nil)
+			req.Header.Set("Authorization", "Bearer "+userAToken)
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
+			if w.Code != http.StatusOK {
+				t.Fatalf("用户 A 查询公共 Agent 失败: %d", w.Code)
+			}
+			var list agentListResp
+			_ = json.Unmarshal(w.Body.Bytes(), &list)
+			for _, item := range list.Items {
+				if item.Scope != models.ScopeShared {
+					t.Fatalf("用户 A 查询公共 Agent 列表中混入了非 SHARED Agent: %+v", item)
+				}
+			}
+		}
+
+		// (3) 用户 B 查询 scope=PRIVATE: 仅返回 Bob 自己的 Agent
+		{
+			req := httptest.NewRequest(http.MethodGet, "/api/agents?scope=PRIVATE", nil)
+			req.Header.Set("Authorization", "Bearer "+userBToken)
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
+			if w.Code != http.StatusOK {
+				t.Fatalf("用户 B 查询私有 Agent 失败: %d", w.Code)
+			}
+			var list agentListResp
+			_ = json.Unmarshal(w.Body.Bytes(), &list)
+			if len(list.Items) != 1 || list.Items[0].Name != "Bob-Private-Host-For-Isolation" {
+				t.Fatalf("用户 B 查询私有 Agent 结果不符合预期: %+v", list.Items)
+			}
+		}
+
+		// (4) 用户 A 尝试携带 ?scope=PRIVATE&all_owners=true: 非管理员无效，依然仅返回本人私有 Agent
+		{
+			req := httptest.NewRequest(http.MethodGet, "/api/agents?scope=PRIVATE&all_owners=true", nil)
+			req.Header.Set("Authorization", "Bearer "+userAToken)
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
+			if w.Code != http.StatusOK {
+				t.Fatalf("用户 A 查询私有 Agent 失败: %d", w.Code)
+			}
+			var list agentListResp
+			_ = json.Unmarshal(w.Body.Bytes(), &list)
+			if len(list.Items) != 1 || list.Items[0].Name != "Alice-Private-Host" {
+				t.Fatalf("普通用户携带 all_owners=true 发生越权泄露: %+v", list.Items)
+			}
+		}
+
+		// (5) 管理员查询 scope=PRIVATE (默认未开启 all_owners): 仅返回管理员本人私有 Agent (此处管理员未建，应为 0)
+		{
+			req := httptest.NewRequest(http.MethodGet, "/api/agents?scope=PRIVATE", nil)
+			req.Header.Set("Authorization", "Bearer "+adminToken)
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
+			if w.Code != http.StatusOK {
+				t.Fatalf("管理员查询私有 Agent 失败: %d", w.Code)
+			}
+			var list agentListResp
+			_ = json.Unmarshal(w.Body.Bytes(), &list)
+			if len(list.Items) != 0 {
+				t.Fatalf("管理员未开启 all_owners 模式下泄露了其他同事私有 Agent: %+v", list.Items)
+			}
+		}
+
+		// (6) 管理员开启 all_owners=true 查询 scope=PRIVATE: 放行全量私有 Agent (包含 Alice 与 Bob)
+		{
+			req := httptest.NewRequest(http.MethodGet, "/api/agents?scope=PRIVATE&all_owners=true", nil)
+			req.Header.Set("Authorization", "Bearer "+adminToken)
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
+			if w.Code != http.StatusOK {
+				t.Fatalf("管理员全量查询私有 Agent 失败: %d", w.Code)
+			}
+			var list agentListResp
+			_ = json.Unmarshal(w.Body.Bytes(), &list)
+			if len(list.Items) < 2 {
+				t.Fatalf("管理员全量查询私有 Agent 期望至少 2 个，实际: %d", len(list.Items))
+			}
+			var hasAlice, hasBob bool
+			for _, item := range list.Items {
+				if item.Name == "Alice-Private-Host" {
+					hasAlice = true
+				}
+				if item.Name == "Bob-Private-Host-For-Isolation" {
+					hasBob = true
+				}
+			}
+			if !hasAlice || !hasBob {
+				t.Fatalf("管理员全量查询私有 Agent 未包含全部同事 Agent: %+v", list.Items)
+			}
+		}
+	})
 }
 
 func createdAgentPath(id uint64) string {

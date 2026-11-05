@@ -192,6 +192,7 @@ export function testAgentProcessConsolidation_GroupNameAndRBAC(): void {
   );
   expect(normalUserPrivateAgentHtml).toContain('我的私有 Agent');
   expect(normalUserPrivateAgentHtml).toContain('data-testid="register-agent-btn"');
+  expect(normalUserPrivateAgentHtml).not.toContain('data-testid="toggle-all-owners-checkbox"');
 
   // 2.2 普通用户切换到公共 SHARED Agent: 禁绝新增/修改/注销等写入口
   const normalUserSharedAgentHtml = renderToString(
@@ -229,6 +230,41 @@ export function testAgentProcessConsolidation_GroupNameAndRBAC(): void {
   );
   expect(adminSharedAgentHtml).toContain('+ 登记 公共 Agent');
   expect(adminSharedAgentHtml).toContain('data-testid="register-agent-btn"');
+
+  // 2.4 管理员在私有 PRIVATE Agent 下: 默认“我的私有 Agent”，且具备“全量同事视角”开关
+  const adminPrivateAgentHtml = renderToString(
+    <MemoryRouter initialEntries={['/agents?scope=PRIVATE']}>
+      <ModuleUserProvider
+        value={{
+          user: adminUser,
+          loadingUser: false,
+          isEmbedded: false,
+          reloadUser: async () => {},
+        }}
+      >
+        <AgentManagementPage />
+      </ModuleUserProvider>
+    </MemoryRouter>
+  );
+  expect(adminPrivateAgentHtml).toContain('我的私有 Agent');
+  expect(adminPrivateAgentHtml).toContain('data-testid="toggle-all-owners-checkbox"');
+
+  // 2.5 管理员携带 all_owners=true: 标题呈现“全量私有 Agent (管理员视角)”
+  const adminAllOwnersHtml = renderToString(
+    <MemoryRouter initialEntries={['/agents?scope=PRIVATE&all_owners=true']}>
+      <ModuleUserProvider
+        value={{
+          user: adminUser,
+          loadingUser: false,
+          isEmbedded: false,
+          reloadUser: async () => {},
+        }}
+      >
+        <AgentManagementPage />
+      </ModuleUserProvider>
+    </MemoryRouter>
+  );
+  expect(adminAllOwnersHtml).toContain('全量私有 Agent (管理员视角)');
 }
 
 describe('WorkbenchRBAC', () => {

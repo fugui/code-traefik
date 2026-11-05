@@ -7,6 +7,7 @@ export interface Agent {
   scope: 'SHARED' | 'PRIVATE';
   owner_id?: string;
   owner_name?: string;
+  owner?: { id: number | string; username?: string; name?: string };
   status: 'ONLINE' | 'OFFLINE';
   boot_id?: string;
   mounts_revision?: number;

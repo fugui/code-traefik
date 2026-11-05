@@ -51,11 +51,12 @@ type AgentUpdateReq struct {
 
 // AgentListQuery 列表查询参数
 type AgentListQuery struct {
-	Scope    string `form:"scope"`
-	Status   string `form:"status"`
-	Keyword  string `form:"keyword"`
-	Page     int    `form:"page"`
-	PageSize int    `form:"page_size"`
+	Scope     string `form:"scope"`
+	Status    string `form:"status"`
+	Keyword   string `form:"keyword"`
+	AllOwners bool   `form:"all_owners"`
+	Page      int    `form:"page"`
+	PageSize  int    `form:"page_size"`
 }
 
 // ForceUnlockReq 强制解锁租约请求
@@ -362,10 +363,24 @@ func (m *Manager) GetAgent(ctx context.Context, agentID uint64, currentUserID ui
 func (m *Manager) ListAgents(ctx context.Context, query AgentListQuery, currentUserID uint, isAdmin bool) ([]models.Agent, int64, error) {
 	dbQuery := m.db.Model(&models.Agent{}).Preload("Owner").Preload("LeaseHolder")
 
-	if !isAdmin {
-		dbQuery = dbQuery.Where("scope = ? OR (scope = ? AND owner_id = ?)", models.ScopeShared, models.ScopePrivate, currentUserID)
-	} else if query.Scope != "" {
-		dbQuery = dbQuery.Where("scope = ?", query.Scope)
+	allOwners := query.AllOwners && isAdmin
+	scope := strings.ToUpper(strings.TrimSpace(query.Scope))
+
+	// ScopeReadGuard: 严格公私域过滤与本人私有隔离
+	if scope == models.ScopeShared {
+		dbQuery = dbQuery.Where("scope = ?", models.ScopeShared)
+	} else if scope == models.ScopePrivate {
+		if allOwners {
+			dbQuery = dbQuery.Where("scope = ?", models.ScopePrivate)
+		} else {
+			dbQuery = dbQuery.Where("scope = ? AND owner_id = ?", models.ScopePrivate, currentUserID)
+		}
+	} else if scope != "" {
+		dbQuery = dbQuery.Where("scope = ?", scope)
+	} else {
+		if !allOwners {
+			dbQuery = dbQuery.Where("scope = ? OR (scope = ? AND owner_id = ?)", models.ScopeShared, models.ScopePrivate, currentUserID)
+		}
 	}
 
 	if query.Status != "" {

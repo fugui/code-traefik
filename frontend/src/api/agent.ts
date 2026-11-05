@@ -13,6 +13,7 @@ export async function listAgents(params?: {
   status?: 'ONLINE' | 'OFFLINE';
   lease_state?: 'IDLE' | 'LEASED';
   search?: string;
+  all_owners?: boolean;
   page?: number;
   page_size?: number;
 }) {
@@ -21,6 +22,7 @@ export async function listAgents(params?: {
   if (params?.status) query.set('status', params.status);
   if (params?.lease_state) query.set('lease_state', params.lease_state);
   if (params?.search) query.set('search', params.search);
+  if (params?.all_owners) query.set('all_owners', 'true');
   if (params?.page) query.set('page', String(params.page));
   if (params?.page_size) query.set('page_size', String(params.page_size));
   const qs = query.toString();

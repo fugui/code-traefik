@@ -29,6 +29,8 @@ export const AgentManagementPage: React.FC<AgentManagementPageProps> = ({
   const scopeParam = (searchParams.get('scope') as 'SHARED' | 'PRIVATE') || 'SHARED';
   const urlAgentId = searchParams.get('agent_id') || '';
   const urlProcessId = searchParams.get('process_id') || '';
+  const allOwnersParam = searchParams.get('all_owners') === 'true';
+  const isAllOwners = Boolean(isAdmin && scopeParam === 'PRIVATE' && allOwnersParam);
 
   const { page, pageSize, setPage, setPageSize } = usePaginationState({
     defaultPageSize: 25,
@@ -88,6 +90,7 @@ export const AgentManagementPage: React.FC<AgentManagementPageProps> = ({
     try {
       const res = await agentApi.listAgents({
         scope: scopeParam,
+        all_owners: isAllOwners,
         page,
         page_size: pageSize,
       });
@@ -111,7 +114,7 @@ export const AgentManagementPage: React.FC<AgentManagementPageProps> = ({
     } finally {
       setLoading(false);
     }
-  }, [scopeParam, page, pageSize, urlAgentId, toast]);
+  }, [scopeParam, isAllOwners, page, pageSize, urlAgentId, toast]);
 
   useEffect(() => {
     void loadAgents();
@@ -137,6 +140,7 @@ export const AgentManagementPage: React.FC<AgentManagementPageProps> = ({
       const next = new URLSearchParams(prev);
       next.set('scope', newScope);
       next.set('page', '1');
+      next.delete('all_owners');
       next.delete('agent_id');
       next.delete('process_id');
       next.delete('open_mount');
@@ -405,10 +409,46 @@ export const AgentManagementPage: React.FC<AgentManagementPageProps> = ({
       <div className="code-agent-layout code-mt-md">
         {/* 左栏：Agent 列表 */}
         <div className="code-agent-list-pane">
-          <div className="code-pane-header">
+          <div className="code-pane-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span className="code-pane-title">
-              {scopeParam === 'SHARED' ? '团队公共 Agent' : '我的私有 Agent'} ({totalAgents})
+              {scopeParam === 'SHARED'
+                ? '团队公共 Agent'
+                : isAllOwners
+                ? '全量私有 Agent (管理员视角)'
+                : '我的私有 Agent'} ({totalAgents})
             </span>
+            {isAdmin && scopeParam === 'PRIVATE' && (
+              <label
+                className="code-checkbox-label"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.35rem',
+                  fontSize: '0.8rem',
+                  cursor: 'pointer',
+                  userSelect: 'none',
+                }}
+              >
+                <input
+                  type="checkbox"
+                  data-testid="toggle-all-owners-checkbox"
+                  checked={isAllOwners}
+                  onChange={(e) => {
+                    setSearchParams((prev) => {
+                      const next = new URLSearchParams(prev);
+                      if (e.target.checked) {
+                        next.set('all_owners', 'true');
+                      } else {
+                        next.delete('all_owners');
+                      }
+                      next.set('page', '1');
+                      return next;
+                    });
+                  }}
+                />
+                <span>全量同事视角</span>
+              </label>
+            )}
           </div>
 
           {loading ? (
@@ -466,6 +506,14 @@ export const AgentManagementPage: React.FC<AgentManagementPageProps> = ({
                         <span className="code-meta-label">归属作用域:</span>
                         <span className="code-badge code-badge--secondary">{ag.scope}</span>
                       </div>
+                      {ag.scope === 'PRIVATE' && (
+                        <div className="code-meta-item">
+                          <span className="code-meta-label">所有者:</span>
+                          <span className="code-meta-val">
+                            {ag.owner?.name || ag.owner?.username || ag.owner_name || (ag.owner_id ? `用户 #${ag.owner_id}` : '未登记')}
+                          </span>
+                        </div>
+                      )}
                     </div>
 
                     <div className="code-agent-card__actions" onClick={(e) => e.stopPropagation()}>

@@ -54,14 +54,28 @@ func ListAgents(c *gin.Context) {
 	status := strings.ToUpper(strings.TrimSpace(c.Query("status")))
 	leaseState := strings.ToUpper(strings.TrimSpace(c.Query("lease_state")))
 	search := strings.TrimSpace(c.Query("search"))
+	allOwners := (c.Query("all_owners") == "true" || c.Query("all_owners") == "1") && isAdmin
 
 	query := models.DB.Model(&models.Agent{}).Preload("Owner").Preload("LeaseHolder")
 
-	// ScopeReadGuard: 普通用户仅能查看 SHARED 和本人 PRIVATE
-	if !isAdmin {
-		query = query.Where("scope = ? OR (scope = ? AND owner_id = ?)", models.ScopeShared, models.ScopePrivate, uc.UserID)
+	// ScopeReadGuard: 严格公私域过滤与本人私有隔离
+	if scope == models.ScopeShared {
+		// 无论是否管理员，查看团队公共 Agent 时仅返回 SHARED，严禁混入私有 Agent
+		query = query.Where("scope = ?", models.ScopeShared)
+	} else if scope == models.ScopePrivate {
+		// 查看私有 Agent: 默认仅看当前登录用户本人登记的私有 Agent；仅当具备管理员权限且显式指定 all_owners 时才放行全量
+		if allOwners {
+			query = query.Where("scope = ?", models.ScopePrivate)
+		} else {
+			query = query.Where("scope = ? AND owner_id = ?", models.ScopePrivate, uc.UserID)
+		}
 	} else if scope != "" {
 		query = query.Where("scope = ?", scope)
+	} else {
+		// 未指定 scope（如流量录制、调试下拉框）：默认仅返回公共 SHARED 与当前登录用户本人的 PRIVATE
+		if !allOwners {
+			query = query.Where("scope = ? OR (scope = ? AND owner_id = ?)", models.ScopeShared, models.ScopePrivate, uc.UserID)
+		}
 	}
 
 	if status != "" {
