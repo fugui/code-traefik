@@ -21,10 +21,37 @@ var (
 	BuildTime = version.BuildTime
 )
 
+// DefaultAllowIPs 默认受信任主控 IP 白名单（支持环回联调及现网主控服务器 10.1.64.178 直连挂载）
+const DefaultAllowIPs = "127.0.0.1,10.1.64.178"
+
+// resolveDefaultAllowIPs 支持环境变量 TRAEFIK_AGENT_ALLOW_IPS 覆盖默认白名单
+func resolveDefaultAllowIPs() string {
+	if env := os.Getenv("TRAEFIK_AGENT_ALLOW_IPS"); env != "" {
+		return env
+	}
+	return DefaultAllowIPs
+}
+
+// parseAllowIPs 解析逗号分隔的 IP / CIDR 字符串
+func parseAllowIPs(raw string) []string {
+	var allowIPs []string
+	if raw != "" {
+		parts := strings.Split(raw, ",")
+		for _, p := range parts {
+			if trimmed := strings.TrimSpace(p); trimmed != "" {
+				allowIPs = append(allowIPs, trimmed)
+			}
+		}
+	}
+	return allowIPs
+}
+
 func main() {
+	defaultAllowIPs := resolveDefaultAllowIPs()
+
 	var (
 		listenAddr  = flag.String("listen", "0.0.0.0:9091", "Agent 监听地址 (IP:Port)")
-		allowIPsStr = flag.String("allow-ips", "127.0.0.1", "允许访问的主控 IP/CIDR 白名单 (逗号分隔)")
+		allowIPsStr = flag.String("allow-ips", defaultAllowIPs, "允许访问的主控 IP/CIDR 白名单 (逗号分隔)")
 		claimCode   = flag.String("claim-code", "", "预设认领码 (留空自动生成一次性认领码)")
 		claimFile   = flag.String("claim-code-file", "", "认领码保存路径 (如 /var/run/code-traefik/claim.token)")
 		maxBufferMB = flag.Int64("max-buffer-mb", 64, "单个活跃会话有界缓冲上限 (MB)")
@@ -49,15 +76,7 @@ func main() {
 		os.Exit(0)
 	}
 
-	var allowIPs []string
-	if *allowIPsStr != "" {
-		parts := strings.Split(*allowIPsStr, ",")
-		for _, p := range parts {
-			if trimmed := strings.TrimSpace(p); trimmed != "" {
-				allowIPs = append(allowIPs, trimmed)
-			}
-		}
-	}
+	allowIPs := parseAllowIPs(*allowIPsStr)
 
 	cfg := server.AgentServerConfig{
 		ListenAddr:            *listenAddr,

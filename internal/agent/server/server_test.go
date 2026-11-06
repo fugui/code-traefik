@@ -133,6 +133,56 @@ func TestAgentIPAllowlistAndClaimCode(t *testing.T) {
 	}
 }
 
+// TestAgentIPAllowlistWithProductionControlPlane 验证包含现网主控 IP (10.1.64.178) 白名单准入与隔离
+func TestAgentIPAllowlistWithProductionControlPlane(t *testing.T) {
+	cfg := AgentServerConfig{
+		ListenAddr: "127.0.0.1:0",
+		AllowIPs:   []string{"127.0.0.1", "10.1.64.178"},
+		ClaimCode:  "prod_claim_code_98765",
+	}
+
+	srv, err := NewAgentServer(cfg)
+	if err != nil {
+		t.Fatalf("NewAgentServer failed: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	srv.registerRoutes(mux)
+	handler := srv.ipAllowlistMiddleware(mux)
+
+	// 1. 模拟来自现网主控 IP (10.1.64.178) 携带合法 ClaimCode 成功握手
+	reqProd := httptest.NewRequest(http.MethodGet, "/agent/v1/handshake", nil)
+	reqProd.RemoteAddr = "10.1.64.178:54321"
+	reqProd.Header.Set(agentproto.HeaderClaimCode, "prod_claim_code_98765")
+	recProd := httptest.NewRecorder()
+	handler.ServeHTTP(recProd, reqProd)
+
+	if recProd.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK for 10.1.64.178, got %d (body: %s)", recProd.Code, recProd.Body.String())
+	}
+
+	// 2. 模拟本地 127.0.0.1 同样受允许
+	reqLocal := httptest.NewRequest(http.MethodGet, "/agent/v1/handshake", nil)
+	reqLocal.RemoteAddr = "127.0.0.1:54322"
+	reqLocal.Header.Set(agentproto.HeaderClaimCode, "prod_claim_code_98765")
+	recLocal := httptest.NewRecorder()
+	handler.ServeHTTP(recLocal, reqLocal)
+
+	if recLocal.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK for 127.0.0.1, got %d", recLocal.Code)
+	}
+
+	// 3. 模拟非白名单 IP (如 10.20.30.40) 请求被拦截
+	reqForbidden := httptest.NewRequest(http.MethodGet, "/agent/v1/handshake", nil)
+	reqForbidden.RemoteAddr = "10.20.30.40:54321"
+	recForbidden := httptest.NewRecorder()
+	handler.ServeHTTP(recForbidden, reqForbidden)
+
+	if recForbidden.Code != http.StatusForbidden {
+		t.Errorf("expected 403 Forbidden for non-whitelisted IP, got %d", recForbidden.Code)
+	}
+}
+
 // TestBoundedSessionBufferBackpressureAndGracePurge 验证有界缓冲背压丢帧与失联看门狗自洁
 func TestBoundedSessionBufferBackpressureAndGracePurge(t *testing.T) {
 	// 1. 测试 1MB 缓冲上限与非阻塞丢帧

@@ -118,9 +118,9 @@ type ModuleService struct {
 	ServiceName         string               `gorm:"size:128;not null;uniqueIndex:uk_traefik_mod_svc_name" json:"service_name"` // 格式 {package}.{serviceName}，全系统唯一提供 (A-05)
 	DiffIgnorePaths     datatypes.JSON       `gorm:"type:jsonb;not null;default:'[]'" json:"diff_ignore_paths"`                 // 服务级默认回归 Diff 忽略字段路径 []string (F-14)
 	Description         string               `gorm:"type:text" json:"description"`
-	DownstreamCount     int                  `gorm:"-" json:"downstream_count"`                   // 被下游模块依赖数量
-	DownstreamModules   []string             `gorm:"-" json:"downstream_modules,omitempty"`         // 被下游模块名称清单
-	DownstreamConsumers []DownstreamConsumer `gorm:"-" json:"downstream_consumers,omitempty"`       // 被下游模块结构化清单
+	DownstreamCount     int                  `gorm:"-" json:"downstream_count"`               // 被下游模块依赖数量
+	DownstreamModules   []string             `gorm:"-" json:"downstream_modules,omitempty"`   // 被下游模块名称清单
+	DownstreamConsumers []DownstreamConsumer `gorm:"-" json:"downstream_consumers,omitempty"` // 被下游模块结构化清单
 	CreatedBy           uint                 `gorm:"not null;default:0" json:"created_by"`
 	CreatedAt           time.Time            `json:"created_at"`
 	UpdatedAt           time.Time            `json:"updated_at"`
