@@ -274,15 +274,31 @@ func ListModuleServices(db *gorm.DB, moduleID uint64) ([]models.ModuleService, e
 
 	for i := range services {
 		var deps []models.ModuleDependency
-		_ = db.Preload("ConsumerModule").Where("service_id = ?", services[i].ID).Find(&deps).Error
+		_ = db.Preload("ConsumerModule.Subsystem").Where("service_id = ?", services[i].ID).Find(&deps).Error
 		services[i].DownstreamCount = len(deps)
 		modNames := make([]string, 0, len(deps))
+		consumers := make([]models.DownstreamConsumer, 0, len(deps))
 		for _, d := range deps {
 			if d.ConsumerModule != nil {
-				modNames = append(modNames, d.ConsumerModule.Name)
+				subName := ""
+				if d.ConsumerModule.Subsystem != nil {
+					subName = d.ConsumerModule.Subsystem.Name
+				}
+				name := d.ConsumerModule.Name
+				if subName != "" {
+					name = fmt.Sprintf("%s (%s)", d.ConsumerModule.Name, subName)
+				}
+				modNames = append(modNames, name)
+				consumers = append(consumers, models.DownstreamConsumer{
+					ModuleID:      d.ConsumerModule.ID,
+					ModuleName:    d.ConsumerModule.Name,
+					ModuleCode:    d.ConsumerModule.Code,
+					SubsystemName: subName,
+				})
 			}
 		}
 		services[i].DownstreamModules = modNames
+		services[i].DownstreamConsumers = consumers
 	}
 	return services, nil
 }

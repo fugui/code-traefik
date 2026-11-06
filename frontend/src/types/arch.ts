@@ -40,6 +40,13 @@ export interface FunctionalGroup {
   updated_at?: string;
 }
 
+export interface DownstreamConsumer {
+  module_id: string | number;
+  module_name: string;
+  module_code: string;
+  subsystem_name?: string;
+}
+
 export interface ModuleService {
   id: string;
   module_id: string;
@@ -48,6 +55,7 @@ export interface ModuleService {
   description?: string;
   downstream_count?: number;
   downstream_modules?: string[];
+  downstream_consumers?: DownstreamConsumer[];
   created_at?: string;
   updated_at?: string;
 }

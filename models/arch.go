@@ -104,18 +104,26 @@ type Module struct {
 func (Module) TableName() string { return config.TablePrefix + "modules" }
 
 // 6. ModuleService 模块级对外供给服务契约表 (traefik_module_services)
+type DownstreamConsumer struct {
+	ModuleID      uint64 `json:"module_id"`
+	ModuleName    string `json:"module_name"`
+	ModuleCode    string `json:"module_code"`
+	SubsystemName string `json:"subsystem_name,omitempty"`
+}
+
 type ModuleService struct {
-	ID                uint64         `gorm:"primaryKey;autoIncrement" json:"id"`
-	ModuleID          uint64         `gorm:"not null;index:idx_traefik_mod_svc_mod" json:"module_id"`
-	Module            *Module        `gorm:"foreignKey:ModuleID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"module,omitempty"`
-	ServiceName       string         `gorm:"size:128;not null;uniqueIndex:uk_traefik_mod_svc_name" json:"service_name"` // 格式 {package}.{serviceName}，全系统唯一提供 (A-05)
-	DiffIgnorePaths   datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"diff_ignore_paths"`                 // 服务级默认回归 Diff 忽略字段路径 []string (F-14)
-	Description       string         `gorm:"type:text" json:"description"`
-	DownstreamCount   int            `gorm:"-" json:"downstream_count"`             // 被下游模块依赖数量
-	DownstreamModules []string       `gorm:"-" json:"downstream_modules,omitempty"` // 被下游模块名称清单
-	CreatedBy         uint           `gorm:"not null;default:0" json:"created_by"`
-	CreatedAt         time.Time      `json:"created_at"`
-	UpdatedAt         time.Time      `json:"updated_at"`
+	ID                  uint64               `gorm:"primaryKey;autoIncrement" json:"id"`
+	ModuleID            uint64               `gorm:"not null;index:idx_traefik_mod_svc_mod" json:"module_id"`
+	Module              *Module              `gorm:"foreignKey:ModuleID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"module,omitempty"`
+	ServiceName         string               `gorm:"size:128;not null;uniqueIndex:uk_traefik_mod_svc_name" json:"service_name"` // 格式 {package}.{serviceName}，全系统唯一提供 (A-05)
+	DiffIgnorePaths     datatypes.JSON       `gorm:"type:jsonb;not null;default:'[]'" json:"diff_ignore_paths"`                 // 服务级默认回归 Diff 忽略字段路径 []string (F-14)
+	Description         string               `gorm:"type:text" json:"description"`
+	DownstreamCount     int                  `gorm:"-" json:"downstream_count"`                   // 被下游模块依赖数量
+	DownstreamModules   []string             `gorm:"-" json:"downstream_modules,omitempty"`         // 被下游模块名称清单
+	DownstreamConsumers []DownstreamConsumer `gorm:"-" json:"downstream_consumers,omitempty"`       // 被下游模块结构化清单
+	CreatedBy           uint                 `gorm:"not null;default:0" json:"created_by"`
+	CreatedAt           time.Time            `json:"created_at"`
+	UpdatedAt           time.Time            `json:"updated_at"`
 }
 
 func (ModuleService) TableName() string { return config.TablePrefix + "module_services" }

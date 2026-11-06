@@ -1027,8 +1027,19 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
                   if (targetMod && targetMod.subsystem_id && targetMod.group_id) {
                     handleSelectModuleLeaf(targetMod.subsystem_id, targetMod.group_id, id);
                   } else {
-                    setSelectedModuleId(id);
-                    updateParams({ module_id: id });
+                    void (async () => {
+                      try {
+                        const res = await archApi.getModule(id);
+                        if (res.module && res.module.subsystem_id && res.module.group_id) {
+                          handleSelectModuleLeaf(res.module.subsystem_id, res.module.group_id, id);
+                          return;
+                        }
+                      } catch {
+                        // ignore
+                      }
+                      setSelectedModuleId(id);
+                      updateParams({ module_id: id });
+                    })();
                   }
                 }}
                 selectedModule={selectedModule}

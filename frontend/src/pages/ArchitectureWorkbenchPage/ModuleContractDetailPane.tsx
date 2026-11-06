@@ -15,7 +15,8 @@ import {
   FileCode,
   Edit3,
 } from 'lucide-react';
-import { Drawer } from '@code/common';
+import { Drawer, Modal } from '@code/common';
+import { useToast } from '../../utils/toast';
 import { useModulePath } from '../../hooks/useModulePath';
 import * as archApi from '../../api/arch';
 import type {
@@ -86,9 +87,22 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
   onBindProcess,
 }) => {
   // 内联编辑忽略路径状态
+  const toast = useToast();
   const modulePath = useModulePath();
   const [editingServiceId, setEditingServiceId] = useState<string | null>(null);
   const [ignorePathInput, setIgnorePathInput] = useState<string>('');
+
+  // 依赖拦截详情 Modal 状态
+  const [blockedService, setBlockedService] = useState<ModuleService | null>(null);
+
+  const handleDeleteServiceClick = (svc: ModuleService) => {
+    if ((svc.downstream_count || 0) > 0) {
+      setBlockedService(svc);
+      toast.warning(`服务契约 [${svc.service_name}] 正在被下游模块依赖，无法直接删除`);
+      return;
+    }
+    void onDeleteService(svc.id);
+  };
 
   // 1. 声明供给服务 Drawer
   const [isProvideDrawerOpen, setIsProvideDrawerOpen] = useState(false);
@@ -648,24 +662,70 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
                         )}
                       </td>
                       <td>
-                        <span className="code-badge code-badge--info">
-                          {svc.downstream_count || 0} 个依赖方
-                        </span>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', alignItems: 'flex-start' }}>
+                          <span
+                            className={`code-badge ${(svc.downstream_count || 0) > 0 ? 'code-badge--warning' : 'code-badge--info'}`}
+                            data-testid={`badge-downstream-${svc.id}`}
+                          >
+                            {svc.downstream_count || 0} 个依赖方
+                          </span>
+                          {svc.downstream_consumers && svc.downstream_consumers.length > 0 ? (
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', maxWidth: '260px' }}>
+                              {svc.downstream_consumers.map((c) => (
+                                <button
+                                  key={c.module_id}
+                                  type="button"
+                                  className="code-module-link-chip"
+                                  style={{ fontSize: '11px', padding: '2px 6px' }}
+                                  onClick={() => onSelectModule(String(c.module_id))}
+                                  title={`点击在架构树中聚焦此下游模块：${c.module_name}${c.subsystem_name ? ` (${c.subsystem_name})` : ''}`}
+                                >
+                                  <Cpu size={11} />
+                                  <span>{c.module_name}</span>
+                                  {c.subsystem_name && (
+                                    <span className="code-color-muted code-text-xs">[{c.subsystem_name}]</span>
+                                  )}
+                                </button>
+                              ))}
+                            </div>
+                          ) : svc.downstream_modules && svc.downstream_modules.length > 0 ? (
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', maxWidth: '260px' }}>
+                              {svc.downstream_modules.map((modName, idx) => (
+                                <span
+                                  key={idx}
+                                  className="code-tag code-tag--muted code-font-mono"
+                                  style={{ fontSize: '11px' }}
+                                  title={`下游依赖方: ${modName}`}
+                                >
+                                  {modName}
+                                </span>
+                              ))}
+                            </div>
+                          ) : null}
+                        </div>
                       </td>
                       <td>{svc.description || '-'}</td>
                       {isAdmin && (
                         <td>
                           <button
                             type="button"
-                            className="code-btn code-btn--danger code-btn--xs"
-                            disabled={(svc.downstream_count || 0) > 0}
-                            title={(svc.downstream_count || 0) > 0 ? `正被 ${svc.downstream_count} 个下游模块依赖，请先在下游解除依赖` : undefined}
-                            onClick={() => {
-                              if ((svc.downstream_count || 0) > 0) return;
-                              void onDeleteService(svc.id);
-                            }}
+                            className={`code-btn code-btn--xs ${(svc.downstream_count || 0) > 0 ? 'code-btn--secondary' : 'code-btn--danger'}`}
+                            title={
+                              (svc.downstream_count || 0) > 0
+                                ? `正被 ${svc.downstream_count} 个下游模块依赖，点击查看依赖详情与解除指引`
+                                : `删除对外服务契约 [${svc.service_name}]`
+                            }
+                            data-testid={`btn-delete-service-${svc.id}`}
+                            onClick={() => handleDeleteServiceClick(svc)}
                           >
-                            删除
+                            {(svc.downstream_count || 0) > 0 ? (
+                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                                <AlertTriangle size={12} style={{ color: 'var(--color-warning)' }} />
+                                删除
+                              </span>
+                            ) : (
+                              '删除'
+                            )}
                           </button>
                         </td>
                       )}
@@ -1282,6 +1342,135 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
           )}
         </div>
       </Drawer>
+
+      {/* 4. 下游依赖拦截指引 Modal */}
+      <Modal
+        open={!!blockedService}
+        onClose={() => setBlockedService(null)}
+        title="无法直接删除服务契约"
+      >
+        <div className="code-blocked-service-modal" style={{ padding: '0.5rem 0' }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px', marginBottom: '1.25rem' }}>
+            <div
+              style={{
+                width: '40px',
+                height: '40px',
+                borderRadius: '50%',
+                backgroundColor: 'rgba(234, 179, 8, 0.12)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0,
+              }}
+            >
+              <AlertTriangle size={22} style={{ color: 'var(--color-warning)' }} />
+            </div>
+            <div>
+              <h4 style={{ margin: '0 0 6px 0', fontSize: '15px', color: 'var(--color-text-primary)' }}>
+                契约正在被下游模块引用
+              </h4>
+              <p style={{ margin: 0, fontSize: '13px', color: 'var(--color-text-secondary)', lineHeight: 1.6 }}>
+                对外服务契约 <code className="code-font-mono" style={{ color: 'var(--color-primary)', fontWeight: 600 }}>{blockedService?.service_name}</code> 当前正被以下 <strong style={{ color: 'var(--color-warning)' }}>{blockedService?.downstream_count}</strong> 个下游模块作为服务依赖消费。为保证系统拓扑完整性与调用链稳定，必须先解除依赖。
+              </p>
+            </div>
+          </div>
+
+          <div style={{ marginBottom: '1.25rem' }}>
+            <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--color-text-secondary)', marginBottom: '8px' }}>
+              依赖此服务的下游模块清单：
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '200px', overflowY: 'auto' }}>
+              {blockedService?.downstream_consumers && blockedService.downstream_consumers.length > 0 ? (
+                blockedService.downstream_consumers.map((c) => (
+                  <div
+                    key={c.module_id}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      padding: '8px 12px',
+                      borderRadius: 'var(--radius-md)',
+                      backgroundColor: 'var(--color-bg-muted)',
+                      border: '1px solid var(--color-border-primary)',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <Cpu size={14} style={{ color: 'var(--color-primary)' }} />
+                      <span style={{ fontWeight: 600, fontSize: '13px', color: 'var(--color-text-primary)' }}>
+                        {c.module_name}
+                      </span>
+                      <span className="code-tag code-font-mono code-text-xs">
+                        {c.module_code}
+                      </span>
+                      {c.subsystem_name && (
+                        <span className="code-text-xs code-color-muted">
+                          [{c.subsystem_name}]
+                        </span>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      className="code-btn code-btn--primary code-btn--xs"
+                      onClick={() => {
+                        setBlockedService(null);
+                        onSelectModule(String(c.module_id));
+                      }}
+                      title="点击直接切换并聚焦至该下游模块"
+                    >
+                      前往解除依赖 →
+                    </button>
+                  </div>
+                ))
+              ) : (
+                (blockedService?.downstream_modules ?? []).map((modName, idx) => (
+                  <div
+                    key={idx}
+                    style={{
+                      padding: '8px 12px',
+                      borderRadius: 'var(--radius-md)',
+                      backgroundColor: 'var(--color-bg-muted)',
+                      border: '1px solid var(--color-border-primary)',
+                      fontSize: '13px',
+                      color: 'var(--color-text-primary)',
+                    }}
+                  >
+                    {modName}
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          <div
+            style={{
+              padding: '10px 14px',
+              backgroundColor: 'var(--color-bg-muted)',
+              borderRadius: 'var(--radius-md)',
+              fontSize: '12px',
+              color: 'var(--color-text-secondary)',
+              lineHeight: 1.6,
+              marginBottom: '1rem',
+            }}
+          >
+            <strong>💡 解除与删除操作指引：</strong>
+            <ol style={{ margin: '4px 0 0 0', paddingLeft: '20px' }}>
+              <li>点击上方【前往解除依赖 →】按钮，跳转至对应下游模块；</li>
+              <li>在下游模块的【依赖下游服务列表 (DEPEND)】中，点击【解除】移除该依赖；</li>
+              <li>返回当前模块，此时该服务契约即可正常点击【删除】。</li>
+            </ol>
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+            <button
+              type="button"
+              className="code-btn code-btn--secondary"
+              onClick={() => setBlockedService(null)}
+            >
+              我知道了
+            </button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 };

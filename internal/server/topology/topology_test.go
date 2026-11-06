@@ -420,6 +420,21 @@ func TestModuleDependenciesAndExternalSystem(t *testing.T) {
 		t.Fatalf("预期 ProviderModule.Subsystem 正确预加载，实际: %+v", deps[0].ProviderModule.Subsystem)
 	}
 
+	// 2.2 验证供给方查询时下游依赖详情丰富性 (DownstreamModules 与 DownstreamConsumers 包含子系统名称)
+	svcs, err := ListModuleServices(db, mod1.ID)
+	if err != nil {
+		t.Fatalf("ListModuleServices 失败: %v", err)
+	}
+	if len(svcs) != 1 || svcs[0].DownstreamCount != 1 {
+		t.Fatalf("预期 1 个供给服务且 downstream_count=1，实际: %+v", svcs)
+	}
+	if len(svcs[0].DownstreamModules) != 1 || len(svcs[0].DownstreamConsumers) != 1 {
+		t.Fatalf("预期 downstream_modules 和 downstream_consumers 长度为 1，实际: %+v", svcs[0])
+	}
+	if svcs[0].DownstreamConsumers[0].ModuleID != mod2.ID || svcs[0].DownstreamConsumers[0].ModuleName != mod2.Name {
+		t.Fatalf("预期下游消费者包含 mod2，实际: %+v", svcs[0].DownstreamConsumers[0])
+	}
+
 	// 3. 重复依赖拦截
 	if _, err := CreateModuleDependency(db, ModuleDependencyInput{
 		ConsumerModuleID: mod2.ID,
