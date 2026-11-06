@@ -23,7 +23,8 @@ docs/
 │   ├── 02-data-plane-and-cros-rpc-engine.md       # 【数据面篇】CROS RPC 协议栈、Agent eBPF 采集与自愈重放引擎
 │   ├── 03-architecture-elements-and-topology.md   # 【业务篇】架构元素建模 (SSOT)、模块接口契约与拓扑验证
 │   ├── 04-control-plane-and-web-console.md        # 【管理面篇】Server 控制面、微前端控制台、Protobuf 编解码与回归 Diff
-│   └── 05-database-schema.md                      # 【数据模型篇】17 张 traefik_* 物理表 GORM 字典、黄金套件快照、分区表与索引设计
+│   ├── 05-database-schema.md                      # 【数据模型篇】17 张 traefik_* 物理表 GORM 字典、黄金套件快照、分区表与索引设计
+│   └── 06-agent-observability-and-self-healing-design.md # 【运维可观测与自愈篇】Agent 探针特权感知、体检诊断与全链路闭环自愈设计
 ├── 03-api/          # 接口与数据契约：RESTful / SSE API 签名、主从信道契约、RBAC 权限与审计规范
 │   └── 01-http-api-contract.md                    # 【API 契约】控制面 REST/SSE 字典、CI 门禁契约、主从 HTTP/WS 契约与 RBAC 守卫
 ├── 04-tasks/        # TDD 实施规划与验收：Milestone 1~17 依赖拓扑、任务作战卡与自动化验收标准 (AC)
