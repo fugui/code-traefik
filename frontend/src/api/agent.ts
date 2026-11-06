@@ -161,6 +161,15 @@ export async function disarmAllProbes(agentId: string | number) {
   );
 }
 
+export async function armAllProbes(agentId: string | number) {
+  return apiRequest<{ message: string; agent?: Agent }>(
+    `/agents/${agentId}/probes/arm-all`,
+    {
+      method: 'POST',
+    }
+  );
+}
+
 export async function disarmProcessProbe(
   processId: string | number,
   force?: boolean
@@ -168,6 +177,15 @@ export async function disarmProcessProbe(
   const qs = force ? '?force=true' : '';
   return apiRequest<{ message: string; process_id: number; probe_status: string }>(
     `/processes/${processId}/disarm${qs}`,
+    {
+      method: 'POST',
+    }
+  );
+}
+
+export async function armProcessProbe(processId: string | number) {
+  return apiRequest<Process>(
+    `/processes/${processId}/arm`,
     {
       method: 'POST',
     }

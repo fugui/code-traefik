@@ -142,6 +142,7 @@ func RegisterAPIRoutes(r *gin.Engine) {
 		protected.POST("/agents/:id/lease/force-unlock", requireAdmin, ForceUnlockAgentLease)
 		protected.PUT("/agents/:id/process-mounts", BatchUpdateProcessMounts)
 		protected.POST("/agents/:id/probes/disarm-all", DisarmAllProbes)
+		protected.POST("/agents/:id/probes/arm-all", ArmAllProbes)
 		protected.POST("/agents/:id/probes/rearm", RearmAgentProbes)
 
 		// 7. 业务进程部署映射域 (F-02)
@@ -152,6 +153,7 @@ func RegisterAPIRoutes(r *gin.Engine) {
 		protected.DELETE("/processes/:id", DeleteProcess)
 		protected.GET("/processes/:id/downstreams", GetProcessDownstreams)
 		protected.POST("/processes/:id/disarm", DisarmProcessProbe)
+		protected.POST("/processes/:id/arm", ArmProcessProbe)
 
 		// 8. 协同录制与架构拓扑域 (F-05, F-11, F-16)
 		protected.GET("/recording-sessions", ListRecordingSessions)

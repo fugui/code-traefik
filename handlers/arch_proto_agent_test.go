@@ -246,6 +246,7 @@ func RegisterRoutesForTest(r *gin.Engine) {
 		protected.POST("/agents/:id/lease/force-unlock", requireAdmin, handlers.ForceUnlockAgentLease)
 		protected.PUT("/agents/:id/process-mounts", handlers.BatchUpdateProcessMounts)
 		protected.POST("/agents/:id/probes/disarm-all", handlers.DisarmAllProbes)
+		protected.POST("/agents/:id/probes/arm-all", handlers.ArmAllProbes)
 		protected.POST("/agents/:id/probes/rearm", handlers.RearmAgentProbes)
 
 		// 进程
@@ -256,6 +257,7 @@ func RegisterRoutesForTest(r *gin.Engine) {
 		protected.DELETE("/processes/:id", handlers.DeleteProcess)
 		protected.GET("/processes/:id/downstreams", handlers.GetProcessDownstreams)
 		protected.POST("/processes/:id/disarm", handlers.DisarmProcessProbe)
+		protected.POST("/processes/:id/arm", handlers.ArmProcessProbe)
 
 		// 8. 协同录制与架构拓扑域 (F-05, F-11, F-16)
 		protected.GET("/recording-sessions", handlers.ListRecordingSessions)
@@ -1954,6 +1956,38 @@ func TestBatchProcessMounts_OptimisticLock_AndDisarm(t *testing.T) {
 	_ = json.Unmarshal(w.Body.Bytes(), &rearmResp)
 	if rearmResp["message"] == nil {
 		t.Fatalf("expected message in rearm response, got: %v", rearmResp)
+	}
+
+	// 9. 测试单进程激活探针 POST /api/processes/:id/arm
+	req = httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/processes/%d/arm", proc1ID), nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on arm, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var armedProc1 models.Process
+	_ = db.First(&armedProc1, proc1ID).Error
+	if armedProc1.ProbeDesiredState != models.ProbeDesiredStateArmed {
+		t.Fatalf("expected ARMED desired state on proc1, got %s", armedProc1.ProbeDesiredState)
+	}
+
+	// 10. 测试一键激活全部探针 POST /api/agents/:id/probes/arm-all
+	req = httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/agents/%d/probes/arm-all", agent.ID), nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on arm-all, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var allProcsArmed []models.Process
+	_ = db.Where("agent_id = ?", agent.ID).Find(&allProcsArmed).Error
+	for _, p := range allProcsArmed {
+		if p.ProbeDesiredState != models.ProbeDesiredStateArmed {
+			t.Fatalf("expected all procs ARMED after arm-all, got %s", p.ProbeDesiredState)
+		}
 	}
 }
 

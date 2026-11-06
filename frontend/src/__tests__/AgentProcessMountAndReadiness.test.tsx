@@ -344,4 +344,37 @@ describe('AgentProcessMountAndReadiness Test Suite', () => {
     expect(emptyDrawerHtml).toContain('data-testid="goto-mount-process-btn"');
     expect(emptyDrawerHtml).toContain('前往挂载架构进程 →');
   });
+
+  it('renders dynamic probe arm and disarm buttons based on probe_desired_state', () => {
+    const disarmedProc: Process = {
+      id: 'proc-disarmed-1',
+      agent_id: 'agent-101',
+      name: 'sut-order',
+      listen_port: 9001,
+      probe_desired_state: 'DISARMED',
+      probe_status: 'DISARMED',
+    };
+
+    const disarmedHtml = renderToString(
+      <MemoryRouter initialEntries={['/agents?scope=SHARED&agent_id=agent-101']}>
+        <ModuleUserProvider
+          value={{
+            user: adminUser,
+            loadingUser: false,
+            isEmbedded: false,
+            reloadUser: async () => {},
+          }}
+        >
+          <AgentManagementPage initialAgent={dummyAgent} initialProcesses={[disarmedProc]} />
+        </ModuleUserProvider>
+      </MemoryRouter>
+    );
+
+    // 验证当期望状态为 DISARMED 时：行内渲染 [激活探针] 按钮，且顶部渲染 [⚡ 一键激活全部探针]
+    expect(disarmedHtml).toContain('data-testid="arm-process-proc-disarmed-1"');
+    expect(disarmedHtml).toContain('激活探针');
+    expect(disarmedHtml).not.toContain('data-testid="disarm-process-proc-disarmed-1"');
+    expect(disarmedHtml).toContain('data-testid="arm-all-probes-btn"');
+    expect(disarmedHtml).toContain('⚡ 一键激活全部探针');
+  });
 });

@@ -229,6 +229,19 @@ export const AgentManagementPage: React.FC<AgentManagementPageProps> = ({
     }
   };
 
+  const handleArmAllProbes = async () => {
+    if (!selectedAgent) return;
+    try {
+      const res = await agentApi.armAllProbes(selectedAgent.id);
+      toast.success(res.message || '已一键激活全部探针');
+      const refreshed = await agentApi.getAgent(selectedAgent.id);
+      setProcesses(refreshed.processes ?? []);
+      setSelectedAgent(refreshed.agent);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '一键激活探针失败');
+    }
+  };
+
   const handleRearmAgent = async (agentId: string) => {
     try {
       const res = await agentApi.rearmAgentProbes(agentId);
@@ -275,6 +288,20 @@ export const AgentManagementPage: React.FC<AgentManagementPageProps> = ({
         return;
       }
       toast.error(errMsg || '卸载探针失败');
+    }
+  };
+
+  const handleArmProcess = async (procId: string) => {
+    try {
+      await agentApi.armProcessProbe(procId);
+      toast.success('进程探针已激活待命');
+      if (selectedAgent) {
+        const refreshed = await agentApi.getAgent(selectedAgent.id);
+        setProcesses(refreshed.processes ?? []);
+        setSelectedAgent(refreshed.agent);
+      }
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : '激活探针失败');
     }
   };
 
@@ -694,15 +721,27 @@ export const AgentManagementPage: React.FC<AgentManagementPageProps> = ({
                   </button>
                   {canWriteSelectedAgent && (
                     <>
-                      <button
-                        type="button"
-                        className="code-btn code-btn--secondary code-btn--xs"
-                        data-testid="disarm-all-probes-btn"
-                        onClick={() => void handleDisarmAllProbes()}
-                        title="一键卸载此 Agent 上的所有已激活探针"
-                      >
-                        一键卸载全部探针
-                      </button>
+                      {processes.length > 0 && processes.every((p) => p.probe_desired_state === 'DISARMED') ? (
+                        <button
+                          type="button"
+                          className="code-btn code-btn--primary code-btn--xs"
+                          data-testid="arm-all-probes-btn"
+                          onClick={() => void handleArmAllProbes()}
+                          title="一键激活此 Agent 上的所有进程探针"
+                        >
+                          ⚡ 一键激活全部探针
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          className="code-btn code-btn--secondary code-btn--xs"
+                          data-testid="disarm-all-probes-btn"
+                          onClick={() => void handleDisarmAllProbes()}
+                          title="一键卸载此 Agent 上的所有已激活探针"
+                        >
+                          一键卸载全部探针
+                        </button>
+                      )}
                       <button
                         type="button"
                         className="code-btn code-btn--secondary code-btn--xs"
@@ -826,15 +865,27 @@ export const AgentManagementPage: React.FC<AgentManagementPageProps> = ({
                                       重试对账
                                     </button>
                                   )}
-                                  <button
-                                    type="button"
-                                    className="code-btn code-btn--secondary code-btn--xs"
-                                    data-testid={`disarm-process-${proc.id}`}
-                                    onClick={() => void handleDisarmProcess(proc.id)}
-                                    title="卸载该进程的 eBPF 探针"
-                                  >
-                                    卸载探针
-                                  </button>
+                                  {proc.probe_desired_state === 'DISARMED' ? (
+                                    <button
+                                      type="button"
+                                      className="code-btn code-btn--primary code-btn--xs"
+                                      data-testid={`arm-process-${proc.id}`}
+                                      onClick={() => void handleArmProcess(proc.id)}
+                                      title="激活该进程的 eBPF 探针并设为待命"
+                                    >
+                                      激活探针
+                                    </button>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      className="code-btn code-btn--secondary code-btn--xs"
+                                      data-testid={`disarm-process-${proc.id}`}
+                                      onClick={() => void handleDisarmProcess(proc.id)}
+                                      title="卸载该进程的 eBPF 探针"
+                                    >
+                                      卸载探针
+                                    </button>
+                                  )}
                                   <button
                                     type="button"
                                     className="code-btn code-btn--danger code-btn--xs"

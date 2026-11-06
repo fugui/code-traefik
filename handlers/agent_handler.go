@@ -721,6 +721,74 @@ func DisarmAllProbes(c *gin.Context) {
 	})
 }
 
+// ArmAllProbes POST /api/agents/:id/probes/arm-all
+// 一键激活该 Agent 上全部进程探针
+func ArmAllProbes(c *gin.Context) {
+	uc := commonAuth.GetUserContext(c)
+	isAdmin := isCurrentUserAdmin(uc)
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "非法的 Agent ID"})
+		return
+	}
+
+	var agent models.Agent
+	if err := models.DB.First(&agent, id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Agent 不存在"})
+		return
+	}
+
+	if agent.Scope == models.ScopeShared && !isAdmin {
+		c.JSON(http.StatusForbidden, gin.H{"error": "普通用户无权操作公共 SHARED Agent"})
+		return
+	}
+	if agent.Scope == models.ScopePrivate && !isAdmin && (agent.OwnerID == nil || *agent.OwnerID != uc.UserID) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "无权操作他人私有 Agent"})
+		return
+	}
+
+	beforeAgent := agent
+
+	err = models.DB.Transaction(func(tx *gorm.DB) error {
+		status := models.ProbeStatusWaitingProc
+		diag := "已一键批量激活探针"
+		if agent.Status == models.AgentStatusOffline {
+			status = models.ProbeStatusOffline
+			diag = "已设为待命，等待 Agent 宿主机上线"
+		}
+
+		if err := tx.Model(&models.Process{}).Where("agent_id = ?", id).Updates(map[string]interface{}{
+			"probe_desired_state": models.ProbeDesiredStateArmed,
+			"probe_status":        status,
+			"diag_message":        diag,
+			"updated_by":          uc.UserID,
+		}).Error; err != nil {
+			return err
+		}
+
+		agent.MountsRevision++
+		return tx.Model(&models.Agent{}).Where("id = ?", id).Update("mounts_revision", agent.MountsRevision).Error
+	})
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "激活全部探针失败: " + err.Error()})
+		return
+	}
+
+	// 触发对账自愈
+	go func(aid uint64) {
+		_, _ = GetHubManager().RearmAgentProbes(context.Background(), aid)
+	}(id)
+
+	_ = models.DB.First(&agent, id).Error
+	recordAudit(c, "arm_all_probes", commonModels.AuditLevelP2, fmt.Sprintf("一键激活 Agent [%s] 上全部进程探针", agent.Name), "agent", agent.ID, agent.Name, beforeAgent, agent)
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "已一键激活全部探针",
+		"agent":   agent,
+	})
+}
+
 // RearmAgentProbes POST /api/agents/:id/probes/rearm
 func RearmAgentProbes(c *gin.Context) {
 	uc := commonAuth.GetUserContext(c)

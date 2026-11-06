@@ -417,3 +417,58 @@ func DisarmProcessProbe(c *gin.Context) {
 	recordAudit(c, "disarm_probe", commonModels.AuditLevelP2, fmt.Sprintf("卸载进程 [%s] 探针", proc.Name), "process", proc.ID, proc.Name, before, proc)
 	c.JSON(http.StatusOK, proc)
 }
+
+// ArmProcessProbe POST /api/processes/:id/arm
+// 单进程探针激活，将探针期望状态置为 ARMED，并触发待命预挂载对账与自愈
+func ArmProcessProbe(c *gin.Context) {
+	uc := commonAuth.GetUserContext(c)
+	isAdmin := isCurrentUserAdmin(uc)
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "非法的进程 ID"})
+		return
+	}
+
+	var proc models.Process
+	if err := models.DB.Preload("Agent").Preload("ArchProcess").First(&proc, id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "进程映射不存在"})
+		return
+	}
+
+	if proc.Agent != nil {
+		if proc.Agent.Scope == models.ScopeShared && !isAdmin {
+			c.JSON(http.StatusForbidden, gin.H{"error": "普通用户无权操作公共 SHARED 进程"})
+			return
+		}
+		if proc.Agent.Scope == models.ScopePrivate && !isAdmin && (proc.Agent.OwnerID == nil || *proc.Agent.OwnerID != uc.UserID) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "无权操作他人私有进程"})
+			return
+		}
+	}
+
+	before := proc
+	proc.ProbeDesiredState = models.ProbeDesiredStateArmed
+	if proc.Agent != nil && proc.Agent.Status == models.AgentStatusOffline {
+		proc.ProbeStatus = models.ProbeStatusOffline
+		proc.DiagMessage = "探针已设为待命，等待 Agent 宿主机上线"
+	} else {
+		proc.ProbeStatus = models.ProbeStatusWaitingProc
+		proc.DiagMessage = "探针已激活待命"
+	}
+	proc.UpdatedBy = uc.UserID
+
+	if err := models.DB.Save(&proc).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "更新进程状态失败: " + err.Error()})
+		return
+	}
+
+	// 推进 Agent MountsRevision 并清除退避触发对账自愈
+	_ = models.DB.Model(&models.Agent{}).Where("id = ?", proc.AgentID).Update("mounts_revision", gorm.Expr("mounts_revision + 1")).Error
+	go func(aid uint64) {
+		_, _ = GetHubManager().RearmAgentProbes(context.Background(), aid)
+	}(proc.AgentID)
+
+	proc.FillFromArchProcess()
+	recordAudit(c, "arm_probe", commonModels.AuditLevelP2, fmt.Sprintf("激活进程 [%s] 探针", proc.Name), "process", proc.ID, proc.Name, before, proc)
+	c.JSON(http.StatusOK, proc)
+}
