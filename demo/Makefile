@@ -2,7 +2,7 @@ export PATH := $(HOME)/go/bin:$(PATH)
 
 BIN_DIR := bin
 
-.PHONY: all build test clean start stop run-client proto
+.PHONY: all build test clean start stop run-client proto tmux
 
 all: build
 
@@ -28,9 +28,13 @@ test:
 	@echo "Running all demo unit and integration tests..."
 	go test -v ./...
 
-# 一键拉起后台服务集群
+# 一键拉起后台服务集群 (纯后台静默运行)
 start: build
 	@./scripts/start_all.sh
+
+# 一键启动 Tmux 田字格可视化集群 (推荐：4 进程 2x2 分屏实时监控与交互)
+tmux:
+	@./start.sh
 
 # 一键停止服务集群
 stop:
