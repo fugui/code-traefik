@@ -13,14 +13,15 @@ proto:
 		--descriptor_set_out=demo/demo.pb --include_imports \
 		demo/proto/order.proto demo/proto/account.proto demo/proto/inventory.proto
 
-# 编译四个进程的二进制产物
+# 编译微服务组件与 Agent 二进制产物
 build: proto
-	@echo "Building all 4 CROS RPC binaries into $(BIN_DIR)..."
+	@echo "Building all CROS RPC binaries and Agent into $(BIN_DIR)..."
 	@mkdir -p $(BIN_DIR)
 	go build -o $(BIN_DIR)/backend-account ./cmd/backend-account
 	go build -o $(BIN_DIR)/backend-inventory ./cmd/backend-inventory
 	go build -o $(BIN_DIR)/sut-order ./cmd/sut-order
 	go build -o $(BIN_DIR)/client ./cmd/client
+	go build -o $(BIN_DIR)/code-traefik-agent ../cmd/agent
 	@echo "Build complete."
 
 # 运行单元测试与集成测试
