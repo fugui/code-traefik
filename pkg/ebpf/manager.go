@@ -31,6 +31,11 @@ type CapabilityChecker interface {
 // LinuxCapabilityChecker 默认只读解析 /proc/self/status CapEff 位图
 type LinuxCapabilityChecker struct{}
 
+// NewLinuxCapabilityChecker 创建默认 Linux 能力探测器
+func NewLinuxCapabilityChecker() *LinuxCapabilityChecker {
+	return &LinuxCapabilityChecker{}
+}
+
 // Linux capability 常量
 const (
 	CapNetAdmin  = 12
@@ -171,6 +176,11 @@ func NewManager(cfg ManagerConfig) *Manager {
 // CheckPrivileges 检查宿主机 eBPF 所需特权
 func (m *Manager) CheckPrivileges() (bool, []string, string) {
 	return m.capChecker.CheckCapabilities()
+}
+
+// CheckCapabilities 检查宿主机 eBPF 所需特权 (等同于 CheckPrivileges)
+func (m *Manager) CheckCapabilities() (bool, []string, string) {
+	return m.CheckPrivileges()
 }
 
 // IsAttached 返回内核探针当前是否处于挂载状态

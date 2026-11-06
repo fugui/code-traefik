@@ -648,6 +648,9 @@ func (m *Manager) ProbeAgentOnce(ctx context.Context, agentID uint64) error {
 			updates["lease_holder_id"] = nil
 			updates["lease_acquired_at"] = nil
 			updates["lease_expires_at"] = nil
+
+			// 重启自愈：清除历史对账退避，允许立即对账
+			m.rearmBackoffs.Delete(agentID)
 		} else if agent.LeaseType != models.AgentLeaseNone {
 			// 正常持锁且存活：滑窗续约
 			exp := now.Add(DefaultLeaseTTL)
@@ -664,8 +667,8 @@ func (m *Manager) ProbeAgentOnce(ctx context.Context, agentID uint64) error {
 		return err
 	}
 
-	// 检查待命状态对账: 若 ArmedDigest 与预期 ExpectedArmedDigest 不一致，触发 Single-Flight 自动对账
-	if agent.ExpectedArmedDigest != "" && handshake.ArmedDigest != agent.ExpectedArmedDigest {
+	// 检查待命状态对账: 若 Agent 发生重启，或其实际 ArmedDigest 与预期 ExpectedArmedDigest 不一致，触发 Single-Flight 自动对账
+	if isRebooted || (agent.ExpectedArmedDigest != "" && handshake.ArmedDigest != agent.ExpectedArmedDigest) {
 		go func(aid uint64) {
 			_, _ = m.AutoRearmAgent(context.Background(), aid)
 		}(agentID)
@@ -823,6 +826,9 @@ func (m *Manager) AutoRearmAgent(ctx context.Context, agentID uint64) (*agentpro
 			Processes: specs,
 		}
 
+		// 提前固化期望摘要到 Agent，保证即便本次网络/权限失败，后续心跳仍能感知意图并自动自愈
+		_ = m.db.Model(&models.Agent{}).Where("id = ?", agentID).Update("expected_armed_digest", expectedDigest).Error
+
 		reqBytes, _ := json.Marshal(armReq)
 		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, agent.Endpoint+"/agent/v1/monitors/arm", bytes.NewReader(reqBytes))
 		if err != nil {
@@ -836,9 +842,6 @@ func (m *Manager) AutoRearmAgent(ctx context.Context, agentID uint64) (*agentpro
 		httpResp, doErr := m.httpClient.Do(httpReq)
 		if doErr != nil || (httpResp != nil && httpResp.StatusCode != http.StatusOK) {
 			// 对账失败：指数退避推进 (10s -> 30s -> 60s -> 300s)
-			if httpResp != nil {
-				_ = httpResp.Body.Close()
-			}
 			idx := 0
 			if val, ok := m.rearmBackoffs.Load(agentID); ok {
 				idx = val.(*rearmBackoffState).backoffIdx + 1
@@ -853,17 +856,56 @@ func (m *Manager) AutoRearmAgent(ctx context.Context, agentID uint64) (*agentpro
 			})
 
 			errMsg := "对账网络通信失败"
+			isCapDenied := false
+			var capMsg string
+
 			if doErr != nil {
 				errMsg = doErr.Error()
 			} else if httpResp != nil {
 				errMsg = fmt.Sprintf("HTTP 状态码 %d", httpResp.StatusCode)
+				if httpResp.StatusCode == http.StatusServiceUnavailable {
+					type armErrResp struct {
+						Error       string                         `json:"error"`
+						Diagnostics []agentproto.ProcessDiagStatus `json:"diagnostics"`
+					}
+					var errPayload armErrResp
+					if decErr := json.NewDecoder(httpResp.Body).Decode(&errPayload); decErr == nil {
+						if errPayload.Error != "" {
+							errMsg = errPayload.Error
+						}
+						for _, d := range errPayload.Diagnostics {
+							if d.Status == "CAP_DENIED" {
+								isCapDenied = true
+								if d.Message != "" {
+									capMsg = d.Message
+								}
+								break
+							}
+						}
+						if strings.Contains(errPayload.Error, "特权") || strings.Contains(errPayload.Error, "CAP_") {
+							isCapDenied = true
+						}
+					}
+				}
+				_ = httpResp.Body.Close()
 			}
 
-			// 标记进程异常状态 ProbeStatus = ERROR_FAILED
+			// 标记进程异常状态：若检测到特权缺失，精准标记为 CAP_DENIED，否则标记为 ERROR_FAILED
+			failedStatus := models.ProbeStatusErrorFailed
+			finalDiag := "自动对账待命失败: " + errMsg
+			if isCapDenied {
+				failedStatus = models.ProbeStatusCapDenied
+				if capMsg != "" {
+					finalDiag = capMsg
+				} else {
+					finalDiag = "缺少必要的 eBPF 内核特权 (CAP_BPF / CAP_NET_ADMIN)，请使用 sudo 启动 Agent"
+				}
+			}
+
 			_ = m.db.Model(&models.Process{}).Where("agent_id = ? AND probe_desired_state != ?", agentID, models.ProbeDesiredStateDisarmed).
 				Updates(map[string]interface{}{
-					"probe_status": models.ProbeStatusErrorFailed,
-					"diag_message": "自动对账待命失败: " + errMsg,
+					"probe_status": failedStatus,
+					"diag_message": finalDiag,
 				}).Error
 
 			return nil, fmt.Errorf("Agent %d 自动对账失败: %s", agentID, errMsg)
@@ -914,6 +956,8 @@ func (m *Manager) AutoRearmAgent(ctx context.Context, agentID uint64) (*agentpro
 					probeStatus = models.ProbeStatusWaitingProc
 				} else if diag.NeedReconnect {
 					probeStatus = models.ProbeStatusNeedReconnect
+				} else if diag.Status == "CAP_DENIED" {
+					probeStatus = models.ProbeStatusCapDenied
 				} else if diag.Status != "MONITORING" {
 					probeStatus = models.ProbeStatusErrorFailed
 				}
@@ -937,4 +981,10 @@ func (m *Manager) AutoRearmAgent(ctx context.Context, agentID uint64) (*agentpro
 		return nil, err
 	}
 	return res.(*agentproto.ArmStandbyResp), nil
+}
+
+// RearmAgentProbes 强制清除退避并立即对 Agent 触发一次探针预挂载对账 (自愈重试)
+func (m *Manager) RearmAgentProbes(ctx context.Context, agentID uint64) (*agentproto.ArmStandbyResp, error) {
+	m.rearmBackoffs.Delete(agentID)
+	return m.AutoRearmAgent(ctx, agentID)
 }

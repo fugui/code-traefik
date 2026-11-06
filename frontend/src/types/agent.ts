@@ -70,6 +70,7 @@ export interface Process {
   probe_desired_state?: 'ARMED' | 'DISARMED';
   probe_status?: ProbeStatus;
   probe_status_reason?: string;
+  diag_message?: string;
   module_ids?: string[];
   extra_downstreams?: string[];
   description?: string;

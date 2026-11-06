@@ -529,6 +529,21 @@ func TestAgentHub_SingleFlightRearm_BackoffAndOptimisticLock(t *testing.T) {
 				http.Error(w, "internal arm failure", http.StatusInternalServerError)
 				return
 			}
+			if atomic.LoadInt32(&shouldFailArm) == 2 {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusServiceUnavailable)
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{
+					"error": "缺少必要的 eBPF 特权",
+					"diagnostics": []agentproto.ProcessDiagStatus{
+						{
+							ProcessID: 1,
+							Status:    "CAP_DENIED",
+							Message:   "缺少特权: CAP_BPF, CAP_NET_ADMIN (CapEff: 0x0)",
+						},
+					},
+				})
+				return
+			}
 			var req agentproto.ArmStandbyReq
 			_ = json.NewDecoder(r.Body).Decode(&req)
 			digest := agentproto.ComputeArmedDigest(req.Processes)
@@ -632,5 +647,45 @@ func TestAgentHub_SingleFlightRearm_BackoffAndOptimisticLock(t *testing.T) {
 	}
 	if freshProc.ProbeStatus != models.ProbeStatusError {
 		t.Fatalf("对账失败后进程状态期望 ERROR，实际: %s", freshProc.ProbeStatus)
+	}
+
+	// 6. 测试 503 CAP_DENIED 精准落盘与 ExpectedArmedDigest 提前持久化
+	atomic.StoreInt32(&shouldFailArm, 2)
+
+	_, capErr := mgr.RearmAgentProbes(context.Background(), agent.ID)
+	if capErr == nil {
+		t.Fatalf("期望对账返回特权不足失败，但返回 nil")
+	}
+
+	if err := db.First(&freshProc, proc.ID).Error; err != nil {
+		t.Fatalf("查询 Process 失败: %v", err)
+	}
+	if freshProc.ProbeStatus != models.ProbeStatusCapDenied {
+		t.Fatalf("503 特权不足对账失败后期望 CAP_DENIED，实际: %s", freshProc.ProbeStatus)
+	}
+	if !strings.Contains(freshProc.DiagMessage, "缺少特权") {
+		t.Fatalf("期望 DiagMessage 包含缺少特权详情，实际: %s", freshProc.DiagMessage)
+	}
+
+	var freshAgent models.Agent
+	if err := db.First(&freshAgent, agent.ID).Error; err != nil {
+		t.Fatalf("查询 Agent 失败: %v", err)
+	}
+	if freshAgent.ExpectedArmedDigest == "" {
+		t.Fatalf("期望即便失败也提前固化 ExpectedArmedDigest，实际为空")
+	}
+
+	// 7. 测试 RearmAgentProbes 强制清除退避并自愈恢复
+	atomic.StoreInt32(&shouldFailArm, 0)
+	rearmResp, rearmOkErr := mgr.RearmAgentProbes(context.Background(), agent.ID)
+	if rearmOkErr != nil || rearmResp == nil {
+		t.Fatalf("RearmAgentProbes 期望成功，实际报错: %v", rearmOkErr)
+	}
+
+	if err := db.First(&freshProc, proc.ID).Error; err != nil {
+		t.Fatalf("查询 Process 失败: %v", err)
+	}
+	if freshProc.ProbeStatus != models.ProbeStatusReady {
+		t.Fatalf("自愈恢复后期望 READY，实际: %s", freshProc.ProbeStatus)
 	}
 }

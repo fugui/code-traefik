@@ -82,7 +82,7 @@ export const ArchProcessDetailPane: React.FC<ArchProcessDetailPaneProps> = ({
     }
   };
 
-  const renderProbeStatusBadge = (status?: string) => {
+  const renderProbeStatusBadge = (status?: string, reason?: string) => {
     switch (status) {
       case 'READY':
         return (
@@ -174,6 +174,23 @@ export const ArchProcessDetailPane: React.FC<ArchProcessDetailPaneProps> = ({
             Agent 离线 (OFFLINE)
           </span>
         );
+      case 'CAP_DENIED':
+        return (
+          <span
+            className="code-badge"
+            style={{
+              background: 'rgba(239, 68, 68, 0.15)',
+              color: 'var(--color-danger)',
+              border: '1px solid var(--color-danger)',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '4px',
+            }}
+            title={reason || '权限不足：缺少 CAP_BPF / root 特权 (CAP_DENIED)'}
+          >
+            <AlertTriangle size={11} /> 权限不足 (CAP_DENIED)
+          </span>
+        );
       case 'ERROR':
       default:
         return (
@@ -187,6 +204,7 @@ export const ArchProcessDetailPane: React.FC<ArchProcessDetailPaneProps> = ({
               alignItems: 'center',
               gap: '4px',
             }}
+            title={reason || (status ? `${status} 异常` : '探针异常 (ERROR)')}
           >
             <AlertTriangle size={11} /> 异常 ({status || 'ERROR'})
           </span>
@@ -746,7 +764,7 @@ export const ArchProcessDetailPane: React.FC<ArchProcessDetailPaneProps> = ({
                               <span className="code-color-muted code-text-xs">继承默认</span>
                             )}
                           </td>
-                          <td>{renderProbeStatusBadge(m.probe_status)}</td>
+                          <td>{renderProbeStatusBadge(m.probe_status, m.diag_message || m.probe_status_reason)}</td>
                           <td>
                             <span
                               className="code-badge"

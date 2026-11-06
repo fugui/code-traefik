@@ -226,8 +226,8 @@ tmux send-keys -t "$PANE_L_TOP" "./bin/backend-account --addr=127.0.0.1:9002" C-
 # 2. 启动左中: 库存服务 (:9003)
 tmux send-keys -t "$PANE_L_MID" "./bin/backend-inventory --addr=127.0.0.1:9003" C-m
 
-# 3. 启动左下: 数据面 code-traefik-agent (:9091)
-tmux send-keys -t "$PANE_L_BOT" "./bin/code-traefik-agent --listen=127.0.0.1:9091" C-m
+# 3. 启动左下: 数据面 code-traefik-agent (:9091) - 使用提权启动器确保具备 eBPF 内核特权
+tmux send-keys -t "$PANE_L_BOT" "./start-agent.sh --listen=127.0.0.1:9091" C-m
 
 # 4. 启动右上: 订单网关核心 (:9001) - 稍候 0.2 秒确保下游端口已就绪
 tmux send-keys -t "$PANE_R_TOP" "sleep 0.2 && ./bin/sut-order --addr=127.0.0.1:9001 --account-addr=127.0.0.1:9002 --inventory-addr=127.0.0.1:9003" C-m

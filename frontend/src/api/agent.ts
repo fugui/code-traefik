@@ -173,3 +173,18 @@ export async function disarmProcessProbe(
     }
   );
 }
+
+export async function rearmAgentProbes(agentId: string | number) {
+  return apiRequest<{
+    message: string;
+    agent?: Agent;
+    processes?: Process[];
+    diagnostics?: unknown;
+    has_error: boolean;
+  }>(
+    `/agents/${agentId}/probes/rearm`,
+    {
+      method: 'POST',
+    }
+  );
+}

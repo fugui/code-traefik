@@ -22,6 +22,8 @@ describe('AgentProcessMountAndReadiness Test Suite', () => {
     mounts_revision: 3,
     fallback_agent_id: 99,
     lease_type: '',
+    has_ebpf_cap: true,
+    cap_detail: 'EUID=0 (Full root privileges)',
   };
 
   const dummyProcesses: Process[] = [
@@ -57,6 +59,30 @@ describe('AgentProcessMountAndReadiness Test Suite', () => {
       effective_listen_port: 8082,
       probe_desired_state: 'ARMED',
       probe_status: 'WAITING_PROC',
+      advertise_ip: '192.168.56.18',
+    },
+    {
+      id: 'p4',
+      agent_id: 'agent-101',
+      arch_process_id: 4,
+      name: 'proc-pay-srv',
+      listen_port: 8083,
+      effective_listen_port: 8083,
+      probe_desired_state: 'ARMED',
+      probe_status: 'CAP_DENIED',
+      diag_message: '缺少特权: CAP_BPF, CAP_NET_ADMIN',
+      advertise_ip: '192.168.56.18',
+    },
+    {
+      id: 'p5',
+      agent_id: 'agent-101',
+      arch_process_id: 5,
+      name: 'proc-notify-srv',
+      listen_port: 8084,
+      effective_listen_port: 8084,
+      probe_desired_state: 'ARMED',
+      probe_status: 'ERROR',
+      diag_message: '自动对账待命失败: HTTP 状态码 503',
       advertise_ip: '192.168.56.18',
     },
   ];
@@ -142,6 +168,13 @@ describe('AgentProcessMountAndReadiness Test Suite', () => {
     expect(html).toContain('团队公共 Agent');
     expect(html).toContain('mounts-revision-badge');
     expect(html).toContain('fallback-agent-badge');
+    expect(html).toContain('agent-cap-ready-agent-101');
+    expect(html).toContain('probe-badge-cap-denied');
+    expect(html).toContain('🔴 CAP_DENIED');
+    expect(html).toContain('自动对账待命失败: HTTP 状态码 503');
+    expect(html).toContain('rearm-agent-probes-btn');
+    expect(html).toContain('rearm-process-p4');
+    expect(html).toContain('rearm-process-p5');
   });
 
   it('renders RecordingStartDrawer with 7-state badges, zero-restart banner, and need-reconnect warning', () => {

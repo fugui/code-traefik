@@ -246,6 +246,7 @@ func RegisterRoutesForTest(r *gin.Engine) {
 		protected.POST("/agents/:id/lease/force-unlock", requireAdmin, handlers.ForceUnlockAgentLease)
 		protected.PUT("/agents/:id/process-mounts", handlers.BatchUpdateProcessMounts)
 		protected.POST("/agents/:id/probes/disarm-all", handlers.DisarmAllProbes)
+		protected.POST("/agents/:id/probes/rearm", handlers.RearmAgentProbes)
 
 		// 进程
 		protected.GET("/processes", handlers.ListProcesses)
@@ -1939,6 +1940,20 @@ func TestBatchProcessMounts_OptimisticLock_AndDisarm(t *testing.T) {
 		if p.ProbeDesiredState != models.ProbeDesiredStateDisarmed || p.ProbeStatus != models.ProbeStatusDisarmed {
 			t.Fatalf("expected all procs DISARMED after disarm-all, got %s / %s", p.ProbeDesiredState, p.ProbeStatus)
 		}
+	}
+
+	// 8. 测试探针重试对账 POST /api/agents/:id/probes/rearm
+	req = httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/agents/%d/probes/rearm", agent.ID), nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on rearm, got %d: %s", w.Code, w.Body.String())
+	}
+	var rearmResp map[string]interface{}
+	_ = json.Unmarshal(w.Body.Bytes(), &rearmResp)
+	if rearmResp["message"] == nil {
+		t.Fatalf("expected message in rearm response, got: %v", rearmResp)
 	}
 }
 

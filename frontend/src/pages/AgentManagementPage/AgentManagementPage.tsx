@@ -229,6 +229,26 @@ export const AgentManagementPage: React.FC<AgentManagementPageProps> = ({
     }
   };
 
+  const handleRearmAgent = async (agentId: string) => {
+    try {
+      const res = await agentApi.rearmAgentProbes(agentId);
+      if (res.has_error) {
+        toast.warning(res.message);
+      } else {
+        toast.success(res.message || '探针预挂载对账成功');
+      }
+      if (res.processes) {
+        setProcesses(res.processes);
+      }
+      if (res.agent) {
+        setSelectedAgent(res.agent);
+      }
+      await loadAgents();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '探针重试对账失败');
+    }
+  };
+
   const handleDisarmProcess = async (procId: string) => {
     try {
       await agentApi.disarmProcessProbe(procId);
@@ -350,6 +370,21 @@ export const AgentManagementPage: React.FC<AgentManagementPageProps> = ({
             ⚫ OFFLINE
           </span>
         );
+      case 'CAP_DENIED':
+        return (
+          <span
+            className="code-badge"
+            style={{
+              background: 'rgba(239, 68, 68, 0.15)',
+              color: 'var(--color-danger)',
+              border: '1px solid var(--color-danger)',
+            }}
+            title={reason || '权限不足：缺少 CAP_BPF / root 特权 (CAP_DENIED)'}
+            data-testid="probe-badge-cap-denied"
+          >
+            🔴 CAP_DENIED
+          </span>
+        );
       case 'ERROR':
       default:
         return (
@@ -360,7 +395,7 @@ export const AgentManagementPage: React.FC<AgentManagementPageProps> = ({
               color: 'var(--color-danger)',
               border: '1px solid var(--color-danger)',
             }}
-            title={reason || '探针异常 (ERROR)'}
+            title={reason || (status ? `${status} 异常` : '探针异常 (ERROR)')}
             data-testid="probe-badge-error"
           >
             🔴 {status || 'ERROR'}
@@ -506,6 +541,40 @@ export const AgentManagementPage: React.FC<AgentManagementPageProps> = ({
                         <span className="code-meta-label">归属作用域:</span>
                         <span className="code-badge code-badge--secondary">{ag.scope}</span>
                       </div>
+                      <div className="code-meta-item">
+                        <span className="code-meta-label">eBPF 特权:</span>
+                        {ag.has_ebpf_cap ? (
+                          <span
+                            className="code-badge"
+                            style={{
+                              background: 'rgba(34, 197, 94, 0.15)',
+                              color: 'var(--color-success)',
+                              border: '1px solid var(--color-success)',
+                              fontSize: '0.75rem',
+                              padding: '1px 6px',
+                            }}
+                            title={ag.cap_detail || '具备完整 root/eBPF 权限'}
+                            data-testid={`agent-cap-ready-${ag.id}`}
+                          >
+                            🟢 具备
+                          </span>
+                        ) : (
+                          <span
+                            className="code-badge"
+                            style={{
+                              background: 'rgba(239, 68, 68, 0.15)',
+                              color: 'var(--color-danger)',
+                              border: '1px solid var(--color-danger)',
+                              fontSize: '0.75rem',
+                              padding: '1px 6px',
+                            }}
+                            title={ag.cap_detail || '缺少 CAP_BPF / root 特权，无法挂载探针'}
+                            data-testid={`agent-cap-missing-${ag.id}`}
+                          >
+                            🔴 缺失
+                          </span>
+                        )}
+                      </div>
                       {ag.scope === 'PRIVATE' && (
                         <div className="code-meta-item">
                           <span className="code-meta-label">所有者:</span>
@@ -569,6 +638,19 @@ export const AgentManagementPage: React.FC<AgentManagementPageProps> = ({
                     >
                       v{selectedAgent.mounts_revision ?? 0}
                     </span>
+                    <span
+                      className="code-badge"
+                      style={{
+                        fontSize: '0.75rem',
+                        background: selectedAgent.has_ebpf_cap ? 'rgba(34, 197, 94, 0.12)' : 'rgba(239, 68, 68, 0.12)',
+                        color: selectedAgent.has_ebpf_cap ? 'var(--color-success)' : 'var(--color-danger)',
+                        border: selectedAgent.has_ebpf_cap ? '1px solid var(--color-success)' : '1px solid var(--color-danger)',
+                      }}
+                      title={selectedAgent.cap_detail || (selectedAgent.has_ebpf_cap ? '具备完整 root/eBPF 权限' : '缺少特权')}
+                      data-testid={`agent-cap-${selectedAgent.has_ebpf_cap ? 'ready' : 'missing'}-${selectedAgent.id}`}
+                    >
+                      {selectedAgent.has_ebpf_cap ? '🟢 eBPF 特权就绪' : '🔴 缺少 eBPF 特权'}
+                    </span>
                     {selectedAgent.fallback_agent_id && (
                       <span
                         className="code-badge"
@@ -620,6 +702,16 @@ export const AgentManagementPage: React.FC<AgentManagementPageProps> = ({
                         title="一键卸载此 Agent 上的所有已激活探针"
                       >
                         一键卸载全部探针
+                      </button>
+                      <button
+                        type="button"
+                        className="code-btn code-btn--secondary code-btn--xs"
+                        data-testid="rearm-agent-probes-btn"
+                        disabled={selectedAgent.status !== 'ONLINE' || Boolean(selectedAgent.lease_type) || processes.length === 0}
+                        onClick={() => void handleRearmAgent(selectedAgent.id)}
+                        title="立即向 Agent 下发待命预挂载对账，清除退避并自愈探针状态"
+                      >
+                        🔄 探针立即对账
                       </button>
                       <button
                         type="button"
@@ -701,7 +793,7 @@ export const AgentManagementPage: React.FC<AgentManagementPageProps> = ({
                           <td className="code-font-mono code-text-xs code-color-muted">
                             {proc.override_cmd_pattern || proc.cmd_pattern || proc.arch_process?.default_cmd_pattern || '-'}
                           </td>
-                          <td>{renderProbeStatusBadge(proc.probe_status, proc.probe_status_reason)}</td>
+                          <td>{renderProbeStatusBadge(proc.probe_status, proc.diag_message || proc.probe_status_reason)}</td>
                           <td>
                             <span
                               className="code-badge"
@@ -723,6 +815,17 @@ export const AgentManagementPage: React.FC<AgentManagementPageProps> = ({
                             <div className="code-table-actions">
                               {canWriteSelectedAgent ? (
                                 <>
+                                  {(proc.probe_status === 'ERROR' || proc.probe_status === 'CAP_DENIED') && (
+                                    <button
+                                      type="button"
+                                      className="code-btn code-btn--primary code-btn--xs"
+                                      data-testid={`rearm-process-${proc.id}`}
+                                      onClick={() => void handleRearmAgent(selectedAgent.id)}
+                                      title={proc.diag_message || '重试预挂载待命对账并自愈'}
+                                    >
+                                      重试对账
+                                    </button>
+                                  )}
                                   <button
                                     type="button"
                                     className="code-btn code-btn--secondary code-btn--xs"

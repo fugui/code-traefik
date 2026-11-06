@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/netip"
@@ -450,14 +451,18 @@ func (s *AgentServer) handleDiscoverProcesses(w http.ResponseWriter, r *http.Req
 func (s *AgentServer) handleSyncMonitors(w http.ResponseWriter, r *http.Request) {
 	var req agentproto.SyncMonitorReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Printf("[Agent] [HTTP 400] 录制/重放监控下发 JSON 解析失败: %v", err)
 		http.Error(w, "Invalid JSON payload", http.StatusBadRequest)
 		return
 	}
+
+	log.Printf("[Agent] [HTTP] 收到录制/重放监控下发请求: SessionID=%d, 进程数=%d (RemoteAddr: %s)", req.SessionID, len(req.Processes), r.RemoteAddr)
 
 	s.mu.Lock()
 	// SingleTenantGuard: 租约互斥检查
 	if s.activeLeaseType != "" && (s.activeLeaseType != "RECORDING" || s.activeRefID != req.SessionID) {
 		s.mu.Unlock()
+		log.Printf("[Agent] [HTTP 409] 租约冲突: 当前已被 %s (RefID=%d) 占用，拒绝 SessionID=%d", s.activeLeaseType, s.activeRefID, req.SessionID)
 		http.Error(w, "Conflict: Agent leased by other task", http.StatusConflict)
 		return
 	}
@@ -467,9 +472,12 @@ func (s *AgentServer) handleSyncMonitors(w http.ResponseWriter, r *http.Request)
 
 	diags, err := s.ebpfMgr.SyncMonitors(req.SessionID, req.Processes)
 	if err != nil {
+		log.Printf("[Agent] [❌ 下发监控失败 (HTTP 503)]: %v (SessionID=%d)", err, req.SessionID)
 		http.Error(w, fmt.Sprintf("下发监控失败: %v", err), http.StatusServiceUnavailable)
 		return
 	}
+
+	log.Printf("[Agent] [✓ 监控下发成功]: SessionID=%d, 诊断进程数=%d", req.SessionID, len(diags))
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -480,18 +488,23 @@ func (s *AgentServer) handleSyncMonitors(w http.ResponseWriter, r *http.Request)
 func (s *AgentServer) handleArmStandby(w http.ResponseWriter, r *http.Request) {
 	clientClaim := r.Header.Get(agentproto.HeaderClaimCode)
 	if clientClaim != "" && clientClaim != s.claimCode {
+		log.Printf("[Agent] [HTTP 403] 待命预挂载认领码不匹配 (RemoteAddr: %s)", r.RemoteAddr)
 		http.Error(w, "Forbidden: Invalid ClaimCode", http.StatusForbidden)
 		return
 	}
 
 	var req agentproto.ArmStandbyReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Printf("[Agent] [HTTP 400] 待命预挂载 JSON 解析失败: %v", err)
 		http.Error(w, "Invalid JSON payload: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
+	log.Printf("[Agent] [HTTP] 收到待命预挂载请求: Revision=%d, 进程数=%d (RemoteAddr: %s)", req.Revision, len(req.Processes), r.RemoteAddr)
+
 	diags, err := s.ebpfMgr.ArmStandby(req.Processes)
 	if err != nil {
+		log.Printf("[Agent] [❌ 待命预挂载被拒绝 (HTTP 503)]: %v (进程数=%d)", err, len(req.Processes))
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusServiceUnavailable)
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -509,6 +522,8 @@ func (s *AgentServer) handleArmStandby(w http.ResponseWriter, r *http.Request) {
 	s.armedProcesses = req.Processes
 	s.latestDiags = diags
 	s.mu.Unlock()
+
+	log.Printf("[Agent] [✓ 待命预挂载生效 (ARMED)]: Revision=%d, 摘要=%s, 就绪进程数=%d", req.Revision, digest, len(diags))
 
 	resp := agentproto.ArmStandbyResp{
 		Revision:    req.Revision,
@@ -552,6 +567,8 @@ func (s *AgentServer) handleStopMonitor(w http.ResponseWriter, r *http.Request) 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	log.Printf("[Agent] [HTTP] 收到停录请求: ActiveSessionID=%d (RemoteAddr: %s)", s.activeRefID, r.RemoteAddr)
+
 	_, dropped, total := s.buffer.Stats()
 	bypassed, _, _ := s.ebpfMgr.GetStats()
 
@@ -567,8 +584,11 @@ func (s *AgentServer) handleStopMonitor(w http.ResponseWriter, r *http.Request) 
 
 	// 平滑停止录制：排空在途数据并解绑大流量 Tracepoint，但保留长连接与待命状态 (停录不断连)
 	s.ebpfMgr.StopCapture()
+	oldRefID := s.activeRefID
 	s.activeLeaseType = ""
 	s.activeRefID = 0
+
+	log.Printf("[Agent] [✓ 停录完成]: SessionID=%d, 捕获总帧数=%d, 丢帧=%d, 恢复 ARMED 待命状态", oldRefID, total, dropped)
 
 	resp := agentproto.StopMonitorResp{
 		CapturedFrames:    total,
@@ -715,6 +735,7 @@ func (s *AgentServer) handleCancelReplay(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *AgentServer) handlePurge(w http.ResponseWriter, r *http.Request) {
+	log.Printf("[Agent] [HTTP] 收到强制清理与复位请求 (Purge, RemoteAddr: %s)", r.RemoteAddr)
 	s.PurgeAll()
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -725,9 +746,12 @@ func (s *AgentServer) handlePurge(w http.ResponseWriter, r *http.Request) {
 func (s *AgentServer) handleStream(w http.ResponseWriter, r *http.Request) {
 	conn, err := s.upgrader.Upgrade(w, r, nil)
 	if err != nil {
+		log.Printf("[Agent] [HTTP] WebSocket 协议升级失败: %v", err)
 		return
 	}
 	defer conn.Close()
+
+	log.Printf("[Agent] [HTTP] 管控端已建立流量数据流 WebSocket 传输信道 (RemoteAddr: %s)", r.RemoteAddr)
 
 	atomic.StoreInt32(&s.wsActive, 1)
 	defer atomic.StoreInt32(&s.wsActive, 0)

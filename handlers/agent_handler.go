@@ -720,3 +720,72 @@ func DisarmAllProbes(c *gin.Context) {
 		"agent":   agent,
 	})
 }
+
+// RearmAgentProbes POST /api/agents/:id/probes/rearm
+func RearmAgentProbes(c *gin.Context) {
+	uc := commonAuth.GetUserContext(c)
+	isAdmin := isCurrentUserAdmin(uc)
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "非法的 Agent ID"})
+		return
+	}
+
+	var agent models.Agent
+	if err := models.DB.First(&agent, id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Agent 不存在"})
+		return
+	}
+
+	if agent.Scope == models.ScopeShared && !isAdmin {
+		c.JSON(http.StatusForbidden, gin.H{"error": "普通用户无权操作公共 SHARED Agent"})
+		return
+	}
+	if agent.Scope == models.ScopePrivate && !isAdmin && (agent.OwnerID == nil || *agent.OwnerID != uc.UserID) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "无权操作他人私有 Agent"})
+		return
+	}
+
+	if agent.Status != models.AgentStatusOnline {
+		c.JSON(http.StatusConflict, gin.H{"error": "Agent 当前处于离线状态，无法执行探针预挂载对账"})
+		return
+	}
+
+	beforeAgent := agent
+
+	// 强制清空退避并立即对账
+	mgr := GetHubManager()
+	diagResp, rearmErr := mgr.RearmAgentProbes(c.Request.Context(), agent.ID)
+
+	// 刷新查询最新进程列表
+	procs := make([]models.Process, 0)
+	_ = models.DB.Preload("ArchProcess.Group").Preload("ArchProcess.Modules").
+		Where("agent_id = ?", agent.ID).
+		Order("effective_listen_port ASC, id ASC").
+		Find(&procs).Error
+	for i := range procs {
+		procs[i].FillFromArchProcess()
+	}
+
+	_ = models.DB.First(&agent, id).Error
+	recordAudit(c, "rearm_probes", commonModels.AuditLevelP2, fmt.Sprintf("对 Agent [%s] 触发探针重新对账自愈", agent.Name), "agent", agent.ID, agent.Name, beforeAgent, agent)
+
+	if rearmErr != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"message":     "对账完成但存在告警: " + rearmErr.Error(),
+			"agent":       agent,
+			"processes":   procs,
+			"diagnostics": diagResp,
+			"has_error":   true,
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":     "探针预挂载对账成功",
+		"agent":       agent,
+		"processes":   procs,
+		"diagnostics": diagResp,
+		"has_error":   false,
+	})
+}
