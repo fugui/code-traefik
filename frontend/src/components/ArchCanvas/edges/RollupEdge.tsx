@@ -67,6 +67,10 @@ export const RollupEdge: React.FC<EdgeProps<ArchCanvasEdge>> = ({
       case 'VERIFIED':
         strokeColor = 'var(--color-success)';
         break;
+      case 'OUTBOUND_VERIFIED':
+        strokeColor = 'var(--color-info)';
+        strokeDasharray = '6 3';
+        break;
       case 'UNCOVERED':
         strokeColor = 'var(--color-text-muted)';
         strokeDasharray = '5 5';

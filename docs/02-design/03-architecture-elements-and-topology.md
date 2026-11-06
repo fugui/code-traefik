@@ -486,16 +486,17 @@ flowchart TD
 > 1. 当进程 $P$ 仅承载 1 个模块（$|M(P)| = 1$）时，即便未携带 Trace 且未声明 `DEPEND`，调用方在物理上也必然是唯一的 $M(P)[0]$。前置收敛保证单模块进程的违规外联被 100% 裁决为 **`VIOLATION`**；
 > 2. 同机跨进程互调时，Agent 依据 Socket inode 反查确认发起方 PID 属于纳管进程，从而将对端 INGRESS 关联至发起方进程，避免误判为外部未知调用。
 
-### 5.3 架构一致性六分类比对规则与算法
+### 5.3 架构一致性七分类比对规则与算法
 
-比对算法只针对**“源模块所在进程在本批次被纳管监控”**的静态依赖边进行评估，输出互斥完备的六类比对结果（彻底消除因未监控模块产生的虚假未覆盖噪音）：
+比对算法只针对**“源模块所在进程在本批次被纳管监控”**的静态依赖边进行评估，输出互斥完备的七类比对结果（既消除因未监控模块产生的虚假未覆盖噪音，又严密区分双端闭环验证与单端出站证实）：
 
 | 结果分类枚举 | 中文标签 | 严格判定条件 | 架构治理含义与 UI 视觉语义 |
 | :--- | :--- | :--- | :--- |
-| **`VERIFIED`** | 已验证合规 | 静态声明跨进程依赖 `SrcModule --DEPEND--> (svc, op)`，且实测归属到 `SrcModule` 的跨进程调用 $\ge 1$ | 架构设计与实测运行完全一致（`--color-success` 绿色实线） |
+| **`VERIFIED`** | 已验证合规 | ① 内部跨进程依赖：源端与目标端均已纳管监控，且实测归属到 `SrcModule` 的跨进程调用 $\ge 1$；<br>② 外部服务依赖（`is_external=true`）：目标无法安装 Agent，源端实测出站调用 $\ge 1$ 即完成终点证实 | 架构设计与实测运行完全一致且形成闭环（`--color-success` 绿色实线） |
+| **`OUTBOUND_VERIFIED`** | 单端已出站 | 静态声明为内部跨进程依赖，源端已监控且实测出站调用 $\ge 1$，但**目标供给方物理进程未加入本次监控批次** | 源端确凿发起了契约调用，但目标端处于观测盲区，提示纳管目标端以完成双端闭环（`--color-info` 青色虚线 `6 3`） |
 | **`VIOLATION`** | 架构漂移越权 | 实测精确定位到 `SrcModule`，但 `SrcModule` **未声明**该 `DEPEND(svc, op)`（含调用未登记接口或已登记其他模块） | **高优架构漂移告警**：源码存在未备案的私自跨进程调用（`--color-danger` 红色告警实线） |
-| **`UNCOVERED`** | 本次未触发 | 静态声明为跨进程依赖，源模块与目标供给模块所在进程**均在本次协同监控集合中**，但本次任务未捕获该调用 | 依赖已就绪但当前业务测试用例未覆盖该调用路径（`--color-text-muted` 灰色虚线） |
-| **`NOT_MONITORED`** | 目标未纳管 | 静态声明为跨进程依赖，源模块所在进程已被监控，但**目标供给模块所在物理进程未加入本次监控批次** | 物理上不可观测，**不计入 `UNCOVERED` 覆盖率分母**（`--color-text-muted` 浅灰点划线） |
+| **`UNCOVERED`** | 本次未触发 | 静态声明为跨进程依赖，源模块与目标供给模块所在进程**均在本次协同监控集合中**，但本次任务未捕获该调用 | 依赖已就绪但当前业务测试用例未覆盖该调用路径（`--color-text-muted` 灰色虚线 `5 5`） |
+| **`NOT_MONITORED`** | 目标未纳管 | 静态声明为跨进程依赖，源模块所在进程已被监控，**目标供给模块所在物理进程未加入本次监控批次，且实测未捕获调用** | 物理上不可观测且未产生出站调用，**不计入 `UNCOVERED` 覆盖率分母**（`--color-text-muted` 浅灰点划线 `2 4`） |
 | **`NOT_OBSERVABLE`** | 进程内不可观测 | 静态声明为同进程内两模块调用（依据该批次快照 `SrcModule` 与 `DstModule` 绑定在同一 `ProcessID`） | 物理上走函数调用不经过内核网络栈，**不计入 `UNCOVERED` 分母**（`--color-info` 蓝色徽章） |
 | **`UNATTRIBUTED`** | 进程级待定归属 | 多模块进程发出的调用缺少父 Trace 且存在重复声明，只能定位于 `Process_P -> DstModule` | 提示在源码中补充 DOTR Trace 扩展头或在架构中心收敛重复契约（`--color-warning` 琥珀色边） |
 
@@ -507,12 +508,13 @@ package topology
 type VerificationStatus string
 
 const (
-	StatusVerified      VerificationStatus = "VERIFIED"
-	StatusViolation     VerificationStatus = "VIOLATION"
-	StatusUncovered     VerificationStatus = "UNCOVERED"
-	StatusNotMonitored  VerificationStatus = "NOT_MONITORED"
-	StatusNotObservable VerificationStatus = "NOT_OBSERVABLE"
-	StatusUnattributed  VerificationStatus = "UNATTRIBUTED"
+	StatusVerified         VerificationStatus = "VERIFIED"
+	StatusOutboundVerified VerificationStatus = "OUTBOUND_VERIFIED"
+	StatusViolation        VerificationStatus = "VIOLATION"
+	StatusUncovered        VerificationStatus = "UNCOVERED"
+	StatusNotMonitored     VerificationStatus = "NOT_MONITORED"
+	StatusNotObservable    VerificationStatus = "NOT_OBSERVABLE"
+	StatusUnattributed     VerificationStatus = "UNATTRIBUTED"
 )
 
 type ConsistencyEdgeResult struct {
@@ -529,15 +531,16 @@ type ConsistencyEdgeResult struct {
 }
 
 type ConsistencyReportDTO struct {
-	SessionID          uint64                  `json:"session_id"`
-	StaticModelVersion time.Time               `json:"static_model_version"` // 静态架构版本快照时刻，模型变更时缓存自动失效
-	VerifiedCount      int                     `json:"verified_count"`
-	ViolationCount     int                     `json:"violation_count"`
-	UncoveredCount     int                     `json:"uncovered_count"`
-	NotMonitoredCount  int                     `json:"not_monitored_count"`
-	NotObservableCount int                     `json:"not_observable_count"`
-	UnattributedCount  int                     `json:"unattributed_count"`
-	Edges              []ConsistencyEdgeResult `json:"edges"`
+	SessionID             uint64                  `json:"session_id"`
+	StaticModelVersion    time.Time               `json:"static_model_version"` // 静态架构版本快照时刻，模型变更时缓存自动失效
+	VerifiedCount         int                     `json:"verified_count"`
+	OutboundVerifiedCount int                     `json:"outbound_verified_count"`
+	ViolationCount        int                     `json:"violation_count"`
+	UncoveredCount        int                     `json:"uncovered_count"`
+	NotMonitoredCount     int                     `json:"not_monitored_count"`
+	NotObservableCount    int                     `json:"not_observable_count"`
+	UnattributedCount     int                     `json:"unattributed_count"`
+	Edges                 []ConsistencyEdgeResult `json:"edges"`
 }
 ```
 

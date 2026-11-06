@@ -1,7 +1,7 @@
 import React from 'react';
 import { Drawer } from '@code/common';
 import type { RollupEdgeModel } from '../../../types/topology_graph';
-import { ArrowRight, AlertTriangle, FileText } from 'lucide-react';
+import { ArrowRight, AlertTriangle, FileText, Info } from 'lucide-react';
 
 export interface EdgeDetailDrawerProps {
   open: boolean;
@@ -50,6 +50,13 @@ export const EdgeDetailDrawer: React.FC<EdgeDetailDrawerProps> = ({
               <span className={`code-arch-badge code-arch-edge-badge--${edge.status.toLowerCase()}`}>
                 {edge.status}
               </span>
+            </div>
+          )}
+
+          {edge.status === 'OUTBOUND_VERIFIED' && (
+            <div className="code-edge-detail__info-alert">
+              <Info size={14} />
+              <span>实测已确凿捕获源端出站调用，但目标供给方物理进程未纳入本次监控。建议在录制会话中纳管目标进程以实现双端闭环验证。</span>
             </div>
           )}
 

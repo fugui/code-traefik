@@ -10,17 +10,18 @@ import type { ConsistencyReportDTO, ConsistencyEdge } from '../../../types/traff
 import { findLCA } from './hierarchy';
 
 export const STATUS_PRIORITY: Record<ConsistencyEdgeStatus, number> = {
-  VIOLATION: 6,
-  UNATTRIBUTED: 5,
-  UNCOVERED: 4,
-  NOT_MONITORED: 3,
+  VIOLATION: 7,
+  UNATTRIBUTED: 6,
+  UNCOVERED: 5,
+  NOT_MONITORED: 4,
+  OUTBOUND_VERIFIED: 3,
   NOT_OBSERVABLE: 2,
   VERIFIED: 1,
 };
 
 /**
- * 六分类最差状态优先级合并
- * VIOLATION > UNATTRIBUTED > UNCOVERED > NOT_MONITORED > NOT_OBSERVABLE > VERIFIED
+ * 七分类最差状态优先级合并
+ * VIOLATION > UNATTRIBUTED > UNCOVERED > NOT_MONITORED > OUTBOUND_VERIFIED > NOT_OBSERVABLE > VERIFIED
  */
 export function mergeStatus(
   a?: ConsistencyEdgeStatus,

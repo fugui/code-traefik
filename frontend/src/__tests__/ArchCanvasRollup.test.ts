@@ -314,14 +314,69 @@ describe('ArchCanvasRollup Model Suite', () => {
     expect(STATUS_PRIORITY.VIOLATION).toBeGreaterThan(STATUS_PRIORITY.UNATTRIBUTED);
     expect(STATUS_PRIORITY.UNATTRIBUTED).toBeGreaterThan(STATUS_PRIORITY.UNCOVERED);
     expect(STATUS_PRIORITY.UNCOVERED).toBeGreaterThan(STATUS_PRIORITY.NOT_MONITORED);
-    expect(STATUS_PRIORITY.NOT_MONITORED).toBeGreaterThan(STATUS_PRIORITY.NOT_OBSERVABLE);
+    expect(STATUS_PRIORITY.NOT_MONITORED).toBeGreaterThan(STATUS_PRIORITY.OUTBOUND_VERIFIED);
+    expect(STATUS_PRIORITY.OUTBOUND_VERIFIED).toBeGreaterThan(STATUS_PRIORITY.NOT_OBSERVABLE);
     expect(STATUS_PRIORITY.NOT_OBSERVABLE).toBeGreaterThan(STATUS_PRIORITY.VERIFIED);
 
     expect(mergeStatus('VERIFIED', 'VIOLATION')).toBe('VIOLATION');
     expect(mergeStatus('UNCOVERED', 'UNATTRIBUTED')).toBe('UNATTRIBUTED');
     expect(mergeStatus('NOT_MONITORED', 'NOT_OBSERVABLE')).toBe('NOT_MONITORED');
+    expect(mergeStatus('OUTBOUND_VERIFIED', 'VERIFIED')).toBe('OUTBOUND_VERIFIED');
+    expect(mergeStatus('NOT_MONITORED', 'OUTBOUND_VERIFIED')).toBe('NOT_MONITORED');
     expect(mergeStatus('VERIFIED', undefined)).toBe('VERIFIED');
     expect(mergeStatus(undefined, undefined)).toBeUndefined();
+  });
+
+  // 6b. OUTBOUND_VERIFIED: 单端已出站边状态映射与调用聚合测试
+  it('testRollup_OutboundVerifiedMatchingAndMetrics: correctly assigns OUTBOUND_VERIFIED and aggregates calls', () => {
+    const expandState: ExpandStateMap = {
+      sub_1: true,
+      grp_11: true,
+      sub_2: true,
+      grp_21: true,
+    };
+
+    const testEdges: GraphEdge[] = [
+      {
+        id: 'e_outbound_test',
+        kind: 'CROSS_PROCESS',
+        source_node_id: 'mod_101',
+        target_node_id: 'mod_201',
+        src_module_id: 101,
+        dst_module_id: 201,
+        services: [
+          {
+            service_name: 'stock.v1.OutboundStock',
+            description: '出站库存调用',
+          },
+        ],
+      },
+    ];
+
+    const mockReport: ConsistencyReportDTO = {
+      session_id: '10',
+      edges: [
+        {
+          src_module_id: 101,
+          dst_module_id: 201,
+          service_name: 'stock.v1.OutboundStock',
+          operation: 'GetStock',
+          category: 'OUTBOUND_VERIFIED',
+          status: 'OUTBOUND_VERIFIED',
+          call_count: 8,
+          sample_traffic_record_id: 999,
+        },
+      ],
+    };
+
+    const result = rollupEdges(mockNodes, testEdges, expandState, mockReport, 'LOGICAL');
+    const targetEdge = result.rollupEdges.find(
+      (e) => e.source === 'mod_101' && e.target === 'mod_201'
+    );
+    expect(targetEdge).toBeDefined();
+    expect(targetEdge?.status).toBe('OUTBOUND_VERIFIED');
+    expect(targetEdge?.totalCalls).toBe(8);
+    expect(targetEdge?.sampleTrafficRecordId).toBe(999);
   });
 
   // 7. AC-M6-01.5: Tarjan SCC 拓扑环路检测

@@ -76,6 +76,7 @@ export interface TopologyGraphDTO {
 
 export type ConsistencyEdgeStatus =
   | 'VERIFIED'
+  | 'OUTBOUND_VERIFIED'
   | 'VIOLATION'
   | 'UNATTRIBUTED'
   | 'UNCOVERED'

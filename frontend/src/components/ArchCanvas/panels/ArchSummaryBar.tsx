@@ -1,6 +1,6 @@
 import React from 'react';
 import type { ConsistencyReportDTO, ConsistencyEdge } from '../../../types/traffic';
-import { CheckCircle2, AlertOctagon, HelpCircle, EyeOff, MinusCircle, Radio } from 'lucide-react';
+import { CheckCircle2, Send, AlertOctagon, HelpCircle, EyeOff, MinusCircle, Radio } from 'lucide-react';
 
 export interface ArchSummaryBarProps {
   report: ConsistencyReportDTO;
@@ -14,6 +14,7 @@ export const ArchSummaryBar: React.FC<ArchSummaryBarProps> = ({
   onOpenPendingList,
 }) => {
   const verified = report.verified_count ?? report.stats?.VERIFIED ?? 0;
+  const outboundVerified = report.outbound_verified_count ?? report.stats?.OUTBOUND_VERIFIED ?? 0;
   const violation = report.violation_count ?? report.stats?.VIOLATION ?? 0;
   const unattributed = report.unattributed_count ?? report.stats?.UNATTRIBUTED ?? 0;
   const uncovered = report.uncovered_count ?? report.stats?.UNCOVERED ?? 0;
@@ -24,9 +25,17 @@ export const ArchSummaryBar: React.FC<ArchSummaryBarProps> = ({
     <div className="code-arch-summary-bar">
       <span className="code-arch-summary-bar__title">一致性比对报告:</span>
 
-      <div className="code-arch-summary-item code-arch-summary-item--verified" title="架构声明与实测运行完全一致">
+      <div className="code-arch-summary-item code-arch-summary-item--verified" title="架构声明与实测运行完全一致且形成闭环">
         <CheckCircle2 size={13} />
         <span>已验证 ({verified})</span>
+      </div>
+
+      <div
+        className="code-arch-summary-item code-arch-summary-item--outbound"
+        title="实测已确凿捕获出站调用，但目标进程未纳入监控，待双端纳管后闭环"
+      >
+        <Send size={13} />
+        <span>单端已出站 ({outboundVerified})</span>
       </div>
 
       <div className="code-arch-summary-item code-arch-summary-item--violation" title="未声明越权调用或调用未登记接口">

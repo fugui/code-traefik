@@ -302,8 +302,8 @@ export interface ConsistencyEdge {
   dst_module_name?: string;
   service_name: string;
   operation: string;
-  category: 'VERIFIED' | 'VIOLATION' | 'UNCOVERED' | 'NOT_MONITORED' | 'NOT_OBSERVABLE' | 'UNATTRIBUTED';
-  status?: 'VERIFIED' | 'VIOLATION' | 'UNCOVERED' | 'NOT_MONITORED' | 'NOT_OBSERVABLE' | 'UNATTRIBUTED';
+  category: 'VERIFIED' | 'OUTBOUND_VERIFIED' | 'VIOLATION' | 'UNCOVERED' | 'NOT_MONITORED' | 'NOT_OBSERVABLE' | 'UNATTRIBUTED';
+  status?: 'VERIFIED' | 'OUTBOUND_VERIFIED' | 'VIOLATION' | 'UNCOVERED' | 'NOT_MONITORED' | 'NOT_OBSERVABLE' | 'UNATTRIBUTED';
   call_count: number;
   observed_call_count?: number;
   sample_traffic_record_id?: string | number;
@@ -313,9 +313,10 @@ export interface ConsistencyEdge {
 
 export interface ConsistencyReportDTO {
   session_id: string;
-  stats?: Record<'VERIFIED' | 'VIOLATION' | 'UNCOVERED' | 'NOT_MONITORED' | 'NOT_OBSERVABLE' | 'UNATTRIBUTED', number>;
+  stats?: Record<'VERIFIED' | 'OUTBOUND_VERIFIED' | 'VIOLATION' | 'UNCOVERED' | 'NOT_MONITORED' | 'NOT_OBSERVABLE' | 'UNATTRIBUTED', number>;
   edges: ConsistencyEdge[];
   verified_count?: number;
+  outbound_verified_count?: number;
   violation_count?: number;
   uncovered_count?: number;
   not_monitored_count?: number;

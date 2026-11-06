@@ -16,12 +16,13 @@ import (
 type VerificationStatus string
 
 const (
-	StatusVerified      VerificationStatus = "VERIFIED"
-	StatusViolation     VerificationStatus = "VIOLATION"
-	StatusUncovered     VerificationStatus = "UNCOVERED"
-	StatusNotMonitored  VerificationStatus = "NOT_MONITORED"
-	StatusNotObservable VerificationStatus = "NOT_OBSERVABLE"
-	StatusUnattributed  VerificationStatus = "UNATTRIBUTED"
+	StatusVerified         VerificationStatus = "VERIFIED"
+	StatusOutboundVerified VerificationStatus = "OUTBOUND_VERIFIED"
+	StatusViolation        VerificationStatus = "VIOLATION"
+	StatusUncovered        VerificationStatus = "UNCOVERED"
+	StatusNotMonitored     VerificationStatus = "NOT_MONITORED"
+	StatusNotObservable    VerificationStatus = "NOT_OBSERVABLE"
+	StatusUnattributed     VerificationStatus = "UNATTRIBUTED"
 )
 
 // ConsistencyEdgeResult 单条边一致性验证结果
@@ -45,16 +46,17 @@ type ConsistencyEdgeResult struct {
 
 // ConsistencyReportDTO 一致性验证报告响应 DTO
 type ConsistencyReportDTO struct {
-	SessionID          uint64                  `json:"session_id"`
-	StaticModelVersion time.Time               `json:"static_model_version"` // 静态架构版本快照时刻
-	VerifiedCount      int                     `json:"verified_count"`
-	ViolationCount     int                     `json:"violation_count"`
-	UncoveredCount     int                     `json:"uncovered_count"`
-	NotMonitoredCount  int                     `json:"not_monitored_count"`
-	NotObservableCount int                     `json:"not_observable_count"`
-	UnattributedCount  int                     `json:"unattributed_count"`
-	Stats              map[string]int          `json:"stats"`
-	Edges              []ConsistencyEdgeResult `json:"edges"`
+	SessionID             uint64                  `json:"session_id"`
+	StaticModelVersion    time.Time               `json:"static_model_version"` // 静态架构版本快照时刻
+	VerifiedCount         int                     `json:"verified_count"`
+	OutboundVerifiedCount int                     `json:"outbound_verified_count"`
+	ViolationCount        int                     `json:"violation_count"`
+	UncoveredCount        int                     `json:"uncovered_count"`
+	NotMonitoredCount     int                     `json:"not_monitored_count"`
+	NotObservableCount    int                     `json:"not_observable_count"`
+	UnattributedCount     int                     `json:"unattributed_count"`
+	Stats                 map[string]int          `json:"stats"`
+	Edges                 []ConsistencyEdgeResult `json:"edges"`
 }
 
 // VerifySessionTopology 动态报文穿透还原实际调用并与静态契约比对 (F-05.3, SC-06)
@@ -260,9 +262,13 @@ func VerifySessionTopology(ctx context.Context, db *gorm.DB, sessionID uint64, r
 		}
 
 		if dstModID == nil || dep.IsExternal {
-			// 未登记外部接口或无内部供给者
+			// 未登记外部接口或无内部供给者 (外部依赖)
+			status := StatusNotMonitored
+			if obsCount > 0 {
+				status = StatusVerified // 外部服务实测捕获出站调用，外部依赖验证合规
+			}
 			edge := ConsistencyEdgeResult{
-				Status:             StatusNotMonitored,
+				Status:             status,
 				SrcModuleID:        &srcModID,
 				SrcProcessID:       &srcProcID,
 				DstModuleID:        nil,
@@ -293,27 +299,44 @@ func VerifySessionTopology(ctx context.Context, db *gorm.DB, sessionID uint64, r
 			continue
 		}
 
-		// 判定 ②: 目标供给模块所在物理进程未加入本次监控批次 -> NOT_MONITORED
-		if !isMonitoredProc[dstProcID] {
-			edge := ConsistencyEdgeResult{
-				Status:             StatusNotMonitored,
-				SrcModuleID:        &srcModID,
-				SrcProcessID:       &srcProcID,
-				DstModuleID:        dstModID,
-				ServiceName:        svc,
-				Operation:          "",
-				ObservedCallCount:  obsCount,
-				SampleTrafficRecID: sampleID,
+		// 判定 ②: 目标供给模块所在物理进程已加入本次监控批次
+		if isMonitoredProc[dstProcID] {
+			if obsCount > 0 {
+				// VERIFIED: 目标与来源均纳管且实测跨进程调用 >= 1 (双端闭环验证合规)
+				edge := ConsistencyEdgeResult{
+					Status:             StatusVerified,
+					SrcModuleID:        &srcModID,
+					SrcProcessID:       &srcProcID,
+					DstModuleID:        dstModID,
+					ServiceName:        svc,
+					Operation:          "",
+					ObservedCallCount:  obsCount,
+					SampleTrafficRecID: sampleID,
+					AttributionMode:    AttributionUniqueDepend,
+				}
+				edges = append(edges, edge)
+			} else {
+				// UNCOVERED: 均纳管但未捕获调用
+				edge := ConsistencyEdgeResult{
+					Status:             StatusUncovered,
+					SrcModuleID:        &srcModID,
+					SrcProcessID:       &srcProcID,
+					DstModuleID:        dstModID,
+					ServiceName:        svc,
+					Operation:          "",
+					ObservedCallCount:  0,
+					SampleTrafficRecID: nil,
+				}
+				edges = append(edges, edge)
 			}
-			edges = append(edges, edge)
 			continue
 		}
 
-		// 判定 ③: 目标与来源均纳管，检查实测调用
+		// 判定 ③: 目标供给模块所在物理进程未加入本次监控批次 (!isMonitoredProc[dstProcID])
 		if obsCount > 0 {
-			// VERIFIED: 静态跨进程声明且实测调用 >= 1
+			// OUTBOUND_VERIFIED: 单端已出站（源端已监控且实测出站调用 >= 1，但目标供给方物理进程未纳入本次监控）
 			edge := ConsistencyEdgeResult{
-				Status:             StatusVerified,
+				Status:             StatusOutboundVerified,
 				SrcModuleID:        &srcModID,
 				SrcProcessID:       &srcProcID,
 				DstModuleID:        dstModID,
@@ -325,9 +348,9 @@ func VerifySessionTopology(ctx context.Context, db *gorm.DB, sessionID uint64, r
 			}
 			edges = append(edges, edge)
 		} else {
-			// UNCOVERED: 均纳管但未捕获调用
+			// NOT_MONITORED: 目标供给模块所在物理进程未加入本次监控批次，且未捕获调用，不计入未覆盖分母
 			edge := ConsistencyEdgeResult{
-				Status:             StatusUncovered,
+				Status:             StatusNotMonitored,
 				SrcModuleID:        &srcModID,
 				SrcProcessID:       &srcProcID,
 				DstModuleID:        dstModID,
@@ -375,11 +398,11 @@ func VerifySessionTopology(ctx context.Context, db *gorm.DB, sessionID uint64, r
 		// 已确切归属到 SrcModuleID，检查是否属于已知已匹配的声明调用
 		ck := fmt.Sprintf("%d:%s:%s", groupKey.SrcModID, groupKey.Svc, groupKey.Op)
 		if matchedDeclaredCalls[ck] {
-			// 已在第 6 步生成 VERIFIED 边，更新实际 AttributionMode 即可
+			// 已在第 6 步生成 VERIFIED / OUTBOUND_VERIFIED 边，更新实际 AttributionMode 即可
 			for i := range edges {
 				if edges[i].SrcModuleID != nil && *edges[i].SrcModuleID == groupKey.SrcModID &&
 					edges[i].ServiceName == groupKey.Svc &&
-					edges[i].Status == StatusVerified {
+					(edges[i].Status == StatusVerified || edges[i].Status == StatusOutboundVerified) {
 					edges[i].AttributionMode = groupKey.Mode
 					break
 				}
@@ -430,7 +453,13 @@ func VerifySessionTopology(ctx context.Context, db *gorm.DB, sessionID uint64, r
 		if edges[i].Detail == "" {
 			switch edges[i].Status {
 			case StatusVerified:
-				edges[i].Detail = "实测跨模块调用与静态 PROVIDE/DEPEND 声明契约完全吻合"
+				if edges[i].DstModuleID == nil {
+					edges[i].Detail = "实测捕获外部服务出站调用，外部依赖验证合规"
+				} else {
+					edges[i].Detail = "实测跨模块调用与静态 PROVIDE/DEPEND 声明契约完全吻合"
+				}
+			case StatusOutboundVerified:
+				edges[i].Detail = "实测已捕获源端出站调用，但目标供给方进程未纳入本次监控，待双端纳管后闭环"
 			case StatusViolation:
 				edges[i].Detail = "实测抓取到调用关系，但静态拓扑架构中未显式声明 DEPEND 依赖"
 			case StatusUncovered:
@@ -455,6 +484,8 @@ func VerifySessionTopology(ctx context.Context, db *gorm.DB, sessionID uint64, r
 		switch e.Status {
 		case StatusVerified:
 			report.VerifiedCount++
+		case StatusOutboundVerified:
+			report.OutboundVerifiedCount++
 		case StatusViolation:
 			report.ViolationCount++
 		case StatusUncovered:
@@ -469,12 +500,13 @@ func VerifySessionTopology(ctx context.Context, db *gorm.DB, sessionID uint64, r
 	}
 
 	report.Stats = map[string]int{
-		string(StatusVerified):      report.VerifiedCount,
-		string(StatusViolation):     report.ViolationCount,
-		string(StatusUncovered):     report.UncoveredCount,
-		string(StatusNotMonitored):  report.NotMonitoredCount,
-		string(StatusNotObservable): report.NotObservableCount,
-		string(StatusUnattributed):  report.UnattributedCount,
+		string(StatusVerified):         report.VerifiedCount,
+		string(StatusOutboundVerified): report.OutboundVerifiedCount,
+		string(StatusViolation):        report.ViolationCount,
+		string(StatusUncovered):        report.UncoveredCount,
+		string(StatusNotMonitored):     report.NotMonitoredCount,
+		string(StatusNotObservable):    report.NotObservableCount,
+		string(StatusUnattributed):     report.UnattributedCount,
 	}
 
 	// 9. 更新 session 表的 TopologyVerifySummary 缓存

@@ -238,9 +238,11 @@ func TestSC06_ArchitectureConsistencyVerification(t *testing.T) {
 	// (2) mod2 PROVIDE dophi.a-ServiceA2 (同在 procA)
 	svcA2 := models.ModuleService{ModuleID: mod2.ID, ServiceName: "dophi.a-ServiceA2", CreatedBy: 1}
 	db.Create(&svcA2)
-	// (3) modUnmon PROVIDE dophi.unmon-ServiceUnmon
+	// (3) modUnmon PROVIDE dophi.unmon-ServiceUnmon 与 dophi.unmon-OutboundService
 	svcUnmon := models.ModuleService{ModuleID: modUnmon.ID, ServiceName: "dophi.unmon-ServiceUnmon", CreatedBy: 1}
 	db.Create(&svcUnmon)
+	svcUnmonOutbound := models.ModuleService{ModuleID: modUnmon.ID, ServiceName: "dophi.unmon-OutboundService", CreatedBy: 1}
+	db.Create(&svcUnmonOutbound)
 	// (4) mod4 PROVIDE dophi.c-ServiceC
 	svcC := models.ModuleService{ModuleID: mod4.ID, ServiceName: "dophi.c-ServiceC", CreatedBy: 1}
 	db.Create(&svcC)
@@ -249,13 +251,17 @@ func TestSC06_ArchitectureConsistencyVerification(t *testing.T) {
 	db.Create(&svcV)
 
 	// 静态依赖声明：
-	// ① 期望 VERIFIED: mod1 DEPEND mod3(dophi.b-ServiceB)
+	// ① 期望 VERIFIED: mod1 DEPEND mod3(dophi.b-ServiceB) 双端纳管闭环
 	db.Create(&models.ModuleDependency{ConsumerModuleID: mod1.ID, ServiceID: &svcB.ID, ProviderModuleID: &mod3.ID, CreatedBy: 1})
-	// ③ 期望 NOT_OBSERVABLE: mod1 DEPEND mod2(dophi.a-ServiceA2) 同进程内依赖
+	// ② 期望 VERIFIED (外部依赖实测证实): mod1 DEPEND pay.v1.ExternalGateway
+	db.Create(&models.ModuleDependency{ConsumerModuleID: mod1.ID, IsExternal: true, ExternalService: "pay.v1.ExternalGateway", CreatedBy: 1})
+	// ③ 期望 OUTBOUND_VERIFIED: mod1 DEPEND modUnmon(dophi.unmon-OutboundService) 目标未纳管但实测捕获出站
+	db.Create(&models.ModuleDependency{ConsumerModuleID: mod1.ID, ServiceID: &svcUnmonOutbound.ID, ProviderModuleID: &modUnmon.ID, CreatedBy: 1})
+	// ④ 期望 NOT_OBSERVABLE: mod1 DEPEND mod2(dophi.a-ServiceA2) 同进程内依赖
 	db.Create(&models.ModuleDependency{ConsumerModuleID: mod1.ID, ServiceID: &svcA2.ID, ProviderModuleID: &mod2.ID, CreatedBy: 1})
-	// ④ 期望 NOT_MONITORED: mod1 DEPEND modUnmon(dophi.unmon-ServiceUnmon)
+	// ⑤ 期望 NOT_MONITORED: mod1 DEPEND modUnmon(dophi.unmon-ServiceUnmon) 目标未纳管且未触发调用
 	db.Create(&models.ModuleDependency{ConsumerModuleID: mod1.ID, ServiceID: &svcUnmon.ID, ProviderModuleID: &modUnmon.ID, CreatedBy: 1})
-	// ⑤ 期望 UNCOVERED: mod1 DEPEND mod4(dophi.c-ServiceC) 均纳入监控但实测未调用
+	// ⑥ 期望 UNCOVERED: mod1 DEPEND mod4(dophi.c-ServiceC) 均纳入监控但实测未调用
 	db.Create(&models.ModuleDependency{ConsumerModuleID: mod1.ID, ServiceID: &svcC.ID, ProviderModuleID: &mod4.ID, CreatedBy: 1})
 
 	// 4. 创建录制批次：纳入 procA, procB, procC (procUnmon 未纳入)
@@ -275,7 +281,7 @@ func TestSC06_ArchitectureConsistencyVerification(t *testing.T) {
 
 	now := time.Now()
 	// 5. 插入实测流量记录：
-	// 记录 1: 对应 ① VERIFIED (mod1 -> mod3: dophi.b-ServiceB:MethodB)
+	// 记录 1: 对应 ① VERIFIED 双端纳管 (mod1 -> mod3: dophi.b-ServiceB:MethodB)
 	rec1 := models.TrafficRecord{
 		SessionID:          session.ID,
 		CreatedAt:          now,
@@ -292,7 +298,41 @@ func TestSC06_ArchitectureConsistencyVerification(t *testing.T) {
 	}
 	db.Create(&rec1)
 
-	// 记录 2: 对应 ② VIOLATION (未声明的跨进程调用: mod1 私自调用 mod3 的未声明服务 dophi.v-ViolationService)
+	// 记录 1b: 对应 ② VERIFIED 外部服务实测出站 (mod1 -> pay.v1.ExternalGateway:PayMethod)
+	recExternal := models.TrafficRecord{
+		SessionID:          session.ID,
+		CreatedAt:          now,
+		AgentID:            agt.ID,
+		ProcessID:          procA.ID,
+		Direction:          models.TrafficDirEgress,
+		ServiceName:        "pay.v1.ExternalGateway",
+		Operation:          "PayMethod",
+		SrcModuleID:        &mod1.ID,
+		DstModuleID:        nil,
+		SrcAttributionMode: AttributionSingleModuleProc,
+		ExchangeType:       models.ExchangeUnary,
+		SNO:                models.U64Numeric(1004),
+	}
+	db.Create(&recExternal)
+
+	// 记录 1c: 对应 ③ OUTBOUND_VERIFIED 单端已出站待闭环 (mod1 -> modUnmon: dophi.unmon-OutboundService:MethodOutbound)
+	recOutbound := models.TrafficRecord{
+		SessionID:          session.ID,
+		CreatedAt:          now,
+		AgentID:            agt.ID,
+		ProcessID:          procA.ID,
+		Direction:          models.TrafficDirEgress,
+		ServiceName:        "dophi.unmon-OutboundService",
+		Operation:          "MethodOutbound",
+		SrcModuleID:        &mod1.ID,
+		DstModuleID:        &modUnmon.ID,
+		SrcAttributionMode: AttributionUniqueDepend,
+		ExchangeType:       models.ExchangeUnary,
+		SNO:                models.U64Numeric(1005),
+	}
+	db.Create(&recOutbound)
+
+	// 记录 2: 对应 ⑦ VIOLATION (未声明的跨进程调用: mod1 私自调用 mod3 的未声明服务 dophi.v-ViolationService)
 	rec2 := models.TrafficRecord{
 		SessionID:          session.ID,
 		CreatedAt:          now,
@@ -309,7 +349,7 @@ func TestSC06_ArchitectureConsistencyVerification(t *testing.T) {
 	}
 	db.Create(&rec2)
 
-	// 记录 3: 对应 ⑥ UNATTRIBUTED (procA 发出，缺少 Trace 且 mod1/mod2 均未声明，降级为 PROCESS_LEVEL)
+	// 记录 3: 对应 ⑧ UNATTRIBUTED (procA 发出，缺少 Trace 且 mod1/mod2 均未声明，降级为 PROCESS_LEVEL)
 	candBytes, _ := json.Marshal([]uint64{mod1.ID, mod2.ID})
 	rec3 := models.TrafficRecord{
 		SessionID:             session.ID,
@@ -333,13 +373,16 @@ func TestSC06_ArchitectureConsistencyVerification(t *testing.T) {
 		t.Fatalf("VerifySessionTopology 失败: %v", err)
 	}
 
-	t.Logf("一致性比对结果: Verified=%d, Violation=%d, NotObservable=%d, NotMonitored=%d, Uncovered=%d, Unattributed=%d",
-		report.VerifiedCount, report.ViolationCount, report.NotObservableCount,
+	t.Logf("一致性比对结果: Verified=%d, OutboundVerified=%d, Violation=%d, NotObservable=%d, NotMonitored=%d, Uncovered=%d, Unattributed=%d",
+		report.VerifiedCount, report.OutboundVerifiedCount, report.ViolationCount, report.NotObservableCount,
 		report.NotMonitoredCount, report.UncoveredCount, report.UnattributedCount)
 
-	// 7. 严格断言全部 6 类结果各出现且仅出现 1 次
-	if report.VerifiedCount != 1 {
-		t.Errorf("预期 VerifiedCount=1，实际: %d", report.VerifiedCount)
+	// 7. 严格断言全部 7 类结果
+	if report.VerifiedCount != 2 {
+		t.Errorf("预期 VerifiedCount=2 (内部闭环1+外部出站1)，实际: %d", report.VerifiedCount)
+	}
+	if report.OutboundVerifiedCount != 1 {
+		t.Errorf("预期 OutboundVerifiedCount=1，实际: %d", report.OutboundVerifiedCount)
 	}
 	if report.ViolationCount != 1 {
 		t.Errorf("预期 ViolationCount=1，实际: %d", report.ViolationCount)
