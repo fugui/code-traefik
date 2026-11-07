@@ -495,6 +495,23 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
   // 标准架构进程 CRUD
   const handleSaveArchProcess = async () => {
     try {
+      if (!archProcessForm.group_id) {
+        toast.error('请选择所属物理进程组');
+        return;
+      }
+      if (!archProcessForm.code.trim()) {
+        toast.error('请填写进程全局唯一编码 (code)');
+        return;
+      }
+      if (!archProcessForm.name.trim()) {
+        toast.error('请填写进程名称');
+        return;
+      }
+      if (archProcessForm.default_listen_port === 0 && !archProcessForm.default_cmd_pattern.trim()) {
+        toast.error('纯客户端进程 (端口 0) 必须提供默认命令行匹配特征以定位 PID');
+        return;
+      }
+
       if (editingArchProcess) {
         const res = await archApi.updateArchProcess(editingArchProcess.id, {
           group_id: archProcessForm.group_id,
@@ -1545,7 +1562,9 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
       >
         <div className="code-form">
           <div className="code-form-item">
-            <label className="code-form-label">所属物理进程组:</label>
+            <label className="code-form-label">
+              所属物理进程组 <span className="code-color-danger">*</span>:
+            </label>
             <select
               className="code-select"
               value={archProcessForm.group_id}
@@ -1558,9 +1577,14 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
                 </option>
               ))}
             </select>
+            <span className="code-form-help">
+              按业务职能聚合分组（如核心服务组、交互终端与发压组、接入网关组）。
+            </span>
           </div>
           <div className="code-form-item">
-            <label className="code-form-label">进程全局唯一编码 (code):</label>
+            <label className="code-form-label">
+              进程全局唯一编码 (code) <span className="code-color-danger">*</span>:
+            </label>
             <input
               type="text"
               className="code-input"
@@ -1568,9 +1592,14 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
               onChange={(e) => setArchProcessForm({ ...archProcessForm, code: e.target.value })}
               placeholder="如 proc-account-service"
             />
+            <span className="code-form-help">
+              跨多套环境映射挂载的标准架构基线标识，全局唯一且不可重复。
+            </span>
           </div>
           <div className="code-form-item">
-            <label className="code-form-label">进程名称:</label>
+            <label className="code-form-label">
+              进程名称 <span className="code-color-danger">*</span>:
+            </label>
             <input
               type="text"
               className="code-input"
@@ -1578,9 +1607,23 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
               onChange={(e) => setArchProcessForm({ ...archProcessForm, name: e.target.value })}
               placeholder="如 账户账务中心进程"
             />
+            <span className="code-form-help">
+              控制台界面、拓扑大盘与模块挂载列表中展示的业务友好名称。
+            </span>
           </div>
           <div className="code-form-item">
-            <label className="code-form-label">默认监听端口 (0 表示纯客户端):</label>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <label className="code-form-label" style={{ marginBottom: 0 }}>
+                默认监听端口 (0 表示纯客户端) <span className="code-color-danger">*</span>:
+              </label>
+              {archProcessForm.default_listen_port === 0 ? (
+                <span className="code-badge code-badge--info">纯客户端模式 (端口 0)</span>
+              ) : (
+                <span className="code-badge code-badge--success">
+                  服务端模式 (:{archProcessForm.default_listen_port})
+                </span>
+              )}
+            </div>
             <input
               type="number"
               className="code-input"
@@ -1594,11 +1637,23 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
               min={0}
               max={65535}
             />
+            <span className="code-form-help">
+              {archProcessForm.default_listen_port === 0
+                ? '设置为 0 表示纯客户端（发压工具/调用方程序），自身不监听网络端口，必须配置下方命令行特征定位 PID。'
+                : '服务端标准监听的 TCP 端口 (1~65535)，Agent 探针可通过物理端口直接反查并精准定位系统 PID。'}
+            </span>
           </div>
           <div className="code-form-item">
-            <label className="code-form-label">
-              默认命令行匹配特征 (纯客户端必填, 支持 re: 正则):
-            </label>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <label className="code-form-label" style={{ marginBottom: 0 }}>
+                默认命令行匹配特征:
+              </label>
+              {archProcessForm.default_listen_port === 0 ? (
+                <span className="code-badge code-badge--danger">纯客户端必填</span>
+              ) : (
+                <span className="code-badge code-badge--muted">选填</span>
+              )}
+            </div>
             <input
               type="text"
               className="code-input"
@@ -1606,8 +1661,36 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
               onChange={(e) =>
                 setArchProcessForm({ ...archProcessForm, default_cmd_pattern: e.target.value })
               }
-              placeholder="如 re:.*account-service.* 或 account-srv"
+              placeholder="如 client-runner 或 re:.*traffic-gen.*"
             />
+            {archProcessForm.default_listen_port === 0 ? (
+              <div
+                className="code-alert-banner code-alert-banner--warning"
+                style={{ padding: '0.5rem 0.75rem', marginTop: '0.25rem' }}
+              >
+                <div className="code-alert-banner__icon" style={{ fontSize: '1rem' }}>
+                  ⚠
+                </div>
+                <div>
+                  <div>
+                    <strong>纯客户端定位说明：</strong>纯客户端自身不开放网络端口，探针必须扫描 Linux <code>/proc/&lt;pid&gt;/cmdline</code> 命令行特征以精准定位 PID。
+                  </div>
+                  <div
+                    style={{
+                      marginTop: '0.2rem',
+                      color: 'var(--color-text-secondary)',
+                      fontSize: '0.75rem',
+                    }}
+                  >
+                    支持可执行文件名（如 <code>CLIENT</code>、<code>runner</code>）、参数特征或以 <code>re:</code> 开头的正则表达式（如 <code>re:.*test-client.*</code>）。
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <span className="code-form-help">
+                服务端已有监听端口时探针默认按端口精确定位；可填入可执行文件名或参数作为同机多实例辅助校验或过滤特征（支持 <code>re:</code> 正则）。
+              </span>
+            )}
           </div>
           <div className="code-form-item">
             <label className="code-form-label">排序权重 (数字越小越靠前):</label>
@@ -1622,6 +1705,9 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
                 })
               }
             />
+            <span className="code-form-help">
+              左侧架构树与筛选下拉框中的显示排序，数值越小越靠前。
+            </span>
           </div>
           <div className="code-form-item">
             <label className="code-form-label">描述说明:</label>
@@ -1631,6 +1717,9 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
               onChange={(e) => setArchProcessForm({ ...archProcessForm, description: e.target.value })}
               placeholder="说明物理进程的职能与部署特征"
             />
+            <span className="code-form-help">
+              可记录该物理进程的架构职责、部署形态或特别注意事项。
+            </span>
           </div>
         </div>
       </Drawer>
