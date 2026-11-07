@@ -21,7 +21,8 @@ build: proto
 	go build -o $(BIN_DIR)/backend-inventory ./cmd/backend-inventory
 	go build -o $(BIN_DIR)/sut-order ./cmd/sut-order
 	go build -o $(BIN_DIR)/client ./cmd/client
-	go build -o $(BIN_DIR)/code-traefik-agent ../cmd/agent
+	$(MAKE) -C .. agent
+	cp --remove-destination ../code-traefik-agent $(BIN_DIR)/code-traefik-agent
 	@echo "Build complete."
 
 # 运行单元测试与集成测试
