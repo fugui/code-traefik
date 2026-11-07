@@ -317,12 +317,16 @@ src/
 │   │       ├── ArchSummaryBar.tsx          # 一致性比对六分类摘要栏与待定归属待办入口
 │   │       ├── NodeInspectDrawer.tsx       # 选中节点属性画像与 PROVIDE/DEPEND 快速跳转抽屉
 │   │       └── EdgeDetailDrawer.tsx        # 汇总边底层契约明细与一致性抽样报文联动抽屉
-│   └── PacketAnatomyDrawer/                # 公共四段式 CROS RPC 深度解剖抽屉 (供流量调试台与拓扑一致性边共同复用)
-│       ├── PacketAnatomyDrawer.tsx         # 单条往返内「请求帧 REQ <-> 应答帧 RSP」零延迟切换外壳 (+单包重放调试动作插槽)
-│       ├── CommHeadBitmapCard.tsx          # ① 24B 公共头字节偏移位图可视化卡片
-│       ├── SessionHeadDetailCard.tsx       # ② 会话头版本识别、字段表与客户端/服务端耗时拆解条
-│       ├── ExtendHeadTraceCard.tsx         # ③ DOTR TraceID/SpanID/FatherSpanID 链路跳转与入队等待耗时
-│       └── PayloadJsonHexSplitView.tsx     # ④ 左栏 payload_json.{req|rsp} 树 <-> 右栏 raw_{req|rsp}_packet 16B 对齐 Hex 对照
+│   └── PacketAnatomyDrawer/                # 面向业务视角的报文调用透视与底层解剖抽屉 (供流量调试台与拓扑一致性边复用)
+│       ├── PacketAnatomyDrawer.tsx         # 抽屉外壳与无模态嵌入容器 (支持 [💼 业务视图 | 🔬 协议专家] 双模切换)
+│       ├── BusinessSummaryBar.tsx          # 顶部业务调用概览条 (服务/方法大标题、状态码徽章、TraceID 一键复制、往返耗时与链路)
+│       ├── BusinessPayloadCompareView.tsx  # 核心业务孪生视窗: 请求入参 vs 返回结果左右双栏并排 (Split View, 树状高亮/折叠/一键复制)
+│       ├── RpcLatencyWaterfallBar.tsx      # 微秒级阶段耗时彩色甘特条 (网络传输 / 入队排队 / 服务端业务执行)
+│       ├── AdvancedProtocolAccordion.tsx   # 底层协议与十六进制专家排错手风琴折叠区 (默认收起，反序列化失败自动展开)
+│       ├── CommHeadBitmapCard.tsx          # ① 24B 公共头字节偏移位图可视化卡片 (折叠区子组件)
+│       ├── SessionHeadDetailCard.tsx       # ② 会话头版本识别与底层二进制字段表 (折叠区子组件)
+│       ├── ExtendHeadTraceCard.tsx         # ③ DOTR 扩展头 TLV 原始段与时间戳 (折叠区子组件)
+│       └── PayloadJsonHexSplitView.tsx     # ④ 16B 对齐 Raw Hex 与底层报文对照视窗 (折叠区子组件)
 ├── pages/
 │   ├── RecordingWorkbenchPage/             # 1. [流量作业] 流量录制工作台 (/record - 默认落地页)
 │   │   ├── ActiveRecordingBanner.tsx       # 活跃录制状态卡: 实时帧计数、A-01 存量长连接重连告警、一键停录与【实时跟流调试】
@@ -854,6 +858,44 @@ export interface ReplayClosurePreviewDTO {
     role: 'PRODUCER' | 'STATE_MUTATOR';
   }>;
   recommended_record_ids: string[]; // 包含前置依赖 + 当前入口记录的发起序列表
+}
+```
+
+### 4.7 面向业务开发者的报文调用与结果透视抽屉架构设计 (ADR-15 / M18)
+
+#### 4.7.1 设计目标与信息架构分层
+将原本偏向 Wireshark/网络协议抓包的四段二进制界面彻底重构为**以业务工程师日常排查为核心的高质感视窗**：
+1. **第一层：业务调用总览 Bar (`BusinessSummaryBar`)**
+   - **标题与接口**：直接外显点分服务名与 RPC 方法大标题（如 `demo.inventory.InventoryService / GetItemStock`），支持一键复制完整全名；
+   - **调用结果与状态**：成功时呈现醒目绿色 `🟢 成功 (Code: 0)`；发生业务错误或协议异常时呈现高亮红色/黄色胶囊（如 `🔴 业务异常 (Code: 5001 - ITEM_OUT_OF_STOCK)`），若存在 `biz_status_summary` 则外露业务提示信息；
+   - **耗时与流向**：展示往返耗时（如 `3.30 ms` / `3303 μs`）、架构链路（`MOD_1 ➔ MOD_3`）、交换模式（`UNARY` / `STREAM`）与流向（`INGRESS` / `EGRESS`）；
+   - **TraceID 快速复制与联动**：外显 DOTR TraceID，附带一键复制与“一键过滤本 Trace”动作。
+2. **第二层：业务请求与响应孪生对比视窗 (`BusinessPayloadCompareView`)**
+   - **左右双栏并排 (Split View)**：
+     - **左栏（业务请求入参 Request）**：展示请求 Schema 名（如 `ItemStockRequest` v1）与格式化 JSON；
+     - **右栏（业务返回结果 Response）**：展示响应状态码、状态提示与返回数据 JSON；
+     - **自适应降级**：若为 `ONEWAY`（单向通知）或 `REQ_ONLY`（未收到应答/超时），右栏展示清晰的状态占位与排查提示；若为 `RSP_ORPHAN`（孤立应答），左栏展示无头应答说明；
+   - **高质感工具栏**：提供 **[复制 JSON]**、**[折叠/展开]**、以及 **[按 生效 .pb 重新解码]** 快捷按钮。
+3. **第三层：微秒级阶段耗时瀑布分解 (`RpcLatencyWaterfallBar`)**
+   - 提取会话头与扩展头中的耗时指标，按微秒计算总耗时与各阶段占比并渲染直观的彩色横向进度条：
+     - 客户端网络传输耗时 (`clientToServerUs`)
+     - 队列排队等待耗时 (`queueWaitUs`)
+     - 服务端业务执行耗时 (`serverProcessUs` / `serverExecUs`)
+   - 附带业务诊断文案（如：“耗时主要集中在服务端业务处理（91%），网关与传输无延迟”）。
+4. **第四层：底层协议与十六进制专家排错手风琴折叠区 (`AdvancedProtocolAccordion`)**
+   - 默认折叠收起，仅在卡片头部显示摘要标签（`24B 公共头 · 会话头 V05 · 1 个扩展头 · Raw Hex 205B`）；
+   - 当点击展开或当载荷出现 `NO_SCHEMA_RAW_HEX` / `DECODE_ERR_RAW_HEX` 时自动展开；
+   - 内部完整容纳原有的 ① CommHead 24B 位图色块、② SessionHead 二进制字段偏移表、③ ExtendHead 原始段以及 ④ 16B 对齐 Raw Hex 与 ASCII 对照视窗，保持底层排错能力 100% 完整。
+
+```typescript
+// frontend/src/components/PacketAnatomyDrawer/types.ts
+export type PacketInspectorViewMode = 'BUSINESS' | 'EXPERT';
+
+export interface BusinessSummaryProps {
+  data: PacketAnatomyDrawerDTO;
+  onFilterTrace?: (traceId: string) => void;
+  onRedecode?: (recordId: string) => Promise<void>;
+  extraActions?: React.ReactNode;
 }
 ```
 

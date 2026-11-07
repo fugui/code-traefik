@@ -1,6 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import { renderToString } from 'react-dom/server';
-import { PacketAnatomyDrawer, PacketAnatomyContent } from '../components/PacketAnatomyDrawer';
+import {
+  PacketAnatomyDrawer,
+  PacketAnatomyContent,
+  BusinessSummaryBar,
+  BusinessPayloadCompareView,
+  RpcLatencyWaterfallBar,
+  AdvancedProtocolAccordion,
+} from '../components/PacketAnatomyDrawer';
 import type { PacketAnatomyDrawerDTO } from '../types';
 
 const evilScript = '<script>' + 'al' + 'ert(1)</' + 'script>';
@@ -123,6 +130,7 @@ export const mockAnatomyDTO: PacketAnatomyDrawerDTO = {
       timingBreakdownUs: {
         clientToServerUs: 120,
         serverProcessUs: 1100,
+        queueWaitUs: 15,
       },
       fields: [],
     },
@@ -136,15 +144,45 @@ export const mockAnatomyDTO: PacketAnatomyDrawerDTO = {
       isTruncated: false,
       isReplayable: true,
       decodeStatus: 'DECODED_JSON',
-      decodedJson: { status: 'SUCCESS', code: 0 },
+      decodedJson: { status: 'SUCCESS', code: 0, balanceRemaining: 5000 },
       rawFrameHexLines: [],
     },
   },
 };
 
 /**
+ * 业务错误 Mock 数据：状态码为 5001
+ */
+export const mockBizErrorAnatomyDTO: PacketAnatomyDrawerDTO = {
+  ...mockAnatomyDTO,
+  recordId: '10002',
+  rspSide: {
+    ...mockAnatomyDTO.rspSide!,
+    sessionHead: {
+      ...mockAnatomyDTO.rspSide!.sessionHead,
+      uiStatusCode: 5001,
+      ullStatusCode: 'ERR_INSUFFICIENT_STOCK',
+    },
+    payload: {
+      ...mockAnatomyDTO.rspSide!.payload,
+      decodedJson: { error: 'ITEM_OUT_OF_STOCK', message: '库存不足无法扣减' },
+    },
+  },
+};
+
+/**
+ * 单向 ONEWAY Mock 数据
+ */
+export const mockOnewayAnatomyDTO: PacketAnatomyDrawerDTO = {
+  ...mockAnatomyDTO,
+  recordId: '10003',
+  exchangeType: 'ONEWAY',
+  rspSide: undefined,
+};
+
+/**
  * TestPacketAnatomyDrawerFourSections
- * 验证四段解剖内容渲染及 XSS 转义防御 (F-15.2)
+ * 验证底层四段解剖内容渲染及 XSS 转义防御 (F-15.2 向后兼容性)
  */
 export function TestPacketAnatomyDrawerFourSections(): void {
   const html = renderToString(<PacketAnatomyContent data={mockAnatomyDTO} />);
@@ -179,10 +217,79 @@ export function TestPacketAnatomyDrawerFourSections(): void {
   }
 }
 
-// 自动执行断言函数以保证自检通过
-describe('PacketAnatomyDrawer', () => {
-  it('renders all four sections and escapes HTML', () => {
+describe('PacketAnatomyDrawer (M18 业务级视图与向后兼容性)', () => {
+  it('renders all four sections and escapes HTML (backward compatibility)', () => {
     TestPacketAnatomyDrawerFourSections();
+  });
+
+  it('TC-INSPECT-01: renders business-centric overview bar with service, operation, latency and trace ID', () => {
+    const html = renderToString(
+      <BusinessSummaryBar
+        data={mockAnatomyDTO}
+        viewMode="BUSINESS"
+        onViewModeChange={() => {}}
+      />
+    );
+    expect(html).toContain('CreateOrder');
+    expect(html).toContain('🟢 成功 (Code: 0)');
+    expect(html).toContain('1250 μs');
+    expect(html).toContain('MOD_API_GATEWAY');
+    expect(html).toContain('MOD_ORDER_SUT');
+    expect(html).toContain('0123456789abcdef0123456789abcdef');
+    expect(html).toContain('💼 业务视图');
+    expect(html).toContain('🔬 协议专家');
+  });
+
+  it('TC-INSPECT-02: renders request and response split comparison view simultaneously', () => {
+    const html = renderToString(<BusinessPayloadCompareView data={mockAnatomyDTO} />);
+    // 验证无需切换 Tab，请求入参和响应出参同屏可见
+    expect(html).toContain('业务请求参数 (Request)');
+    expect(html).toContain('业务返回结果 (Response)');
+    expect(html).toContain('ORD_20261029_001');
+    expect(html).toContain('9900');
+    expect(html).toContain('SUCCESS');
+    expect(html).toContain('balanceRemaining');
+  });
+
+  it('TC-INSPECT-03: renders business error status badge prominently when statusCode is non-zero', () => {
+    const html = renderToString(
+      <BusinessSummaryBar
+        data={mockBizErrorAnatomyDTO}
+        viewMode="BUSINESS"
+        onViewModeChange={() => {}}
+      />
+    );
+    expect(html).toContain('🔴 业务异常 (Code: 5001');
+    expect(html).toContain('ERR_INSUFFICIENT_STOCK');
+
+    const compareHtml = renderToString(<BusinessPayloadCompareView data={mockBizErrorAnatomyDTO} />);
+    expect(compareHtml).toContain('ITEM_OUT_OF_STOCK');
+    expect(compareHtml).toContain('库存不足无法扣减');
+  });
+
+  it('TC-INSPECT-04: renders microsecond-level latency waterfall bar with stage breakdown', () => {
+    const html = renderToString(<RpcLatencyWaterfallBar data={mockAnatomyDTO} />);
+    expect(html).toContain('微秒级调用阶段耗时瀑布');
+    expect(html).toContain('客户端传输:');
+    expect(html).toContain('120 μs');
+    expect(html).toContain('入队排队:');
+    expect(html).toContain('15 μs');
+    expect(html).toContain('服务端业务执行:');
+    expect(html).toContain('1100 μs');
+  });
+
+  it('TC-INSPECT-05: renders advanced protocol accordion with collapsible toggle and tags', () => {
+    const html = renderToString(<AdvancedProtocolAccordion data={mockAnatomyDTO} />);
+    expect(html).toContain('底层二进制协议与十六进制解剖 (专家排错区)');
+    expect(html).toContain('24B CommHead');
+    expect(html).toContain('V05 (256B)');
+    expect(html).toContain('DOTR 扩展头');
+    expect(html).toContain('16B Raw Hex');
+  });
+
+  it('TC-INSPECT-06: renders graceful empty state for ONEWAY and RSP_ORPHAN packets', () => {
+    const html = renderToString(<BusinessPayloadCompareView data={mockOnewayAnatomyDTO} />);
+    expect(html).toContain('单向通知调用 (ONEWAY)');
   });
 
   it('renders Drawer with workspace scope to avoid stacking context conflict with host header', () => {
@@ -192,5 +299,6 @@ describe('PacketAnatomyDrawer', () => {
     expect(html).toContain('code-drawer-root--workspace');
     expect(html).toContain('code-drawer-mask--workspace');
     expect(html).toContain('code-drawer-panel--workspace');
+    expect(html).toContain('RPC 调用透视 · CreateOrder');
   });
 });

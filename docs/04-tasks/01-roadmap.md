@@ -48,6 +48,7 @@ flowchart LR
     M14 ==> M15
     M15 ==> M16
     M16 ==> M17
+    M17 ==> M18
     M6["M6: 分层复合拓扑与一致性画布<br/>(React Flow + ELK Worker + 边汇总 + 去 Agent 物理图)"]
     M7["M7: 契约资产化治理、嵌套服务表与消息体字段树<br/>(两级折叠表 + 字段字典树 + 可视化 Diff 忽略 + 原文件导出)"]
     M8["M8: 控制台信息架构重组与调试工作流闭环<br/>(3组8项菜单 + 录制台账/单包调试重放 + 架构解耦与进程收口)"]
@@ -60,6 +61,7 @@ flowchart LR
     M15["M15: 黄金契约套件资产库与事务固化工作台<br/>(traefik_golden_suites + 事务树一键沉淀 + 权威脱机回归)"]
     M16["M16: 设计态契约破坏性变更阻断雷达<br/>(Protobuf AST 比对 + Tag/类型/删除强阻断 + 下游消费者推导)"]
     M17["M17: CI/CD 自动化强阻断门禁与凭据报告<br/>(POST /api/gates/evaluate + Violation/Diff双重红阻 + MR报告)"]
+    M18["M18: 面向业务视角的报文透视与双模解剖抽屉<br/>(业务概览 + 入参出参并排对比 + 耗时瀑布 + 专家折叠)"]
 ```
 
 | 里程碑 | 状态 | 作战卡文档 | 核心职责与交付边界 | 准出质量门禁 (Exit Gate) |
@@ -81,6 +83,7 @@ flowchart LR
 | **M15** | ✅ 已交付 | [`16-m15-golden-contract-suites-and-curation-workbench.md`](./16-m15-golden-contract-suites-and-curation-workbench.md) | 黄金契约套件自包含快照库与双源重放解耦（ADR-14 v1.1.0）：升级至 **17 张业务表**（`traefik_golden_suites` + **完全自包含深拷贝 `traefik_golden_suite_items`** 免疫 30 天分区 `DROP TABLE`），解耦 `ReplayTask` 双源外键；`/debug` 事务树【🌟 沉淀为黄金契约】抽屉；构建 `/golden-suites` 工作台（补齐第 10 项菜单）、动态掩码清洗与套件一键脱机回归 | `testdb` 17 表迁移与**源分区清理后套件独立回放存活单测**全绿 + 前端套件工作台单测通过 + `make lint && make build` 零警告 |
 | **M16** | ✅ 已交付 | [`17-m16-design-time-breaking-change-radar.md`](./17-m16-design-time-breaking-change-radar.md) | 设计态契约破坏性变更阻断雷达与回滚逃生舱（ADR-14 v1.1.0）：基于 `FileDescriptorSet` 实现全维度 AST 比对引擎（覆盖 Service/Method 删改、字段 Tag/类型/`oneof`/`map` 变异、`DescriptorProto.GetReservedRange()` 数字区间核验与枚举篡改）；默认返回结构化 `409 BREAKING_CHANGE_DETECTED` 与下游消费者血缘清单；支持管理员 `allow_breaking + breaking_reason` 紧急回滚逃生与 `P1` 审计 | AST 全规则比对单测覆盖率 `100%` + 下游消费者推导与 `allow_breaking` 回滚审计单测全绿 + 拦截抽屉 Vitest 通过 |
 | **M17** | ✅ 已交付 | [`18-m17-ci-cd-quality-gate-and-automated-enforcement.md`](./18-m17-ci-cd-quality-gate-and-automated-enforcement.md) | CI/CD 自动化强阻断门禁、实测边回传与排他锁有界排队（ADR-14 v1.1.0）：Agent 重放回传 `ObservedEgressCalls` 支撑控制面单次闭环判定 `GATED_VIOLATION`；实现 `X-Traefik-CI-Token` SHA-256 `ConstantTimeCompare` 机器鉴权与轮换 API；实现 `POST /api/gates/evaluate`（内置 `wait_lease_seconds` 排队防并发踩踏，正交区分 `503` 环境忙/未就绪 vs `422` 违规/劣化红阻 vs `200` 准出）及 Markdown PR/MR 报告 | 重放实测边 `422 GATED_VIOLATION` / `GATED_BREAKING_DIFF`、并发排队零误杀、`503` 环境隔离及 CI Token 安全单测全绿 |
+| **M18** | ✅ 已交付 | [`19-m18-business-centric-packet-inspector-redesign.md`](./19-m18-business-centric-packet-inspector-redesign.md) | 面向业务视角的 RPC 报文透视与双模解剖抽屉重构（F-15.2）：废弃 Wireshark 式二进制反直觉视觉，默认突出点分服务/方法大标题、状态码徽章、TraceID 复制、架构链路与往返总耗时；请求入参 vs 返回结果左右双栏同屏孪生对比（Split View），带 JSON 高亮与一键复制；微秒级阶段耗时彩色甘特拆解；底层 24B 位图/二进制字段/16B Hex 渐进式折叠收纳为专家排错区 | 前端 Vitest 单测覆盖业务总览、入参出参并排、非零业务错误高亮、阶段耗时瀑布、底层折叠区兼容及 XSS 安全防御全绿 + `make lint && make build` 零警告 |
 
 ---
 

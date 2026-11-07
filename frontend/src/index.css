@@ -922,6 +922,439 @@ body {
   padding: 1rem 0;
 }
 
+/* ========================================================
+ * 面向业务视角的报文透视与双模解剖卡片体系 (M18)
+ * ======================================================== */
+
+/* 1. 业务调用总览 Bar */
+.code-biz-summary-card {
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-border-primary);
+  border-radius: var(--radius-lg);
+  padding: 1rem 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  box-shadow: var(--shadow-sm);
+}
+
+.code-biz-summary-main {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.code-biz-summary-title-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  flex: 1;
+  min-width: 280px;
+}
+
+.code-biz-summary-badges {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.code-biz-summary-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  font-size: 1.15rem;
+  font-weight: 700;
+  line-height: 1.4;
+  color: var(--color-text-primary);
+}
+
+.code-biz-summary-service {
+  color: var(--color-text-primary);
+  word-break: break-all;
+}
+
+.code-biz-summary-divider {
+  color: var(--color-text-muted);
+}
+
+.code-biz-summary-op {
+  color: var(--color-primary);
+  word-break: break-all;
+}
+
+.code-biz-summary-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.code-view-mode-toggle {
+  display: inline-flex;
+  background: var(--color-bg-muted);
+  border: 1px solid var(--color-border-primary);
+  border-radius: var(--radius-md);
+  padding: 2px;
+  gap: 2px;
+}
+
+.code-view-mode-btn {
+  padding: 0.35rem 0.75rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  border-radius: calc(var(--radius-md) - 2px);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.code-view-mode-btn:hover {
+  color: var(--color-text-primary);
+  background: var(--color-bg-hover);
+}
+
+.code-view-mode-btn--active {
+  background: var(--color-bg-surface);
+  color: var(--color-primary);
+  box-shadow: var(--shadow-sm);
+}
+
+.code-biz-meta-strip {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  flex-wrap: wrap;
+  padding-top: 0.6rem;
+  border-top: 1px dashed var(--color-border-subtle);
+  font-size: 0.85rem;
+}
+
+.code-biz-meta-item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+/* 2. 核心业务视窗：请求入参 vs 返回结果左右双栏并排 (Split View) */
+.code-biz-compare-container {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+
+@media (max-width: 900px) {
+  .code-biz-compare-container {
+    grid-template-columns: 1fr;
+  }
+}
+
+.code-biz-compare-pane {
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-border-primary);
+  border-radius: var(--radius-lg);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+  min-height: 280px;
+}
+
+.code-biz-compare-pane--error {
+  border-color: var(--color-danger);
+}
+
+.code-biz-pane-header {
+  padding: 0.75rem 1rem;
+  background: var(--color-bg-muted);
+  border-bottom: 1px solid var(--color-border-primary);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.code-biz-pane-title-group {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.code-biz-pane-icon {
+  font-size: 1.05rem;
+}
+
+.code-biz-pane-title {
+  font-weight: 700;
+  font-size: 0.95rem;
+  color: var(--color-text-primary);
+}
+
+.code-biz-pane-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.code-biz-schema-tag {
+  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+  background: var(--color-bg-surface);
+  padding: 0.2rem 0.5rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border-subtle);
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.code-biz-pane-body {
+  flex: 1;
+  padding: 1rem;
+  overflow-y: auto;
+  max-height: 480px;
+  background: var(--color-bg-surface);
+}
+
+.code-json-viewer-content {
+  margin: 0;
+  padding: 0.85rem;
+  background: var(--color-bg-muted);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: var(--color-text-primary);
+  white-space: pre-wrap;
+  word-break: break-all;
+  overflow-x: auto;
+}
+
+.code-payload-empty-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 2.5rem 1rem;
+  color: var(--color-text-secondary);
+  gap: 0.5rem;
+  height: 100%;
+}
+
+.code-payload-empty-box--warning {
+  color: var(--color-warning);
+}
+
+.code-payload-empty-box--danger {
+  color: var(--color-danger);
+}
+
+.code-payload-empty-icon {
+  font-size: 2rem;
+}
+
+.code-payload-empty-title {
+  font-weight: 700;
+  font-size: 0.95rem;
+  color: var(--color-text-primary);
+}
+
+.code-payload-empty-desc {
+  font-size: 0.82rem;
+  max-width: 360px;
+  line-height: 1.4;
+  color: var(--color-text-muted);
+}
+
+/* 3. 微秒级阶段耗时甘特拆解瀑布条 */
+.code-latency-waterfall-card {
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-border-primary);
+  border-radius: var(--radius-lg);
+  padding: 1rem 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  box-shadow: var(--shadow-sm);
+}
+
+.code-latency-waterfall-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.code-latency-waterfall-title {
+  font-weight: 700;
+  font-size: 0.95rem;
+  color: var(--color-text-primary);
+  display: flex;
+  align-items: center;
+}
+
+.code-latency-diagnosis {
+  font-size: 0.82rem;
+}
+
+.code-waterfall-bar-track {
+  height: 24px;
+  width: 100%;
+  background: var(--color-bg-muted);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  display: flex;
+  border: 1px solid var(--color-border-subtle);
+}
+
+.code-waterfall-segment {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--color-text-white);
+  transition: width 0.3s ease;
+  overflow: hidden;
+  white-space: nowrap;
+  padding: 0 4px;
+}
+
+.code-waterfall-segment--client {
+  background: var(--color-info);
+}
+
+.code-waterfall-segment--queue {
+  background: var(--color-warning);
+}
+
+.code-waterfall-segment--server {
+  background: var(--color-primary);
+}
+
+.code-waterfall-segment--other {
+  background: var(--color-text-muted);
+  opacity: 0.5;
+}
+
+.code-waterfall-legend {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+  font-size: 0.82rem;
+}
+
+.code-waterfall-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.code-legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.code-bg-info {
+  background: var(--color-info);
+}
+
+.code-bg-warning {
+  background: var(--color-warning);
+}
+
+.code-bg-primary {
+  background: var(--color-primary);
+}
+
+/* 4. 底层协议专家排错手风琴折叠区 */
+.code-protocol-accordion {
+  border: 1px solid var(--color-border-primary);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-surface);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+  transition: border-color 0.2s ease;
+}
+
+.code-protocol-accordion--expanded {
+  border-color: var(--color-primary);
+}
+
+.code-protocol-accordion-header {
+  padding: 0.85rem 1.25rem;
+  background: var(--color-bg-muted);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.15s ease;
+}
+
+.code-protocol-accordion-header:hover {
+  background: var(--color-bg-hover);
+}
+
+.code-protocol-accordion-title {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.code-accordion-arrow {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  width: 14px;
+}
+
+.code-accordion-label {
+  font-weight: 700;
+  font-size: 0.95rem;
+  color: var(--color-text-primary);
+}
+
+.code-protocol-accordion-tags {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.code-protocol-accordion-body {
+  padding: 1.25rem;
+  background: var(--color-bg-surface);
+  border-top: 1px solid var(--color-border-primary);
+}
+
+.code-protocol-accordion-body--collapsed {
+  display: none;
+}
+
+.code-protocol-accordion-body--visible {
+  display: block;
+}
+
+.code-expert-mode-container {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
 .code-anatomy-top-bar {
   display: flex;
   align-items: center;
