@@ -1,6 +1,6 @@
-# 业务流量与接口契约治理平台 (`code-traefik`)
+# 架构与活体契约治理平台 (`code-traefik`)
 
-> **产品定位**：基于真实流量的活体契约、架构一致性与防劣化自愈平台（原“业务流量监控与重放”系统升维）  
+> **产品定位**：以真实运行态为活水，架设微服务架构防漂移与活体契约防劣化的自愈防线  
 > **当前版本**：`v0.2.0` | **服务标识**：`Code-Traefik` (`traefik`) | **专有协议**：DOPHI `CROS RPC` over IPv4 TCP
 
 本项目基于 CodeBench 微前端架构与 `code-common` 公共底座构建，严格遵循 **SDD (Spec-Driven Development，规范驱动开发) + TDD (Test-Driven Development，测试驱动开发)** 工程模式：  

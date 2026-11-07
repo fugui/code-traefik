@@ -1,4 +1,4 @@
-# 业务流量与接口契约治理 (`code-traefik`) 数据库物理模型与 GORM 建模字典
+# 架构与活体契约治理 (`code-traefik`) 数据库物理模型与 GORM 建模字典
 
 - **文档编号**：`05-database-schema.md`
 - **文档版本**：v1.4.0

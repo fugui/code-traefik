@@ -1,4 +1,4 @@
-# 业务流量与接口契约治理 (`code-traefik`) 特性清单与需求范围界定规范 (Feature Matrix & Scope)
+# 架构与活体契约治理 (`code-traefik`) 特性清单与需求范围界定规范 (Feature Matrix & Scope)
 
 - **文档编号**：`01-feature-matrix.md`
 - **文档版本**：v2.12.1
@@ -37,7 +37,7 @@
 ## 1. 系统愿景与产品定位 (Vision & Positioning)
 
 ### 1.1 项目愿景与产品本质
-**业务流量与接口契约治理 (`code-traefik`)** 是挂载于 CodeBench 开发者综合工作台的企业级业务子系统，**只服务于业务实际使用的 DOPHI `CROS RPC` 协议**（`24B 公共消息头 RPC_COMM_HEAD_S` + `会话头 RPC_REQ/RSP/MNG_HEAD_S` + `0..N 段扩展头` + `序列化 Payload`），不做任何其他协议扩展。
+**架构与活体契约治理 (`code-traefik`)** 是挂载于 CodeBench 开发者综合工作台的企业级业务子系统，**只服务于业务实际使用的 DOPHI `CROS RPC` 协议**（`24B 公共消息头 RPC_COMM_HEAD_S` + `会话头 RPC_REQ/RSP/MNG_HEAD_S` + `0..N 段扩展头` + `序列化 Payload`），不做任何其他协议扩展。
 
 传统契约管理（Swagger、Postman、Proto 仓库等）多停留在“设计态的静态文档”，管不住生产运行时的真实调用，无法察觉微服务间的私自跨层依赖与接口破坏。
 本系统的本质是**「以契约治理为核心、以运行态真实流量为活水、以零侵入仿真为闭环的活体契约治理与防劣化平台」**：

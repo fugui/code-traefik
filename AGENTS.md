@@ -1,4 +1,4 @@
-# AGENTS.md - 业务流量与接口契约治理 (Code-Traefik)
+# AGENTS.md - 架构与活体契约治理平台 (Code-Traefik)
 
 > 💡 **上位准则**：工作区通用 SDD+TDD 四阶段研发流水线、`docs/` 双位编号规范、Go/React 编码风格、双模主题 Token、通用分页及自动交付规章，统一遵循 [`../AGENTS.md`](../AGENTS.md)（`code-common/rules/AGENTS.md`），本文档仅定义本模块专属契约与边界。
 

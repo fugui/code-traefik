@@ -1,4 +1,4 @@
-# 业务流量与接口契约治理 (`code-traefik`) HTTP / SSE 与主从通信接口契约规范
+# 架构与活体契约治理 (`code-traefik`) HTTP / SSE 与主从通信接口契约规范
 
 - **文档编号**：`01-http-api-contract.md`
 - **文档版本**：v1.4.0
