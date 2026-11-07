@@ -2800,6 +2800,33 @@ body {
   white-space: pre-wrap;
 }
 
+.code-guide-advance-box {
+  background: var(--color-bg-surface);
+  border: 1px dashed var(--color-primary);
+  border-radius: var(--radius-md);
+  padding: 1rem 1.25rem;
+}
+
+.code-guide-advance-box__header {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.5rem;
+}
+
+.code-guide-advance-box__title {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--color-text-primary);
+}
+
+.code-guide-advance-box__desc {
+  font-size: 0.825rem;
+  line-height: 1.5;
+  color: var(--color-text-secondary);
+  margin-bottom: 0.65rem;
+}
+
 .code-cta-action-area {
   display: flex;
   align-items: center;

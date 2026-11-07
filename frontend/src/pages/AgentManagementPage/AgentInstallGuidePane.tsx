@@ -17,6 +17,8 @@ export const AgentInstallGuidePane: React.FC<AgentInstallGuidePaneProps> = ({
   const curlCommand = `curl -fsSL "${downloadUrl}" -o code-traefik-agent && chmod +x code-traefik-agent`;
   const doctorCommand = `sudo ./code-traefik-agent --doctor`;
   const startCommand = `sudo ./code-traefik-agent --listen 0.0.0.0:9091 --allow-ips "${host},127.0.0.1"`;
+  const setcapCommand = `sudo setcap 'cap_net_admin,cap_sys_ptrace,cap_sys_admin,cap_perfmon,cap_bpf=ep' ./code-traefik-agent`;
+  const nonSudoStartCommand = `./code-traefik-agent --listen 0.0.0.0:9091 --allow-ips "${host},127.0.0.1"`;
 
   const handleCopy = (text: string, key: string) => {
     if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
@@ -205,6 +207,51 @@ export const AgentInstallGuidePane: React.FC<AgentInstallGuidePaneProps> = ({
 [Agent] 实例 BootID: e702ba7c-728b-4a55-a226-c116c49ce3ea
 [Agent] [✓] 内核特权检测通过: CAP_BPF, CAP_NET_ADMIN, CAP_SYS_ADMIN 均就绪`}
               </pre>
+            </div>
+
+            {/* 进阶技巧：配置 Linux Capabilities 免 sudo 运行 */}
+            <div className="code-guide-advance-box code-mt-sm" data-testid="guide-advance-setcap">
+              <div className="code-guide-advance-box__header">
+                <span className="code-badge code-badge--info">💡 进阶技巧</span>
+                <span className="code-guide-advance-box__title">配置 Linux Capabilities 实现普通用户免 sudo 运行</span>
+              </div>
+              <p className="code-guide-advance-box__desc">
+                若出于安全合规要求不希望长期以 <code>sudo</code> (root) 运行常驻进程，可执行以下一次性授权，将 eBPF 所需的最小特权直接赋予二进制文件：
+              </p>
+
+              <div className="code-cmd-block code-mt-xs">
+                <div className="code-cmd-block__header">
+                  <span className="code-cmd-block__label">1. 一次性授权命令（仅需首次执行一次）：</span>
+                  <button
+                    type="button"
+                    className="code-copy-btn"
+                    data-testid="copy-setcap-btn"
+                    onClick={() => handleCopy(setcapCommand, 'setcap')}
+                  >
+                    {copiedKey === 'setcap' ? '✓ 已复制' : '复制命令'}
+                  </button>
+                </div>
+                <pre className="code-cmd-code code-font-mono" data-testid="setcap-command-text">
+                  {setcapCommand}
+                </pre>
+              </div>
+
+              <div className="code-cmd-block code-mt-xs">
+                <div className="code-cmd-block__header">
+                  <span className="code-cmd-block__label">2. 授权完成后，普通用户直接常驻启动（无需 sudo）：</span>
+                  <button
+                    type="button"
+                    className="code-copy-btn"
+                    data-testid="copy-nonsudo-start-btn"
+                    onClick={() => handleCopy(nonSudoStartCommand, 'nonsudo')}
+                  >
+                    {copiedKey === 'nonsudo' ? '✓ 已复制' : '复制命令'}
+                  </button>
+                </div>
+                <pre className="code-cmd-code code-font-mono" data-testid="nonsudo-start-command-text">
+                  {nonSudoStartCommand}
+                </pre>
+              </div>
             </div>
           </div>
         </div>

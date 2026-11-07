@@ -414,6 +414,12 @@ describe('AgentProcessMountAndReadiness Test Suite', () => {
     expect(html).toContain('sudo ./code-traefik-agent --doctor');
     expect(html).toContain('data-testid="guide-step-start"');
     expect(html).toContain('sudo ./code-traefik-agent --listen 0.0.0.0:9091');
+    expect(html).toContain('data-testid="guide-advance-setcap"');
+    expect(html).toContain('配置 Linux Capabilities 实现普通用户免 sudo 运行');
+    expect(html).toContain('data-testid="copy-setcap-btn"');
+    expect(html).toContain('sudo setcap');
+    expect(html).toContain('data-testid="copy-nonsudo-start-btn"');
+    expect(html).toContain('data-testid="nonsudo-start-command-text"');
     expect(html).toContain('data-testid="guide-step-register"');
     expect(html).toContain('data-testid="cta-register-agent-btn"');
     expect(html).toContain('🚀 已在主机启动完成？立即登记私有 Agent');
