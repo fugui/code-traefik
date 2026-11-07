@@ -134,7 +134,6 @@ func RegisterAPIRoutes(r *gin.Engine) {
 
 		// 6. 公私域 Agent 纳管与排他租约管控域 (F-06, F-08)
 		protected.GET("/agents", ListAgents)
-		protected.GET("/agent/download", DownloadAgentBinary)
 		protected.GET("/agents/:id", GetAgent)
 		protected.POST("/agents", RegisterAgent)
 		protected.PUT("/agents/:id", UpdateAgent)

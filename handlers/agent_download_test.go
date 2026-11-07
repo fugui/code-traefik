@@ -68,3 +68,13 @@ func TestDownloadAgentBinary(t *testing.T) {
 		assert.Contains(t, w2.Body.String(), "服务端未找到可供下载")
 	})
 }
+
+func TestRegisterAPIRoutes_NoDuplicateRoutesPanic(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	assert.NotPanics(t, func() {
+		handlers.RegisterAPIRoutes(r)
+	})
+}
+
+
