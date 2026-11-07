@@ -2552,6 +2552,267 @@ body {
   color: var(--color-danger);
 }
 
+/* Agent 私有空状态接入引导卡片 */
+.code-agent-empty-guide-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  background: var(--color-bg-muted);
+  border: 1px dashed var(--color-border-primary);
+  border-radius: var(--radius-lg);
+  padding: 2.5rem 1.5rem;
+  margin: 1rem 0;
+}
+
+.code-agent-empty-guide-icon {
+  font-size: 2.5rem;
+  line-height: 1;
+  margin-bottom: 0.75rem;
+}
+
+.code-agent-empty-guide-title {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  margin-bottom: 0.4rem;
+}
+
+.code-agent-empty-guide-desc {
+  font-size: 0.85rem;
+  color: var(--color-text-secondary);
+  max-width: 420px;
+  line-height: 1.5;
+  margin-bottom: 1.25rem;
+}
+
+.code-agent-empty-guide-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+/* Agent 下载与接入说明面板 (INSTALL Tab) */
+.code-agent-install-guide {
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-border-primary);
+  border-radius: var(--radius-lg);
+  padding: 1.5rem 2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.code-guide-header {
+  border-bottom: 1px solid var(--color-border-subtle);
+  padding-bottom: 1.25rem;
+}
+
+.code-guide-header__badge {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.code-guide-header__title {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  margin-bottom: 0.5rem;
+}
+
+.code-guide-header__desc {
+  font-size: 0.875rem;
+  line-height: 1.6;
+  color: var(--color-text-secondary);
+  max-width: 900px;
+}
+
+.code-guide-steps-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.code-guide-step-card {
+  background: var(--color-bg-muted);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  padding: 1.25rem 1.5rem;
+  transition: border-color 0.15s ease;
+}
+
+.code-guide-step-card:hover {
+  border-color: var(--color-border-hover);
+}
+
+.code-guide-step-card--cta {
+  border-color: var(--color-primary);
+  background: var(--color-primary-subtle);
+}
+
+.code-guide-step-card__header {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.85rem;
+  margin-bottom: 1rem;
+}
+
+.code-step-number {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--color-primary);
+  color: var(--color-text-white);
+  font-weight: 700;
+  font-size: 0.875rem;
+  flex-shrink: 0;
+}
+
+.code-step-title-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.code-step-title {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  margin: 0;
+}
+
+.code-step-subtitle {
+  font-size: 0.775rem;
+  color: var(--color-text-muted);
+}
+
+.code-step-p {
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: var(--color-text-secondary);
+  margin-bottom: 0.75rem;
+}
+
+.code-download-actions {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.code-cmd-block {
+  background: var(--color-bg-input);
+  border: 1px solid var(--color-border-primary);
+  border-radius: var(--radius-md);
+  padding: 0.65rem 0.85rem;
+}
+
+.code-cmd-block__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+}
+
+.code-cmd-block__label {
+  font-size: 0.775rem;
+  color: var(--color-text-muted);
+}
+
+.code-copy-btn {
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 0.2rem 0.6rem;
+  font-size: 0.75rem;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.code-copy-btn:hover {
+  background: var(--color-bg-hover);
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.code-cmd-code {
+  margin: 0;
+  padding: 0.4rem 0.2rem;
+  font-size: 0.825rem;
+  line-height: 1.45;
+  color: var(--color-text-primary);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.code-guide-doctor-items {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 0.65rem;
+}
+
+.code-doctor-pill {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 0.4rem 0.65rem;
+  font-size: 0.785rem;
+  color: var(--color-text-secondary);
+}
+
+.code-param-table-wrapper {
+  overflow-x: auto;
+}
+
+.code-log-preview-box {
+  background: var(--color-bg-input);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  padding: 0.75rem 1rem;
+}
+
+.code-log-preview-box__title {
+  display: block;
+  font-size: 0.775rem;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  margin-bottom: 0.4rem;
+}
+
+.code-log-preview-box__content {
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--color-text-muted);
+  white-space: pre-wrap;
+}
+
+.code-cta-action-area {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.code-btn--lg {
+  padding: 0.65rem 1.5rem;
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
+
 /* 录制会话控制与横幅 */
 .code-session-bar-wrap {
   display: flex;

@@ -377,4 +377,70 @@ describe('AgentProcessMountAndReadiness Test Suite', () => {
     expect(disarmedHtml).toContain('data-testid="arm-all-probes-btn"');
     expect(disarmedHtml).toContain('⚡ 一键激活全部探针');
   });
+
+  it('renders AgentScopeTabs with SHARED, PRIVATE, and INSTALL tabs', () => {
+    const html = renderToString(
+      <MemoryRouter initialEntries={['/agents?scope=INSTALL']}>
+        <ModuleUserProvider
+          value={{
+            user: adminUser,
+            loadingUser: false,
+            isEmbedded: false,
+            reloadUser: async () => {},
+          }}
+        >
+          <AgentManagementPage />
+        </ModuleUserProvider>
+      </MemoryRouter>
+    );
+
+    // 验证 3 个 Tab 均正确渲染
+    expect(html).toContain('data-testid="tab-scope-shared"');
+    expect(html).toContain('团队公共 Agent (SHARED)');
+    expect(html).toContain('data-testid="tab-scope-private"');
+    expect(html).toContain('我的私有 Agent (PRIVATE)');
+    expect(html).toContain('data-testid="tab-scope-install"');
+    expect(html).toContain('📥 Agent 下载与接入说明 (INSTALL)');
+    expect(html).toContain('code-scope-tab--active');
+
+    // 验证 INSTALL Tab 内容面板
+    expect(html).toContain('data-testid="agent-install-guide-pane"');
+    expect(html).toContain('code-traefik-agent 部署与快速接入');
+    expect(html).toContain('data-testid="guide-step-download"');
+    expect(html).toContain('data-testid="direct-download-btn"');
+    expect(html).toContain('data-testid="copy-curl-btn"');
+    expect(html).toContain('curl -fsSL');
+    expect(html).toContain('data-testid="guide-step-doctor"');
+    expect(html).toContain('sudo ./code-traefik-agent --doctor');
+    expect(html).toContain('data-testid="guide-step-start"');
+    expect(html).toContain('sudo ./code-traefik-agent --listen 0.0.0.0:9091');
+    expect(html).toContain('data-testid="guide-step-register"');
+    expect(html).toContain('data-testid="cta-register-agent-btn"');
+    expect(html).toContain('🚀 已在主机启动完成？立即登记私有 Agent');
+  });
+
+  it('renders empty guide card in PRIVATE scope when no agents are registered (Plan B联动)', () => {
+    const html = renderToString(
+      <MemoryRouter initialEntries={['/agents?scope=PRIVATE']}>
+        <ModuleUserProvider
+          value={{
+            user: adminUser,
+            loadingUser: false,
+            isEmbedded: false,
+            reloadUser: async () => {},
+          }}
+        >
+          <AgentManagementPage />
+        </ModuleUserProvider>
+      </MemoryRouter>
+    );
+
+    // 验证私有 Agent 空状态引导卡片
+    expect(html).toContain('data-testid="private-agent-empty-guide"');
+    expect(html).toContain('暂无已登记的私有 Agent');
+    expect(html).toContain('data-testid="empty-guide-to-install-btn"');
+    expect(html).toContain('📥 查看下载与启动指引');
+    expect(html).toContain('data-testid="empty-guide-direct-register-btn"');
+    expect(html).toContain('+ 已有运行中的 Agent？直接登记');
+  });
 });

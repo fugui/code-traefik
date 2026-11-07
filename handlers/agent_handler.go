@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -856,4 +857,39 @@ func RearmAgentProbes(c *gin.Context) {
 		"diagnostics": diagResp,
 		"has_error":   false,
 	})
+}
+
+// DownloadAgentBinary GET /api/agent/download
+// 提供数据面 Agent 单二进制可执行文件的下载服务
+func DownloadAgentBinary(c *gin.Context) {
+	// 候选搜索路径（支持本地开发、容器化部署及工作区编译输出）
+	candidates := []string{
+		os.Getenv("TRAEFIK_AGENT_BIN_PATH"),
+		"./code-traefik-agent",
+		"./bin/code-traefik-agent",
+		"../code-traefik-agent",
+		"/usr/local/bin/code-traefik-agent",
+	}
+
+	var foundPath string
+	for _, p := range candidates {
+		if p == "" {
+			continue
+		}
+		if info, err := os.Stat(p); err == nil && !info.IsDir() {
+			foundPath = p
+			break
+		}
+	}
+
+	if foundPath == "" {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": "服务端未找到可供下载的 code-traefik-agent 二进制可执行文件，请在服务端执行 make agent 进行构建",
+		})
+		return
+	}
+
+	c.Header("Content-Disposition", "attachment; filename=\"code-traefik-agent\"")
+	c.Header("Content-Type", "application/octet-stream")
+	c.File(foundPath)
 }

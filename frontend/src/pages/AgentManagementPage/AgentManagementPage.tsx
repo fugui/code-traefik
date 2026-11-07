@@ -6,7 +6,8 @@ import { useModuleUser } from '../../context/ModuleUserContext';
 import * as agentApi from '../../api/agent';
 import type { Agent, Process } from '../../types';
 import { useModulePath } from '../../hooks/useModulePath';
-import { AgentScopeTabs } from './AgentScopeTabs';
+import { AgentScopeTabs, AgentScopeType } from './AgentScopeTabs';
+import { AgentInstallGuidePane } from './AgentInstallGuidePane';
 import { AgentLeaseStatusBadge } from './AgentLeaseStatusBadge';
 import { AgentProcessMountDrawer } from './AgentProcessMountDrawer';
 
@@ -26,7 +27,9 @@ export const AgentManagementPage: React.FC<AgentManagementPageProps> = ({
   const toast = useToast();
   const isAdmin = Boolean(user?.is_module_admin || user?.is_super_admin);
 
-  const scopeParam = (searchParams.get('scope') as 'SHARED' | 'PRIVATE') || 'SHARED';
+  const rawScope = searchParams.get('scope');
+  const scopeParam: AgentScopeType =
+    rawScope === 'PRIVATE' ? 'PRIVATE' : rawScope === 'INSTALL' ? 'INSTALL' : 'SHARED';
   const urlAgentId = searchParams.get('agent_id') || '';
   const urlProcessId = searchParams.get('process_id') || '';
   const allOwnersParam = searchParams.get('all_owners') === 'true';
@@ -46,10 +49,16 @@ export const AgentManagementPage: React.FC<AgentManagementPageProps> = ({
 
   // 弹窗状态
   const [registerModalOpen, setRegisterModalOpen] = useState(false);
-  const [registerForm, setRegisterForm] = useState({
+  const [registerForm, setRegisterForm] = useState<{
+    name: string;
+    endpoint: string;
+    scope: 'SHARED' | 'PRIVATE';
+    claim_code: string;
+    description: string;
+  }>({
     name: '',
     endpoint: 'http://127.0.0.1:9091',
-    scope: scopeParam,
+    scope: scopeParam === 'SHARED' ? 'SHARED' : 'PRIVATE',
     claim_code: '',
     description: '',
   });
@@ -86,10 +95,17 @@ export const AgentManagementPage: React.FC<AgentManagementPageProps> = ({
   }, [selectedAgent, canWriteSelectedAgent, openMountParam, setSearchParams, toast]);
 
   const loadAgents = useCallback(async () => {
+    if (scopeParam === 'INSTALL') {
+      setLoading(false);
+      setAgents([]);
+      setTotalAgents(0);
+      setSelectedAgent(null);
+      return;
+    }
     setLoading(true);
     try {
       const res = await agentApi.listAgents({
-        scope: scopeParam,
+        scope: scopeParam as 'SHARED' | 'PRIVATE',
         all_owners: isAllOwners,
         page,
         page_size: pageSize,
@@ -135,7 +151,7 @@ export const AgentManagementPage: React.FC<AgentManagementPageProps> = ({
     })();
   }, [selectedAgentId, toast]);
 
-  const handleScopeChange = (newScope: 'SHARED' | 'PRIVATE') => {
+  const handleScopeChange = (newScope: AgentScopeType) => {
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
       next.set('scope', newScope);
@@ -147,7 +163,10 @@ export const AgentManagementPage: React.FC<AgentManagementPageProps> = ({
       return next;
     });
     setSelectedAgent(null);
-    setRegisterForm((prev) => ({ ...prev, scope: newScope }));
+    setRegisterForm((prev) => ({
+      ...prev,
+      scope: newScope === 'SHARED' ? 'SHARED' : 'PRIVATE',
+    }));
   };
 
   const handleHandshake = async (agentId: string) => {
@@ -442,7 +461,7 @@ export const AgentManagementPage: React.FC<AgentManagementPageProps> = ({
         </div>
 
         <div className="code-header-actions">
-          {(isAdmin || scopeParam === 'PRIVATE') && (
+          {(isAdmin || scopeParam === 'PRIVATE' || scopeParam === 'INSTALL') && (
             <button
               type="button"
               className="code-btn code-btn--primary"
@@ -451,7 +470,7 @@ export const AgentManagementPage: React.FC<AgentManagementPageProps> = ({
                 setRegisterForm({
                   name: '',
                   endpoint: 'http://127.0.0.1:9091',
-                  scope: scopeParam,
+                  scope: scopeParam === 'SHARED' ? 'SHARED' : 'PRIVATE',
                   claim_code: '',
                   description: '',
                 });
@@ -467,57 +486,110 @@ export const AgentManagementPage: React.FC<AgentManagementPageProps> = ({
       {/* 作用域切换 */}
       <AgentScopeTabs currentScope={scopeParam} onChangeScope={handleScopeChange} />
 
-      {/* Agent 列表与进程映射双栏 */}
-      <div className="code-agent-layout code-mt-md">
-        {/* 左栏：Agent 列表 */}
-        <div className="code-agent-list-pane">
-          <div className="code-pane-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span className="code-pane-title">
-              {scopeParam === 'SHARED'
-                ? '团队公共 Agent'
-                : isAllOwners
-                ? '全量私有 Agent (管理员视角)'
-                : '我的私有 Agent'} ({totalAgents})
-            </span>
-            {isAdmin && scopeParam === 'PRIVATE' && (
-              <label
-                className="code-checkbox-label"
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '0.35rem',
-                  fontSize: '0.8rem',
-                  cursor: 'pointer',
-                  userSelect: 'none',
-                }}
-              >
-                <input
-                  type="checkbox"
-                  data-testid="toggle-all-owners-checkbox"
-                  checked={isAllOwners}
-                  onChange={(e) => {
-                    setSearchParams((prev) => {
-                      const next = new URLSearchParams(prev);
-                      if (e.target.checked) {
-                        next.set('all_owners', 'true');
-                      } else {
-                        next.delete('all_owners');
-                      }
-                      next.set('page', '1');
-                      return next;
-                    });
+      {scopeParam === 'INSTALL' ? (
+        <div className="code-mt-md">
+          <AgentInstallGuidePane
+            onOpenRegisterModal={() => {
+              setRegisterForm({
+                name: '',
+                endpoint: 'http://127.0.0.1:9091',
+                scope: 'PRIVATE',
+                claim_code: '',
+                description: '',
+              });
+              setRegisterModalOpen(true);
+            }}
+          />
+        </div>
+      ) : (
+        /* Agent 列表与进程映射双栏 */
+        <div className="code-agent-layout code-mt-md">
+          {/* 左栏：Agent 列表 */}
+          <div className="code-agent-list-pane">
+            <div className="code-pane-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span className="code-pane-title">
+                {scopeParam === 'SHARED'
+                  ? '团队公共 Agent'
+                  : isAllOwners
+                  ? '全量私有 Agent (管理员视角)'
+                  : '我的私有 Agent'} ({totalAgents})
+              </span>
+              {isAdmin && scopeParam === 'PRIVATE' && (
+                <label
+                  className="code-checkbox-label"
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.35rem',
+                    fontSize: '0.8rem',
+                    cursor: 'pointer',
+                    userSelect: 'none',
                   }}
-                />
-                <span>全量同事视角</span>
-              </label>
-            )}
-          </div>
+                >
+                  <input
+                    type="checkbox"
+                    data-testid="toggle-all-owners-checkbox"
+                    checked={isAllOwners}
+                    onChange={(e) => {
+                      setSearchParams((prev) => {
+                        const next = new URLSearchParams(prev);
+                        if (e.target.checked) {
+                          next.set('all_owners', 'true');
+                        } else {
+                          next.delete('all_owners');
+                        }
+                        next.set('page', '1');
+                        return next;
+                      });
+                    }}
+                  />
+                  <span>全量同事视角</span>
+                </label>
+              )}
+            </div>
 
-          {loading ? (
-            <div className="code-tpl-loading-screen">正在加载 Agent 列表...</div>
-          ) : agents.length === 0 ? (
-            <div className="code-empty-pane code-p-xl">当前作用域下暂无已登记的 Agent</div>
-          ) : (
+            {loading ? (
+              <div className="code-tpl-loading-screen">正在加载 Agent 列表...</div>
+            ) : agents.length === 0 ? (
+              scopeParam === 'PRIVATE' ? (
+                <div className="code-agent-empty-guide-card code-p-lg" data-testid="private-agent-empty-guide">
+                  <div className="code-agent-empty-guide-icon">🖥️</div>
+                  <h4 className="code-agent-empty-guide-title">暂无已登记的私有 Agent</h4>
+                  <p className="code-agent-empty-guide-desc">
+                    私有 Agent 运行在您的个人主机或本地开发机上，支持独占的单机 eBPF 流量录制、免重启套接字待命与排他联调。
+                  </p>
+                  <div className="code-agent-empty-guide-actions code-mt-md">
+                    <button
+                      type="button"
+                      className="code-btn code-btn--primary code-btn--sm"
+                      data-testid="empty-guide-to-install-btn"
+                      onClick={() => handleScopeChange('INSTALL')}
+                    >
+                      📥 查看下载与启动指引
+                    </button>
+                    <button
+                      type="button"
+                      className="code-btn code-btn--secondary code-btn--sm"
+                      data-testid="empty-guide-direct-register-btn"
+                      onClick={() => {
+                        setRegisterForm({
+                          name: '',
+                          endpoint: 'http://127.0.0.1:9091',
+                          scope: 'PRIVATE',
+                          claim_code: '',
+                          description: '',
+                        });
+                        setRegisterModalOpen(true);
+                      }}
+                    >
+                      + 已有运行中的 Agent？直接登记
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="code-empty-pane code-p-xl">当前作用域下暂无已登记的 Agent</div>
+              )
+            ) : (
             <div className="code-agent-cards-grid">
               {(agents ?? []).map((ag) => {
                 const isSelected = selectedAgent?.id === ag.id;
@@ -921,6 +993,7 @@ export const AgentManagementPage: React.FC<AgentManagementPageProps> = ({
           )}
         </div>
       </div>
+      )}
 
       {/* 登记 Agent 弹窗 */}
       <Modal

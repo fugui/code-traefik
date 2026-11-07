@@ -41,6 +41,7 @@ func RegisterAPIRoutes(r *gin.Engine) {
 		openAPI.POST("/login", Login)
 		openAPI.GET("/oauth2/authorize", StartOAuth2Flow)
 		openAPI.GET("/oauth2/callback", OAuth2Callback)
+		openAPI.GET("/agent/download", DownloadAgentBinary)
 	}
 
 	// 2. 受保护业务路由 (Protected - 需携带合法平台 JWT)
@@ -133,6 +134,7 @@ func RegisterAPIRoutes(r *gin.Engine) {
 
 		// 6. 公私域 Agent 纳管与排他租约管控域 (F-06, F-08)
 		protected.GET("/agents", ListAgents)
+		protected.GET("/agent/download", DownloadAgentBinary)
 		protected.GET("/agents/:id", GetAgent)
 		protected.POST("/agents", RegisterAgent)
 		protected.PUT("/agents/:id", UpdateAgent)
