@@ -98,15 +98,15 @@ describe('ModuleServiceDownstreamAndDeletion Test Suite (P0 UX Optimization)', (
       </MemoryRouter>
     );
 
-    // 1. 验证被依赖的服务显示带有 warning 状态的 1 个依赖方 Badge
+    // 1. 验证被依赖的服务显示带有 warning 状态的 1 个消费方 Badge
     expect(html).toContain('data-testid="badge-downstream-svc-order-1"');
     expect(html).toContain('code-badge--warning');
-    expect(html).toMatch(/1(<!-- -->)?\s*个依赖方/);
+    expect(html).toMatch(/1(<!-- -->)?\s*个消费方/);
 
-    // 2. 验证依赖方清单中清晰呈现了下游模块名称与所属子系统标签
+    // 2. 验证消费方清单中清晰呈现了消费模块名称与所属子系统标签
     expect(html).toContain('客户端交互终端模块');
     expect(html).toContain('客户端交互子系统');
-    expect(html).toContain('点击在架构树中聚焦此下游模块：客户端交互终端模块 (客户端交互子系统)');
+    expect(html).toContain('点击在架构树中聚焦此消费模块：客户端交互终端模块 (客户端交互子系统)');
 
     // 3. 验证被依赖的删除按钮：不再具备原生 disabled 属性（杜绝死寂无响应），并带有警示提示
     expect(html).toContain('data-testid="btn-delete-service-svc-order-1"');
@@ -115,11 +115,11 @@ describe('ModuleServiceDownstreamAndDeletion Test Suite (P0 UX Optimization)', (
     const match = html.match(deleteBtnRegex);
     expect(match).not.toBeNull();
     expect(match![0]).not.toContain('disabled');
-    expect(match![0]).toContain('正被 1 个下游模块依赖，点击查看依赖详情与解除指引');
+    expect(match![0]).toContain('正被 1 个模块依赖消费，点击查看消费详情与解除指引');
 
-    // 4. 验证零依赖的服务显示 info 状态的 0 个依赖方 Badge 且删除按钮为纯净删除
+    // 4. 验证零依赖的服务显示 info 状态的 0 个消费方 Badge 且删除按钮为纯净删除
     expect(html).toContain('data-testid="badge-downstream-svc-order-2"');
-    expect(html).toMatch(/0(<!-- -->)?\s*个依赖方/);
+    expect(html).toMatch(/0(<!-- -->)?\s*个消费方/);
     expect(html).toContain('data-testid="btn-delete-service-svc-order-2"');
     const deleteBtnRegex2 = /<button[^>]*data-testid="btn-delete-service-svc-order-2"[^>]*>/;
     const match2 = html.match(deleteBtnRegex2);

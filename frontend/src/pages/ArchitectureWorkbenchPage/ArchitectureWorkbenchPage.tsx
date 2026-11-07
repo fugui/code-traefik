@@ -353,7 +353,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
     };
   }, [selectedGroupId, toast]);
 
-  // 加载与刷新模块详情、对外供给服务与下游服务依赖
+  // 加载与刷新模块详情、对外供给服务与所需依赖服务
   const refreshCurrentModule = useCallback(
     async (modId: string) => {
       if (!modId) return null;
@@ -792,7 +792,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
     if (!selectedModuleId) return;
     try {
       await archApi.createModuleDependency(selectedModuleId, data);
-      toast.success('下游服务依赖添加成功');
+      toast.success('服务依赖添加成功');
       await refreshCurrentModule(selectedModuleId);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '添加依赖失败');
@@ -804,7 +804,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
     if (!selectedModuleId) return;
     try {
       await archApi.deleteModuleDependency(depId);
-      toast.success('下游依赖已解除');
+      toast.success('服务依赖已解除');
       await refreshCurrentModule(selectedModuleId);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '解除依赖失败');

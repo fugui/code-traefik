@@ -731,8 +731,8 @@ func (GoldenSuiteItem) TableName() string { return config.TablePrefix + "golden_
 | :--- | :--- | :---: | :---: |
 | 删除 `Subsystem` | 存在 `FunctionalGroup` 或 `Module` 引用 | `409 Conflict` | `ON DELETE RESTRICT` |
 | 删除 `FunctionalGroup` | 存在子 `FunctionalGroup`（`parent_id`）或挂载的 `Module` | `409 Conflict` | `ON DELETE RESTRICT` |
-| 删除 `Module` | 存在已对外提供且已被其他 FM 依赖的 `ModuleService`，或仍装载于某 `ArchProcess`（`arch_process_id IS NOT NULL`） | `409 Conflict` | 存在下游依赖或装载关系时禁止孤儿删除 |
-| 删除 `ModuleService` | 该 Service 已被其他内部功能模块作为依赖引用 (`ModuleDependency`) | `409 Conflict` | 拦截强校验，需先移除下游依赖方的契约绑定 |
+| 删除 `Module` | 存在已对外提供且已被其他 FM 依赖的 `ModuleService`，或仍装载于某 `ArchProcess`（`arch_process_id IS NOT NULL`） | `409 Conflict` | 存在依赖消费关系或装载关系时禁止孤儿删除 |
+| 删除 `ModuleService` | 该 Service 已被其他内部功能模块作为依赖引用 (`ModuleDependency`) | `409 Conflict` | 拦截强校验，需先移除消费方模块的契约绑定 |
 | 删除 `ArchProcessGroup` | 组下仍存在 `ArchProcess` 标准架构进程 | `409 Conflict` | `ON DELETE RESTRICT` |
 | 删除 `ArchProcess` | 已被任何宿主机 Agent 挂载实例化（`traefik_processes` 存在引用）或被历史 `ReplayTask` 引用 | `409 Conflict` | `ON DELETE RESTRICT`（无引用时删除自动将 `Module.arch_process_id` 置 `NULL`） |
 | 同机重复挂载 `ArchProcess` 或端口冲突 | 同一台 `Agent`（无论 `SHARED` 或 `PRIVATE`）重复挂载同一 `arch_process_id`，或同机非零 `effective_listen_port` 冲突 | `409 Conflict` | `uk_traefik_proc_agent_arch` / `uk_traefik_proc_agent_port`（支持多套 `SHARED` 公共测试环境各自 `1:1` 挂载同一 `ArchProcess`） |

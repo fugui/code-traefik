@@ -425,7 +425,7 @@ export const ArchProcessDetailPane: React.FC<ArchProcessDetailPaneProps> = ({
           data-testid="tab-contracts"
         >
           <Layers size={14} />
-          <span>进程级下游契约 (供 {providedServices.length} | 需 {dependencies.length})</span>
+          <span>进程级服务契约 (供 {providedServices.length} | 需 {dependencies.length})</span>
         </button>
 
         <button
@@ -540,7 +540,7 @@ export const ArchProcessDetailPane: React.FC<ArchProcessDetailPaneProps> = ({
           </div>
         )}
 
-        {/* Tab 2: 进程级下游契约 */}
+        {/* Tab 2: 进程级服务契约 */}
         {activeTab === 'contracts' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
             {/* 对外提供服务 */}
@@ -600,7 +600,7 @@ export const ArchProcessDetailPane: React.FC<ArchProcessDetailPaneProps> = ({
             {/* 对外依赖消费 */}
             <div>
               <h4 style={{ margin: '0 0 0.5rem', fontSize: '0.95rem', fontWeight: 600 }}>
-                下游依赖消费契约 (DEPEND - 共 {dependencies.length} 个)
+                所需依赖服务契约 (DEPEND - 共 {dependencies.length} 个)
               </h4>
               {dependencies.length === 0 ? (
                 <div

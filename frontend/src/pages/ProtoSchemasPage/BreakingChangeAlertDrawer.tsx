@@ -159,7 +159,7 @@ export const BreakingChangeAlertDrawer: React.FC<BreakingChangeAlertDrawerProps>
           </div>
         </div>
 
-        {/* 波及下游消费者血缘推导 */}
+        {/* 波及消费方模块推导 */}
         <div className="breaking-change-drawer__section">
           <div
             style={{
@@ -169,7 +169,7 @@ export const BreakingChangeAlertDrawer: React.FC<BreakingChangeAlertDrawerProps>
               color: 'var(--color-text-primary)',
             }}
           >
-            波及下游消费者血缘推导 ({affectedDependents.length} 个功能模块)
+            波及消费方模块推导 ({affectedDependents.length} 个功能模块)
           </div>
           {affectedDependents.length === 0 ? (
             <div
@@ -183,7 +183,7 @@ export const BreakingChangeAlertDrawer: React.FC<BreakingChangeAlertDrawerProps>
                 border: '1px dashed var(--color-border-primary)',
               }}
             >
-              暂未检测到已登记 DEPEND 依赖该接口的下游消费者模块
+              暂未检测到已登记 DEPEND 依赖该接口的消费方模块
             </div>
           ) : (
             <div
@@ -198,7 +198,7 @@ export const BreakingChangeAlertDrawer: React.FC<BreakingChangeAlertDrawerProps>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
                 <thead>
                   <tr style={{ background: 'var(--color-bg-muted)', textAlign: 'left' }}>
-                    <th style={{ padding: '8px 12px', borderBottom: '1px solid var(--color-border-primary)' }}>下游模块</th>
+                    <th style={{ padding: '8px 12px', borderBottom: '1px solid var(--color-border-primary)' }}>消费方模块</th>
                     <th style={{ padding: '8px 12px', borderBottom: '1px solid var(--color-border-primary)' }}>模块编码</th>
                     <th style={{ padding: '8px 12px', borderBottom: '1px solid var(--color-border-primary)' }}>标准进程</th>
                     <th style={{ padding: '8px 12px', borderBottom: '1px solid var(--color-border-primary)' }}>模块负责人</th>

@@ -98,7 +98,7 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
   const handleDeleteServiceClick = (svc: ModuleService) => {
     if ((svc.downstream_count || 0) > 0) {
       setBlockedService(svc);
-      toast.warning(`服务契约 [${svc.service_name}] 正在被下游模块依赖，无法直接删除`);
+      toast.warning(`服务契约 [${svc.service_name}] 正在被其他模块依赖消费，无法直接删除`);
       return;
     }
     void onDeleteService(svc.id);
@@ -594,7 +594,7 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
                   <tr>
                     <th style={{ width: '28%' }}>服务名称 (service_name)</th>
                     <th style={{ width: '32%' }}>默认 Diff 忽略字段路径 (diff_ignore_paths)</th>
-                    <th style={{ width: '15%' }}>下游依赖方数量</th>
+                    <th style={{ width: '15%' }}>服务消费方 (Consumers)</th>
                     <th style={{ width: '15%' }}>说明</th>
                     {isAdmin && <th style={{ width: '10%' }}>操作</th>}
                   </tr>
@@ -667,7 +667,7 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
                             className={`code-badge ${(svc.downstream_count || 0) > 0 ? 'code-badge--warning' : 'code-badge--info'}`}
                             data-testid={`badge-downstream-${svc.id}`}
                           >
-                            {svc.downstream_count || 0} 个依赖方
+                            {svc.downstream_count || 0} 个消费方
                           </span>
                           {svc.downstream_consumers && svc.downstream_consumers.length > 0 ? (
                             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', maxWidth: '260px' }}>
@@ -678,7 +678,7 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
                                   className="code-module-link-chip"
                                   style={{ fontSize: '11px', padding: '2px 6px' }}
                                   onClick={() => onSelectModule(String(c.module_id))}
-                                  title={`点击在架构树中聚焦此下游模块：${c.module_name}${c.subsystem_name ? ` (${c.subsystem_name})` : ''}`}
+                                  title={`点击在架构树中聚焦此消费模块：${c.module_name}${c.subsystem_name ? ` (${c.subsystem_name})` : ''}`}
                                 >
                                   <Cpu size={11} />
                                   <span>{c.module_name}</span>
@@ -695,7 +695,7 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
                                   key={idx}
                                   className="code-tag code-tag--muted code-font-mono"
                                   style={{ fontSize: '11px' }}
-                                  title={`下游依赖方: ${modName}`}
+                                  title={`服务消费方: ${modName}`}
                                 >
                                   {modName}
                                 </span>
@@ -712,7 +712,7 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
                             className={`code-btn code-btn--xs ${(svc.downstream_count || 0) > 0 ? 'code-btn--secondary' : 'code-btn--danger'}`}
                             title={
                               (svc.downstream_count || 0) > 0
-                                ? `正被 ${svc.downstream_count} 个下游模块依赖，点击查看依赖详情与解除指引`
+                                ? `正被 ${svc.downstream_count} 个模块依赖消费，点击查看消费详情与解除指引`
                                 : `删除对外服务契约 [${svc.service_name}]`
                             }
                             data-testid={`btn-delete-service-${svc.id}`}
@@ -743,18 +743,18 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
             </div>
           </div>
 
-          {/* 下表格：依赖下游服务列表 (DEPEND Services) */}
+          {/* 下表格：所需依赖服务列表 (DEPEND Services) */}
           <div className="code-service-section">
             <div className="code-service-section-header">
               <div className="code-service-section-title-wrap">
                 <div className="code-service-section-title-row">
                   <h4 className="code-service-section-title">
-                    依赖下游服务列表 (DEPEND)
+                    所需依赖服务列表 (DEPEND)
                   </h4>
                   <span className="code-badge code-badge--info">{dependencies.length} 个依赖</span>
                 </div>
                 <p className="code-service-section-desc">
-                  当前模块运行所依赖的下游 Service 服务契约（支持平台内已有模块供给服务或外部第三方系统）
+                  当前模块运行所依赖的 Service 服务契约（支持平台内已有模块供给服务或外部第三方系统）
                 </p>
               </div>
 
@@ -884,7 +884,7 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
                   {dependencies.length === 0 && (
                     <tr>
                       <td colSpan={isAdmin ? 6 : 5} className="code-table-empty">
-                        当前模块暂未声明任何下游服务依赖，点击右上角【+ 添加服务依赖】声明链路
+                        当前模块暂未声明任何服务依赖，点击右上角【+ 添加服务依赖】声明链路
                       </td>
                     </tr>
                   )}
@@ -1145,8 +1145,8 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
       <Drawer
         open={isDependDrawerOpen}
         onClose={() => setIsDependDrawerOpen(false)}
-        title={`添加下游服务依赖 [${selectedModule?.name || ''}]`}
-        subtitle="声明当前功能模块在业务链路中需要调用或依赖的下游 Service"
+        title={`添加服务依赖 [${selectedModule?.name || ''}]`}
+        subtitle="声明当前功能模块在业务链路中需要调用或依赖的 Service 服务契约"
         width="md"
         footer={
           <div className="code-drawer-footer">
@@ -1209,7 +1209,7 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
                   value={dependForm.service_id}
                   onChange={(e) => setDependForm({ ...dependForm, service_id: e.target.value })}
                 >
-                  <option value="">-- 请选择被依赖的下游 Service --</option>
+                  <option value="">-- 请选择被依赖的目标 Service --</option>
                   {availableServices.map((item) => (
                     <option key={item.service_id} value={item.service_id}>
                       {item.service_name} (供给方: {item.module_name} [{item.module_code}] / 子系统: {item.subsystem_name})
@@ -1343,7 +1343,7 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
         </div>
       </Drawer>
 
-      {/* 4. 下游依赖拦截指引 Modal */}
+      {/* 4. 依赖拦截指引 Modal */}
       <Modal
         open={!!blockedService}
         onClose={() => setBlockedService(null)}
@@ -1367,17 +1367,17 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
             </div>
             <div>
               <h4 style={{ margin: '0 0 6px 0', fontSize: '15px', color: 'var(--color-text-primary)' }}>
-                契约正在被下游模块引用
+                契约正在被其他模块引用消费
               </h4>
               <p style={{ margin: 0, fontSize: '13px', color: 'var(--color-text-secondary)', lineHeight: 1.6 }}>
-                对外服务契约 <code className="code-font-mono" style={{ color: 'var(--color-primary)', fontWeight: 600 }}>{blockedService?.service_name}</code> 当前正被以下 <strong style={{ color: 'var(--color-warning)' }}>{blockedService?.downstream_count}</strong> 个下游模块作为服务依赖消费。为保证系统拓扑完整性与调用链稳定，必须先解除依赖。
+                对外服务契约 <code className="code-font-mono" style={{ color: 'var(--color-primary)', fontWeight: 600 }}>{blockedService?.service_name}</code> 当前正被以下 <strong style={{ color: 'var(--color-warning)' }}>{blockedService?.downstream_count}</strong> 个功能模块作为服务依赖消费。为保证系统拓扑完整性与调用链稳定，必须先解除依赖。
               </p>
             </div>
           </div>
 
           <div style={{ marginBottom: '1.25rem' }}>
             <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--color-text-secondary)', marginBottom: '8px' }}>
-              依赖此服务的下游模块清单：
+              消费此服务的功能模块清单：
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '200px', overflowY: 'auto' }}>
               {blockedService?.downstream_consumers && blockedService.downstream_consumers.length > 0 ? (
@@ -1415,7 +1415,7 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
                         setBlockedService(null);
                         onSelectModule(String(c.module_id));
                       }}
-                      title="点击直接切换并聚焦至该下游模块"
+                      title="点击直接切换并聚焦至该消费模块"
                     >
                       前往解除依赖 →
                     </button>
@@ -1454,8 +1454,8 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
           >
             <strong>💡 解除与删除操作指引：</strong>
             <ol style={{ margin: '4px 0 0 0', paddingLeft: '20px' }}>
-              <li>点击上方【前往解除依赖 →】按钮，跳转至对应下游模块；</li>
-              <li>在下游模块的【依赖下游服务列表 (DEPEND)】中，点击【解除】移除该依赖；</li>
+              <li>点击上方【前往解除依赖 →】按钮，跳转至对应消费模块；</li>
+              <li>在消费模块的【所需依赖服务列表 (DEPEND)】中，点击【解除】移除该依赖；</li>
               <li>返回当前模块，此时该服务契约即可正常点击【删除】。</li>
             </ol>
           </div>

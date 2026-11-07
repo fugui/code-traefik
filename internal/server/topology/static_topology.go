@@ -35,7 +35,7 @@ var (
 	ErrProcessNotFound           = errors.New("目标进程映射不存在")
 	ErrInvalidServiceNameFormat  = errors.New("服务名必须符合 {package}.{serviceName} 点分规范且长度为 1..63 位可见字符")
 	ErrDuplicateModuleService    = errors.New("该服务已被其他功能模块声明提供 (A-05)")
-	ErrDuplicateDependency       = errors.New("当前功能模块已存在相同的下游服务依赖")
+	ErrDuplicateDependency       = errors.New("当前功能模块已存在相同的服务依赖")
 	ErrSelfDependency            = errors.New("功能模块不能依赖自身提供的服务")
 	ErrServiceHasDependencies    = errors.New("该服务已被其他功能模块作为依赖引用，请先解除依赖关系")
 	ErrInvalidExternalDependency = errors.New("外部服务依赖必须填写外部系统名称或外部服务名称")

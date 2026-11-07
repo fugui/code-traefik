@@ -68,8 +68,8 @@ describe('BreakingChangeAlertDrawer Unit Suite (M16 / SC-09)', () => {
     expect(html).toContain("字段 &#x27;user_id&#x27; 的 Tag 从 1 变更为 2");
     expect(html).toContain('account.v1.AccountService');
 
-    // 下游消费者模块与负责人
-    expect(html).toContain('波及下游消费者');
+    // 消费方模块与负责人
+    expect(html).toContain('波及消费方模块');
     expect(html).toContain('ORDER_CORE');
     expect(html).toContain('订单核心模块');
     expect(html).toContain('sut-order');
