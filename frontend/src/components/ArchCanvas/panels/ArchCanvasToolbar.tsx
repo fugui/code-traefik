@@ -2,6 +2,17 @@ import React from 'react';
 import { Search, RotateCcw, Eye, Layers, X, Server } from 'lucide-react';
 import type { RecordingSession, Agent } from '../../../types';
 
+export interface ArchStats {
+  subsystems: number;
+  functionalGroups: number;
+  modules: number;
+  processGroups: number;
+  processes: number;
+  externals: number;
+  unreg: number;
+  edgeCount: number;
+}
+
 export interface ArchCanvasToolbarProps {
   view: 'LOGICAL' | 'PHYSICAL';
   onViewChange: (view: 'LOGICAL' | 'PHYSICAL') => void;
@@ -19,6 +30,7 @@ export interface ArchCanvasToolbarProps {
   agents?: Agent[];
   selectedEnvAgentId?: string | null;
   onSelectEnvAgentId?: (agentId: string | null) => void;
+  stats?: ArchStats | null;
 }
 
 export const ArchCanvasToolbar: React.FC<ArchCanvasToolbarProps> = ({
@@ -38,6 +50,7 @@ export const ArchCanvasToolbar: React.FC<ArchCanvasToolbarProps> = ({
   agents = [],
   selectedEnvAgentId = null,
   onSelectEnvAgentId,
+  stats,
 }) => {
   return (
     <div className="code-arch-toolbar">
@@ -102,7 +115,7 @@ export const ArchCanvasToolbar: React.FC<ArchCanvasToolbarProps> = ({
 
         {view === 'PHYSICAL' && <div className="code-arch-toolbar__divider" />}
 
-        {/* 层级滑杆 (L0 ~ Ln) */}
+        {/* 层级滑杆 (L0 ~ Ln) 与快捷展开 */}
         <div className="code-arch-toolbar__slider-group" title={`当前展开层级: L${depthLevel} (0 ~ ${maxDepth})`}>
           <Layers size={14} className="code-arch-toolbar__icon" />
           <span className="code-arch-toolbar__label">层级:</span>
@@ -115,6 +128,28 @@ export const ArchCanvasToolbar: React.FC<ArchCanvasToolbarProps> = ({
             onChange={(e) => onDepthLevelChange(Number(e.target.value))}
             className="code-arch-toolbar__slider"
           />
+          {maxDepth > 0 && (
+            <div className="code-arch-toolbar__quick-actions">
+              <button
+                type="button"
+                className="code-arch-toolbar__quick-depth-btn"
+                onClick={() => onDepthLevelChange(0)}
+                title="一键折叠收起到顶层容器 (L0)"
+                disabled={depthLevel === 0}
+              >
+                顶层
+              </button>
+              <button
+                type="button"
+                className="code-arch-toolbar__quick-depth-btn"
+                onClick={() => onDepthLevelChange(maxDepth)}
+                title={`一键平铺全展到深层微服务模块 (L${maxDepth})`}
+                disabled={depthLevel === maxDepth}
+              >
+                全展
+              </button>
+            </div>
+          )}
         </div>
 
         {/* 滚轮自动展开开关 */}
@@ -138,6 +173,53 @@ export const ArchCanvasToolbar: React.FC<ArchCanvasToolbarProps> = ({
           <span>重置布局</span>
         </button>
       </div>
+
+      {/* 中部全景架构资产摘要 (充分利用横向空白，直观展现系统全景规模) */}
+      {stats && (
+        <div className="code-arch-toolbar__center" data-testid="arch-toolbar-stats">
+          {view === 'LOGICAL' ? (
+            <>
+              <span className="code-arch-stat-badge" title="逻辑子系统总数">
+                子系统: <strong>{stats.subsystems}</strong>
+              </span>
+              <span className="code-arch-stat-badge" title="功能组总数">
+                功能组: <strong>{stats.functionalGroups}</strong>
+              </span>
+              <span className="code-arch-stat-badge" title="微服务模块总数">
+                模块: <strong>{stats.modules}</strong>
+              </span>
+              <span className="code-arch-stat-badge" title="声明契约边总数">
+                契约依赖: <strong>{stats.edgeCount}</strong>
+              </span>
+              {stats.externals > 0 && (
+                <span className="code-arch-stat-badge" title="外部依赖系统/端点数">
+                  外部依赖: <strong>{stats.externals}</strong>
+                </span>
+              )}
+            </>
+          ) : (
+            <>
+              <span className="code-arch-stat-badge" title="物理进程组总数">
+                进程组: <strong>{stats.processGroups}</strong>
+              </span>
+              <span className="code-arch-stat-badge" title="纳管物理进程总数">
+                物理进程: <strong>{stats.processes}</strong>
+              </span>
+              <span className="code-arch-stat-badge" title="承载模块总数">
+                挂载模块: <strong>{stats.modules}</strong>
+              </span>
+              <span className="code-arch-stat-badge" title="物理通信链路数">
+                物理链路: <strong>{stats.edgeCount}</strong>
+              </span>
+              {stats.externals > 0 && (
+                <span className="code-arch-stat-badge" title="外部依赖端点数">
+                  外部系统: <strong>{stats.externals}</strong>
+                </span>
+              )}
+            </>
+          )}
+        </div>
+      )}
 
       {/* 右侧控制区 */}
       <div className="code-arch-toolbar__right">

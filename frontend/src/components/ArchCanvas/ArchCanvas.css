@@ -6,9 +6,9 @@
   position: relative;
   width: 100%;
   height: 100%;
-  min-height: 580px;
+  min-height: 0;
   background-color: var(--color-bg-surface);
-  border-radius: var(--radius-md, 8px);
+  border-radius: 0;
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -103,6 +103,64 @@
   background-color: var(--color-bg-muted);
   color: var(--color-primary);
   border: 1px solid var(--color-border-primary);
+}
+
+.code-arch-toolbar__quick-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.code-arch-toolbar__quick-depth-btn {
+  padding: 2px 7px;
+  font-size: 11px;
+  border-radius: 4px;
+  border: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-muted);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  line-height: 1.2;
+}
+
+.code-arch-toolbar__quick-depth-btn:hover:not(:disabled) {
+  background: var(--color-bg-hover);
+  color: var(--color-primary);
+  border-color: var(--color-primary);
+}
+
+.code-arch-toolbar__quick-depth-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* 中部全景架构资产摘要 */
+.code-arch-toolbar__center {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  justify-content: center;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.code-arch-stat-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: var(--radius-full, 9999px);
+  background: var(--color-bg-muted);
+  border: 1px solid var(--color-border-subtle);
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+.code-arch-stat-badge strong {
+  color: var(--color-text-primary);
+  font-weight: 600;
 }
 
 .code-arch-toolbar__slider {
@@ -877,4 +935,66 @@
   box-shadow: 0 0 0 2.5px var(--color-primary), 0 0 16px rgba(59, 130, 246, 0.5) !important;
   border-color: var(--color-primary) !important;
   transition: box-shadow 0.25s ease, border-color 0.25s ease;
+}
+
+/* ==============================================================================
+   全景架构图例与状态 HUD 悬浮面板 (利用画布空白，丰富信息维度)
+   ============================================================================== */
+.code-arch-legend-hud {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 10;
+  background-color: var(--color-bg-surface);
+  border: 1px solid var(--color-border-primary);
+  border-radius: var(--radius-md, 8px);
+  box-shadow: var(--shadow-md);
+  padding: 8px 12px;
+  font-size: 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  backdrop-filter: blur(8px);
+  user-select: none;
+  max-width: 220px;
+}
+
+.code-arch-legend-hud__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  cursor: pointer;
+}
+
+.code-arch-legend-hud__title {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.code-arch-legend-hud__items {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 4px;
+  padding-top: 6px;
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.code-arch-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--color-text-secondary);
+}
+
+.code-arch-legend-badge {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex-shrink: 0;
 }

@@ -76,5 +76,3 @@ func TestRegisterAPIRoutes_NoDuplicateRoutesPanic(t *testing.T) {
 		handlers.RegisterAPIRoutes(r)
 	})
 }
-
-

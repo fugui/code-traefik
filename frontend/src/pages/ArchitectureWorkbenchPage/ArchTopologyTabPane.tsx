@@ -343,17 +343,55 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
     );
   }, [consistencyReport]);
 
+  // 全景架构资产统计摘要 (供工具栏与状态面板展示，充分利用空闲区域)
+  const graphStats = useMemo(() => {
+    if (!graphData || !graphData.nodes) return null;
+    let subsystems = 0;
+    let functionalGroups = 0;
+    let modules = 0;
+    let processGroups = 0;
+    let processes = 0;
+    let externals = 0;
+    let unreg = 0;
+    graphData.nodes.forEach((n) => {
+      if (n.type === 'SUBSYSTEM') subsystems++;
+      else if (n.type === 'FUNCTIONAL_GROUP') functionalGroups++;
+      else if (n.type === 'MODULE') modules++;
+      else if (n.type === 'PROCESS_GROUP') processGroups++;
+      else if (n.type === 'PROCESS') processes++;
+      else if (
+        n.type === 'EXTERNAL_CONTAINER' ||
+        n.type === 'EXTERNAL_SYSTEM' ||
+        n.type === 'EXTERNAL_ENDPOINT'
+      )
+        externals++;
+      else if (n.type === 'UNREGISTERED_INTERFACE') unreg++;
+    });
+    return {
+      subsystems,
+      functionalGroups,
+      modules,
+      processGroups,
+      processes,
+      externals,
+      unreg,
+      edgeCount: graphData.edges?.length ?? 0,
+    };
+  }, [graphData]);
+
   return (
     <div
       className="code-arch-topology-tab-pane"
       style={{
         display: 'flex',
         flexDirection: 'column',
-        height: 'calc(100vh - var(--portal-header-height, 0px) - 130px)',
-        minHeight: 640,
+        flex: 1,
+        height: '100%',
+        width: '100%',
+        minHeight: 0,
         backgroundColor: 'var(--color-bg-surface)',
-        border: '1px solid var(--color-border-primary)',
-        borderRadius: 'var(--radius-lg, 12px)',
+        border: 'none',
+        borderRadius: 0,
         overflow: 'hidden',
       }}
     >
@@ -375,6 +413,7 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
         agents={agents}
         selectedEnvAgentId={envAgentId}
         onSelectEnvAgentId={handleSelectEnvAgentId}
+        stats={graphStats}
       />
 
       {/* 一致性报告摘要栏 */}
@@ -391,8 +430,8 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
         />
       )}
 
-      {/* 画布主体 */}
-      <div style={{ flex: 1, minHeight: 520, position: 'relative', overflow: 'hidden' }}>
+      {/* 画布主体：弹性自适应撑满剩余视口高度 */}
+      <div style={{ flex: 1, height: '100%', minHeight: 0, position: 'relative', overflow: 'hidden' }}>
         {loadingGraph && (
           <div
             style={{

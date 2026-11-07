@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useMemo } from 'react';
+import { Info, ChevronUp, ChevronDown, Maximize2 } from 'lucide-react';
 import {
   ReactFlow,
   Controls,
@@ -62,6 +63,7 @@ export const ArchCanvas: React.FC<ArchCanvasProps> = ({
 }) => {
   const [draggedNodeIds, setDraggedNodeIds] = useState<Set<string>>(new Set());
   const [rfInstance, setRfInstance] = useState<ReactFlowInstance<ArchCanvasNode, ArchCanvasEdge> | null>(null);
+  const [isLegendExpanded, setIsLegendExpanded] = useState<boolean>(true);
 
   // 响应重置布局触发
   React.useEffect(() => {
@@ -106,6 +108,25 @@ export const ArchCanvas: React.FC<ArchCanvasProps> = ({
     setFlowNodes(layoutNodes);
     setFlowEdges(layoutEdges);
   }, [layoutNodes, layoutEdges, setFlowNodes, setFlowEdges]);
+
+  // 当排版就绪且用户未拖拽时，自动平滑执行自适应视口居中 (Fit View)，充分利用画布可用视野
+  React.useEffect(() => {
+    if (!rfInstance || layoutNodes.length === 0 || isLayouting) return;
+    if (draggedNodeIds.size > 0) return; // 尊重用户的单点拖拽位移
+
+    const timer = setTimeout(() => {
+      void rfInstance.fitView({ padding: 0.18, duration: 240 });
+    }, 60);
+
+    return () => clearTimeout(timer);
+  }, [rfInstance, layoutNodes.length, isLayouting, draggedNodeIds.size]);
+
+  // 手动触发自适应居中铺满
+  const handleFitView = useCallback(() => {
+    if (rfInstance) {
+      void rfInstance.fitView({ padding: 0.18, duration: 250 });
+    }
+  }, [rfInstance]);
 
   // 记录用户手动拖拽的节点 ID，使关联边自动退化为动态 SmoothStep
   const handleNodeDrag: OnNodeDrag = useCallback((_, node) => {
@@ -177,20 +198,75 @@ export const ArchCanvas: React.FC<ArchCanvasProps> = ({
         <div
           style={{
             position: 'absolute',
-            top: 12,
-            right: 12,
+            top: 14,
+            left: 14,
             zIndex: 10,
-            padding: '4px 8px',
+            padding: '4px 10px',
             backgroundColor: 'var(--color-bg-surface)',
             border: '1px solid var(--color-border-primary)',
             borderRadius: 4,
             fontSize: 11,
             color: 'var(--color-text-secondary)',
+            boxShadow: 'var(--shadow-sm)',
           }}
         >
           正交排版计算中...
         </div>
       )}
+
+      {/* 悬浮全景图例与视口辅助 HUD (利用画布空白，丰富信息维度) */}
+      <div className="code-arch-legend-hud" data-testid="arch-legend-hud">
+        <div
+          className="code-arch-legend-hud__header"
+          onClick={() => setIsLegendExpanded((prev) => !prev)}
+          title="点击折叠/展开拓扑图例"
+        >
+          <span className="code-arch-legend-hud__title">
+            <Info size={12} />
+            <span>架构图例</span>
+          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <button
+              type="button"
+              className="code-arch-toolbar__quick-depth-btn"
+              onClick={(e) => {
+                e.stopPropagation();
+                handleFitView();
+              }}
+              title="一键自适应居中铺满画布"
+            >
+              <Maximize2 size={10} style={{ marginRight: 2 }} />
+              居中
+            </button>
+            {isLegendExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+          </div>
+        </div>
+
+        {isLegendExpanded && (
+          <div className="code-arch-legend-hud__items">
+            <div className="code-arch-legend-item">
+              <span className="code-arch-legend-badge" style={{ backgroundColor: '#2563eb' }} />
+              <span>{view === 'PHYSICAL' ? '进程组 (L0)' : '子系统 (L0)'}</span>
+            </div>
+            <div className="code-arch-legend-item">
+              <span className="code-arch-legend-badge" style={{ backgroundColor: '#6366f1' }} />
+              <span>{view === 'PHYSICAL' ? '物理进程 (L1)' : '功能组 (L1)'}</span>
+            </div>
+            <div className="code-arch-legend-item">
+              <span className="code-arch-legend-badge" style={{ backgroundColor: '#0284c7' }} />
+              <span>微服务模块 (L2)</span>
+            </div>
+            <div className="code-arch-legend-item">
+              <span className="code-arch-legend-badge" style={{ backgroundColor: '#475569' }} />
+              <span>外部依赖网络/系统</span>
+            </div>
+            <div className="code-arch-legend-item">
+              <span className="code-arch-legend-badge" style={{ backgroundColor: '#059669' }} />
+              <span>跨进程调用 / 契约链路</span>
+            </div>
+          </div>
+        )}
+      </div>
 
       <ReactFlow<ArchCanvasNode, ArchCanvasEdge>
         style={{ width: '100%', height: '100%', flex: 1 }}
