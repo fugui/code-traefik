@@ -4,7 +4,7 @@ FRONTEND_DIR    := frontend
 DIST_DIR        := $(FRONTEND_DIR)/dist
 NODE_MODULES    := $(FRONTEND_DIR)/node_modules
 
-DEFAULT_VERSION := v0.1.0
+DEFAULT_VERSION := v0.2.0
 COMMIT          ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 BUILDTIME       ?= $(shell date -u '+%Y-%m-%d %H:%M:%S')
 

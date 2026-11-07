@@ -1,7 +1,7 @@
 # 业务流量与接口契约治理平台 (`code-traefik`)
 
 > **产品定位**：基于真实流量的活体契约、架构一致性与防劣化自愈平台（原“业务流量监控与重放”系统升维）  
-> **当前版本**：`v0.1.0` | **服务标识**：`Code-Traefik` (`traefik`) | **专有协议**：DOPHI `CROS RPC` over IPv4 TCP
+> **当前版本**：`v0.2.0` | **服务标识**：`Code-Traefik` (`traefik`) | **专有协议**：DOPHI `CROS RPC` over IPv4 TCP
 
 本项目基于 CodeBench 微前端架构与 `code-common` 公共底座构建，严格遵循 **SDD (Spec-Driven Development，规范驱动开发) + TDD (Test-Driven Development，测试驱动开发)** 工程模式：  
 **「契约基线与特性边界 (`01-features`) ➔ 系统架构与数据模型 (`02-design`) ➔ 接口契约与任务拆解 (`03-api` & `04-tasks`) ➔ TDD 测试先行与分阶段交付」**
@@ -18,8 +18,8 @@
 
 ```mermaid
 flowchart LR
-    A["<b>1. 静态立规 (明契约)</b><br/>架构蓝图 SSOT<br/>Proto 契约资产化台账<br/>PROVIDE / DEPEND 规范"] --> B["<b>2. 动态核验 (审行为)</b><br/>eBPF 零侵入内核探针<br/>单进程开箱出入站双录<br/>架构漂移 (Violation) 告警"]
-    B --> C["<b>3. 闭环防衰 (防破坏)</b><br/>零下游 ScopedMock 接管<br/>ullSNO 头部协议自愈<br/>协议+Protobuf 字段双层 Diff"]
+    A["<b>1. 静态立规 (明契约)</b><br/>架构蓝图 SSOT<br/>Proto 契约资产化台账<br/>破坏性变更阻断雷达"] --> B["<b>2. 动态核验 (审行为)</b><br/>eBPF 零侵入内核探针<br/>单进程开箱出入站双录<br/>架构漂移 (Violation) 告警"]
+    B --> C["<b>3. 闭环防衰 (防破坏)</b><br/>零下游 ScopedMock 接管<br/>ullSNO 头部协议自愈<br/>黄金用例库 & CI/CD 强门禁"]
     C -. "契约资产与忽略规则向前继承" .-> A
 ```
 
@@ -27,9 +27,9 @@ flowchart LR
 
 | 治理维度 | 核心解决的痛点 | 平台提供的能力与技术机制 |
 | :--- | :--- | :--- |
-| **① 接口资产与规范治理**<br/>*(Contract Assets & Specs)* | 接口口口相传、Proto 散落各处、微服务职责边界模糊、存在大量无人认领的僵尸接口 | 1. 建立**三级架构元素**（子系统 ➔ 功能组 ➔ 功能模块）与标准物理进程蓝图（SSOT）；<br/>2. 契约收敛至 Service 维度，全网 **`PROVIDE` 供给全局唯一**，`DEPEND` 显式依赖声明；<br/>3. **多 Protobuf 描述集资产台账**：支持跨描述集拓扑去重、消息体字段字典树透视、可视化 Diff 忽略基线与未认领“孤儿契约”闭环。 |
-| **② 架构一致性与漂移治理**<br/>*(Architecture Drift Radar)* | 架构设计图与代码实际调用漂移，开发私自跨层调用、旁路直连，架构腐化无从察觉 | 1. **内核态 `cilium/ebpf` 动态探针**：零修改、零 SDK、不重启进程，亚秒级完成出入站双向无感采集；<br/>2. **实测拓扑自动还原**：依据 CROS RPC 报文提取 `(ascServiceName, ascOperation)` 动态反查模块归属；<br/>3. **架构一致性比对**：将实测调用与设计基线逐项核验，毫秒级红牌告警 **`Violation`（违规未声明调用）**、呈现 **`Uncovered`（未覆盖接口）**。 |
-| **③ 契约级防劣化与自愈重放**<br/>*(Contract Regression & Healing)* | 跨模块回归测试依赖一整套下游环境；接口变更容易破坏兼容性导致线上故障 | 1. **零下游依赖因果闭包重放 (`ScopedMock`)**：单进程脱机运行，出口请求由局部因果池接管，**真实下游 0 字节外泄**；<br/>2. **二进制头部自愈**：自动改写应答 `ullSNO`、Trace 缓冲与发送时间戳，免除跨机器同步 Schema 负担；<br/>3. **双层语义 Diff 引擎**：自动比对协议状态码与 Protobuf 业务字段，精准定位破坏性改动。 |
+| **① 接口资产与规范治理**<br/>*(Contract Assets & Specs)* | 接口口口相传、Proto 散落各处、微服务职责边界模糊、存在大量无人认领的僵尸接口，代码重构容易无意破坏下游兼容性 | 1. 建立**三级架构元素**（子系统 ➔ 功能组 ➔ 功能模块）与标准物理进程蓝图（SSOT）；<br/>2. 契约收敛至 Service 维度，全网 **`PROVIDE` 供给全局唯一**，`DEPEND` 显式依赖声明并受删除拦截保护；<br/>3. **多 Protobuf 描述集资产台账**：支持跨描述集拓扑去重、消息体字段字典树透视、可视化 Diff 忽略基线与未认领“孤儿契约”闭环；<br/>4. **破坏性变更阻断雷达 (AST)**：静态深度检测字段删除、类型漂移与 wire type 变更，全网推导下游微服务影响并提供审计逃生舱。 |
+| **② 架构一致性与漂移治理**<br/>*(Architecture Drift Radar)* | 架构设计图与代码实际调用漂移，开发私自跨层调用、旁路直连，架构腐化无从察觉；缺乏端到端全景健康度量 | 1. **内核态 `cilium/ebpf` 动态探针**：零修改、零 SDK、不重启进程，亚秒级完成出入站双向无感采集；支持 `setcap` 免 sudo 特权运行；<br/>2. **实测拓扑自动还原**：依据 CROS RPC 报文提取 `(ascServiceName, ascOperation)` 动态反查模块归属与调用边（Confirmed / External / Violation）；<br/>3. **契约治理全景大盘**：落地三维封顶健康指数算法（规范性 40 分 + 一致性 30 分 + 回归保障率 30 分 = 100 分），提供漂移 Top 榜与僵尸接口暴露。 |
+| **③ 契约级防劣化与自愈重放**<br/>*(Contract Regression & Healing)* | 跨模块回归测试依赖一整套下游环境；接口变更容易破坏兼容性导致线上故障；缺乏沉淀高价值测试资产与自动化阻断手段 | 1. **零下游依赖因果闭包重放 (`ScopedMock`)**：单进程脱机运行，出口请求由局部因果池接管，**真实下游 0 字节外泄**；<br/>2. **二进制头部自愈**：自动改写应答 `ullSNO`、Trace 缓冲与发送时间戳，免除跨机器同步 Schema 负担；<br/>3. **双层语义 Diff 引擎**：自动比对协议状态码与 Protobuf 业务字段，精准定位破坏性改动；<br/>4. **黄金用例套件工坊**：一键将高价值事务固化为完全自包含快照，脱敏并永久免疫物理分区清理；<br/>5. **CI/CD 自动化门禁**：提供专有判定 API、有界排他锁排队与 PR 强阻断报告。 |
 
 ---
 
@@ -40,25 +40,28 @@ flowchart LR
 ```mermaid
 flowchart TB
     subgraph Portal["CodeBench 微前端门户 (:8000 / :5181)"]
-        UI_Dash["全局概览台: 治理全景大盘 (/dashboard 默认落地 · 三维封顶健康分)"]
-        UI_Flow["契约核验与回归台: 契约采集 / 事务分析 / 防劣化回归 / 黄金用例库"]
-        UI_Arch["架构与契约台: 架构拓扑 / 架构元素 (逻辑|物理) / Proto 契约资产"]
-        UI_Env["环境治理台: Agent 与进程纳管 / 治理参数与 CI 凭据"]
+        UI_Dash["① 全局概览台: 治理全景大盘 (/dashboard 默认落地 · 三维封顶健康指数)"]
+        UI_Flow["② 契约核验与回归台: 契约采集 (/record) · 事务透视 (/debug) · 防劣化回归 (/replay) · 黄金用例库 (/golden-suites)"]
+        UI_Arch["③ 架构与契约台: 复合拓扑画布 (/topology) · 架构元素与物理蓝图 (/architecture) · Proto 契约与变更雷达 (/schemas)"]
+        UI_Env["④ 环境治理台: Agent 与进程纳管 (/agents · 含下载接入说明) · 治理参数与 CI 门禁 (/settings)"]
     end
 
     subgraph ControlPlane["code-traefik-server 控制面 (:8091)"]
-        Arch_SSOT["架构基线与契约中心 (SSOT)"]
+        Arch_SSOT["架构基线、蓝图与契约中心 (SSOT)"]
         Agent_Hub["Agent 调度与排他租约管控 (Mutex Lease)"]
         Decoder["CROS RPC 分帧 + Protobuf 动态解码"]
         Verify_Eng["实测拓扑还原与架构一致性核验引擎"]
         Diff_Eng["协议状态码 + Protobuf 字段级双层回归 Diff"]
-        DB[("PostgreSQL 共享库 (traefik_* 表前缀)")]
+        Breaking_Radar["Proto AST 破坏性变更雷达与下游血缘分析"]
+        CI_Gate["CI/CD 自动化门禁判定 (X-Traefik-CI-Token)"]
+        DB[("PostgreSQL 共享库 (traefik_* 表前缀 / 按日分区)")]
     end
 
     subgraph DataPlane["业务运行节点 (每机 1 个 code-traefik-agent | 零 .pb 依赖)"]
         Agent_Srv["受控信道服务 (HTTP 下发 + WS 二进制流回传)"]
-        BPF_Mgr["cilium/ebpf 探针生命周期 (预挂待命 ARMED)"]
+        BPF_Mgr["cilium/ebpf 探针生命周期 (预挂待命 ARMED · setcap 免 sudo)"]
         Mock_Replay["透明出站代理 + ScopedMock 闭包自愈重放"]
+        Self_Heal["启动特权自检与全链路探针自愈引擎"]
     end
 
     subgraph TargetHost["被测业务进程与内核态"]
@@ -70,10 +73,11 @@ flowchart TB
 
     Portal == "REST API (JWT) / SSE 实时事件流" ==> ControlPlane
     ControlPlane --> DB
-    ControlPlane == "1. 调度元数据 / 重放包" ==> Agent_Srv
-    Agent_Srv == "2. 原始二进制帧上报" ==> ControlPlane
+    ControlPlane == "1. 调度元数据 / 重放包 / CI 验证" ==> Agent_Srv
+    Agent_Srv == "2. 原始二进制帧上报 / 实测边回传" ==> ControlPlane
 
     Agent_Srv --> BPF_Mgr
+    Agent_Srv --> Self_Heal
     BPF_Mgr ==> Hook_Ingress
     BPF_Mgr ==> Hook_Egress
     Hook_Ingress -. "被动复制入站收发" .-> Proc
@@ -90,8 +94,13 @@ flowchart TB
 code-traefik/
 ├── docs/                # SDD + TDD 规范文档库 (00-prompt ~ 07-references)
 ├── cmd/
-│   ├── server/          # 控制面入口 code-traefik-server（微前端托管、契约中心、Diff引擎）
-│   └── agent/           # 数据面探针入口 code-traefik-agent（零数据库、零.pb、嵌入式eBPF）
+│   ├── server/          # 控制面入口 code-traefik-server（微前端托管、契约中心、Diff 引擎）
+│   ├── agent/           # 数据面探针入口 code-traefik-agent（零数据库、零.pb、嵌入式 eBPF）
+│   └── seed/            # Demo 拓扑与测试数据重置播种入口
+├── demo/                # 4 进程完整微服务仿真集群与田字格 Tmux 可视化联调演示
+├── internal/
+│   ├── server/          # 控制面内部核心业务：契约中心、调度租约、Protobuf 动态解码与破坏性变更比对
+│   └── agent/           # 数据面内部服务：eBPF 探针生命周期、出站代理、报文自愈与 ScopedMock 接管
 ├── pkg/
 │   ├── crosrpc/         # CROS RPC 协议解析与分帧库（主控与 Agent 共享）
 │   ├── ebpf/            # cilium/ebpf 内核探针、Socket 预热与三态出站代理
@@ -99,7 +108,7 @@ code-traefik/
 │   └── version/         # 规范化语义版本号与构建指纹
 ├── config/              # 配置加载与模块级元数据常量 (ModuleKey="traefik", TablePrefix="traefik_")
 ├── models/              # GORM 数据模型（强制 traefik_ 物理表前缀隔离）
-├── handlers/            # HTTP 控制器、RBAC 权限守卫、审计 Diff 与物理隔离单元测试
+├── handlers/            # HTTP 控制器、RBAC 权限守卫、审计 Diff、CI 门禁与物理隔离单元测试
 ├── frontend/            # React 18 + Vite 5 + Module Federation 微前端工程
 ├── scripts/             # 自动化构建与辅助脚本
 ├── Makefile             # 标准构建、测试与代码检查入口
@@ -119,15 +128,32 @@ code-traefik/
   - [x] [`01-system-architecture.md`](./docs/02-design/01-system-architecture.md)（主从协同、双模运行架构、微前端接入规范）
   - [x] [`02-data-plane-and-cros-rpc-engine.md`](./docs/02-design/02-data-plane-and-cros-rpc-engine.md)（CROS RPC 协议栈、eBPF 采集与二进制 Mock 引擎）
   - [x] [`03-architecture-elements-and-topology.md`](./docs/02-design/03-architecture-elements-and-topology.md)（三级架构模型 SSOT、模块服务契约与拓扑一致性核验）
-  - [x] [`04-control-plane-and-web-console.md`](./docs/02-design/04-control-plane-and-web-console.md)（控制面调度、Protobuf 编解码与回归 Diff）
+  - [x] [`04-control-plane-and-web-console.md`](./docs/02-design/04-control-plane-and-web-console.md)（控制面调度、Protobuf 编解码、回归 Diff 与业务透视抽屉）
   - [x] [`05-database-schema.md`](./docs/02-design/05-database-schema.md)（17 张 `traefik_*` 物理表字典、黄金套件自包含快照与按日范围分区设计）
 - [x] **阶段三：接口契约与 TDD 任务分解** (`docs/03-api/`, `docs/04-tasks/`)
   - [x] [`01-http-api-contract.md`](./docs/03-api/01-http-api-contract.md)（RESTful API 契约、CI 门禁鉴权、主从 HTTP/WS 信道协议与 RBAC 权限矩阵）
-  - [x] [`01-roadmap.md`](./docs/04-tasks/01-roadmap.md)（Milestone 1~17 DAG 拓扑、特性矩阵覆盖与全局质量门禁）
-  - [x] [`02-m1-crosrpc-and-domain-models.md`](./docs/04-tasks/02-m1-crosrpc-and-domain-models.md) ~ [`14-m13-packet-causality-call-tree-and-sequence-workbench.md`](./docs/04-tasks/14-m13-packet-causality-call-tree-and-sequence-workbench.md)（M1~M13 已交付）
-  - [x] [`15-m14-governance-dashboard-and-ia-restructuring.md`](./docs/04-tasks/15-m14-governance-dashboard-and-ia-restructuring.md) ~ [`18-m17-ci-cd-quality-gate-and-automated-enforcement.md`](./docs/04-tasks/18-m17-ci-cd-quality-gate-and-automated-enforcement.md)（M14~M17 作战卡已冻结待实施）
+  - [x] [`01-roadmap.md`](./docs/04-tasks/01-roadmap.md)（Milestone 1~18 DAG 拓扑、特性矩阵覆盖与全局质量门禁）
+  - [x] **M1~M18 作战卡全量交付 (100% Completed)**：
+    - [x] [`02-m1-crosrpc-and-domain-models.md`](./docs/04-tasks/02-m1-crosrpc-and-domain-models.md)（CROS RPC 分帧与数据模型）
+    - [x] [`03-m2-arch-proto-and-agent-control.md`](./docs/04-tasks/03-m2-arch-proto-and-agent-control.md)（架构契约与 Agent 调度信道）
+    - [x] [`04-m3-agent-dataplane-ebpf-and-replay.md`](./docs/04-tasks/04-m3-agent-dataplane-ebpf-and-replay.md)（eBPF 数据面与脱机重放注入）
+    - [x] [`05-m4-recording-topology-and-diff-engine.md`](./docs/04-tasks/05-m4-recording-topology-and-diff-engine.md)（实测拓扑还原与双层 Diff）
+    - [x] [`06-m5-microfrontend-and-e2e-delivery.md`](./docs/04-tasks/06-m5-microfrontend-and-e2e-delivery.md)（微前端嵌入与单二进制交付）
+    - [x] [`07-m6-hierarchical-topology-canvas.md`](./docs/04-tasks/07-m6-hierarchical-topology-canvas.md)（分层复合拓扑与一致性画布）
+    - [x] [`08-m7-proto-schema-deepening-and-nested-contract-workbench.md`](./docs/04-tasks/08-m7-proto-schema-deepening-and-nested-contract-workbench.md)（契约资产化与嵌套字典树）
+    - [x] [`09-m8-console-ia-restructuring-and-debug-workflow.md`](./docs/04-tasks/09-m8-console-ia-restructuring-and-debug-workflow.md)（控制台信息架构与调试流）
+    - [x] [`10-m9-recording-drawer-and-process-tree-selection.md`](./docs/04-tasks/10-m9-recording-drawer-and-process-tree-selection.md)（协同录制抽屉与进程树选择）
+    - [x] [`11-m10-arch-process-blueprint-and-premount-workflow.md`](./docs/04-tasks/11-m10-arch-process-blueprint-and-premount-workflow.md)（架构物理进程蓝图与 eBPF 自动预挂）
+    - [x] [`12-m11-enhanced-proto-schema-asset-management.md`](./docs/04-tasks/12-m11-enhanced-proto-schema-asset-management.md)（多描述集资产台账与跨集依赖）
+    - [x] [`13-m12-bidirectional-capture-and-agent-recording-ux.md`](./docs/04-tasks/13-m12-bidirectional-capture-and-agent-recording-ux.md)（单进程开箱双录与体验闭环）
+    - [x] [`14-m13-packet-causality-call-tree-and-sequence-workbench.md`](./docs/04-tasks/14-m13-packet-causality-call-tree-and-sequence-workbench.md)（报文因果树、时序泳道与事务闭包）
+    - [x] [`15-m14-governance-dashboard-and-ia-restructuring.md`](./docs/04-tasks/15-m14-governance-dashboard-and-ia-restructuring.md)（平台级治理大盘与 IA 升维）
+    - [x] [`16-m15-golden-contract-suites-and-curation-workbench.md`](./docs/04-tasks/16-m15-golden-contract-suites-and-curation-workbench.md)（黄金契约套件与事务固化工作台）
+    - [x] [`17-m16-design-time-breaking-change-radar.md`](./docs/04-tasks/17-m16-design-time-breaking-change-radar.md)（设计态破坏性变更阻断雷达）
+    - [x] [`18-m17-ci-cd-quality-gate-and-automated-enforcement.md`](./docs/04-tasks/18-m17-ci-cd-quality-gate-and-automated-enforcement.md)（CI/CD 自动化强阻断门禁与凭据报告）
+    - [x] [`19-m18-business-centric-packet-inspector-redesign.md`](./docs/04-tasks/19-m18-business-centric-packet-inspector-redesign.md)（面向业务视角的双模报文透视抽屉）
 - [x] **阶段四：工程实施、架构决策与运维验证** (`docs/05-adr/`, `docs/06-ops/`)
-  - [x] [`docs/05-adr/`](./docs/05-adr/)（ADR-01 ~ ADR-14 架构决策全景记录，含 ADR-14 大盘/黄金套件/CI门禁）
+  - [x] [`docs/05-adr/`](./docs/05-adr/)（ADR-01 ~ ADR-14 架构决策全景记录，含 ADR-14 契约大盘/黄金套件/CI 门禁）
   - [x] [`01-verification-and-deployment-guide.md`](./docs/06-ops/01-verification-and-deployment-guide.md)（联调测试与生产部署手册）
   - [x] [`02-e2e-browser-test-and-ux-review.md`](./docs/06-ops/02-e2e-browser-test-and-ux-review.md)（E2E 黑盒走查与交互走查记录）
 
@@ -136,23 +162,62 @@ code-traefik/
 ## 5. 快速开始与常用命令
 
 ```bash
-# 1. 后端依赖安装与单元测试（含物理隔离数据库用例）
+# 1. 后端依赖检查与全量单元测试（包含物理隔离数据库用例）
 make test
-TEST_DB_DSN="host=127.0.0.1 port=5432 user=postgres password=PWD dbname=postgres sslmode=disable" make test
 
-# 2. 前端静态类型与代码质量检查
+# 2. 前端静态类型与代码质量检查（TypeScript + ESLint 严格模式）
 make lint
 
-# 3. 编译打包（生成控制面与 Agent 二进制）并验证清理
-make build && make clean
+# 3. 完整编译打包（生成前端静态资产、控制面单二进制与 Agent 单二进制）
+make build
 
 # 4. 启动控制面服务（默认监听 :8091）
 ./code-traefik-server
+
+# 5. 启动数据面 Agent（需特权或 setcap 权能，默认监听 :9091）
+sudo ./code-traefik-agent
+# 或免 sudo 启动（提前执行: sudo setcap cap_net_raw,cap_net_admin,cap_bpf+ep ./code-traefik-agent）
+./code-traefik-agent
+
+# 6. 运行 4 进程微服务 Demo 集群（田字格 Tmux 可视化分屏联调）
+cd demo && make tmux-demo
 ```
 
 ---
 
 ## 6. 🏷️ 版本历史 (Release History)
+
+### v0.2.0 (2026-11-08)
+* **🌟 平台级契约治理全景大盘 (M14)**：
+  - 控制台默认落地治理大盘 (`/dashboard`)，确立 4 组 10 项清晰现代信息架构；
+  - 引入公私域隔离的三支柱子分封顶健康指数（规范性 40 分 + 一致性 30 分 + 回归保障率 30 分 = 100 分）；
+  - 架构违规漂移 Top 榜、未覆盖僵尸接口告警与未认领孤儿契约实时透视。
+* **🏆 黄金契约套件与事务固化工作台 (M15)**：
+  - 支持将生产高价值真实调用流一键沉淀为自包含黄金用例快照（二进制 Raw Packet + 闭包数据）；
+  - 永久免疫 30 天流量物理分区清理，支持多用例集批量脱机回归演练、基线版本锁定与脱敏。
+* **🚨 设计态契约破坏性变更阻断雷达 (M16)**：
+  - 深度解析 Protobuf AST，精确识别删除字段、类型变更、wire type 漂移、tag 碰撞及保留编号冲突；
+  - 自动化全网下游微服务消费血缘影响推导与风险评级；
+  - 提供管理员加签（`allow_breaking` + 审计说明）紧急逃生舱。
+* **🛡️ CI/CD 自动化流水线强阻断门禁 (M17)**：
+  - 开放专用 CI 门禁判定 API（`POST /api/v1/gate/verify`）与 `X-Traefik-CI-Token` SHA-256 常量时间安全比对；
+  - 引入排他租约锁有界排队机制（Bounded Mutex Lease Queue），彻底消除高并发流水线踩踏冲突；
+  - 支持实测边双向回传校验（Confirmed / External / Violation）与非零状态码强阻断，沉淀结构化 MR/PR 评估报告。
+* **🔍 面向业务视角的 RPC 报文透视与双模解剖 (M18)**：
+  - 抽屉信息架构从“网络抓包 Wireshark 视角”全面升维至“业务联调与排障视角”；
+  - 打造请求入参与返回结果左右双栏孪生同屏对比视窗（Split View），支持 JSON 树高亮与独立一键复制；
+  - 提供微秒级阶段耗时彩色甘特条（客户端传输 / 队列等待 / 服务端处理比例）；
+  - 渐进式折叠底层协议专家手风琴区（24B CommHead 位图、SessionHead 字段表、ExtendHead 链路与 16B 对齐 HexDump 完整保留）。
+* **⚡ 数据面 Agent 体验、高可用与自愈加固**：
+  - 支持免 sudo 运行（`setcap CAP_NET_RAW,CAP_NET_ADMIN,CAP_BPF` Linux Capabilities 配置指引）；
+  - 启动特权自检与全链路探针生命周期自动自愈；
+  - 控制台新增 Agent 下载与一键接入说明 TAB，提供多架构二进制直下与自动化挂载脚本；
+  - 现网主控 IP 默认白名单支持与动态白名单机制；
+  - 配套田字格 Tmux 一键可视化 4 进程演示集群（Backend/Agent/SUT/Client）。
+* **🎨 现代 Web 体验与生态准则合规**：
+  - 严格遵循深浅双模主题 Design Tokens（`--color-*` 语义 Token）与扁平 BEM 规范；
+  - 严格遵循标准通用分页规范（15/25/50/100，默认 25，5页滑动窗口，URL SearchParams 同步）；
+  - 全量 22 个前端测试套件 78 个用例 + 后端单元测试 100% 零警告全绿通过，零 TypeScript 与 ESLint 告警。
 
 ### v0.1.0 (2026-11-05)
 * **🌟 战略定位升维**：明确从纯技术视角的“业务流量录制工具”升维为“**基于真实流量的活体契约与微服务架构治理平台**”，确立“接口资产治理”、“架构漂移雷达”与“无依赖自愈防劣化”三大价值支柱。

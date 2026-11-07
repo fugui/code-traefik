@@ -201,7 +201,7 @@ export const AgentInstallGuidePane: React.FC<AgentInstallGuidePaneProps> = ({
             <div className="code-log-preview-box code-mt-sm">
               <span className="code-log-preview-box__title">💡 终端启动日志示例（请关注认领码 ClaimCode）：</span>
               <pre className="code-log-preview-box__content code-font-mono">
-{`[Agent] 启动 code-traefik-agent 版本: v0.1.0 (GitCommit: dev, BuildTime: 2026-11-07)
+{`[Agent] 启动 code-traefik-agent 版本: v0.2.0 (GitCommit: dev, BuildTime: 2026-11-08)
 [Agent] 监听地址: 0.0.0.0:9091, 白名单: [${host} 127.0.0.1]
 [Agent] 认领码 (ClaimCode): c7a8b9f2e1
 [Agent] 实例 BootID: e702ba7c-728b-4a55-a226-c116c49ce3ea
