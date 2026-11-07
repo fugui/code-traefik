@@ -14,6 +14,9 @@ import {
 import type { Subsystem, FunctionalGroupTreeNode, Module } from '../../types';
 
 export interface SubsystemGroupTreePanelProps {
+  // 面板宽度
+  panelWidth?: number;
+
   // 逻辑架构树相关
   subsystems: Subsystem[];
   selectedSubsystemId: string;
@@ -77,6 +80,7 @@ function checkGroupTreeMatch(
 }
 
 export const SubsystemGroupTreePanel: React.FC<SubsystemGroupTreePanelProps> = ({
+  panelWidth,
   subsystems,
   selectedSubsystemId,
   onSelectSubsystem,
@@ -233,6 +237,7 @@ export const SubsystemGroupTreePanel: React.FC<SubsystemGroupTreePanelProps> = (
       <div
         key={`mod-${mod.id}`}
         className={`code-tree-node code-tree-node--module ${isSelected ? 'code-tree-node--selected' : ''}`}
+        title={`${mod.name} (${mod.code})`}
         onClick={(e) => {
           e.stopPropagation();
           if (onSelectModuleLeaf) {
@@ -298,6 +303,7 @@ export const SubsystemGroupTreePanel: React.FC<SubsystemGroupTreePanelProps> = (
       <div key={`grp-${node.id}`} className="code-tree-node-wrapper code-tree-node-wrapper--group">
         <div
           className={`code-tree-node code-tree-node--group ${isSelected ? 'code-tree-node--selected' : ''}`}
+          title={`${node.name} (${node.code})`}
           onClick={() => onSelectGroup(nodeIdStr, String(currentSubsystemId))}
         >
           <div className="code-tree-node__left">
@@ -399,6 +405,7 @@ export const SubsystemGroupTreePanel: React.FC<SubsystemGroupTreePanelProps> = (
       <div key={`sub-${sub.id}`} className="code-tree-node-wrapper code-tree-node-wrapper--subsystem">
         <div
           className={`code-tree-node code-tree-node--subsystem ${isSelected ? 'code-tree-node--selected' : ''}`}
+          title={`${sub.name} (${sub.code})`}
           onClick={() => {
             onSelectSubsystem(subIdStr);
             if (!expandedSubsystemIds.has(subIdStr)) {
@@ -468,7 +475,10 @@ export const SubsystemGroupTreePanel: React.FC<SubsystemGroupTreePanelProps> = (
   };
 
   return (
-    <div className="code-tree-panel">
+    <div
+      className="code-tree-panel"
+      style={panelWidth ? { width: `${panelWidth}px` } : undefined}
+    >
       {/* 顶部标题与操作栏 */}
       <div className="code-tree-panel__header">
         <h3 className="code-tree-panel__title">逻辑架构元素树</h3>

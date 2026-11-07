@@ -38,6 +38,10 @@ function findGroupInTree(
   return null;
 }
 
+const DEFAULT_TREE_WIDTH = 380;
+const MIN_TREE_WIDTH = 280;
+const MAX_TREE_WIDTH = 640;
+
 export const ArchitectureWorkbenchPage: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const { user } = useModuleUser();
@@ -116,6 +120,67 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
     sort_order: 1,
     description: '',
   });
+
+  // 左侧架构树面板宽度与拖拽调整 (支持持久化与双击复位)
+  const [treePanelWidth, setTreePanelWidth] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem('code_arch_tree_panel_width');
+      if (saved) {
+        const parsed = parseInt(saved, 10);
+        if (!isNaN(parsed) && parsed >= MIN_TREE_WIDTH && parsed <= MAX_TREE_WIDTH) {
+          return parsed;
+        }
+      }
+    } catch {
+      // 容错
+    }
+    return DEFAULT_TREE_WIDTH;
+  });
+  const [isDraggingTreeWidth, setIsDraggingTreeWidth] = useState(false);
+
+  const handleStartResizeTree = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsDraggingTreeWidth(true);
+    const startX = e.clientX;
+    const startWidth = treePanelWidth;
+
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      const deltaX = moveEvent.clientX - startX;
+      const newWidth = Math.min(MAX_TREE_WIDTH, Math.max(MIN_TREE_WIDTH, startWidth + deltaX));
+      setTreePanelWidth(newWidth);
+    };
+
+    const handleMouseUp = (upEvent: MouseEvent) => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      setIsDraggingTreeWidth(false);
+
+      const deltaX = upEvent.clientX - startX;
+      const finalWidth = Math.min(MAX_TREE_WIDTH, Math.max(MIN_TREE_WIDTH, startWidth + deltaX));
+      try {
+        localStorage.setItem('code_arch_tree_panel_width', String(finalWidth));
+      } catch {
+        // 容错
+      }
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+  }, [treePanelWidth]);
+
+  const handleResetTreeWidth = useCallback(() => {
+    setTreePanelWidth(DEFAULT_TREE_WIDTH);
+    try {
+      localStorage.setItem('code_arch_tree_panel_width', String(DEFAULT_TREE_WIDTH));
+    } catch {
+      // 容错
+    }
+  }, []);
 
   // 更新 URL Search Params 辅助函数
   const updateParams = useCallback(
@@ -826,6 +891,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
         {treeView === 'physical' ? (
           <div className="code-arch-split-layout">
             <ArchProcessTreePanel
+              panelWidth={treePanelWidth}
               groups={archProcessGroups}
               selectedProcessId={selectedArchProcessId}
               onSelectProcess={(id) => {
@@ -866,6 +932,13 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
                 });
                 setArchProcessDrawerOpen(true);
               }}
+            />
+
+            <div
+              className={`code-arch-split-resizer ${isDraggingTreeWidth ? 'code-arch-split-resizer--dragging' : ''}`}
+              onMouseDown={handleStartResizeTree}
+              onDoubleClick={handleResetTreeWidth}
+              title="拖拽调整左侧树面板宽度 (双击重置为 380px)"
             />
 
             {selectedArchProcessDetail ? (
@@ -928,6 +1001,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
         ) : (
           <div className="code-arch-split-layout">
             <SubsystemGroupTreePanel
+              panelWidth={treePanelWidth}
               subsystems={subsystems}
               selectedSubsystemId={selectedSubsystemId}
               onSelectSubsystem={(id) => {
@@ -1016,6 +1090,13 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
                 setMoveGroupDrawerOpen(true);
               }}
               onDeleteGroup={(id) => void handleDeleteGroup(id)}
+            />
+
+            <div
+              className={`code-arch-split-resizer ${isDraggingTreeWidth ? 'code-arch-split-resizer--dragging' : ''}`}
+              onMouseDown={handleStartResizeTree}
+              onDoubleClick={handleResetTreeWidth}
+              title="拖拽调整左侧树面板宽度 (双击重置为 380px)"
             />
 
             {selectedModule ? (

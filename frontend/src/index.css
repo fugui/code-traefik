@@ -1702,14 +1702,44 @@ body {
 
 /* 左侧架构树面板 */
 .code-tree-panel {
-  width: 350px;
+  width: 380px;
   flex-shrink: 0;
   border-right: 1px solid var(--color-border-primary);
-  padding: 1.25rem 1rem;
+  padding: 1.25rem 0.875rem;
   display: flex;
   flex-direction: column;
   gap: 0.875rem;
   background: transparent;
+  box-sizing: border-box;
+}
+
+/* 架构元素工作台左右分栏拖拽手柄 */
+.code-arch-split-resizer {
+  width: 8px;
+  margin: 0 -4px;
+  cursor: col-resize;
+  position: relative;
+  z-index: 10;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+  background: transparent;
+}
+
+.code-arch-split-resizer::after {
+  content: '';
+  width: 2px;
+  height: 100%;
+  background: transparent;
+  transition: background-color 0.15s ease, width 0.15s ease;
+}
+
+.code-arch-split-resizer:hover::after,
+.code-arch-split-resizer--dragging::after {
+  background: var(--color-primary);
+  width: 3px;
 }
 
 /* 视角双模切换器 (方案 2: 逻辑架构树 vs 物理进程树) */
@@ -1978,12 +2008,14 @@ body {
 }
 
 .code-tree-node__name {
-  flex: 1;
+  flex: 0 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 0.85rem;
   color: inherit;
+  font-weight: inherit;
 }
 
 .code-tree-node--module .code-tree-node__name {
@@ -2002,11 +2034,12 @@ body {
   padding: 0.05rem 0.3rem;
   margin-left: 0.25rem;
   font-weight: normal;
-  max-width: 85px;
+  max-width: 110px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  flex-shrink: 1;
+  flex-shrink: 2;
+  flex-grow: 0;
 }
 
 .code-tree-node--selected .code-tree-node__code-chip,
@@ -2028,25 +2061,34 @@ body {
   font-family: var(--font-family-mono);
 }
 
-/* 节点悬浮操作栏 */
+/* 节点悬浮操作栏 - 采用绝对定位悬浮于右侧，避免未悬停时占满宽度挤压文字 */
 .code-tree-node__actions {
+  position: absolute;
+  right: 0.35rem;
+  top: 50%;
+  transform: translateY(-50%);
   display: flex;
   align-items: center;
   gap: 0.15rem;
   opacity: 0;
+  pointer-events: none;
   transition: opacity 0.15s ease;
   background: var(--color-bg-surface);
+  border: 1px solid var(--color-border-secondary);
   border-radius: var(--radius-sm);
   padding: 0.1rem 0.25rem;
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--shadow-md);
+  z-index: 5;
 }
 
 .code-tree-node:hover .code-tree-node__actions {
   opacity: 1;
+  pointer-events: auto;
 }
 
 .code-tree-node--selected .code-tree-node__actions {
   background: var(--color-bg-surface);
+  border-color: var(--color-primary-subtle);
 }
 
 .code-tree-action-btn {
@@ -2071,13 +2113,13 @@ body {
   color: var(--color-danger);
 }
 
-/* 树子项嵌套容器与导向参考线 (Indent Guide Lines) */
+/* 树子项嵌套容器与导向参考线 (Indent Guide Lines) - 紧凑缩进保护可用文字宽度 */
 .code-tree-children {
   display: flex;
   flex-direction: column;
   gap: 0.15rem;
-  margin-left: 1rem;
-  padding-left: 0.5rem;
+  margin-left: 0.75rem;
+  padding-left: 0.45rem;
   border-left: 1.5px dashed var(--color-border-primary);
   margin-top: 0.2rem;
   margin-bottom: 0.25rem;

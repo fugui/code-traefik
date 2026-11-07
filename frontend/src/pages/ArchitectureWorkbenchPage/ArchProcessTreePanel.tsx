@@ -13,6 +13,7 @@ import {
 import type { ArchProcessGroup } from '../../types';
 
 export interface ArchProcessTreePanelProps {
+  panelWidth?: number;
   groups: ArchProcessGroup[];
   selectedProcessId: string;
   onSelectProcess: (processId: string) => void;
@@ -24,6 +25,7 @@ export interface ArchProcessTreePanelProps {
 }
 
 export const ArchProcessTreePanel: React.FC<ArchProcessTreePanelProps> = ({
+  panelWidth,
   groups,
   selectedProcessId,
   onSelectProcess,
@@ -76,7 +78,7 @@ export const ArchProcessTreePanel: React.FC<ArchProcessTreePanelProps> = ({
       className="code-arch-tree-panel"
       data-testid="arch-process-tree-panel"
       style={{
-        width: '350px',
+        width: panelWidth ? `${panelWidth}px` : '380px',
         flexShrink: 0,
         display: 'flex',
         flexDirection: 'column',
