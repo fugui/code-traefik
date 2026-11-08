@@ -5,6 +5,8 @@ import {
   MessageSchemaInspectorTree,
   isPathMatched,
 } from '../pages/ProtoSchemaWorkbenchPage/MessageSchemaInspectorTree';
+import { OperationDocDrawer } from '../pages/ProtoSchemaWorkbenchPage/OperationDocDrawer';
+import type { ProtoOperation } from '../types';
 
 function buildThreeLevelNestedFields(): ProtoFieldNodeDTO[] {
   return [
@@ -159,5 +161,79 @@ describe('MessageSchemaTree Suite (M7-P3)', () => {
 
     const arrayItemNode = fields[2].children![0];
     expect(arrayItemNode.fieldPath).toBe('orders[*].order_id');
+
+    // 7. 验证复杂对象子字段数量胶囊与全部展开/全部折叠按钮
+    expect(html).toContain('code-complex-child-count');
+    expect(html).toContain('1 个字段');
+    expect(html).toContain('2 个字段');
+    expect(html).toContain('全部展开');
+    expect(html).toContain('全部折叠');
+  });
+
+  it('testTreeRender_ScalarOnlyNoComplexToolbar: renders cleanly without expand toolbar for pure scalar fields', () => {
+    const scalarFields: ProtoFieldNodeDTO[] = [
+      { name: 'user_id', tagNumber: 1, kind: 'STRING', cardinality: 'OPTIONAL', isMap: false, fieldPath: 'user_id', isIgnoredInDiff: false },
+      { name: 'amount_cents', tagNumber: 2, kind: 'INT64', cardinality: 'OPTIONAL', isMap: false, fieldPath: 'amount_cents', isIgnoredInDiff: false },
+    ];
+
+    const html = renderToString(
+      <MessageSchemaInspectorTree
+        fields={scalarFields}
+        activeIgnorePaths={[]}
+      />
+    );
+
+    expect(html).toContain('user_id');
+    expect(html).toContain('amount_cents');
+    expect(html).toContain('STRING');
+    expect(html).toContain('INT64');
+    // 纯标量字段无复杂子对象时无需展示展开全部按钮
+    expect(html).not.toContain('全部展开');
+  });
+
+  it('testOperationDocDrawer_TwoColumnMetaSplit: renders two-column metadata split layout with copy buttons', () => {
+    const mockOp: ProtoOperation = {
+      id: 'op-123',
+      schema_id: 'schema-456',
+      service_name: 'demo.account.AccountService',
+      operation: 'DeductBalance',
+      proto_file: 'demo/proto/account.proto',
+      proto_package: 'demo.account',
+      proto_service: 'AccountService',
+      req_message_full_name: 'demo.account.DeductBalanceReq',
+      rsp_message_full_name: 'demo.account.DeductBalanceRsp',
+      is_active: true,
+      client_streaming: false,
+      server_streaming: false,
+      diff_ignore_paths: [],
+      created_at: '2026-11-08T00:00:00Z',
+    };
+
+    const html = renderToString(
+      <OperationDocDrawer
+        open={true}
+        onClose={() => {}}
+        operation={mockOp}
+      />
+    );
+
+    // 1. 验证双分栏容器类
+    expect(html).toContain('code-doc-meta-split');
+    expect(html).toContain('code-doc-meta-col');
+
+    // 2. 验证左栏协议元数据
+    expect(html).toContain('Proto Package:');
+    expect(html).toContain('demo.account');
+    expect(html).toContain('Proto Service:');
+    expect(html).toContain('AccountService');
+    expect(html).toContain('所属源文件:');
+    expect(html).toContain('demo/proto/account.proto');
+
+    // 3. 验证右栏消息体契约与内联复制按钮
+    expect(html).toContain('请求 Message:');
+    expect(html).toContain('demo.account.DeductBalanceReq');
+    expect(html).toContain('应答 Message:');
+    expect(html).toContain('demo.account.DeductBalanceRsp');
+    expect(html).toContain('code-copy-btn--inline');
   });
 });

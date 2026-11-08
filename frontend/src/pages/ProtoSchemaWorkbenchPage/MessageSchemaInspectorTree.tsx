@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import type { ProtoFieldNodeDTO } from '../../types/schema_tree';
 import { DiffIgnoreFieldToggle } from './DiffIgnoreFieldToggle';
 
@@ -32,6 +32,7 @@ export const MessageFieldTreeNode: React.FC<{
   inheritedIgnorePaths: string[];
   onToggleIgnore?: (fieldPath: string, willIgnore: boolean) => void;
   isAdmin: boolean;
+  allExpandedSignal?: { version: number; expand: boolean } | null;
 }> = ({
   node,
   depth,
@@ -39,9 +40,16 @@ export const MessageFieldTreeNode: React.FC<{
   inheritedIgnorePaths,
   onToggleIgnore,
   isAdmin,
+  allExpandedSignal,
 }) => {
   const [expanded, setExpanded] = useState(true);
   const hasChildren = Boolean(node.children && node.children.length > 0);
+
+  useEffect(() => {
+    if (allExpandedSignal && hasChildren) {
+      setExpanded(allExpandedSignal.expand);
+    }
+  }, [allExpandedSignal, hasChildren]);
 
   const path = node.fieldPath || node.field_path || node.name;
   const isDirectlyIgnored = isPathMatched(path, activeIgnorePaths);
@@ -82,19 +90,20 @@ export const MessageFieldTreeNode: React.FC<{
     >
       <div
         className="code-tree-node__content"
-        style={{ paddingLeft: `${depth * 18 + 8}px` }}
+        style={{ paddingLeft: `${depth * 20 + 8}px` }}
         onClick={() => hasChildren && setExpanded(!expanded)}
       >
         <span className="code-tree-expand-slot">
           {hasChildren ? (
             <button
               type="button"
-              className="code-tree-toggle-btn"
+              className="code-tree-toggle-btn code-tree-toggle-btn--complex"
               onClick={(e) => {
                 e.stopPropagation();
                 setExpanded(!expanded);
               }}
-              aria-label={expanded ? '折叠' : '展开'}
+              aria-label={expanded ? '折叠子字段' : '展开子字段'}
+              title={expanded ? '点击折叠子字段' : '点击展开子字段'}
             >
               <span className="code-tree-icon">{expanded ? '▼' : '▶'}</span>
             </button>
@@ -114,6 +123,21 @@ export const MessageFieldTreeNode: React.FC<{
         <span className={`code-badge ${getKindBadgeClass(kind)} code-text-xs`}>
           {kind}
         </span>
+
+        {hasChildren && (
+          <span
+            className="code-badge code-badge--secondary code-text-xs code-complex-child-count"
+            title={`包含 ${node.children!.length} 个子字段`}
+          >
+            {`${node.children!.length} 个字段`}
+          </span>
+        )}
+
+        {kind === 'MESSAGE' && !hasChildren && (
+          <span className="code-badge code-badge--secondary code-text-xs" title="未检测到子字段定义或为空消息体">
+            (空结构体)
+          </span>
+        )}
 
         {node.cardinality === 'REPEATED' && (
           <span className="code-badge code-badge--warning code-text-xs">
@@ -172,6 +196,7 @@ export const MessageFieldTreeNode: React.FC<{
               inheritedIgnorePaths={inheritedIgnorePaths}
               onToggleIgnore={onToggleIgnore}
               isAdmin={isAdmin}
+              allExpandedSignal={allExpandedSignal}
             />
           ))}
         </div>
@@ -187,19 +212,46 @@ export const MessageSchemaInspectorTree: React.FC<MessageSchemaInspectorTreeProp
   onToggleIgnore,
   isAdmin = true,
 }) => {
+  const [allExpandedSignal, setAllExpandedSignal] = useState<{ version: number; expand: boolean } | null>(null);
+
   if (!fields || fields.length === 0) {
     return <div className="code-empty-pane code-p-md">未定义字段（可能为空消息体或未找到定义）</div>;
   }
 
+  // 统计是否存在复杂对象字段（MESSAGE 或含有 children）
+  const hasComplexNodes = fields.some((f) => f.kind === 'MESSAGE' || (f.children && f.children.length > 0));
+
   return (
     <div className="code-schema-inspector-tree" data-testid="schema-inspector-tree">
       <div className="code-tree-header">
-        <span className="code-tree-header__title">
-          消息体字段字典树 ({fields.length} 个字段)
-        </span>
-        <span className="code-tree-header__hint code-text-xs code-color-muted">
-          勾选右侧「忽略对比」复选框可自动生成规范点分/数组通配路径并持久化
-        </span>
+        <div className="code-tree-header__left">
+          <span className="code-tree-header__title">
+            消息体字段字典树 ({fields.length} 个字段)
+          </span>
+          <span className="code-tree-header__hint code-text-xs code-color-muted">
+            勾选右侧「忽略对比」复选框可自动生成规范点分/数组通配路径并持久化
+          </span>
+        </div>
+        {hasComplexNodes && (
+          <div className="code-tree-header__actions">
+            <button
+              type="button"
+              className="code-tree-action-btn"
+              onClick={() => setAllExpandedSignal({ version: Date.now(), expand: true })}
+              title="一键展开所有复杂对象字段"
+            >
+              全部展开
+            </button>
+            <button
+              type="button"
+              className="code-tree-action-btn"
+              onClick={() => setAllExpandedSignal({ version: Date.now(), expand: false })}
+              title="一键收起所有复杂对象字段"
+            >
+              全部折叠
+            </button>
+          </div>
+        )}
       </div>
       <div className="code-tree-body">
         {fields.map((field) => (
@@ -211,6 +263,7 @@ export const MessageSchemaInspectorTree: React.FC<MessageSchemaInspectorTreeProp
             inheritedIgnorePaths={inheritedIgnorePaths}
             onToggleIgnore={onToggleIgnore}
             isAdmin={isAdmin}
+            allExpandedSignal={allExpandedSignal}
           />
         ))}
       </div>

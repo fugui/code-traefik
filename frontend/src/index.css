@@ -3372,6 +3372,83 @@ body {
   color: var(--color-warning);
 }
 
+/* ── M7/M11 契约详情抽屉顶部两分栏卡片样式 ── */
+.code-doc-meta-split {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.85rem;
+}
+
+@media (max-width: 768px) {
+  .code-doc-meta-split {
+    grid-template-columns: 1fr;
+  }
+}
+
+.code-doc-meta-col {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 0.75rem 0.95rem;
+  background: var(--color-bg-muted);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.code-doc-meta-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.825rem;
+  min-width: 0;
+}
+
+.code-doc-meta-label {
+  color: var(--color-text-secondary);
+  font-weight: 500;
+  width: 105px;
+  flex-shrink: 0;
+}
+
+.code-doc-meta-val {
+  color: var(--color-text-primary);
+  font-weight: 500;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.code-doc-meta-val--muted {
+  color: var(--color-text-muted);
+}
+
+.code-doc-meta-val-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+  flex: 1;
+}
+
+.code-copy-btn--inline {
+  padding: 0.1rem 0.4rem;
+  font-size: 0.7rem;
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-border-subtle);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.15s ease;
+}
+
+.code-copy-btn--inline:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-primary);
+  border-color: var(--color-primary);
+}
+
 .code-diff-ignore-label {
   font-weight: 500;
 }
@@ -3381,15 +3458,24 @@ body {
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-md);
   overflow: hidden;
+  text-align: left;
 }
 
 .code-schema-inspector-tree .code-tree-header {
   display: flex;
-  flex-direction: column;
-  gap: 0.2rem;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
   padding: 0.65rem 0.85rem;
   background: var(--color-bg-muted);
   border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.code-schema-inspector-tree .code-tree-header__left {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
 }
 
 .code-schema-inspector-tree .code-tree-header__title {
@@ -3398,26 +3484,61 @@ body {
   color: var(--color-text-primary);
 }
 
+.code-schema-inspector-tree .code-tree-header__actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+
+.code-tree-action-btn {
+  padding: 0.2rem 0.55rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-border-subtle);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.code-tree-action-btn:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-primary);
+  border-color: var(--color-primary);
+}
+
 .code-schema-inspector-tree .code-tree-body {
   padding: 0.5rem 0;
   display: flex;
   flex-direction: column;
+  align-items: stretch;
+  text-align: left;
 }
 
 .code-schema-inspector-tree .code-tree-node {
   display: flex;
   flex-direction: column;
+  align-items: stretch;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .code-schema-inspector-tree .code-tree-node__content {
   display: flex;
+  flex-direction: row;
   align-items: center;
+  justify-content: flex-start;
   gap: 0.5rem;
   padding: 0.35rem 0.85rem;
   font-size: 0.82rem;
   border-radius: var(--radius-sm);
   transition: background-color 0.12s ease;
   cursor: pointer;
+  width: 100%;
+  box-sizing: border-box;
+  text-align: left;
 }
 
 .code-schema-inspector-tree .code-tree-node__content:hover {
@@ -3435,11 +3556,40 @@ body {
 }
 
 .code-schema-inspector-tree .code-tree-expand-slot {
-  width: 16px;
+  width: 20px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+}
+
+.code-schema-inspector-tree .code-tree-toggle-btn--complex {
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: var(--color-text-secondary);
+  transition: background-color 0.15s ease, color 0.15s ease;
+  padding: 0;
+}
+
+.code-schema-inspector-tree .code-tree-toggle-btn--complex:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-primary);
+}
+
+.code-schema-inspector-tree .code-complex-child-count {
+  font-size: 0.7rem;
+  padding: 0.05rem 0.35rem;
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-muted);
+  color: var(--color-text-secondary);
+  border: 1px solid var(--color-border-subtle);
 }
 
 .code-schema-inspector-tree .code-tree-bullet {
@@ -3453,16 +3603,22 @@ body {
   background: var(--color-bg-muted);
   padding: 0.1rem 0.3rem;
   border-radius: 2px;
+  min-width: 28px;
+  text-align: center;
+  display: inline-block;
+  flex-shrink: 0;
 }
 
 .code-schema-inspector-tree .code-field-name {
   font-weight: 600;
   color: var(--color-text-primary);
+  flex-shrink: 0;
 }
 
 .code-schema-inspector-tree .code-field-path-preview {
   color: var(--color-text-muted);
   font-size: 0.7rem;
+  flex-shrink: 0;
 }
 
 .code-schema-inspector-tree .code-field-comments {

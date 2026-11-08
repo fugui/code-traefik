@@ -88,22 +88,71 @@ export const OperationDocDrawer: React.FC<OperationDocDrawerProps> = ({
     >
       {operation ? (
         <div className="code-doc-drawer-body">
-          <div className="code-meta-grid">
-            <div className="code-meta-item">
-              <span className="code-meta-label">Proto Package:</span>
-              <span className="code-meta-val code-font-mono">{operation.proto_package || '(默认包)'}</span>
+          <div className="code-doc-meta-split">
+            <div className="code-doc-meta-col">
+              <div className="code-doc-meta-item">
+                <span className="code-doc-meta-label">Proto Package:</span>
+                <span className="code-doc-meta-val code-font-mono" title={operation.proto_package || '(默认包)'}>
+                  {operation.proto_package || '(默认包)'}
+                </span>
+              </div>
+              <div className="code-doc-meta-item">
+                <span className="code-doc-meta-label">Proto Service:</span>
+                <span className="code-doc-meta-val code-font-mono" title={operation.proto_service}>
+                  {operation.proto_service}
+                </span>
+              </div>
+              <div className="code-doc-meta-item">
+                <span className="code-doc-meta-label">所属源文件:</span>
+                <span className="code-doc-meta-val code-font-mono code-doc-meta-val--muted" title={operation.proto_file}>
+                  {operation.proto_file || '-'}
+                </span>
+              </div>
             </div>
-            <div className="code-meta-item">
-              <span className="code-meta-label">Proto Service:</span>
-              <span className="code-meta-val code-font-mono">{operation.proto_service}</span>
-            </div>
-            <div className="code-meta-item">
-              <span className="code-meta-label">请求 Message:</span>
-              <span className="code-meta-val code-font-mono code-color-primary">{operation.req_message_full_name || '-'}</span>
-            </div>
-            <div className="code-meta-item">
-              <span className="code-meta-label">应答 Message:</span>
-              <span className="code-meta-val code-font-mono code-color-success">{operation.rsp_message_full_name || '-'}</span>
+
+            <div className="code-doc-meta-col">
+              <div className="code-doc-meta-item">
+                <span className="code-doc-meta-label">请求 Message:</span>
+                <div className="code-doc-meta-val-wrapper">
+                  <span className="code-doc-meta-val code-font-mono code-color-primary" title={operation.req_message_full_name || '-'}>
+                    {operation.req_message_full_name || '-'}
+                  </span>
+                  {operation.req_message_full_name && (
+                    <button
+                      type="button"
+                      className="code-copy-btn--inline"
+                      onClick={() => {
+                        void navigator.clipboard?.writeText(operation.req_message_full_name || '');
+                        toast.success('已复制请求结构体名称');
+                      }}
+                      title="复制全名"
+                    >
+                      复制
+                    </button>
+                  )}
+                </div>
+              </div>
+              <div className="code-doc-meta-item">
+                <span className="code-doc-meta-label">应答 Message:</span>
+                <div className="code-doc-meta-val-wrapper">
+                  <span className="code-doc-meta-val code-font-mono code-color-success" title={operation.rsp_message_full_name || '-'}>
+                    {operation.rsp_message_full_name || '-'}
+                  </span>
+                  {operation.rsp_message_full_name && (
+                    <button
+                      type="button"
+                      className="code-copy-btn--inline"
+                      onClick={() => {
+                        void navigator.clipboard?.writeText(operation.rsp_message_full_name || '');
+                        toast.success('已复制应答结构体名称');
+                      }}
+                      title="复制全名"
+                    >
+                      复制
+                    </button>
+                  )}
+                </div>
+              </div>
             </div>
           </div>
 
