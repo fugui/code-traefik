@@ -12,7 +12,7 @@
   - [`05-database-schema.md` §3.7](../02-design/05-database-schema.md) (v1.5.1, 第 18 张业务表 `traefik_topology_layouts`)
   - [`01-http-api-contract.md` §2.2](../03-api/01-http-api-contract.md) (v1.5.1)
   - [`15-scalable-topology-focus-and-layout-persistence-adr.md`](../05-adr/15-scalable-topology-focus-and-layout-persistence-adr.md) (ADR-15 v1.1.0；**全部阈值、URL 参数与 CSS 类名以 ADR-15 §6 为唯一基准**)
-- **状态**：已规划待实施 (Planned — SDD+TDD 规范冻结)
+- **状态**：✅ 已交付 (Delivered — M19-P1 ~ M19-P7 全量门禁与 SC-11 规模验收通过)
 
 ### 修订记录
 

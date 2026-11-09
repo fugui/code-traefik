@@ -28,6 +28,9 @@ export const RollupEdge: React.FC<EdgeProps<ArchCanvasEdge>> = ({
   }, []);
 
   const isDegraded = Boolean(data?.isDraggedDegraded);
+  const isSpotlightDimmed = Boolean(data?.isSpotlightDimmed);
+  const isHubSummary = Boolean(data?.isHubSummary);
+  const foldedPeerCount = Number(data?.foldedPeerCount || 0);
   const bendPoints = data?.bendPoints;
 
   let edgePath = '';
@@ -35,7 +38,6 @@ export const RollupEdge: React.FC<EdgeProps<ArchCanvasEdge>> = ({
   let labelY = (sourceY + targetY) / 2;
 
   if (!isDegraded && bendPoints && bendPoints.length > 0) {
-    // 过滤与起止点距离过近的冗余拐点，确保末端折线具有清晰的方向向量供箭头 orient="auto" 计算
     const validBendPoints = bendPoints.filter((bp) => {
       const distStart = Math.hypot(bp.x - sourceX, bp.y - sourceY);
       const distEnd = Math.hypot(bp.x - targetX, bp.y - targetY);
@@ -70,10 +72,23 @@ export const RollupEdge: React.FC<EdgeProps<ArchCanvasEdge>> = ({
   const safeMarkerId = `code-arch-arrow-${id.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
   const markerEndUrl = `url(#${safeMarkerId})`;
 
-  const labelText =
-    data?.totalCalls && data.totalCalls > 0
-      ? `∑ ${data.totalCalls.toLocaleString()}`
-      : `${contractCount} 契约`;
+  const labelText = isHubSummary
+    ? `+${foldedPeerCount} 个节点`
+    : data?.totalCalls && data.totalCalls > 0
+    ? `∑ ${data.totalCalls.toLocaleString()}`
+    : `${contractCount} 契约`;
+
+  const handleHubExpandClick = (e: React.MouseEvent) => {
+    if (!isHubSummary) return;
+    e.stopPropagation();
+    const onExpandHub = data?.onExpandHub as ((hubNodeId: string) => void) | undefined;
+    if (onExpandHub) {
+      const hubNodeId = data?.hubDirection === 'INBOUND' ? String(data?.target || '') : String(data?.source || '');
+      if (hubNodeId) {
+        onExpandHub(hubNodeId);
+      }
+    }
+  };
 
   return (
     <>
@@ -99,7 +114,9 @@ export const RollupEdge: React.FC<EdgeProps<ArchCanvasEdge>> = ({
       </defs>
 
       <g
-        className={`code-arch-edge-group ${isHovered ? 'code-arch-edge-group--hovered' : ''}`}
+        className={`code-arch-edge-group ${isHovered ? 'code-arch-edge-group--hovered' : ''} ${
+          isSpotlightDimmed ? 'code-arch-edge--spotlight-dimmed' : ''
+        }`}
         onMouseEnter={handleMouseEnter}
         onMouseLeave={handleMouseLeave}
       >
@@ -107,11 +124,13 @@ export const RollupEdge: React.FC<EdgeProps<ArchCanvasEdge>> = ({
           id={id}
           path={edgePath}
           markerEnd={markerEndUrl}
-          className={`code-arch-edge ${statusClass} ${isHovered ? 'code-arch-edge--hovered' : ''}`}
+          className={`code-arch-edge ${statusClass} ${isHovered ? 'code-arch-edge--hovered' : ''} ${
+            isSpotlightDimmed ? 'code-arch-edge--spotlight-dimmed' : ''
+          }`}
           style={{
             stroke: strokeColor,
             strokeWidth: isHovered ? strokeWidth + 0.6 : strokeWidth,
-            strokeDasharray,
+            strokeDasharray: isHubSummary ? '6 4' : strokeDasharray,
           }}
         />
         <path
@@ -137,8 +156,16 @@ export const RollupEdge: React.FC<EdgeProps<ArchCanvasEdge>> = ({
           onMouseLeave={handleMouseLeave}
         >
           <span
-            className={`code-arch-edge-badge ${statusClass} ${isHovered ? 'code-arch-edge-badge--hovered' : ''}`}
-            title={`调用方向: ${data?.source || ''} → ${data?.target || ''} (${contractCount} 个契约)`}
+            className={`code-arch-edge-badge ${statusClass} ${isHovered ? 'code-arch-edge-badge--hovered' : ''} ${
+              isHubSummary ? 'code-arch-edge-badge--hub-more' : ''
+            } ${isSpotlightDimmed ? 'code-arch-edge--spotlight-dimmed' : ''}`}
+            onClick={isHubSummary ? handleHubExpandClick : undefined}
+            data-testid={isHubSummary ? `hub-expand-badge-${id}` : undefined}
+            title={
+              isHubSummary
+                ? `点击展开折叠的 ${foldedPeerCount} 条高扇出关联边`
+                : `调用方向: ${data?.source || ''} → ${data?.target || ''} (${contractCount} 个契约)`
+            }
           >
             {labelText}
           </span>

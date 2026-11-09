@@ -42,11 +42,12 @@ func TestAll14ModelsTablePrefixAndMigration(t *testing.T) {
 		ReplayItem{},
 		GoldenSuite{},
 		GoldenSuiteItem{},
+		TopologyLayout{},
 		TraefikSetting{},
 	}
 
-	if len(modelsList) != 18 {
-		t.Fatalf("模型清单数量期望为 18 (17 张业务模型 + TraefikSetting)，实际为: %d", len(modelsList))
+	if len(modelsList) != 19 {
+		t.Fatalf("模型清单数量期望为 19 (18 张业务模型 + TraefikSetting)，实际为: %d", len(modelsList))
 	}
 
 	for _, m := range modelsList {

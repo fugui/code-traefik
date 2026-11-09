@@ -7,35 +7,19 @@ import type {
   ContainerBadgeCounts,
 } from '../../../types/topology_graph';
 import type { ConsistencyReportDTO, ConsistencyEdge } from '../../../types/traffic';
-import { findLCA } from './hierarchy';
+import {
+  synthesizeOverlay,
+  mergeStatus,
+  STATUS_PRIORITY,
+  type OverlaySynthesisResult,
+} from './overlay';
 
-export const STATUS_PRIORITY: Record<ConsistencyEdgeStatus, number> = {
-  VIOLATION: 7,
-  UNATTRIBUTED: 6,
-  UNCOVERED: 5,
-  NOT_MONITORED: 4,
-  OUTBOUND_VERIFIED: 3,
-  NOT_OBSERVABLE: 2,
-  VERIFIED: 1,
-};
-
-/**
- * 七分类最差状态优先级合并
- * VIOLATION > UNATTRIBUTED > UNCOVERED > NOT_MONITORED > OUTBOUND_VERIFIED > NOT_OBSERVABLE > VERIFIED
- */
-export function mergeStatus(
-  a?: ConsistencyEdgeStatus,
-  b?: ConsistencyEdgeStatus
-): ConsistencyEdgeStatus | undefined {
-  if (!a) return b;
-  if (!b) return a;
-  return STATUS_PRIORITY[a] >= STATUS_PRIORITY[b] ? a : b;
-}
+export { mergeStatus, STATUS_PRIORITY };
 
 /**
  * 代表节点查找 rep(nodeId)
- * 沿当前节点的 ancestors[] 路径从顶层根（depth=0）向下扫描，首个处于“折叠 (Collapsed)”状态的容器即为其可见代表节点；
- * 若其所有祖先均处于展开状态，则该叶子节点自身即为代表节点。
+ * 沿当前节点的 ancestors[] 路径从顶层根（depth=0）向下扫描，首个存在于 nodeMap 且处于“折叠 (Collapsed)”状态的容器即为其可见代表节点；
+ * 若其所有祖先均处于展开状态（或在聚焦裁剪下不在 nodeMap 中），则该叶子节点自身即为代表节点。
  */
 export function rep(
   nodeId: string,
@@ -46,6 +30,7 @@ export function rep(
   if (!node) return nodeId;
 
   for (const ancId of node.ancestors) {
+    if (!nodeMap.has(ancId)) continue;
     if (!expandState[ancId]) {
       return ancId;
     }
@@ -61,202 +46,90 @@ export interface RollupResult {
   unattributedPendingList: ConsistencyEdge[];
 }
 
+export interface OverlayEdgeMeta {
+  edgeStatusMap?: Map<string, ConsistencyEdgeStatus>;
+  edgeCallCountMap?: Map<string, number>;
+  edgeSampleRecordMap?: Map<string, number>;
+  dynamicNodes?: GraphNode[];
+  unattributedPendingList?: ConsistencyEdge[];
+}
+
 /**
- * 纯前端边汇总与动态 VIOLATION/UNATTRIBUTED 叠加引擎
+ * M19 Stage-3: 纯代表节点上卷与容器徽章聚合
  */
-export function rollupEdges(
+export function aggregateRollup(
   nodes: GraphNode[],
-  edges: GraphEdge[],
+  workingEdges: GraphEdge[],
   expandState: ExpandStateMap,
-  consistencyReport?: ConsistencyReportDTO | null,
-  view: 'LOGICAL' | 'PHYSICAL' = 'LOGICAL'
-): RollupResult {
+  overlayMeta?: OverlayEdgeMeta
+): Pick<RollupResult, 'rollupEdges' | 'badgeCounts'> {
   const nodeMap = new Map<string, GraphNode>();
-  for (const n of nodes) {
+  const nodeIdxMap = new Map<string, number>();
+  const badgeCounts: Record<string, ContainerBadgeCounts> = {};
+  for (let i = 0; i < nodes.length; i++) {
+    const n = nodes[i];
     nodeMap.set(n.id, n);
+    nodeIdxMap.set(n.id, i + 1);
+    if (
+      n.type !== 'MODULE' &&
+      n.type !== 'EXTERNAL_SYSTEM' &&
+      n.type !== 'EXTERNAL_ENDPOINT' &&
+      n.type !== 'UNREGISTERED_INTERFACE'
+    ) {
+      badgeCounts[n.id] = { internalEdgeCount: 0, intraProcessCallCount: 0 };
+    }
   }
 
-  const dynamicNodes: GraphNode[] = [];
-  const workingEdges: GraphEdge[] = [...edges];
-  const edgeStatusMap = new Map<string, ConsistencyEdgeStatus>();
-  const edgeCallCountMap = new Map<string, number>();
-  const edgeSampleRecordMap = new Map<string, number>();
-  const unattributedPendingList: ConsistencyEdge[] = [];
+  const edgeStatusMap = overlayMeta?.edgeStatusMap;
+  const edgeCallCountMap = overlayMeta?.edgeCallCountMap;
+  const edgeSampleRecordMap = overlayMeta?.edgeSampleRecordMap;
 
-  const ensureUnregisteredInterfaceNode = () => {
-    const virtId = 'VIRTUAL_UNREGISTERED_INTERFACE';
-    if (!nodeMap.has(virtId) && !dynamicNodes.some((n) => n.id === virtId)) {
-      const virtNode: GraphNode = {
-        id: virtId,
-        type: 'UNREGISTERED_INTERFACE',
-        name: '未登记接口',
-        depth: 0,
-        ancestors: [],
-        sort_order: 99999,
-        meta: { description: '动态检出的未登记外部接口告警节点' },
-      };
-      dynamicNodes.push(virtNode);
-      nodeMap.set(virtId, virtNode);
+  const rollupEdgeMap = new Map<number, RollupEdgeModel>();
+  const rollupServiceSetMap = new Map<number, Set<string>>();
+  const repCache = new Map<string, string>();
+  let dynSeq = nodes.length + 1;
+
+  const resolveRepCached = (nodeId: string): string => {
+    const cached = repCache.get(nodeId);
+    if (cached !== undefined) return cached;
+    const resolved = rep(nodeId, expandState, nodeMap);
+    repCache.set(nodeId, resolved);
+    if (!nodeIdxMap.has(resolved)) {
+      nodeIdxMap.set(resolved, dynSeq++);
     }
+    return resolved;
   };
 
-  // 1. 若挂载了一致性报告，执行动态违规边合成与静态边状态映射
-  if (consistencyReport && consistencyReport.edges) {
-    for (const item of consistencyReport.edges) {
-      const status = (item.status || item.category) as ConsistencyEdgeStatus;
-      const callCount = Number(item.call_count || item.observed_call_count || 0);
-      const sampleId = item.sample_traffic_record_id ? Number(item.sample_traffic_record_id) : undefined;
-
-      const srcModuleId = item.src_module_id ?? item.source_module_id;
-      const dstModuleId = item.dst_module_id ?? item.target_module_id;
-
-      if (status === 'VIOLATION') {
-        let srcNodeId: string | null = null;
-        if (srcModuleId != null) {
-          srcNodeId = `mod_${srcModuleId}`;
-        } else if (view === 'PHYSICAL' && item.src_process_id != null && nodeMap.has(`proc_${item.src_process_id}`)) {
-          srcNodeId = `proc_${item.src_process_id}`;
-        } else if (item.candidate_module_ids && item.candidate_module_ids.length > 0) {
-          const candIds = item.candidate_module_ids.map((id: string | number) => `mod_${id}`);
-          srcNodeId = findLCA(candIds, nodeMap) || candIds[0];
-        }
-
-        if (!srcNodeId) {
-          srcNodeId = 'UNATTRIBUTED_ROOT';
-        }
-
-        let dstNodeId: string;
-        if (dstModuleId != null) {
-          dstNodeId = `mod_${dstModuleId}`;
-        } else {
-          ensureUnregisteredInterfaceNode();
-          dstNodeId = 'VIRTUAL_UNREGISTERED_INTERFACE';
-        }
-
-        const dynEdgeId = `dyn_viol_${srcNodeId}_${dstNodeId}_${item.service_name}_${item.operation}`;
-        const dynEdge: GraphEdge = {
-          id: dynEdgeId,
-          kind: 'CROSS_PROCESS',
-          source_node_id: srcNodeId,
-          target_node_id: dstNodeId,
-          src_module_id: srcModuleId != null ? Number(srcModuleId) : undefined,
-          dst_module_id: dstModuleId != null ? Number(dstModuleId) : undefined,
-          services: [
-            {
-              service_name: `${item.service_name}.${item.operation}`,
-              description: item.detail || '未声明越权调用 (VIOLATION)',
-            },
-          ],
-        };
-
-        workingEdges.push(dynEdge);
-        edgeStatusMap.set(dynEdgeId, 'VIOLATION');
-        edgeCallCountMap.set(dynEdgeId, callCount);
-        if (sampleId) edgeSampleRecordMap.set(dynEdgeId, sampleId);
-      } else if (status === 'UNATTRIBUTED') {
-        let srcNodeId: string | null = null;
-        if (view === 'PHYSICAL') {
-          if (item.src_process_id != null && nodeMap.has(`proc_${item.src_process_id}`)) {
-            srcNodeId = `proc_${item.src_process_id}`;
-          } else if (item.candidate_module_ids && item.candidate_module_ids.length > 0) {
-            const candIds = item.candidate_module_ids.map((id: string | number) => `mod_${id}`);
-            srcNodeId = findLCA(candIds, nodeMap);
-          }
-        } else {
-          if (item.candidate_module_ids && item.candidate_module_ids.length > 0) {
-            const candIds = item.candidate_module_ids.map((id: string | number) => `mod_${id}`);
-            srcNodeId = findLCA(candIds, nodeMap);
-          }
-        }
-
-        if (srcNodeId) {
-          let dstNodeId: string;
-          if (dstModuleId != null) {
-            dstNodeId = `mod_${dstModuleId}`;
-          } else {
-            ensureUnregisteredInterfaceNode();
-            dstNodeId = 'VIRTUAL_UNREGISTERED_INTERFACE';
-          }
-
-          const dynEdgeId = `dyn_unattr_${srcNodeId}_${dstNodeId}_${item.service_name}_${item.operation}`;
-          const dynEdge: GraphEdge = {
-            id: dynEdgeId,
-            kind: 'CROSS_PROCESS',
-            source_node_id: srcNodeId,
-            target_node_id: dstNodeId,
-            dst_module_id: dstModuleId != null ? Number(dstModuleId) : undefined,
-            services: [
-              {
-                service_name: `${item.service_name}.${item.operation}`,
-                description: item.detail || '多模块共进程待定归属 (UNATTRIBUTED)',
-              },
-            ],
-          };
-
-          workingEdges.push(dynEdge);
-          edgeStatusMap.set(dynEdgeId, 'UNATTRIBUTED');
-          edgeCallCountMap.set(dynEdgeId, callCount);
-          if (sampleId) edgeSampleRecordMap.set(dynEdgeId, sampleId);
-        } else {
-          unattributedPendingList.push(item);
-        }
-      } else {
-        // 静态边匹配 (VERIFIED / UNCOVERED / NOT_MONITORED / NOT_OBSERVABLE)
-        for (const e of workingEdges) {
-          const matchSrc = srcModuleId != null && e.src_module_id === Number(srcModuleId);
-          const matchDst = dstModuleId != null && e.dst_module_id === Number(dstModuleId);
-          const matchSvc = e.services.some(
-            (s) =>
-              s.service_name === item.service_name ||
-              s.service_name === `${item.service_name}.${item.operation}` ||
-              s.service_name.includes(item.service_name)
-          );
-
-          if (matchSrc && matchDst && matchSvc) {
-            const currStatus = edgeStatusMap.get(e.id);
-            edgeStatusMap.set(e.id, mergeStatus(currStatus, status) || status);
-            edgeCallCountMap.set(e.id, (edgeCallCountMap.get(e.id) || 0) + callCount);
-            if (sampleId && !edgeSampleRecordMap.has(e.id)) {
-              edgeSampleRecordMap.set(e.id, sampleId);
-            }
-          }
-        }
-      }
-    }
-  }
-
-  // 2. 边上卷与代表节点聚合
-  const badgeCounts: Record<string, ContainerBadgeCounts> = {};
-  for (const n of nodes) {
-    badgeCounts[n.id] = { internalEdgeCount: 0, intraProcessCallCount: 0 };
-  }
-  for (const n of dynamicNodes) {
-    badgeCounts[n.id] = { internalEdgeCount: 0, intraProcessCallCount: 0 };
-  }
-
-  const rollupEdgeMap = new Map<string, RollupEdgeModel>();
-
   for (const edge of workingEdges) {
-    const sRep = rep(edge.source_node_id, expandState, nodeMap);
-    const tRep = rep(edge.target_node_id, expandState, nodeMap);
+    const sRep = resolveRepCached(edge.source_node_id);
+    const tRep = resolveRepCached(edge.target_node_id);
 
     if (sRep === tRep) {
-      if (!badgeCounts[sRep]) {
-        badgeCounts[sRep] = { internalEdgeCount: 0, intraProcessCallCount: 0 };
+      let badge = badgeCounts[sRep];
+      if (!badge) {
+        badge = { internalEdgeCount: 0, intraProcessCallCount: 0 };
+        badgeCounts[sRep] = badge;
       }
-      badgeCounts[sRep].internalEdgeCount += 1;
+      badge.internalEdgeCount += 1;
       if (edge.kind === 'INTRA_PROCESS') {
-        badgeCounts[sRep].intraProcessCallCount += 1;
+        badge.intraProcessCallCount += 1;
       }
     } else {
-      const rollupKey = `${sRep}->${tRep}`;
-      const status = edgeStatusMap.get(edge.id);
-      const calls = edgeCallCountMap.get(edge.id) || 0;
-      const sampleId = edgeSampleRecordMap.get(edge.id);
+      const sIdx = nodeIdxMap.get(sRep)!;
+      const tIdx = nodeIdxMap.get(tRep)!;
+      const rollupKeyNum = sIdx * 65536 + tIdx;
+      const status = edgeStatusMap?.get(edge.id);
+      const calls = edgeCallCountMap?.get(edge.id) || 0;
+      const sampleId = edgeSampleRecordMap?.get(edge.id);
 
-      const existing = rollupEdgeMap.get(rollupKey);
+      const existing = rollupEdgeMap.get(rollupKeyNum);
       if (!existing) {
-        rollupEdgeMap.set(rollupKey, {
+        const svcSet = new Set<string>();
+        for (const s of edge.services) {
+          svcSet.add(s.service_name);
+        }
+        rollupServiceSetMap.set(rollupKeyNum, svcSet);
+        rollupEdgeMap.set(rollupKeyNum, {
           id: `rollup_${sRep}_${tRep}`,
           source: sRep,
           target: tRep,
@@ -275,8 +148,10 @@ export function rollupEdges(
           existing.sampleTrafficRecordId = sampleId;
         }
 
+        const svcSet = rollupServiceSetMap.get(rollupKeyNum)!;
         for (const s of edge.services) {
-          if (!existing.services.some((es) => es.service_name === s.service_name)) {
+          if (!svcSet.has(s.service_name)) {
+            svcSet.add(s.service_name);
             existing.services.push(s);
           }
         }
@@ -287,7 +162,26 @@ export function rollupEdges(
   return {
     rollupEdges: Array.from(rollupEdgeMap.values()),
     badgeCounts,
-    dynamicNodes,
-    unattributedPendingList,
+  };
+}
+
+/**
+ * 向后兼容门面函数：串联 synthesizeOverlay 与 aggregateRollup
+ */
+export function rollupEdges(
+  nodes: GraphNode[],
+  edges: GraphEdge[],
+  expandState: ExpandStateMap,
+  consistencyReport?: ConsistencyReportDTO | null,
+  view: 'LOGICAL' | 'PHYSICAL' = 'LOGICAL'
+): RollupResult {
+  const overlay: OverlaySynthesisResult = synthesizeOverlay(nodes, edges, consistencyReport, view);
+  const aggregated = aggregateRollup(overlay.workingNodes, overlay.workingEdges, expandState, overlay);
+
+  return {
+    rollupEdges: aggregated.rollupEdges,
+    badgeCounts: aggregated.badgeCounts,
+    dynamicNodes: overlay.dynamicNodes,
+    unattributedPendingList: overlay.unattributedPendingList,
   };
 }

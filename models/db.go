@@ -35,7 +35,7 @@ func SetupWithDB(db *gorm.DB) error {
 		return fmt.Errorf("检测并清理旧版表结构失败: %w", err)
 	}
 
-	// 1. 自动迁移标准实体表（17 张核心 traefik_* 表 + 平台公共审计/用户表，ADR-14）
+	// 1. 自动迁移标准实体表（18 张核心 traefik_* 表 + 平台公共审计/用户表，ADR-14, ADR-15）
 	if err := DB.AutoMigrate(
 		&Department{},
 		&User{},
@@ -57,6 +57,7 @@ func SetupWithDB(db *gorm.DB) error {
 		&ReplayItem{},
 		&GoldenSuite{},
 		&GoldenSuiteItem{},
+		&TopologyLayout{},
 	); err != nil {
 		return fmt.Errorf("迁移数据表结构失败: %w", err)
 	}
@@ -131,6 +132,24 @@ BEGIN
     END IF;
     ALTER TABLE traefik_golden_suites ADD CONSTRAINT chk_traefik_golden_suite_status CHECK (status IN ('ACTIVE', 'ARCHIVED'));
 
+    -- traefik_topology_layouts 公私域、视图与归属组合检查约束 (F-04.3, ADR-15)
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_traefik_topo_layout_scope') THEN
+        ALTER TABLE traefik_topology_layouts DROP CONSTRAINT chk_traefik_topo_layout_scope;
+    END IF;
+    ALTER TABLE traefik_topology_layouts ADD CONSTRAINT chk_traefik_topo_layout_scope CHECK (scope IN ('SHARED','PRIVATE'));
+
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_traefik_topo_layout_view') THEN
+        ALTER TABLE traefik_topology_layouts DROP CONSTRAINT chk_traefik_topo_layout_view;
+    END IF;
+    ALTER TABLE traefik_topology_layouts ADD CONSTRAINT chk_traefik_topo_layout_view CHECK (view IN ('LOGICAL','PHYSICAL'));
+
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_traefik_topo_layout_owner') THEN
+        ALTER TABLE traefik_topology_layouts DROP CONSTRAINT chk_traefik_topo_layout_owner;
+    END IF;
+    ALTER TABLE traefik_topology_layouts ADD CONSTRAINT chk_traefik_topo_layout_owner
+        CHECK ((scope = 'SHARED' AND owner_id IS NULL AND focus_scope = 'GLOBAL' AND is_default = false)
+            OR (scope = 'PRIVATE' AND owner_id IS NOT NULL));
+
     -- 移除旧版 uk_traefik_replay_task_item 索引（若存在），由 uk_traefik_replay_task_seq 替代
     DROP INDEX IF EXISTS uk_traefik_replay_task_item;
 END $$;`
@@ -147,6 +166,9 @@ END $$;`
 		`CREATE UNIQUE INDEX IF NOT EXISTS uk_traefik_golden_suite_code ON traefik_golden_suites (code);`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS uk_traefik_golden_item_order ON traefik_golden_suite_items (suite_id, order_no);`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS uk_traefik_replay_task_seq ON traefik_replay_items (task_id, seq_no);`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uk_traefik_topo_layout_shared ON traefik_topology_layouts (view) WHERE scope = 'SHARED';`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uk_traefik_topo_layout_private_name ON traefik_topology_layouts (owner_id, view, name) WHERE scope = 'PRIVATE';`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uk_traefik_topo_layout_private_default ON traefik_topology_layouts (owner_id, view, focus_scope) WHERE scope = 'PRIVATE' AND is_default;`,
 	}
 	for _, idxSQL := range partialIndexes {
 		if err := DB.Exec(idxSQL).Error; err != nil {

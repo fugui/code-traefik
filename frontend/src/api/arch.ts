@@ -17,7 +17,15 @@ import type {
   ArchProcessDetailDTO,
   AutoPinnedOverride,
 } from '../types';
-import type { TopologyGraphDTO } from '../types/topology_graph';
+import type {
+  TopologyGraphDTO,
+  SavedNodePosition,
+  SavedExpandState,
+  SavedFilterState,
+  SavedViewport,
+  TopologyLayoutDetailDTO,
+  TopologyLayoutListResponse,
+} from '../types/topology_graph';
 
 export async function listSubsystems(params?: { search?: string; page?: number; page_size?: number }) {
   const query = new URLSearchParams();
@@ -437,3 +445,98 @@ export async function getTopologyGraph(
 
   return data;
 }
+
+export function clearTopologyGraphCache(): void {
+  topologyGraphCache.clear();
+}
+
+// --- Topology Layouts (M19 双层布局持久化与视图书签) ---
+
+export async function listTopologyLayouts(
+  view: 'LOGICAL' | 'PHYSICAL' = 'LOGICAL'
+): Promise<TopologyLayoutListResponse> {
+  return apiRequest<TopologyLayoutListResponse>(
+    `/arch/topology/layouts?view=${encodeURIComponent(view)}`
+  );
+}
+
+export async function getPersonalTopologyLayout(
+  id: number | string
+): Promise<TopologyLayoutDetailDTO> {
+  return apiRequest<TopologyLayoutDetailDTO>(`/arch/topology/layouts/${id}`);
+}
+
+export async function upsertCanonicalTopologyLayout(data: {
+  view: 'LOGICAL' | 'PHYSICAL';
+  name?: string;
+  description?: string;
+  expected_revision?: number | null;
+  structure_version?: string;
+  node_positions: Record<string, SavedNodePosition>;
+  expand_state: SavedExpandState;
+  filter_state: SavedFilterState;
+  viewport: SavedViewport;
+}): Promise<TopologyLayoutDetailDTO> {
+  return apiRequest<TopologyLayoutDetailDTO>('/arch/topology/layouts/canonical', {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function resetCanonicalTopologyLayout(
+  view: 'LOGICAL' | 'PHYSICAL'
+): Promise<{ message: string; deleted_id: number }> {
+  return apiRequest<{ message: string; deleted_id: number }>(
+    `/arch/topology/layouts/canonical?view=${encodeURIComponent(view)}`,
+    { method: 'DELETE' }
+  );
+}
+
+export async function createPersonalTopologyLayout(data: {
+  view: 'LOGICAL' | 'PHYSICAL';
+  name: string;
+  description?: string;
+  focus_scope?: string;
+  is_default?: boolean;
+  structure_version?: string;
+  node_positions: Record<string, SavedNodePosition>;
+  expand_state: SavedExpandState;
+  filter_state: SavedFilterState;
+  viewport: SavedViewport;
+}): Promise<TopologyLayoutDetailDTO> {
+  return apiRequest<TopologyLayoutDetailDTO>('/arch/topology/layouts', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function updatePersonalTopologyLayout(
+  id: number | string,
+  data: {
+    name?: string;
+    description?: string;
+    focus_scope?: string;
+    is_default?: boolean;
+    expected_revision?: number | null;
+    structure_version?: string;
+    node_positions?: Record<string, SavedNodePosition>;
+    expand_state?: SavedExpandState;
+    filter_state?: SavedFilterState;
+    viewport?: SavedViewport;
+  }
+): Promise<TopologyLayoutDetailDTO> {
+  return apiRequest<TopologyLayoutDetailDTO>(`/arch/topology/layouts/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deletePersonalTopologyLayout(
+  id: number | string
+): Promise<{ message: string; deleted_id: number }> {
+  return apiRequest<{ message: string; deleted_id: number }>(
+    `/arch/topology/layouts/${id}`,
+    { method: 'DELETE' }
+  );
+}
+

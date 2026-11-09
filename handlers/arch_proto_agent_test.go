@@ -2,11 +2,13 @@ package handlers_test
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -216,8 +218,15 @@ func RegisterRoutesForTest(r *gin.Engine) {
 		protected.PUT("/arch/processes/:id", requireAdmin, handlers.UpdateArchProcess)
 		protected.DELETE("/arch/processes/:id", requireAdmin, handlers.DeleteArchProcess)
 
-		protected.GET("/arch/topology/graph", handlers.GetTopologyGraph)
+		protected.GET("/arch/topology/graph", handlers.GzipMiddleware(), handlers.GetTopologyGraph)
 		protected.GET("/arch/topology/static", handlers.GetStaticTopology)
+		protected.GET("/arch/topology/layouts", handlers.ListTopologyLayouts)
+		protected.GET("/arch/topology/layouts/personal/:id", handlers.GetPersonalTopologyLayout)
+		protected.PUT("/arch/topology/layouts/canonical", requireAdmin, handlers.UpsertCanonicalTopologyLayout)
+		protected.DELETE("/arch/topology/layouts/canonical", requireAdmin, handlers.ResetCanonicalTopologyLayout)
+		protected.POST("/arch/topology/layouts/personal", handlers.CreatePersonalTopologyLayout)
+		protected.PUT("/arch/topology/layouts/personal/:id", handlers.UpdatePersonalTopologyLayout)
+		protected.DELETE("/arch/topology/layouts/personal/:id", handlers.DeletePersonalTopologyLayout)
 
 		// 描述集
 		protected.GET("/proto-schemas", handlers.ListProtoSchemas)
@@ -2840,5 +2849,93 @@ func TestGetAgent_ReturnsPreloadedMountedProcesses_AndAntiIDOR(t *testing.T) {
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("普通用户 B 访问用户 A 的私有 Agent 期望 403 Forbidden，实际: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestGetTopologyGraph_GzipNegotiation(t *testing.T) {
+	r, db := setupRouterAndDB(t)
+	user := createTestUserInDB(t, db, "gzip_tester", "user")
+	token := generateTestJWT(t, user)
+
+	sub := models.Subsystem{Code: "SUB_GZIP", Name: "Gzip测试子系统"}
+	if err := db.Create(&sub).Error; err != nil {
+		t.Fatalf("创建子系统失败: %v", err)
+	}
+	grp := models.FunctionalGroup{SubsystemID: sub.ID, Code: "GRP_GZIP", Name: "Gzip功能组", Level: 1, Path: "/1/"}
+	if err := db.Create(&grp).Error; err != nil {
+		t.Fatalf("创建功能组失败: %v", err)
+	}
+	mod := models.Module{SubsystemID: sub.ID, GroupID: grp.ID, Code: "MOD_GZIP", Name: "Gzip模块", OwnerID: &user.ID}
+	if err := db.Create(&mod).Error; err != nil {
+		t.Fatalf("创建模块失败: %v", err)
+	}
+
+	// 1. 未携带 Accept-Encoding: gzip -> 返回明文 JSON
+	reqPlain := httptest.NewRequest(http.MethodGet, "/api/arch/topology/graph?view=LOGICAL", nil)
+	reqPlain.Header.Set("Authorization", "Bearer "+token)
+	wPlain := httptest.NewRecorder()
+	r.ServeHTTP(wPlain, reqPlain)
+	if wPlain.Code != http.StatusOK {
+		t.Fatalf("期望 200 OK，实际: %d %s", wPlain.Code, wPlain.Body.String())
+	}
+	if enc := wPlain.Header().Get("Content-Encoding"); enc != "" {
+		t.Fatalf("未请求 gzip 时不应包含 Content-Encoding 头，实际: %s", enc)
+	}
+	var plainDTO topology.TopologyGraphDTO
+	if err := json.Unmarshal(wPlain.Body.Bytes(), &plainDTO); err != nil {
+		t.Fatalf("解析明文响应失败: %v", err)
+	}
+	if plainDTO.StructureVersion == "" {
+		t.Fatalf("期望 StructureVersion 非空")
+	}
+
+	// 2. 携带 Accept-Encoding: gzip -> 返回 gzip 压缩体 + Vary: Accept-Encoding，且可解压还原
+	reqGzip := httptest.NewRequest(http.MethodGet, "/api/arch/topology/graph?view=LOGICAL", nil)
+	reqGzip.Header.Set("Authorization", "Bearer "+token)
+	reqGzip.Header.Set("Accept-Encoding", "gzip, deflate")
+	wGzip := httptest.NewRecorder()
+	r.ServeHTTP(wGzip, reqGzip)
+	if wGzip.Code != http.StatusOK {
+		t.Fatalf("期望 200 OK，实际: %d", wGzip.Code)
+	}
+	if enc := wGzip.Header().Get("Content-Encoding"); enc != "gzip" {
+		t.Fatalf("期望 Content-Encoding: gzip，实际: %q", enc)
+	}
+	if vary := wGzip.Header().Get("Vary"); !strings.Contains(vary, "Accept-Encoding") {
+		t.Fatalf("期望 Vary 包含 Accept-Encoding，实际: %q", vary)
+	}
+	zr, err := gzip.NewReader(bytes.NewReader(wGzip.Body.Bytes()))
+	if err != nil {
+		t.Fatalf("创建 gzip.Reader 失败: %v", err)
+	}
+	decompressed, err := io.ReadAll(zr)
+	_ = zr.Close()
+	if err != nil {
+		t.Fatalf("解压 gzip 响应体失败: %v", err)
+	}
+	var gzDTO topology.TopologyGraphDTO
+	if err := json.Unmarshal(decompressed, &gzDTO); err != nil {
+		t.Fatalf("解析解压后 JSON 失败: %v", err)
+	}
+	if gzDTO.ModelVersion != plainDTO.ModelVersion || gzDTO.StructureVersion != plainDTO.StructureVersion {
+		t.Fatalf("解压后内容与明文不一致: gz=%+v, plain=%+v", gzDTO, plainDTO)
+	}
+
+	// 3. 携带 If-None-Match 命中 304 -> 不压缩且无 Content-Encoding: gzip
+	etag := wGzip.Header().Get("ETag")
+	req304 := httptest.NewRequest(http.MethodGet, "/api/arch/topology/graph?view=LOGICAL", nil)
+	req304.Header.Set("Authorization", "Bearer "+token)
+	req304.Header.Set("Accept-Encoding", "gzip")
+	req304.Header.Set("If-None-Match", etag)
+	w304 := httptest.NewRecorder()
+	r.ServeHTTP(w304, req304)
+	if w304.Code != http.StatusNotModified {
+		t.Fatalf("期望 304 NotModified，实际: %d", w304.Code)
+	}
+	if enc := w304.Header().Get("Content-Encoding"); enc != "" {
+		t.Fatalf("304 响应不应包含 Content-Encoding，实际: %q", enc)
+	}
+	if w304.Body.Len() != 0 {
+		t.Fatalf("304 响应体应为空，实际长度: %d", w304.Body.Len())
 	}
 }

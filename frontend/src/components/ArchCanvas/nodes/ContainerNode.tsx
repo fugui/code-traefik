@@ -10,10 +10,22 @@ import {
   LayoutGrid,
   Globe,
   Radio,
+  Crosshair,
+  Pin,
 } from 'lucide-react';
 
 export const ContainerNode: React.FC<NodeProps<ContainerNodeType>> = ({ id, data }) => {
-  const { graphNode, isExpanded, onToggleExpand, badgeCounts, childCount = 0 } = data;
+  const {
+    graphNode,
+    isExpanded,
+    onToggleExpand,
+    onFocusScope,
+    onTogglePin,
+    isPinned,
+    badgeCounts,
+    childCount = 0,
+    searchMatchCount = 0,
+  } = data;
 
   const handleToggleClick = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -29,7 +41,20 @@ export const ContainerNode: React.FC<NodeProps<ContainerNodeType>> = ({ id, data
     }
   };
 
-  // 节点语义类型标签与专属图标
+  const handleFocusClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (onFocusScope) {
+      onFocusScope(id);
+    }
+  };
+
+  const handlePinClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (onTogglePin) {
+      onTogglePin(id);
+    }
+  };
+
   let icon = <Layers size={14} className="code-arch-container__icon" />;
   let typeTagText = '容器';
   let typeTagClass = 'code-arch-tag--default';
@@ -83,14 +108,47 @@ export const ContainerNode: React.FC<NodeProps<ContainerNodeType>> = ({ id, data
       ? String(graphNode.meta.probe_status)
       : undefined;
 
+  const probeBadgeClass =
+    probeStatus === 'READY'
+      ? 'code-arch-badge--probe-ready'
+      : probeStatus === 'NEED_RECONNECT'
+      ? 'code-arch-badge--probe-reconnect'
+      : 'code-arch-badge--probe-default';
+
+  const containerActions = (
+    <div className="code-arch-container__actions">
+      {onFocusScope && (
+        <button
+          type="button"
+          className="code-arch-container__action-btn"
+          onClick={handleFocusClick}
+          title="下钻聚焦至此容器"
+          data-testid={`focus-container-btn-${id}`}
+        >
+          <Crosshair size={12} />
+        </button>
+      )}
+      {onTogglePin && (
+        <button
+          type="button"
+          className={`code-arch-container__action-btn ${isPinned ? 'code-arch-container__action-btn--active' : ''}`}
+          onClick={handlePinClick}
+          title={isPinned ? '取消固定位置' : '固定容器位置（局部推挤中锁定）'}
+          data-testid={`pin-node-btn-${id}`}
+        >
+          <Pin size={12} />
+        </button>
+      )}
+    </div>
+  );
+
   // 展开态渲染：大框容器（Container Box）
   if (isExpanded) {
     return (
       <div
         className={`code-arch-container code-arch-container--expanded code-arch-container--${graphNode.type.toLowerCase()} ${
           isUnmounted ? 'code-arch-container--unmounted' : ''
-        }`}
-        style={isUnmounted ? { borderStyle: 'dashed', borderColor: 'var(--color-warning)' } : undefined}
+        } ${isPinned ? 'code-arch-node--pinned' : ''}`}
         onDoubleClick={handleDoubleClick}
         title="双击折叠容器"
       >
@@ -125,6 +183,11 @@ export const ContainerNode: React.FC<NodeProps<ContainerNodeType>> = ({ id, data
           </div>
 
           <div className="code-arch-container__badges">
+            {searchMatchCount > 0 && (
+              <span className="code-arch-badge code-arch-badge--provide" title={`内部命中 ${searchMatchCount} 个搜索节点`}>
+                命中: {searchMatchCount}
+              </span>
+            )}
             {childCount > 0 && (
               <span className="code-arch-badge code-arch-badge--counter" title={`包含 ${childCount} 个${childUnit}`}>
                 {childCount} {childUnit}
@@ -141,9 +204,10 @@ export const ContainerNode: React.FC<NodeProps<ContainerNodeType>> = ({ id, data
               </span>
             )}
           </div>
+
+          {containerActions}
         </div>
 
-        {/* 展开容器的衬底 Body（充当子节点的托盘底板） */}
         <div className="code-arch-container__body" />
 
         <Handle type="source" position={Position.Right} className="code-arch-handle" />
@@ -156,8 +220,7 @@ export const ContainerNode: React.FC<NodeProps<ContainerNodeType>> = ({ id, data
     <div
       className={`code-arch-container code-arch-container--collapsed code-arch-container--${graphNode.type.toLowerCase()} ${
         isUnmounted ? 'code-arch-container--unmounted' : ''
-      }`}
-      style={isUnmounted ? { borderStyle: 'dashed', borderColor: 'var(--color-warning)' } : undefined}
+      } ${isPinned ? 'code-arch-node--pinned' : ''}`}
       onDoubleClick={handleDoubleClick}
       title="双击展开容器查看内部节点"
     >
@@ -186,11 +249,18 @@ export const ContainerNode: React.FC<NodeProps<ContainerNodeType>> = ({ id, data
           </span>
         </div>
 
+        {searchMatchCount > 0 && (
+          <span className="code-arch-badge code-arch-badge--provide" title={`容器内命中 ${searchMatchCount} 个搜索节点`}>
+            命中: {searchMatchCount}
+          </span>
+        )}
         {childCount > 0 && (
           <span className="code-arch-badge code-arch-badge--counter" title={`包含 ${childCount} 个${childUnit}`}>
             {childCount} {childUnit}
           </span>
         )}
+
+        {containerActions}
       </div>
 
       <div className="code-arch-container__collapsed-content">
@@ -211,24 +281,7 @@ export const ContainerNode: React.FC<NodeProps<ContainerNodeType>> = ({ id, data
           )}
           {probeStatus && (
             <span
-              className="code-arch-badge"
-              style={{
-                fontSize: '0.675rem',
-                padding: '1px 5px',
-                background:
-                  probeStatus === 'READY'
-                    ? 'rgba(34, 197, 94, 0.15)'
-                    : probeStatus === 'NEED_RECONNECT'
-                    ? 'rgba(234, 179, 8, 0.15)'
-                    : 'var(--color-bg-muted)',
-                color:
-                  probeStatus === 'READY'
-                    ? 'var(--color-success)'
-                    : probeStatus === 'NEED_RECONNECT'
-                    ? 'var(--color-warning)'
-                    : 'var(--color-text-secondary)',
-                border: '1px solid currentColor',
-              }}
+              className={`code-arch-badge ${probeBadgeClass}`}
               title={`探针状态: ${probeStatus}`}
             >
               {probeStatus}

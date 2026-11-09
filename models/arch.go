@@ -147,3 +147,66 @@ type ModuleDependency struct {
 }
 
 func (ModuleDependency) TableName() string { return config.TablePrefix + "module_dependencies" }
+
+// 18. TopologyLayout 拓扑画布双层布局表 (traefik_topology_layouts)，位置层 + 视角层分离 (ADR-15 v1.1.0 §4.2)：
+//   - SHARED（团队基准布局 / 位置层）：每个 view 至多 1 条 (uk_traefik_topo_layout_shared)，由 traefik_admin 发布；
+//     owner_id 为 NULL、focus_scope 恒为 'GLOBAL'；node_positions 为全视图完整相对父坐标；revision 乐观锁防并发覆盖；
+//   - PRIVATE（个人视图书签 / 视角层）：单人上限 20 条，保存聚焦域、过滤条件、展开态与视口，
+//     node_positions 仅存相对团队基准的坐标差量覆写（团队基准更新后未覆写节点自动继承）；
+//   - 坐标均为相对 parentId 父容器的局部坐标，与聚焦域无关；聚焦根与外部邻居卡坐标不落库。
+//   - 约束：chk_traefik_topo_layout_scope / chk_traefik_topo_layout_view / chk_traefik_topo_layout_owner。
+type TopologyLayout struct {
+	ID               uint64         `gorm:"primaryKey;autoIncrement" json:"id"`
+	Scope            string         `gorm:"size:16;not null;default:'PRIVATE';index:idx_traefik_topo_layout_owner_view,priority:3" json:"scope"` // SHARED | PRIVATE
+	View             string         `gorm:"size:16;not null;index:idx_traefik_topo_layout_owner_view,priority:2" json:"view"`                    // LOGICAL | PHYSICAL
+	OwnerID          *uint          `gorm:"index:idx_traefik_topo_layout_owner_view,priority:1" json:"owner_id"`                                 // PRIVATE 归属人 ID；SHARED 为 NULL
+	Owner            *User          `gorm:"foreignKey:OwnerID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"owner,omitempty"`
+	Name             string         `gorm:"size:128;not null" json:"name"` // 书签名称（SHARED 固定为 "团队基准布局"）
+	Description      string         `gorm:"size:512;not null;default:''" json:"description"`
+	FocusScope       string         `gorm:"size:64;not null;default:'GLOBAL'" json:"focus_scope"` // 书签聚焦根容器 ID（"GLOBAL" | "sub_1" | "grp_12" | "pgrp_3" | "proc_7" ...）；SHARED 恒为 "GLOBAL"
+	IsDefault        bool           `gorm:"not null;default:false" json:"is_default"`             // PRIVATE：是否为该 (view, focus_scope) 默认书签；SHARED 恒为 false
+	SchemaVersion    int            `gorm:"not null;default:1" json:"schema_version"`             // JSON 载荷结构版本，前端按版本迁移或降级
+	StructureVersion string         `gorm:"size:64;not null;default:''" json:"structure_version"` // 保存时刻 TopologyGraphDTO.structure_version（树结构指纹），供增量 Diff 合并
+	Revision         int            `gorm:"not null;default:1" json:"revision"`                   // 乐观锁版本号，每次更新 +1
+	NodePositions    datatypes.JSON `gorm:"type:jsonb;not null;default:'{}'" json:"node_positions"`
+	ExpandState      datatypes.JSON `gorm:"type:jsonb;not null;default:'{}'" json:"expand_state"`
+	FilterState      datatypes.JSON `gorm:"type:jsonb;not null;default:'{}'" json:"filter_state"`
+	Viewport         datatypes.JSON `gorm:"type:jsonb;not null;default:'{}'" json:"viewport"`
+	CreatedBy        uint           `gorm:"not null;default:0" json:"created_by"`
+	UpdatedBy        uint           `gorm:"not null;default:0" json:"updated_by"`
+	CreatedAt        time.Time      `json:"created_at"`
+	UpdatedAt        time.Time      `json:"updated_at"`
+}
+
+// SavedNodePosition 单节点相对父容器坐标（x/y 必须为有限实数，键为节点 ID 且长度 <= 128，条目数 <= 5000）
+type SavedNodePosition struct {
+	X      float64 `json:"x"`
+	Y      float64 `json:"y"`
+	Pinned bool    `json:"pinned,omitempty"`
+}
+
+// SavedExpandState 展开态快照（level 为相对聚焦根的深度档位；overrides 条目数 <= 5000）
+type SavedExpandState struct {
+	Level     int             `json:"level"`
+	Overrides map[string]bool `json:"overrides,omitempty"`
+}
+
+// SavedFilterState 过滤条件快照（与前端 TopologyFilterState 字段一一对应）
+type SavedFilterState struct {
+	SubsystemIDs []string `json:"subsystem_ids,omitempty"` // <= 100 项
+	OnlyMyScope  bool     `json:"only_my_scope,omitempty"`
+	Status       string   `json:"status,omitempty"` // ALL | ABNORMAL | VIOLATION_ONLY
+	EgoNodeID    string   `json:"ego_node_id,omitempty"`
+	EgoHops      int      `json:"ego_hops,omitempty"` // 1 | 2
+	HideIsolated bool     `json:"hide_isolated,omitempty"`
+	HubFold      bool     `json:"hub_fold,omitempty"`
+}
+
+// SavedViewport 镜头视口快照
+type SavedViewport struct {
+	X    float64 `json:"x"`
+	Y    float64 `json:"y"`
+	Zoom float64 `json:"zoom"`
+}
+
+func (TopologyLayout) TableName() string { return config.TablePrefix + "topology_layouts" }

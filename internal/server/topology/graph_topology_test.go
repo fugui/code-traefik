@@ -403,3 +403,205 @@ func TestBuildTopologyGraph_Physical_ZeroAgents_EnvOverlayAndFallbackDownstreams
 	}
 	_ = m2
 }
+
+func TestBuildTopologyGraph_StructureVersion_IgnoresEdgesMetaAndEnv(t *testing.T) {
+	db := setupIsolatedTopologyDB(t)
+
+	sub1, err := CreateSubsystem(db, SubsystemInput{Code: "SUB_SV1", Name: "子系统1"})
+	if err != nil {
+		t.Fatalf("创建 sub1 失败: %v", err)
+	}
+	grp1, err := CreateFunctionalGroup(db, FunctionalGroupInput{SubsystemID: sub1.ID, Code: "GRP_SV1", Name: "组1"})
+	if err != nil {
+		t.Fatalf("创建 grp1 失败: %v", err)
+	}
+	grp2, err := CreateFunctionalGroup(db, FunctionalGroupInput{SubsystemID: sub1.ID, Code: "GRP_SV2", Name: "组2"})
+	if err != nil {
+		t.Fatalf("创建 grp2 失败: %v", err)
+	}
+
+	pgrp := models.ArchProcessGroup{Code: "PGRP_SV", Name: "物理组1", SortOrder: 1}
+	if err := db.Create(&pgrp).Error; err != nil {
+		t.Fatalf("创建 pgrp 失败: %v", err)
+	}
+	ap1 := models.ArchProcess{GroupID: pgrp.ID, Code: "PROC_SV1", Name: "proc-sv1", DefaultListenPort: 9101}
+	if err := db.Create(&ap1).Error; err != nil {
+		t.Fatalf("创建 ap1 失败: %v", err)
+	}
+
+	m1, err := CreateModule(db, ModuleInput{GroupID: grp1.ID, Code: "MOD_SV1", Name: "模块1", ArchProcessID: &ap1.ID})
+	if err != nil {
+		t.Fatalf("创建 m1 失败: %v", err)
+	}
+	m2, err := CreateModule(db, ModuleInput{GroupID: grp1.ID, Code: "MOD_SV2", Name: "模块2", ArchProcessID: &ap1.ID})
+	if err != nil {
+		t.Fatalf("创建 m2 失败: %v", err)
+	}
+
+	gBaseLog, err := BuildTopologyGraph(db, TopologyViewLogical)
+	if err != nil {
+		t.Fatalf("BuildTopologyGraph Logical 失败: %v", err)
+	}
+	if gBaseLog.StructureVersion == "" {
+		t.Fatalf("期望 StructureVersion 非空")
+	}
+
+	// 1. 新增内部依赖边 + 修改模块名称/描述 -> structure_version 不变，model_version 改变
+	svc2, err := CreateModuleService(db, ModuleServiceInput{ModuleID: m2.ID, ServiceName: "sv.v1.Svc2"})
+	if err != nil {
+		t.Fatalf("创建 svc2 失败: %v", err)
+	}
+	if _, err := CreateModuleDependency(db, ModuleDependencyInput{ConsumerModuleID: m1.ID, ServiceID: &svc2.ID}); err != nil {
+		t.Fatalf("创建依赖失败: %v", err)
+	}
+	if err := db.Model(&models.Module{}).Where("id = ?", m1.ID).Updates(map[string]any{
+		"name":        "模块1-改名后",
+		"description": "新的描述信息",
+	}).Error; err != nil {
+		t.Fatalf("更新模块名称描述失败: %v", err)
+	}
+
+	gAfterEdgeMeta, err := BuildTopologyGraph(db, TopologyViewLogical)
+	if err != nil {
+		t.Fatalf("BuildTopologyGraph Logical 失败: %v", err)
+	}
+	if gAfterEdgeMeta.StructureVersion != gBaseLog.StructureVersion {
+		t.Fatalf("新增内部边或改名/描述不应改变 structure_version: before=%s, after=%s", gBaseLog.StructureVersion, gAfterEdgeMeta.StructureVersion)
+	}
+	if gAfterEdgeMeta.ModelVersion == gBaseLog.ModelVersion {
+		t.Fatalf("新增内部边或改名/描述应改变 model_version: before=%s, after=%s", gBaseLog.ModelVersion, gAfterEdgeMeta.ModelVersion)
+	}
+
+	// 2. PHYSICAL 叠加不同 env_agent_id -> structure_version 不变，model_version 改变
+	gPhysBase, err := BuildTopologyGraph(db, TopologyViewPhysical)
+	if err != nil {
+		t.Fatalf("BuildTopologyGraph Physical 失败: %v", err)
+	}
+	agentEnv := models.Agent{Name: "agent-sv-env", Endpoint: "http://192.168.56.55:8090", Scope: models.ScopeShared, Status: models.AgentStatusOnline}
+	if err := db.Create(&agentEnv).Error; err != nil {
+		t.Fatalf("创建 agentEnv 失败: %v", err)
+	}
+	procInst := models.Process{AgentID: agentEnv.ID, ArchProcessID: ap1.ID, EffectiveListenPort: 19101, AdvertiseIP: "10.9.9.9", ProbeStatus: models.ProbeStatusReady}
+	if err := db.Create(&procInst).Error; err != nil {
+		t.Fatalf("创建 procInst 失败: %v", err)
+	}
+	gPhysEnv, err := BuildTopologyGraph(db, TopologyViewPhysical, agentEnv.ID)
+	if err != nil {
+		t.Fatalf("BuildTopologyGraph Physical env 失败: %v", err)
+	}
+	if gPhysEnv.StructureVersion != gPhysBase.StructureVersion {
+		t.Fatalf("PHYSICAL 叠加 env_agent_id 不应改变 structure_version: base=%s, env=%s", gPhysBase.StructureVersion, gPhysEnv.StructureVersion)
+	}
+	if gPhysEnv.ModelVersion == gPhysBase.ModelVersion {
+		t.Fatalf("PHYSICAL 叠加 env_agent_id 应改变 model_version: base=%s, env=%s", gPhysBase.ModelVersion, gPhysEnv.ModelVersion)
+	}
+
+	// 3. 移动模块 m2 至 grp2 -> structure_version 改变
+	if err := db.Model(&models.Module{}).Where("id = ?", m2.ID).Update("group_id", grp2.ID).Error; err != nil {
+		t.Fatalf("移动模块失败: %v", err)
+	}
+	gAfterMove, err := BuildTopologyGraph(db, TopologyViewLogical)
+	if err != nil {
+		t.Fatalf("BuildTopologyGraph AfterMove 失败: %v", err)
+	}
+	if gAfterMove.StructureVersion == gBaseLog.StructureVersion {
+		t.Fatalf("移动模块改变 parent_id 后 structure_version 必须改变")
+	}
+
+	// 4. 新增模块 m3 -> structure_version 改变
+	m3, err := CreateModule(db, ModuleInput{GroupID: grp2.ID, Code: "MOD_SV3", Name: "模块3"})
+	if err != nil {
+		t.Fatalf("创建 m3 失败: %v", err)
+	}
+	gAfterAdd, err := BuildTopologyGraph(db, TopologyViewLogical)
+	if err != nil {
+		t.Fatalf("BuildTopologyGraph AfterAdd 失败: %v", err)
+	}
+	if gAfterAdd.StructureVersion == gAfterMove.StructureVersion {
+		t.Fatalf("新增模块后 structure_version 必须改变")
+	}
+
+	// 5. 删除模块 m3 -> structure_version 恢复为 gAfterMove.StructureVersion
+	if err := db.Delete(&models.Module{}, m3.ID).Error; err != nil {
+		t.Fatalf("删除 m3 失败: %v", err)
+	}
+	gAfterDel, err := BuildTopologyGraph(db, TopologyViewLogical)
+	if err != nil {
+		t.Fatalf("BuildTopologyGraph AfterDel 失败: %v", err)
+	}
+	if gAfterDel.StructureVersion != gAfterMove.StructureVersion {
+		t.Fatalf("删除新增模块后 structure_version 应恢复: got=%s, want=%s", gAfterDel.StructureVersion, gAfterMove.StructureVersion)
+	}
+}
+
+func TestBuildTopologyGraph_ModuleOwnerIDInMeta_LogicalAndPhysical(t *testing.T) {
+	db := setupIsolatedTopologyDB(t)
+
+	ownerID := uint(42)
+	user := models.User{
+		ID:       ownerID,
+		Username: "owner42",
+		Name:     "负责人42",
+	}
+	_ = db.Create(&user).Error
+
+	sub, err := CreateSubsystem(db, SubsystemInput{Code: "SUB_OWN", Name: "归属子系统", OwnerID: &ownerID})
+	if err != nil {
+		t.Fatalf("创建子系统失败: %v", err)
+	}
+	grp, err := CreateFunctionalGroup(db, FunctionalGroupInput{SubsystemID: sub.ID, Code: "GRP_OWN", Name: "归属功能组"})
+	if err != nil {
+		t.Fatalf("创建功能组失败: %v", err)
+	}
+	pgrp := models.ArchProcessGroup{Code: "PGRP_OWN", Name: "物理归属组", SortOrder: 1}
+	_ = db.Create(&pgrp).Error
+	ap := models.ArchProcess{GroupID: pgrp.ID, Code: "PROC_OWN", Name: "proc-own", DefaultListenPort: 9201}
+	_ = db.Create(&ap).Error
+
+	modWithOwner, err := CreateModule(db, ModuleInput{
+		GroupID:       grp.ID,
+		Code:          "MOD_WITH_OWNER",
+		Name:          "有负责人模块",
+		OwnerID:       &ownerID,
+		ArchProcessID: &ap.ID,
+	})
+	if err != nil {
+		t.Fatalf("创建有负责人模块失败: %v", err)
+	}
+	modNoOwnerUndeployed, err := CreateModule(db, ModuleInput{
+		GroupID: grp.ID,
+		Code:    "MOD_NO_OWNER",
+		Name:    "无负责人模块",
+	})
+	if err != nil {
+		t.Fatalf("创建无负责人模块失败: %v", err)
+	}
+
+	for _, view := range []string{TopologyViewLogical, TopologyViewPhysical} {
+		g, err := BuildTopologyGraph(db, view)
+		if err != nil {
+			t.Fatalf("BuildTopologyGraph(%s) 失败: %v", view, err)
+		}
+		nodeMap := make(map[string]GraphNode)
+		for _, n := range g.Nodes {
+			nodeMap[n.ID] = n
+		}
+
+		nWith, ok := nodeMap[fmt.Sprintf("mod_%d", modWithOwner.ID)]
+		if !ok {
+			t.Fatalf("[%s] 未找到有负责人模块节点", view)
+		}
+		gotOwner, hasOwner := nWith.Meta["owner_id"]
+		if !hasOwner || gotOwner != ownerID {
+			t.Fatalf("[%s] 有负责人模块 meta.owner_id 期望为 %v，实际为 %v (has=%v)", view, ownerID, gotOwner, hasOwner)
+		}
+
+		nWithout, ok := nodeMap[fmt.Sprintf("mod_%d", modNoOwnerUndeployed.ID)]
+		if !ok {
+			t.Fatalf("[%s] 未找到无负责人模块节点", view)
+		}
+		if val, exists := nWithout.Meta["owner_id"]; exists && val != nil {
+			t.Fatalf("[%s] 未设置负责人时 meta.owner_id 应省略，实际为 %v", view, val)
+		}
+	}
+}

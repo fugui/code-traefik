@@ -228,3 +228,16 @@ export interface ClaimableProtoServiceItem {
   is_claimed: boolean;
   claimed_by_module?: ClaimedByModuleInfo | null;
 }
+
+export type {
+  SavedNodePosition,
+  SavedExpandState,
+  SavedFilterState,
+  SavedViewport,
+  TopologyLayoutSummaryDTO,
+  TopologyLayoutDetailDTO,
+  TopologyLayoutListResponse,
+  NeighborhoodDirection,
+  NeighborhoodHop,
+} from './topology_graph';
+

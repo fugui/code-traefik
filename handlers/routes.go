@@ -113,8 +113,17 @@ func RegisterAPIRoutes(r *gin.Engine) {
 		protected.PUT("/arch/processes/:id", requireAdmin, UpdateArchProcess)
 		protected.DELETE("/arch/processes/:id", requireAdmin, DeleteArchProcess)
 
-		protected.GET("/arch/topology/graph", GetTopologyGraph)
+		protected.GET("/arch/topology/graph", GzipMiddleware(), GetTopologyGraph)
 		protected.GET("/arch/topology/static", GetStaticTopology)
+
+		// 4.2 拓扑画布双层布局与个人视图书签域 (F-04.3, ADR-15)
+		protected.GET("/arch/topology/layouts", ListTopologyLayouts)
+		protected.GET("/arch/topology/layouts/personal/:id", GetPersonalTopologyLayout)
+		protected.PUT("/arch/topology/layouts/canonical", requireAdmin, UpsertCanonicalTopologyLayout)
+		protected.DELETE("/arch/topology/layouts/canonical", requireAdmin, ResetCanonicalTopologyLayout)
+		protected.POST("/arch/topology/layouts/personal", CreatePersonalTopologyLayout)
+		protected.PUT("/arch/topology/layouts/personal/:id", UpdatePersonalTopologyLayout)
+		protected.DELETE("/arch/topology/layouts/personal/:id", DeletePersonalTopologyLayout)
 
 		// 5. Protobuf 描述集与方法映射域 (F-03, F-03.5~F-03.7)
 		protected.GET("/proto-schemas", ListProtoSchemas)

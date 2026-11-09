@@ -5,6 +5,7 @@ import type {
   RollupEdgeModel,
   ContainerBadgeCounts,
   BendPoint,
+  SavedNodePosition,
 } from '../../../types/topology_graph';
 import { findLCA } from '../model/hierarchy';
 
@@ -51,6 +52,10 @@ export function resolveEdgeVisualStyle(data?: Partial<RollupEdgeModel>): {
   } else if (data?.isCycle) {
     statusClass = 'code-arch-edge--cycle';
     strokeColor = 'var(--color-danger)';
+  } else if (data?.isHubSummary) {
+    statusClass = 'code-arch-edge--hub-summary';
+    strokeColor = 'var(--color-text-secondary)';
+    strokeDasharray = '6 4';
   } else if (data?.kind === 'INTRA_PROCESS') {
     statusClass = 'code-arch-edge--intra';
     strokeColor = 'var(--color-border-hover)';
@@ -74,26 +79,45 @@ export interface LayoutedNodeInfo {
   height: number;
 }
 
+export type LodMode = 'COMPACT' | 'STANDARD' | 'DETAIL';
+
 export interface CanvasNodeData {
   graphNode: GraphNode;
   isExpanded: boolean;
   onToggleExpand?: (nodeId: string) => void;
+  onFocusScope?: (nodeId: string) => void;
+  onTogglePin?: (nodeId: string) => void;
+  isPinned?: boolean;
+  lodMode?: LodMode;
   badgeCounts?: ContainerBadgeCounts;
   childCount?: number;
+  searchMatchCount?: number;
   [key: string]: unknown;
 }
 
 export type ContainerNodeType = Node<CanvasNodeData, 'containerNode'>;
 export type ModuleNodeType = Node<CanvasNodeData, 'moduleCard'>;
 export type ExternalNodeType = Node<CanvasNodeData, 'externalNode'>;
+export type ExternalContextNodeType = Node<CanvasNodeData, 'externalContextNode'>;
 export type UnregisteredInterfaceNodeType = Node<CanvasNodeData, 'unregisteredInterfaceNode'>;
 export type ArchCanvasNode =
   | ContainerNodeType
   | ModuleNodeType
   | ExternalNodeType
+  | ExternalContextNodeType
   | UnregisteredInterfaceNodeType;
 
 export type ArchCanvasEdge = Edge<RollupEdgeModel, 'rollupEdge'>;
+
+export interface ProcessLayoutExtraOptions {
+  savedPositions?: Record<string, SavedNodePosition> | null;
+  pinnedNodeIds?: Set<string>;
+  onFocusScope?: (nodeId: string) => void;
+  onTogglePin?: (nodeId: string) => void;
+  onExpandHub?: (nodeId: string) => void;
+  containerSearchMatchCounts?: Record<string, number>;
+  lodMode?: LodMode;
+}
 
 /**
  * 遍历 ELK 节点树，递归提取每个节点的局部坐标与全局绝对坐标 (absX, absY)
@@ -132,7 +156,7 @@ export function extractNodeCoordinates(
  * 后处理 ELK 复合正交排版坐标：
  * 1. 严格保证父节点优先（Parent-First Topological Order）
  * 2. 跨容器复合折线边 bendPoints 累加所属 containingNode 全局绝对坐标 (absX, absY)
- * 3. 手动拖拽节点后关联边自动标记 isDraggedDegraded = true 退化为 SmoothStep
+ * 3. 手动拖拽或局部重排波及节点关联边自动标记 isDraggedDegraded = true 退化为 SmoothStep
  */
 export function processLayoutCoordinates(
   layoutedRoot: ElkNode,
@@ -142,16 +166,18 @@ export function processLayoutCoordinates(
   expandState: Record<string, boolean> = {},
   badgeCounts: Record<string, ContainerBadgeCounts> = {},
   onToggleExpand?: (nodeId: string) => void,
-  childCounts: Record<string, number> = {}
+  childCounts: Record<string, number> = {},
+  extraOptions?: ProcessLayoutExtraOptions
 ): {
   nodes: ArchCanvasNode[];
   edges: ArchCanvasEdge[];
 } {
   const coordMap = extractNodeCoordinates(layoutedRoot, 0, 0);
   const nodeMap = new Map(visibleNodes.map((n) => [n.id, n]));
+  const savedPositions = extraOptions?.savedPositions;
+  const pinnedNodeIds = extraOptions?.pinnedNodeIds;
 
   // 1. 父优先拓扑排序 (Parent-First Order)
-  // 按照树深度 depth 升序排序，且同深度按 sort_order 升序，确保父节点索引必小于子节点
   const sortedGraphNodes = [...visibleNodes].sort((a, b) => {
     if (a.depth !== b.depth) {
       return a.depth - b.depth;
@@ -163,11 +189,18 @@ export function processLayoutCoordinates(
 
   for (const gn of sortedGraphNodes) {
     const layout = coordMap.get(gn.id);
-    const posX = layout?.x ?? 0;
-    const posY = layout?.y ?? 0;
+    const saved = savedPositions?.[gn.id];
+    const posX = saved && Number.isFinite(saved.x) ? saved.x : layout?.x ?? 0;
+    const posY = saved && Number.isFinite(saved.y) ? saved.y : layout?.y ?? 0;
+    const isExpanded = Boolean(expandState[gn.id]);
+    const isPinned = Boolean(pinnedNodeIds?.has(gn.id) || saved?.pinned);
 
-    // 确定 React Flow 节点类型
-    let nodeType: 'containerNode' | 'moduleCard' | 'externalNode' | 'unregisteredInterfaceNode' = 'moduleCard';
+    let nodeType:
+      | 'containerNode'
+      | 'moduleCard'
+      | 'externalNode'
+      | 'externalContextNode'
+      | 'unregisteredInterfaceNode' = 'moduleCard';
     if (
       gn.type === 'SUBSYSTEM' ||
       gn.type === 'FUNCTIONAL_GROUP' ||
@@ -177,11 +210,22 @@ export function processLayoutCoordinates(
       gn.type === 'EXTERNAL_CONTAINER'
     ) {
       nodeType = 'containerNode';
+    } else if (gn.type === 'EXTERNAL_CONTEXT') {
+      nodeType = 'externalContextNode';
     } else if (gn.type === 'EXTERNAL_SYSTEM' || gn.type === 'EXTERNAL_ENDPOINT') {
       nodeType = 'externalNode';
     } else if (gn.type === 'UNREGISTERED_INTERFACE') {
       nodeType = 'unregisteredInterfaceNode';
     }
+
+    const width =
+      isExpanded && saved?.width
+        ? Math.max(saved.width, layout?.width ?? 0)
+        : layout?.width ?? saved?.width;
+    const height =
+      isExpanded && saved?.height
+        ? Math.max(saved.height, layout?.height ?? 0)
+        : layout?.height ?? saved?.height;
 
     const flowNode: ArchCanvasNode = {
       id: gn.id,
@@ -189,14 +233,19 @@ export function processLayoutCoordinates(
       position: { x: posX, y: posY },
       data: {
         graphNode: gn,
-        isExpanded: Boolean(expandState[gn.id]),
+        isExpanded,
         onToggleExpand,
+        onFocusScope: extraOptions?.onFocusScope,
+        onTogglePin: extraOptions?.onTogglePin,
+        isPinned,
+        lodMode: extraOptions?.lodMode,
         badgeCounts: badgeCounts[gn.id],
         childCount: childCounts[gn.id] ?? 0,
+        searchMatchCount: extraOptions?.containerSearchMatchCounts?.[gn.id] ?? 0,
       },
       style: {
-        width: layout?.width,
-        height: layout?.height,
+        width,
+        height,
       },
     };
 
@@ -208,7 +257,10 @@ export function processLayoutCoordinates(
   }
 
   // 2. 收集 ELK 输出的边拐点 sections
-  const elkEdgeSectionsMap = new Map<string, { startPoint?: BendPoint; endPoint?: BendPoint; bendPoints?: BendPoint[] }>();
+  const elkEdgeSectionsMap = new Map<
+    string,
+    { startPoint?: BendPoint; endPoint?: BendPoint; bendPoints?: BendPoint[] }
+  >();
 
   function collectEdgeSections(node: ElkNode) {
     if (node.edges) {
@@ -231,17 +283,29 @@ export function processLayoutCoordinates(
   }
   collectEdgeSections(layoutedRoot);
 
-  // 3. 构建 React Flow 边模型，累加跨复合容器全局坐标偏移与拖拽退化标记
+  // 3. 构建 React Flow 边模型，累加跨复合容器全局坐标偏移与拖拽/重排退化标记
+  const effectiveTouched = new Set<string>(draggedNodeIds);
+  if (draggedNodeIds.size > 0) {
+    for (const gn of visibleNodes) {
+      if (gn.ancestors.some((anc) => draggedNodeIds.has(anc))) {
+        effectiveTouched.add(gn.id);
+      }
+    }
+  }
+
   const edges: ArchCanvasEdge[] = [];
 
   for (const re of rollupEdges) {
-    const isDegraded = draggedNodeIds.has(re.source) || draggedNodeIds.has(re.target);
+    const isDegraded =
+      Boolean(re.isDraggedDegraded) ||
+      Boolean(re.isHubSummary) ||
+      effectiveTouched.has(re.source) ||
+      effectiveTouched.has(re.target);
     const elkSection = elkEdgeSectionsMap.get(re.id);
 
     let finalBendPoints: BendPoint[] | undefined;
 
     if (elkSection?.bendPoints && elkSection.bendPoints.length > 0) {
-      // 跨容器复合边：查找 source 与 target 在可见层级中的 LCA (containingNode)
       const lcaId = findLCA([re.source, re.target], nodeMap);
       let containingAbsX = 0;
       let containingAbsY = 0;
@@ -262,6 +326,7 @@ export function processLayoutCoordinates(
       ...re,
       bendPoints: finalBendPoints,
       isDraggedDegraded: isDegraded,
+      onExpandHub: extraOptions?.onExpandHub,
     };
 
     const { strokeColor } = resolveEdgeVisualStyle(updatedModel);

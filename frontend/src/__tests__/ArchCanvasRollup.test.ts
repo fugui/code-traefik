@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest';
 import type { GraphNode, GraphEdge, ExpandStateMap } from '../types/topology_graph';
 import type { ConsistencyReportDTO } from '../types/traffic';
 import { buildTreeIndex, findLCA, getFullAncestry } from '../components/ArchCanvas/model/hierarchy';
-import { rep, rollupEdges, mergeStatus, STATUS_PRIORITY } from '../components/ArchCanvas/model/rollup';
+import { rep, rollupEdges, aggregateRollup, mergeStatus, STATUS_PRIORITY } from '../components/ArchCanvas/model/rollup';
+import { synthesizeOverlay } from '../components/ArchCanvas/model/overlay';
 import { detectCycles } from '../components/ArchCanvas/model/metrics';
 import { processLayoutCoordinates, resolveEdgeVisualStyle } from '../components/ArchCanvas/layout/layoutProcessor';
 import type { ElkNode } from 'elkjs';
@@ -655,5 +656,43 @@ describe('ArchCanvasRollup Model Suite', () => {
     expect(sub1).toBeDefined();
     expect(sub1?.width).toBeGreaterThan(0);
     expect(sub1?.height).toBeGreaterThan(0);
+  });
+
+  it('testRollupFacade_BackwardCompatible', () => {
+    const expandState: ExpandStateMap = { sub_1: true };
+    const testEdges: GraphEdge[] = [
+      {
+        id: 'edge_1',
+        kind: 'CROSS_PROCESS',
+        source_node_id: 'mod_101',
+        target_node_id: 'mod_201',
+        src_module_id: 101,
+        dst_module_id: 201,
+        services: [{ service_name: 'risk.v1.Check' }],
+      },
+    ];
+    const mockReport: ConsistencyReportDTO = {
+      session_id: '99',
+      edges: [
+        {
+          src_module_id: 101,
+          dst_module_id: 201,
+          service_name: 'risk.v1.Check',
+          operation: 'DoCheck',
+          category: 'VERIFIED',
+          status: 'VERIFIED',
+          call_count: 15,
+        },
+      ],
+    };
+
+    const viaFacade = rollupEdges(mockNodes, testEdges, expandState, mockReport, 'LOGICAL');
+    const overlay = synthesizeOverlay(mockNodes, testEdges, mockReport, 'LOGICAL');
+    const viaSplit = aggregateRollup(overlay.workingNodes, overlay.workingEdges, expandState, overlay);
+
+    expect(viaFacade.rollupEdges).toEqual(viaSplit.rollupEdges);
+    expect(viaFacade.badgeCounts).toEqual(viaSplit.badgeCounts);
+    expect(viaFacade.dynamicNodes).toEqual(overlay.dynamicNodes);
+    expect(viaFacade.unattributedPendingList).toEqual(overlay.unattributedPendingList);
   });
 });

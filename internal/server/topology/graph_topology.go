@@ -67,10 +67,11 @@ type GraphEdge struct {
 
 // TopologyGraphDTO 全量架构拓扑图响应载荷
 type TopologyGraphDTO struct {
-	View         string      `json:"view"`          // LOGICAL | PHYSICAL
-	ModelVersion string      `json:"model_version"` // 基于规范化 nodes+edges 计算的 SHA-256 内容指纹 (如 "v1-LOGICAL-9f86d081884c7d65")
-	Nodes        []GraphNode `json:"nodes"`
-	Edges        []GraphEdge `json:"edges"`
+	View             string      `json:"view"`              // LOGICAL | PHYSICAL
+	ModelVersion     string      `json:"model_version"`     // 基于规范化 nodes+edges 计算的 SHA-256 内容指纹 (如 "v1-LOGICAL-9f86d081884c7d65")
+	StructureVersion string      `json:"structure_version"` // 仅基于排序后的 (id, parent_id) 树结构计算的 SHA-256 指纹 (如 "s1-LOGICAL-a1b2c3d4e5f60718")
+	Nodes            []GraphNode `json:"nodes"`
+	Edges            []GraphEdge `json:"edges"`
 }
 
 // extractHostFromEndpoint 提取 Agent 端点中的 Hostname/IP（兼容 http(s):// 或裸 host:port）
@@ -159,6 +160,20 @@ func BuildTopologyGraph(db *gorm.DB, view string, envAgentIDs ...uint64) (*Topol
 
 	sum := sha256.Sum256(canonicalJSON)
 	dto.ModelVersion = fmt.Sprintf("v1-%s-%x", view, sum[:8])
+
+	// 计算仅对排序后的 (id, parent_id) 行序列的 SHA-256 树结构指纹 (F-04.3, ADR-15)
+	structPairs := make([]string, 0, len(dto.Nodes))
+	for _, n := range dto.Nodes {
+		structPairs = append(structPairs, n.ID+"|"+n.ParentID)
+	}
+	sort.Strings(structPairs)
+	structHasher := sha256.New()
+	for _, row := range structPairs {
+		_, _ = structHasher.Write([]byte(row))
+		_, _ = structHasher.Write([]byte{'\n'})
+	}
+	structSum := structHasher.Sum(nil)
+	dto.StructureVersion = fmt.Sprintf("s1-%s-%x", view, structSum[:8])
 
 	return dto, nil
 }
@@ -301,6 +316,9 @@ func buildLogicalTopologyGraph(db *gorm.DB, dto *TopologyGraphDTO) error {
 		}
 		if isDeployed {
 			meta["arch_process_id"] = *m.ArchProcessID
+		}
+		if m.OwnerID != nil {
+			meta["owner_id"] = *m.OwnerID
 		}
 
 		dto.Nodes = append(dto.Nodes, GraphNode{
@@ -694,6 +712,15 @@ func buildPhysicalTopologyGraph(db *gorm.DB, dto *TopologyGraphDTO, envAgentID u
 			mountedMods := archModMap[ap.ID]
 			for idx, mod := range mountedMods {
 				deployedModuleIDs[mod.ID] = true
+				modMeta := map[string]any{
+					"is_deployed":     true,
+					"arch_process_id": ap.ID,
+					"provide_count":   provideCountMap[mod.ID],
+					"description":     mod.Description,
+				}
+				if mod.OwnerID != nil {
+					modMeta["owner_id"] = *mod.OwnerID
+				}
 				dto.Nodes = append(dto.Nodes, GraphNode{
 					ID:        fmt.Sprintf("mod_%d", mod.ID),
 					Type:      NodeTypeModule,
@@ -704,12 +731,7 @@ func buildPhysicalTopologyGraph(db *gorm.DB, dto *TopologyGraphDTO, envAgentID u
 					Code:      mod.Code,
 					Name:      mod.Name,
 					SortOrder: idx + 1,
-					Meta: map[string]any{
-						"is_deployed":     true,
-						"arch_process_id": ap.ID,
-						"provide_count":   provideCountMap[mod.ID],
-						"description":     mod.Description,
-					},
+					Meta:      modMeta,
 				})
 			}
 		}
@@ -738,6 +760,14 @@ func buildPhysicalTopologyGraph(db *gorm.DB, dto *TopologyGraphDTO, envAgentID u
 		})
 
 		for idx, m := range undeployedMods {
+			modMeta := map[string]any{
+				"is_deployed":   false,
+				"provide_count": provideCountMap[m.ID],
+				"description":   m.Description,
+			}
+			if m.OwnerID != nil {
+				modMeta["owner_id"] = *m.OwnerID
+			}
 			dto.Nodes = append(dto.Nodes, GraphNode{
 				ID:        fmt.Sprintf("mod_%d", m.ID),
 				Type:      NodeTypeModule,
@@ -748,11 +778,7 @@ func buildPhysicalTopologyGraph(db *gorm.DB, dto *TopologyGraphDTO, envAgentID u
 				Code:      m.Code,
 				Name:      m.Name,
 				SortOrder: idx + 1,
-				Meta: map[string]any{
-					"is_deployed":   false,
-					"provide_count": provideCountMap[m.ID],
-					"description":   m.Description,
-				},
+				Meta:      modMeta,
 			})
 		}
 	}
