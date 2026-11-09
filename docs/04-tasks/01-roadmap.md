@@ -1,11 +1,11 @@
 # 架构与活体契约治理 (`code-traefik`) TDD 工程实施路线图与质量门禁
 
 - **文档编号**：`01-roadmap.md`
-- **文档版本**：v1.6.2
-- **更新日期**：2026-11-05
+- **文档版本**：v1.7.0
+- **更新日期**：2026-11-09
 - **归属阶段**：阶段三/四：TDD 实施路线图与全局门禁 (`04-tasks`)
-- **状态**：M1~M17 全量已交付 (100% Completed)
-- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.12.1)、[`01-system-architecture.md`](../02-design/01-system-architecture.md)、[`05-database-schema.md`](../02-design/05-database-schema.md) (v1.4.0)、[`01-http-api-contract.md`](../03-api/01-http-api-contract.md) (v1.4.0)、[`12-packet-causality-call-tree-and-sequence-ux-adr.md`](../05-adr/12-packet-causality-call-tree-and-sequence-ux-adr.md) (ADR-12 v1.0.0)、[`14-governance-dashboard-golden-suite-and-ci-gate-adr.md`](../05-adr/14-governance-dashboard-golden-suite-and-ci-gate-adr.md) (ADR-14 v1.1.0)
+- **状态**：M1~M18 已交付，M19 已规划待实施 (Planned)
+- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.14.0)、[`01-system-architecture.md`](../02-design/01-system-architecture.md)、[`05-database-schema.md`](../02-design/05-database-schema.md) (v1.5.0)、[`01-http-api-contract.md`](../03-api/01-http-api-contract.md) (v1.5.0)、[`12-packet-causality-call-tree-and-sequence-ux-adr.md`](../05-adr/12-packet-causality-call-tree-and-sequence-ux-adr.md) (ADR-12 v1.0.0)、[`14-governance-dashboard-golden-suite-and-ci-gate-adr.md`](../05-adr/14-governance-dashboard-golden-suite-and-ci-gate-adr.md) (ADR-14 v1.1.0)、[`15-scalable-topology-focus-and-layout-persistence-adr.md`](../05-adr/15-scalable-topology-focus-and-layout-persistence-adr.md) (ADR-15 v1.0.0)
 
 ---
 
@@ -49,6 +49,7 @@ flowchart LR
     M15 ==> M16
     M16 ==> M17
     M17 ==> M18
+    M18 ==> M19
     M6["M6: 分层复合拓扑与一致性画布<br/>(React Flow + ELK Worker + 边汇总 + 去 Agent 物理图)"]
     M7["M7: 契约资产化治理、嵌套服务表与消息体字段树<br/>(两级折叠表 + 字段字典树 + 可视化 Diff 忽略 + 原文件导出)"]
     M8["M8: 控制台信息架构重组与调试工作流闭环<br/>(3组8项菜单 + 录制台账/单包调试重放 + 架构解耦与进程收口)"]
@@ -62,6 +63,7 @@ flowchart LR
     M16["M16: 设计态契约破坏性变更阻断雷达<br/>(Protobuf AST 比对 + Tag/类型/删除强阻断 + 下游消费者推导)"]
     M17["M17: CI/CD 自动化强阻断门禁与凭据报告<br/>(POST /api/gates/evaluate + Violation/Diff双重红阻 + MR报告)"]
     M18["M18: 面向业务视角的报文透视与双模解剖抽屉<br/>(业务概览 + 入参出参并排对比 + 耗时瀑布 + 专家折叠)"]
+    M19["M19: 大规模拓扑下钻聚焦与双层混合布局持久化<br/>(C4下钻+1跳外部卡 + 多维降噪/聚光灯 + Pinned混合布局&书签)"]
 ```
 
 | 里程碑 | 状态 | 作战卡文档 | 核心职责与交付边界 | 准出质量门禁 (Exit Gate) |
@@ -84,6 +86,7 @@ flowchart LR
 | **M16** | ✅ 已交付 | [`17-m16-design-time-breaking-change-radar.md`](./17-m16-design-time-breaking-change-radar.md) | 设计态契约破坏性变更阻断雷达与回滚逃生舱（ADR-14 v1.1.0）：基于 `FileDescriptorSet` 实现全维度 AST 比对引擎（覆盖 Service/Method 删改、字段 Tag/类型/`oneof`/`map` 变异、`DescriptorProto.GetReservedRange()` 数字区间核验与枚举篡改）；默认返回结构化 `409 BREAKING_CHANGE_DETECTED` 与下游消费者血缘清单；支持管理员 `allow_breaking + breaking_reason` 紧急回滚逃生与 `P1` 审计 | AST 全规则比对单测覆盖率 `100%` + 下游消费者推导与 `allow_breaking` 回滚审计单测全绿 + 拦截抽屉 Vitest 通过 |
 | **M17** | ✅ 已交付 | [`18-m17-ci-cd-quality-gate-and-automated-enforcement.md`](./18-m17-ci-cd-quality-gate-and-automated-enforcement.md) | CI/CD 自动化强阻断门禁、实测边回传与排他锁有界排队（ADR-14 v1.1.0）：Agent 重放回传 `ObservedEgressCalls` 支撑控制面单次闭环判定 `GATED_VIOLATION`；实现 `X-Traefik-CI-Token` SHA-256 `ConstantTimeCompare` 机器鉴权与轮换 API；实现 `POST /api/gates/evaluate`（内置 `wait_lease_seconds` 排队防并发踩踏，正交区分 `503` 环境忙/未就绪 vs `422` 违规/劣化红阻 vs `200` 准出）及 Markdown PR/MR 报告 | 重放实测边 `422 GATED_VIOLATION` / `GATED_BREAKING_DIFF`、并发排队零误杀、`503` 环境隔离及 CI Token 安全单测全绿 |
 | **M18** | ✅ 已交付 | [`19-m18-business-centric-packet-inspector-redesign.md`](./19-m18-business-centric-packet-inspector-redesign.md) | 面向业务视角的 RPC 报文透视与双模解剖抽屉重构（F-15.2）：废弃 Wireshark 式二进制反直觉视觉，默认突出点分服务/方法大标题、状态码徽章、TraceID 复制、架构链路与往返总耗时；请求入参 vs 返回结果左右双栏同屏孪生对比（Split View），带 JSON 高亮与一键复制；微秒级阶段耗时彩色甘特拆解；底层 24B 位图/二进制字段/16B Hex 渐进式折叠收纳为专家排错区 | 前端 Vitest 单测覆盖业务总览、入参出参并排、非零业务错误高亮、阶段耗时瀑布、底层折叠区兼容及 XSS 安全防御全绿 + `make lint && make build` 零警告 |
+| **M19** | 📋 待实施 | [`20-m19-scalable-topology-focus-and-layout-persistence.md`](./20-m19-scalable-topology-focus-and-layout-persistence.md) | 大规模架构拓扑渐进式下钻聚焦、多维降噪与双层混合布局持久化（ADR-15, `F-04.1`~`F-04.3`）：升级至 **18 张业务表**（新增 `traefik_topology_layouts` 承载 `SHARED` 团队官方基准布局与 `PRIVATE` 个人视图书签）；默认 `L0` 顶层折叠秒开、子系统/功能组/进程组下钻聚焦画布（自动收敛 `1-Hop` 外部上下游邻居卡）与 `>150` 可见节点全展防卡死守卫；多维过滤、搜索平滑飞跃定位、`1-Hop` 聚光灯、高扇出 Hub（`>=8` 边）总线胶囊折叠与三档语义缩放 LOD；`Pinned` 节点坐标钉死、AABB 同层碰撞推开、局部展开/折叠保持当前镜头视口及 `ModelVersion` 增量混合布局合并 | `testdb` 18 表迁移与双层布局 RBAC/Anti-IDOR 单测全绿 + 子图/混合布局纯函数 Vitest 覆盖率 `≥ 90%` + 工作台交互单测全绿 + `make test && make lint && make build` 零警告 |
 
 ---
 
@@ -103,7 +106,10 @@ flowchart LR
 | **F-03.5** | 多 `.pb` 描述集文件资产台账、三级分类治理与 `680px` 透视抽屉 | M11 | `models/models_test.go`<br>`handlers/arch_proto_agent_test.go`<br>`frontend/src/__tests__/SchemaAssetLedgerWorkbench.test.tsx` | `TestProtoSchemaConstraints_16MBSize_CategoryEnum_AndBackfillCounts`<br>`TestProtoSchemaLedgerAPI_LatestOnlyGrouping_BatchActivate_Deactivate_GraphAndDownloadHeaders`<br>`testSchemaWorkbench_AssetsLedger_RowNewVersionPreFill_BatchActivateConflictAndInspectDrawer` |
 | **F-03.6** | 跨 `.pb` 去重拓扑依赖闭包解析、停用防破坏与批量原子激活 | M11 | `internal/server/decoder/decoder_test.go`<br>`handlers/arch_proto_agent_test.go` | `TestCrossSchemaClosure_DeduplicateBundledBase_ZeroServiceBaseLib_AndOwnFileOpsOnly`<br>`TestCompileTrialPool_BatchActivate_DeactivateReverseDep_AndUnifiedRuntimeDecode` |
 | **F-03.7** | 全局服务与接口目录跨 `.pb` 溯源检索与孤儿服务治理 | M11 | `handlers/arch_proto_agent_test.go`<br>`frontend/src/__tests__/ProtoNestedTable.test.tsx` | `TestListProtoServices_ServiceLevelPagination_SourceSchemaBadge_AndUnclaimedFilter`<br>`testGlobalServiceCatalog_ServicePagination_SourceBadge_UnclaimedFilterAndLegacyDeepLink` |
-| **F-04** | 分层复合架构拓扑与一致性画布（含零 Agent 物理拓扑直推） | M2, M5, M6, M10 | `internal/server/topology/graph_topology_test.go`<br>`frontend/src/__tests__/ArchCanvasRollup.test.ts` | `TestBuildTopologyGraph_Logical`<br>`TestBuildTopologyGraph_Physical_ZeroAgentsAndCompileDownstreams`<br>`testRollup_AllCollapsedAndInternalBadge`<br>`testLayout_ParentFirstOrderAndCompoundBendPoints` |
+| **F-04** | 分层复合架构拓扑与一致性画布（含零 Agent 物理拓扑直推） | M2, M5, M6, M10, M19 | `internal/server/topology/graph_topology_test.go`<br>`frontend/src/__tests__/ArchCanvasRollup.test.ts` | `TestBuildTopologyGraph_Logical`<br>`TestBuildTopologyGraph_Physical_ZeroAgentsAndCompileDownstreams`<br>`testRollup_AllCollapsedAndInternalBadge`<br>`testLayout_ParentFirstOrderAndCompoundBendPoints` |
+| **F-04.1** | C4 渐进式探索、作用域下钻聚焦画布 (`Focus Sub-Canvas`) 与大节点防卡死守卫 | M19 | `frontend/src/__tests__/ArchCanvasSubgraphAndHybridLayout.test.ts`<br>`frontend/src/__tests__/TopologyFocusAndPersistenceWorkbench.test.tsx` | `testExtractScopedSubgraph_SubsystemFocusAnd1HopExternalContext`<br>`testFullExpandGuard_BlocksOver150NodesInGlobalScope`<br>`testProgressiveDrillDown_BreadcrumbNavigation_AndSearchFlyTo` |
+| **F-04.2** | 多维正交过滤、搜索飞跃定位、`1-Hop` 聚光灯、Hub 匯流折叠与语义缩放 LOD | M19 | `frontend/src/__tests__/ArchCanvasSubgraphAndHybridLayout.test.ts`<br>`frontend/src/__tests__/TopologyFocusAndPersistenceWorkbench.test.tsx` | `testMultiDimensionalFilters_StatusEgoNetworkAndIsolatedPruning`<br>`testFoldHighDegreeHubEdges_CollapsesOver8CrossEdges`<br>`testSpotlightDimming_PinBadgeToggle_AndCameraRetentionOnLocalExpand` |
+| **F-04.3** | 混合增量布局引擎 (`Pinned + Incremental ELK`)、镜头保持与双层布局持久化 (`SHARED + PRIVATE`) | M19 | `handlers/topology_layout_test.go`<br>`frontend/src/__tests__/ArchCanvasSubgraphAndHybridLayout.test.ts`<br>`frontend/src/__tests__/TopologyFocusAndPersistenceWorkbench.test.tsx` | `TestTopologyLayout_CanonicalUpsertAndReset_RBAC`<br>`TestTopologyLayout_PersonalCRUD_DefaultMutex_AndAntiIDOR`<br>`testMergeIncrementalLayout_PreservesPinnedNodes_ResolvesAABBCollision_AndDiffsModelVersion`<br>`testDualTierLayoutPersistence_SavePersonalView_AdminPublishCanonical_AndDiffBanner` |
 | **F-05** | 实测调用拓扑还原与架构一致性验证 | M4, M6 | `internal/server/topology/consistency_test.go`<br>`frontend/src/__tests__/ArchCanvasRollup.test.ts` | `TestResolveSourceModuleThreeTierPriority`<br>`TestVerifySessionTopologySixCategories`<br>`testOverlay_WorstStatusAndDynamicViolationUnattributed` |
 | **F-06** | Agent 公私域纳管与动态排他租约 | M2 | `internal/server/hub/hub_test.go`<br>`handlers/arch_proto_agent_test.go` | `TestAgentPublicPrivateScopeAndAntiIDOR`<br>`TestAcquireAgentLeasesMutexAndHeartbeatReconcile` |
 | **F-07** | 主控—Agent 受控信道（HTTP + WS） | M1, M3 | `pkg/agentproto/envelope_test.go`<br>`internal/agent/server/server_test.go` | `TestAgentIPAllowlistAndClaimCode`<br>`TestBoundedSessionBufferBackpressureAndGracePurge` |

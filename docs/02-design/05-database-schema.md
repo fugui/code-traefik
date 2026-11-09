@@ -1,26 +1,27 @@
 # 架构与活体契约治理 (`code-traefik`) 数据库物理模型与 GORM 建模字典
 
 - **文档编号**：`05-database-schema.md`
-- **文档版本**：v1.4.0
-- **更新日期**：2026-11-05
+- **文档版本**：v1.5.0
+- **更新日期**：2026-11-09
 - **归属阶段**：阶段二：系统架构与数据模型设计 (`02-design`)
-- **状态**：已批准待实施 (Approved for M14~M17)
-- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.12.1)、[`01-system-architecture.md`](./01-system-architecture.md)、[`04-traffic-storage-partitioning-and-relational-normalization.md`](../05-adr/04-traffic-storage-partitioning-and-relational-normalization.md)、[`09-arch-process-ssot-and-ebpf-premount-standby-adr.md`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md) (ADR-09 v1.1.0)、[`12-packet-causality-call-tree-and-sequence-ux-adr.md`](../05-adr/12-packet-causality-call-tree-and-sequence-ux-adr.md) (ADR-12 v1.0.0)、[`14-governance-dashboard-golden-suite-and-ci-gate-adr.md`](../05-adr/14-governance-dashboard-golden-suite-and-ci-gate-adr.md) (ADR-14 v1.1.0)
+- **状态**：已批准待实施 (Approved for M14~M19)
+- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.14.0)、[`01-system-architecture.md`](./01-system-architecture.md)、[`04-traffic-storage-partitioning-and-relational-normalization.md`](../05-adr/04-traffic-storage-partitioning-and-relational-normalization.md)、[`09-arch-process-ssot-and-ebpf-premount-standby-adr.md`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md) (ADR-09 v1.1.0)、[`12-packet-causality-call-tree-and-sequence-ux-adr.md`](../05-adr/12-packet-causality-call-tree-and-sequence-ux-adr.md) (ADR-12 v1.0.0)、[`14-governance-dashboard-golden-suite-and-ci-gate-adr.md`](../05-adr/14-governance-dashboard-golden-suite-and-ci-gate-adr.md) (ADR-14 v1.1.0)、[`15-scalable-topology-focus-and-layout-persistence-adr.md`](../05-adr/15-scalable-topology-focus-and-layout-persistence-adr.md) (ADR-15 v1.0.0)
 
 ---
 
 ## 1. 数据库共享隔离原则、分区规范与类型安全约定
 
-1. **共享库表名前缀强制隔离**：`code-traefik-server` 与宿主门户 `code-bench` 共享同一 PostgreSQL 实例，直接复用 `code-common/backend/models` 中的 `users`、`departments`、`audit_logs` 公共表；本子系统全部 **17 张核心业务实体表**（及平台治理参数表 `traefik_settings`）必须显式实现 `TableName() string` 并冠以 `config.TablePrefix`（**`traefik_`**）前缀。
+1. **共享库表名前缀强制隔离**：`code-traefik-server` 与宿主门户 `code-bench` 共享同一 PostgreSQL 实例，直接复用 `code-common/backend/models` 中的 `users`、`departments`、`audit_logs` 公共表；本子系统全部 **18 张核心业务实体表**（及平台治理参数表 `traefik_settings`）必须显式实现 `TableName() string` 并冠以 `config.TablePrefix`（**`traefik_`**）前缀。
 2. **架构物理进程蓝图解耦与「单 Agent 单环境」关系规范化（[`ADR-09`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md)）**：
    - 将全局架构物理进程蓝图独立建模为 **`traefik_arch_process_groups`** 与 **`traefik_arch_processes`**，通过 `traefik_modules.arch_process_id` 唯一表达 `1 ArchProcess : N Module` 组装关系（守护 `A-03` 单模块单标准进程归属）；
    - **1 台 `Agent` 即代表 1 套独立运行环境**（支持多套 `SHARED` 公共测试环境与多套 `PRIVATE` 个人环境对等并存，不同 `SHARED` Agent 允许各自挂载同一 `ArchProcess`；`traefik_agents.fallback_agent_id` 支持可选关联某套公共基准环境用于混合下游推导）；
    - 将 **`traefik_processes`** 收敛为环境 Agent `1:1` 挂载实例表，通过强唯一索引 **`UNIQUE(agent_id, arch_process_id)`** 保障单环境单实例约束、通过部分唯一索引 **`UNIQUE(agent_id, effective_listen_port) WHERE effective_listen_port > 0`** 保障同机非零监听端口互斥（`A-02`）并兼容多纯客户端进程（端口 `0`），内置本地覆盖列与统一 **7 态探针就绪快照列**；
    - **运行期录制快照、黄金套件自包含快照与历史挂载解耦（[`ADR-14`](../05-adr/14-governance-dashboard-golden-suite-and-ci-gate-adr.md)）**：`traefik_recording_sessions.process_snapshots` (`jsonb`) 固化录制时刻各参与进程的 `arch_process_id` 与装载 `module_ids` 快照；**`traefik_golden_suites` / `traefik_golden_suite_items`** 将沉淀事务的入站/应答二进制帧与下游 `ScopedMocks` 完整深拷贝持久化，彻底脱离 `traefik_traffic_records` 30 天分区生命周期；`traefik_replay_tasks` 将 `session_id` 设为可空并支持 `golden_suite_id` 双源驱动，同时将 `source_process_id / target_process_id` 设为 `ON DELETE SET NULL`，确保后续卸载空闲挂载进程或清理过期流量分区后，黄金套件与历史任务永久独立可回放；
-   - **`traefik_replay_items`** 物理条目表为每条被测请求独立一行持久化 `raw_actual_packet`（`bytea`）与 `field_diffs`（`jsonb`），支持标准服务端分页查询与历史多次 Diff 重跑。
+   - **`traefik_replay_items`** 物理条目表为每条被测请求独立一行持久化 `raw_actual_packet`（`bytea`）与 `field_diffs`（`jsonb`），支持标准服务端分页查询与历史多次 Diff 重跑；
+   - **双层混合拓扑布局与个人视图书签持久化（[`ADR-15`](../05-adr/15-scalable-topology-focus-and-layout-persistence-adr.md)）**：`traefik_topology_layouts` 统一承载架构师发布的团队官方基准布局（`scope='SHARED'`，按 `(view, focus_scope)` 部分唯一）与普通成员保存的个人专题视图书签（`scope='PRIVATE'`，含节点相对坐标、钉死标记、展开层级、过滤条件与镜头视口快照），通过 `base_model_version` 支撑架构演进时的增量混合布局合并。
 3. **新系统免历史数据迁移的干净重建策略 (`Clean Schema Rebuild`)**：
    - 本项目尚处上线前新系统阶段，无历史生产数据兼容包袱，**不编写旧版单层表历史数据回填迁移脚本**；
-   - 在 `models/db.go` `SetupWithDB` 启动迁移前，若检测到旧版表结构（如存在 `traefik_process_modules` 表，或 `traefik_processes` 表尚未包含 `arch_process_id` 列），直接执行一次性幂等清理：`DROP TABLE IF EXISTS traefik_replay_items, traefik_replay_tasks, traefik_recording_sessions, traefik_process_modules, traefik_processes CASCADE`、清空 `traefik_traffic_records` 并执行 `ALTER TABLE traefik_modules DROP COLUMN IF EXISTS process_id`、重置 `traefik_agents` 残留租约列，随后干净创建最新 17 表结构与完整约束。
+   - 在 `models/db.go` `SetupWithDB` 启动迁移前，若检测到旧版表结构（如存在 `traefik_process_modules` 表，或 `traefik_processes` 表尚未包含 `arch_process_id` 列），直接执行一次性幂等清理：`DROP TABLE IF EXISTS traefik_replay_items, traefik_replay_tasks, traefik_recording_sessions, traefik_process_modules, traefik_processes CASCADE`、清空 `traefik_traffic_records` 并执行 `ALTER TABLE traefik_modules DROP COLUMN IF EXISTS process_id`、重置 `traefik_agents` 残留租约列，随后干净创建最新 18 表结构与完整约束。
 4. **海量流量时间范围物理分区 (`Range Partitioning`)**：
    - 核心流量往返表 **`traefik_traffic_records`** 采用 PostgreSQL 原生 **`PARTITION BY RANGE (created_at)`** 按日（或按周）自动建表；
    - 30 天保留期清理流水线采用轻量级 **`DROP TABLE traefik_traffic_records_yYYYYmMMdDD`**，实现磁盘空间毫秒级无锁释放。
@@ -41,6 +42,7 @@ erDiagram
     USERS ||--o{ TRAEFIK_AGENTS : "owner_id (PRIVATE) & lease_holder_id"
     USERS ||--o{ TRAEFIK_RECORDING_SESSIONS : "owner_id (SHARED / PRIVATE)"
     USERS ||--o{ TRAEFIK_REPLAY_TASKS : "owner_id"
+    USERS ||--o{ TRAEFIK_TOPOLOGY_LAYOUTS : "owner_id (PRIVATE) / created_by (SHARED)"
 
     TRAEFIK_SUBSYSTEMS ||--o{ TRAEFIK_FUNCTIONAL_GROUPS : "subsystem_id (RESTRICT)"
     TRAEFIK_FUNCTIONAL_GROUPS ||--o{ TRAEFIK_FUNCTIONAL_GROUPS : "parent_id (RESTRICT, <=8级)"
@@ -77,7 +79,7 @@ erDiagram
 
 ---
 
-## 3. 17 张 `traefik_*` 核心业务表完整 GORM 模型定义
+## 3. 18 张 `traefik_*` 核心业务表完整 GORM 模型定义
 
 ### 3.1 逻辑架构元素领域表（表 1 ~ 表 3）
 
@@ -640,6 +642,37 @@ type GoldenSuiteItem struct {
 func (GoldenSuiteItem) TableName() string { return config.TablePrefix + "golden_suite_items" }
 ```
 
+### 3.7 拓扑画布双层布局与个人视图书签表（表 18，`F-04.3`, [`ADR-15`](../05-adr/15-scalable-topology-focus-and-layout-persistence-adr.md)）
+
+```go
+// 18. TopologyLayout 拓扑画布双层布局与个人视图书签表 (traefik_topology_layouts)
+// 统一承载团队官方基准布局 (scope='SHARED') 与个人自定义视图书签 (scope='PRIVATE')：
+//   - SHARED 域：同一 (view, focus_scope) 至多 1 条记录，由 traefik_admin 发布，全员默认加载；
+//   - PRIVATE 域：个人保存的常用聚焦域、过滤条件、节点坐标与镜头视口书签，单人上限 20 个。
+type TopologyLayout struct {
+	ID               uint64            `gorm:"primaryKey;autoIncrement" json:"id"`
+	Name             string            `gorm:"size:128;not null" json:"name"`                                               // 布局/视图名称（SHARED 默认为 "团队官方基准布局"）
+	View             string            `gorm:"size:16;not null;index:idx_traefik_topo_layout_lookup,priority:1" json:"view"` // LOGICAL | PHYSICAL
+	FocusScope       string            `gorm:"size:64;not null;default:'GLOBAL';index:idx_traefik_topo_layout_lookup,priority:2" json:"focus_scope"` // "GLOBAL" 或下钻根容器 ID（如 "sub_1", "grp_12", "pgrp_3"）
+	Scope            string            `gorm:"size:16;not null;default:'PRIVATE';index:idx_traefik_topo_layout_lookup,priority:3" json:"scope"`      // SHARED | PRIVATE
+	OwnerID          *uint             `gorm:"index:idx_traefik_topo_layout_owner" json:"owner_id"`                         // PRIVATE 归属人 ID；SHARED 为 NULL
+	Owner            *commonModels.User `gorm:"foreignKey:OwnerID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"owner,omitempty"`
+	IsDefault        bool              `gorm:"not null;default:false" json:"is_default"`                                    // 个人视图中是否作为该 (view, focus_scope) 的首选默认视图
+	BaseModelVersion string            `gorm:"size:64;not null;default:''" json:"base_model_version"`                       // 保存时刻对应的 TopologyGraphDTO.model_version，供增量 Diff 合并
+	NodePositions    datatypes.JSON    `gorm:"type:jsonb;not null;default:'{}'" json:"node_positions"`                      // map[nodeID]{x, y, w?, h?, pinned: bool} 相对父容器坐标
+	ExpandState      datatypes.JSON    `gorm:"type:jsonb;not null;default:'{}'" json:"expand_state"`                        // {level: 0|1|2, overrides: map[nodeID]bool}
+	FilterState      datatypes.JSON    `gorm:"type:jsonb;not null;default:'{}'" json:"filter_state"`                        // {subsystemIds?, statusFilter?, egoCenterId?, egoHops?, hideIsolated?}
+	Viewport         datatypes.JSON    `gorm:"type:jsonb;not null;default:'{}'" json:"viewport"`                            // {x: float64, y: float64, zoom: float64}
+	Description      string            `gorm:"size:512" json:"description"`
+	CreatedBy        uint              `gorm:"not null;default:0" json:"created_by"`
+	UpdatedBy        uint              `gorm:"not null;default:0" json:"updated_by"`
+	CreatedAt        time.Time         `json:"created_at"`
+	UpdatedAt        time.Time         `json:"updated_at"`
+}
+
+func (TopologyLayout) TableName() string { return config.TablePrefix + "topology_layouts" }
+```
+
 > **附：治理配置表与自定义 GIN 索引迁移说明**：
 > 1. 工程初始化模板自带的 `TraefikSetting`（`traefik_settings`）保留用于持久化管理员可调模块治理参数（含 `traffic_retention_days`、`default_max_frames`、`default_max_duration_sec`、新挂载进程默认预挂策略 `default_probe_desired_state_shared='ARMED'` / `default_probe_desired_state_private='ARMED'`，以及 `F-27` CI 门禁机器凭据摘要 `ci_gate_token_sha256` —— **仅存 SHA-256 哈希，永不存明文且不在通用配置列表中回显**），而模板示例占位表 `traefik_items` 在阶段四 M1 迁移时已彻底移除；
 > 2. `traefik_traffic_records` 分区母表 DDL 由独立 SQL 执行：
@@ -718,6 +751,8 @@ func (GoldenSuiteItem) TableName() string { return config.TablePrefix + "golden_
 | `traefik_replay_items` | `uk_traefik_replay_task_seq` | `UNIQUE (task_id, seq_no)` | **F-12 & F-25**：单重放任务内请求执行序号唯一（同时兼容录制批次源 `record_id` 与黄金套件源 `suite_item_id`） |
 | `traefik_golden_suites` | `uk_traefik_golden_suite_code` | `UNIQUE (code)` | **F-25 (ADR-14)**：黄金契约套件编码全局唯一 |
 | `traefik_golden_suite_items` | `uk_traefik_golden_item_order` | `UNIQUE (suite_id, order_no)` | **F-25 (ADR-14)**：同一黄金套件内事务执行顺序严格唯一不冲突 |
+| `traefik_topology_layouts` | `uk_traefik_topo_layout_shared` | `UNIQUE (view, focus_scope) WHERE scope = 'SHARED'` | **F-04.3 (ADR-15)**：同一视图类型与聚焦域下全局至多 1 份团队官方基准布局 |
+| `traefik_topology_layouts` | `uk_traefik_topo_layout_private_name` | `UNIQUE (owner_id, view, focus_scope, name) WHERE scope = 'PRIVATE'` | **F-04.3 (ADR-15)**：同一用户在同一视图与聚焦域下的个人书签名称唯一 |
 | `traefik_traffic_records` | `idx_traefik_tr_session_req_ns` | `BTREE (session_id, req_captured_at_ns, id)` | **F-11 & F-15.6 (ADR-12)**：保障单批次报文严格按请求发起时刻 `O(log N)` 有序读取与事务调用树构建 |
 | `traefik_traffic_records` | `idx_traefik_tr_payload_gin` | `GIN (payload_json jsonb_path_ops)` | **F-11**：加速 `payload_json` 结构化请求/应答载荷的明文键值条件检索 |
 
@@ -746,6 +781,8 @@ func (GoldenSuiteItem) TableName() string { return config.TablePrefix + "golden_
 | 删除 `ProtoSchema` | 当前处于 `is_active = true` 生效态（须先执行 `deactivate` 停用或切换至新版本） | `409 Conflict` | 非生效历史版本允许删除：`ProtoOperation` 级联 `CASCADE` 删除 |
 | 删除 `RecordingSession` | 当前处于 `RECORDING` / `STOPPING` 态，或存在未结束 `ReplayTask` 引用 | `409 Conflict` | 已完成批次删除时历史 `ReplayTask.session_id` 自动 `ON DELETE SET NULL`，已沉淀的 `GoldenSuiteItem` 因自包含深拷贝毫发无损 |
 | 删除 `ArchProcess`（补充黄金套件守卫） | 存在关联的 `GoldenSuite` 黄金契约套件（`traefik_golden_suites`） | `409 Conflict` | `ON DELETE RESTRICT`（防止误删权威门禁绑定的架构标准进程） |
+| 发布/重置团队官方拓扑基准布局 (`SHARED` `TopologyLayout`) | 非 `traefik_admin` 尝试调用 `PUT/DELETE /api/arch/topology/layouts/canonical` | `403 Forbidden` | `AdminOnly` 守卫 + `uk_traefik_topo_layout_shared` 部分唯一索引幂等 Upsert |
+| 读写个人拓扑视图书签 (`PRIVATE` `TopologyLayout`) | 1. 非 `owner_id` 本人尝试修改/删除他人个人视图书签（管理员仅可删除违规项）；<br>2. 单人个人视图书签总数超过 `20` 个配额或同域重名 | `403 Forbidden`<br>`400 / 409` | 应用层 `owner_id` Anti-IDOR 校验 + 配额守卫 + `uk_traefik_topo_layout_private_name` |
 | CI/CD 门禁评估 `POST /api/gates/evaluate` | 1. 目标 Agent 离线、进程 `NEED_RECONNECT` 或排他锁等待超过 `wait_lease_seconds` 仍繁忙；<br>2. 重放检出未报备 `Violation` 或套件 `FAILED Diff / MOCK_MISS` | `503` (环境忙/未就绪)<br>`422` (质量门禁阻断) | 服务端有界退避排队获取 `REPLAY` 租约，区分环境瞬态不可用 (`503`) 与代码违规红牌 (`422`) |
 
 ---
