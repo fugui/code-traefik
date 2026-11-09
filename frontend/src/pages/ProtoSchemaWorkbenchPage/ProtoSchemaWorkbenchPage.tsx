@@ -612,6 +612,7 @@ export const ProtoSchemaWorkbenchPage: React.FC = () => {
           setSelectedOp(null);
         }}
         operation={selectedOp}
+        isAdmin={isAdmin}
         onOperationUpdated={(updated) => {
           setCatalogGroups((prev) =>
             prev.map((grp) => ({

@@ -3372,6 +3372,17 @@ body {
   color: var(--color-warning);
 }
 
+.code-diff-ignore-toggle--disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  filter: grayscale(0.2);
+}
+
+.code-diff-ignore-toggle--disabled:hover {
+  border-color: var(--color-border-subtle);
+  background: var(--color-bg-muted);
+}
+
 /* ── M7/M11 契约详情抽屉顶部两分栏卡片样式 ── */
 .code-doc-meta-split {
   display: grid;

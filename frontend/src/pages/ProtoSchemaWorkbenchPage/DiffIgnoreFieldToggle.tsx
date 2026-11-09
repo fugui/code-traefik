@@ -3,7 +3,7 @@ import React from 'react';
 export interface DiffIgnoreFieldToggleProps {
   fieldPath: string;
   isIgnored: boolean;
-  onToggle: (fieldPath: string, willIgnore: boolean) => void;
+  onToggle?: (fieldPath: string, willIgnore: boolean) => void;
   disabled?: boolean;
 }
 
@@ -13,17 +13,28 @@ export const DiffIgnoreFieldToggle: React.FC<DiffIgnoreFieldToggleProps> = ({
   onToggle,
   disabled = false,
 }) => {
+  const getTitle = () => {
+    if (disabled) {
+      return isIgnored
+        ? `已配置或继承忽略规则: ${fieldPath} (只读)`
+        : `无权修改忽略规则（需模块管理员权限）: ${fieldPath}`;
+    }
+    return isIgnored
+      ? `已忽略对比规则: ${fieldPath} (点击取消)`
+      : `点击忽略该字段对比: ${fieldPath}`;
+  };
+
   return (
     <label
-      className={`code-diff-ignore-toggle ${isIgnored ? 'code-diff-ignore-toggle--active' : ''}`}
-      title={isIgnored ? `已忽略对比规则: ${fieldPath} (点击取消)` : `点击忽略该字段对比: ${fieldPath}`}
+      className={`code-diff-ignore-toggle ${isIgnored ? 'code-diff-ignore-toggle--active' : ''} ${disabled ? 'code-diff-ignore-toggle--disabled' : ''}`}
+      title={getTitle()}
       onClick={(e) => e.stopPropagation()}
     >
       <input
         type="checkbox"
         checked={isIgnored}
         disabled={disabled}
-        onChange={(e) => onToggle(fieldPath, e.target.checked)}
+        onChange={(e) => onToggle && onToggle(fieldPath, e.target.checked)}
         className="code-checkbox-input"
         data-testid={`diff-toggle-${fieldPath}`}
       />

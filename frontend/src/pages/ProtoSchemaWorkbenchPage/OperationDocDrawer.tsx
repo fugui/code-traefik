@@ -51,6 +51,10 @@ export const OperationDocDrawer: React.FC<OperationDocDrawerProps> = ({
 
   const handleToggleIgnore = async (fieldPath: string, willIgnore: boolean) => {
     if (!operation) return;
+    if (!isAdmin) {
+      toast.error('当前用户无权修改忽略规则（需模块管理员权限）');
+      return;
+    }
 
     let nextPaths: string[];
     if (willIgnore) {
@@ -194,7 +198,7 @@ export const OperationDocDrawer: React.FC<OperationDocDrawerProps> = ({
                     fields={reqFields}
                     activeIgnorePaths={ignorePaths}
                     inheritedIgnorePaths={inheritedPaths}
-                    onToggleIgnore={isAdmin ? handleToggleIgnore : undefined}
+                    onToggleIgnore={handleToggleIgnore}
                     isAdmin={isAdmin}
                   />
                 </div>
@@ -210,7 +214,7 @@ export const OperationDocDrawer: React.FC<OperationDocDrawerProps> = ({
                     fields={rspFields}
                     activeIgnorePaths={ignorePaths}
                     inheritedIgnorePaths={inheritedPaths}
-                    onToggleIgnore={isAdmin ? handleToggleIgnore : undefined}
+                    onToggleIgnore={handleToggleIgnore}
                     isAdmin={isAdmin}
                   />
                 </div>

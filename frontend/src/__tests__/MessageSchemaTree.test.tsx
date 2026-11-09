@@ -236,4 +236,25 @@ describe('MessageSchemaTree Suite (M7-P3)', () => {
     expect(html).toContain('demo.account.DeductBalanceRsp');
     expect(html).toContain('code-copy-btn--inline');
   });
+
+  it('testDiffToggle_AlwaysRenderedWithDisabledState: renders toggle as disabled when non-admin', () => {
+    const scalarFields: ProtoFieldNodeDTO[] = [
+      { name: 'user_id', tagNumber: 1, kind: 'STRING', cardinality: 'OPTIONAL', isMap: false, fieldPath: 'user_id', isIgnoredInDiff: false },
+    ];
+
+    // 非管理员模式
+    const htmlNonAdmin = renderToString(
+      <MessageSchemaInspectorTree
+        fields={scalarFields}
+        activeIgnorePaths={[]}
+        isAdmin={false}
+      />
+    );
+
+    // 验证复选框始终渲染，不会因非管理员而隐藏
+    expect(htmlNonAdmin).toContain('code-diff-ignore-toggle');
+    expect(htmlNonAdmin).toContain('code-diff-ignore-toggle--disabled');
+    expect(htmlNonAdmin).toContain('data-testid="diff-toggle-user_id"');
+    expect(htmlNonAdmin).toContain('disabled');
+  });
 });

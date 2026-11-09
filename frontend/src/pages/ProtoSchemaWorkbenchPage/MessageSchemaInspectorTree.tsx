@@ -174,14 +174,12 @@ export const MessageFieldTreeNode: React.FC<{
         )}
 
         <div className="code-tree-node__actions" onClick={(e) => e.stopPropagation()}>
-          {onToggleIgnore && (
-            <DiffIgnoreFieldToggle
-              fieldPath={path}
-              isIgnored={isIgnored}
-              disabled={!isAdmin || isInheritedIgnored}
-              onToggle={(p, willIgnore) => onToggleIgnore(p, willIgnore)}
-            />
-          )}
+          <DiffIgnoreFieldToggle
+            fieldPath={path}
+            isIgnored={isIgnored}
+            disabled={!isAdmin || isInheritedIgnored || !onToggleIgnore}
+            onToggle={onToggleIgnore}
+          />
         </div>
       </div>
 
