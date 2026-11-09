@@ -194,6 +194,8 @@ describe('ArchPhysicalBlueprintWorkbench Test Suite', () => {
           isAdmin={true}
           onEditProcess={() => {}}
           onDeleteProcess={() => {}}
+          onBindModule={async () => {}}
+          onUnbindModule={async () => {}}
         />
       </MemoryRouter>
     );
@@ -217,9 +219,11 @@ describe('ArchPhysicalBlueprintWorkbench Test Suite', () => {
     expect(html).toContain('data-testid="tab-contracts"');
     expect(html).toContain('data-testid="tab-mounts"');
 
-    // Module list (default active tab)
+    // Module list & bind/unbind actions (default active tab)
     expect(html).toContain('MOD_ACCOUNT_QUERY');
     expect(html).toContain('账户查询模块');
+    expect(html).toContain('data-testid="bind-module-btn"');
+    expect(html).toContain('data-testid="unbind-module-btn-m1"');
   });
 
   it('renders ModuleContractDetailPane with bound architecture process and 1-click link to physical tree', () => {

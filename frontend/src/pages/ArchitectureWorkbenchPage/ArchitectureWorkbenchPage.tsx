@@ -576,9 +576,11 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
       });
       toast.success('功能模块已成功关联至当前物理进程');
       void loadArchProcessDetail(selectedArchProcessId);
+      void loadArchProcessTree();
       void loadSubsystemModules();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '关联模块失败');
+      throw err;
     }
   };
 
@@ -592,6 +594,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
       });
       toast.success('功能模块已成功从物理进程中解除关联');
       void loadArchProcessDetail(selectedArchProcessId);
+      void loadArchProcessTree();
       void loadSubsystemModules();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '解除模块关联失败');

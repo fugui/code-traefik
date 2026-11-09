@@ -35,7 +35,7 @@ type ArchProcessGroupReq struct {
 	Description string `json:"description"`
 }
 
-// ArchProcessReq 标准架构业务进程创建/修改请求体
+// ArchProcessReq 标准架构业务进程创建请求体
 type ArchProcessReq struct {
 	GroupID                 FlexUint64      `json:"group_id"`
 	Code                    string          `json:"code"`
@@ -46,6 +46,19 @@ type ArchProcessReq struct {
 	ModuleIDs               FlexUint64Slice `json:"module_ids"`
 	SortOrder               int             `json:"sort_order"`
 	Description             string          `json:"description"`
+}
+
+// ArchProcessUpdateReq 标准架构业务进程修改请求体（支持局部字段按需更新）
+type ArchProcessUpdateReq struct {
+	GroupID                 *FlexUint64      `json:"group_id"`
+	Code                    *string          `json:"code"`
+	Name                    *string          `json:"name"`
+	DefaultListenPort       *int             `json:"default_listen_port"`
+	DefaultCmdPattern       *string          `json:"default_cmd_pattern"`
+	DefaultExtraDownstreams *[]string        `json:"default_extra_downstreams"`
+	ModuleIDs               *FlexUint64Slice `json:"module_ids"`
+	SortOrder               *int             `json:"sort_order"`
+	Description             *string          `json:"description"`
 }
 
 // ListArchProcessGroups GET /api/arch/process-groups
@@ -577,7 +590,7 @@ func UpdateArchProcess(c *gin.Context) {
 		return
 	}
 
-	var req ArchProcessReq
+	var req ArchProcessUpdateReq
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数不合法: " + err.Error()})
 		return
@@ -593,72 +606,114 @@ func UpdateArchProcess(c *gin.Context) {
 		return
 	}
 
-	groupID := req.GroupID.Uint64()
-	if groupID > 0 && groupID != existing.GroupID {
-		var grp models.ArchProcessGroup
-		if err := models.DB.First(&grp, groupID).Error; err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "目标物理进程组不存在"})
-			return
+	before := existing
+
+	if req.GroupID != nil {
+		groupID := req.GroupID.Uint64()
+		if groupID > 0 && groupID != existing.GroupID {
+			var grp models.ArchProcessGroup
+			if err := models.DB.First(&grp, groupID).Error; err != nil {
+				c.JSON(http.StatusNotFound, gin.H{"error": "目标物理进程组不存在"})
+				return
+			}
+			existing.GroupID = groupID
 		}
-		existing.GroupID = groupID
 	}
 
-	code := strings.TrimSpace(req.Code)
-	if code != "" && code != existing.Code {
-		var count int64
-		models.DB.Model(&models.ArchProcess{}).Where("code = ? AND id != ?", code, id).Count(&count)
-		if count > 0 {
-			c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("标准架构进程编码 [%s] 已存在", code)})
+	if req.Code != nil {
+		code := strings.TrimSpace(*req.Code)
+		if code == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "标准架构进程编码不能为空"})
 			return
 		}
-		existing.Code = code
+		if code != existing.Code {
+			var count int64
+			if err := models.DB.Model(&models.ArchProcess{}).Where("code = ? AND id != ?", code, id).Count(&count).Error; err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "检查进程编码重复失败"})
+				return
+			}
+			if count > 0 {
+				c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("标准架构进程编码 [%s] 已存在", code)})
+				return
+			}
+			existing.Code = code
+		}
 	}
 
-	name := strings.TrimSpace(req.Name)
-	if name != "" {
+	if req.Name != nil {
+		name := strings.TrimSpace(*req.Name)
+		if name == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "标准架构进程名称不能为空"})
+			return
+		}
 		existing.Name = name
 	}
 
-	if req.DefaultListenPort < 0 || req.DefaultListenPort > 65535 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "默认监听端口必须在 0..65535 范围内"})
-		return
-	}
-
-	cmdPattern := strings.TrimSpace(req.DefaultCmdPattern)
-	if err := validateCmdPattern(cmdPattern, req.DefaultListenPort); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	existing.DefaultCmdPattern = cmdPattern
-
-	// A-03 校验新模块分配是否已被其他进程占用
-	moduleIDs := []uint64(req.ModuleIDs)
-	if len(moduleIDs) > 0 {
-		var conflictMods []models.Module
-		models.DB.Where("id IN ? AND arch_process_id IS NOT NULL AND arch_process_id != ?", moduleIDs, id).Find(&conflictMods)
-		if len(conflictMods) > 0 {
-			c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("功能模块 [%s] 已被分配给其他标准架构进程 (A-03)", conflictMods[0].Name)})
+	oldDefaultPort := existing.DefaultListenPort
+	newDefaultPort := existing.DefaultListenPort
+	if req.DefaultListenPort != nil {
+		newDefaultPort = *req.DefaultListenPort
+		if newDefaultPort < 0 || newDefaultPort > 65535 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "默认监听端口必须在 0..65535 范围内"})
 			return
 		}
 	}
 
-	downstreamsJSON, _ := json.Marshal(req.DefaultExtraDownstreams)
-	if req.DefaultExtraDownstreams == nil {
-		downstreamsJSON = []byte("[]")
+	cmdPattern := existing.DefaultCmdPattern
+	if req.DefaultCmdPattern != nil {
+		cmdPattern = strings.TrimSpace(*req.DefaultCmdPattern)
 	}
-	existing.DefaultExtraDownstreams = datatypes.JSON(downstreamsJSON)
-	existing.SortOrder = req.SortOrder
-	existing.Description = req.Description
+
+	if req.DefaultListenPort != nil || req.DefaultCmdPattern != nil {
+		if err := validateCmdPattern(cmdPattern, newDefaultPort); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+	}
+	existing.DefaultCmdPattern = cmdPattern
+	existing.DefaultListenPort = newDefaultPort
+
+	// A-03 校验新模块分配是否已被其他进程占用
+	var moduleIDs []uint64
+	if req.ModuleIDs != nil {
+		moduleIDs = []uint64(*req.ModuleIDs)
+		if len(moduleIDs) > 0 {
+			var conflictMods []models.Module
+			if err := models.DB.Where("id IN ? AND arch_process_id IS NOT NULL AND arch_process_id != ?", moduleIDs, id).Find(&conflictMods).Error; err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "校验模块占用状态失败"})
+				return
+			}
+			if len(conflictMods) > 0 {
+				c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("功能模块 [%s] 已被分配给其他标准架构进程 (A-03)", conflictMods[0].Name)})
+				return
+			}
+		}
+	}
+
+	if req.DefaultExtraDownstreams != nil {
+		downstreamsJSON := []byte("[]")
+		if *req.DefaultExtraDownstreams != nil {
+			marshaled, marshalErr := json.Marshal(*req.DefaultExtraDownstreams)
+			if marshalErr != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "解析下游端点列表失败"})
+				return
+			}
+			downstreamsJSON = marshaled
+		}
+		existing.DefaultExtraDownstreams = datatypes.JSON(downstreamsJSON)
+	}
+	if req.SortOrder != nil {
+		existing.SortOrder = *req.SortOrder
+	}
+	if req.Description != nil {
+		existing.Description = *req.Description
+	}
 
 	uc := commonAuth.GetUserContext(c)
 	existing.UpdatedBy = uc.UserID
 
 	// 核心架构特性：默认端口冲突 auto_pinned 保护与单事务固化
 	autoPinnedList := make([]AutoPinnedOverrideDTO, 0)
-
-	oldDefaultPort := existing.DefaultListenPort
-	newDefaultPort := req.DefaultListenPort
-	existing.DefaultListenPort = newDefaultPort
 
 	txErr := models.DB.Transaction(func(tx *gorm.DB) error {
 		// 1. 如果默认端口发生改变且非零，检查所有未设置 override_listen_port 的挂载实例
@@ -720,15 +775,17 @@ func UpdateArchProcess(c *gin.Context) {
 			return err
 		}
 
-		// 3. 更新模块装配：剔除不再装配的模块，并绑定新模块
-		if err := tx.Model(&models.Module{}).Where("arch_process_id = ? AND id NOT IN ?", existing.ID, append(moduleIDs, 0)).
-			Update("arch_process_id", nil).Error; err != nil {
-			return err
-		}
-		if len(moduleIDs) > 0 {
-			if err := tx.Model(&models.Module{}).Where("id IN ?", moduleIDs).
-				Update("arch_process_id", existing.ID).Error; err != nil {
+		// 3. 仅当请求显式携带 module_ids 时才更新模块装配关系，避免仅修改进程基本信息时误清空已绑定模块
+		if req.ModuleIDs != nil {
+			if err := tx.Model(&models.Module{}).Where("arch_process_id = ? AND id NOT IN ?", existing.ID, append(moduleIDs, 0)).
+				Update("arch_process_id", nil).Error; err != nil {
 				return err
+			}
+			if len(moduleIDs) > 0 {
+				if err := tx.Model(&models.Module{}).Where("id IN ?", moduleIDs).
+					Update("arch_process_id", existing.ID).Error; err != nil {
+					return err
+				}
 			}
 		}
 
@@ -740,8 +797,11 @@ func UpdateArchProcess(c *gin.Context) {
 		return
 	}
 
-	_ = models.DB.Preload("Group").Preload("Modules").First(&existing, existing.ID)
-	recordAudit(c, "update", commonModels.AuditLevelP2, fmt.Sprintf("更新标准架构进程 [%s]", existing.Name), "arch_process", existing.ID, existing.Name, nil, existing)
+	if err := models.DB.Preload("Group").Preload("Modules").First(&existing, existing.ID).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "重新加载标准架构进程失败"})
+		return
+	}
+	recordAudit(c, "update", commonModels.AuditLevelP2, fmt.Sprintf("更新标准架构进程 [%s]", existing.Name), "arch_process", existing.ID, existing.Name, before, existing)
 
 	c.JSON(http.StatusOK, gin.H{
 		"arch_process":          existing,

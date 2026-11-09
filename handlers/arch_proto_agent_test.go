@@ -1796,6 +1796,118 @@ func TestArchProcessCRUD_AutoPinPortConflict_RegexValidateAndAntiIDOR(t *testing
 	if len(userADetail.AgentMounts) != 1 || userADetail.AgentMounts[0].AgentID != agentDev.ID {
 		t.Fatalf("用户 A 查询应包含本人私有 Agent 挂载记录，实际返回: %+v", userADetail.AgentMounts)
 	}
+
+	// 8. 局部更新测试：仅提交 {"module_ids": [...]} 关联/解绑模块，以及仅编辑基础信息时不丢失已关联模块
+	sub := models.Subsystem{Code: "SUB_BIND_TEST", Name: "模块关联测试子系统", CreatedBy: admin.ID}
+	db.Create(&sub)
+	fgrp := models.FunctionalGroup{SubsystemID: sub.ID, Code: "FG_BIND_TEST", Name: "模块关联测试功能组", Level: 1, Path: "/1/", CreatedBy: admin.ID}
+	db.Create(&fgrp)
+	mod1 := models.Module{SubsystemID: sub.ID, GroupID: fgrp.ID, Code: "MOD_BIND_1", Name: "待关联模块1", CreatedBy: admin.ID}
+	mod2 := models.Module{SubsystemID: sub.ID, GroupID: fgrp.ID, Code: "MOD_BIND_2", Name: "待关联模块2", CreatedBy: admin.ID}
+	db.Create(&mod1)
+	db.Create(&mod2)
+
+	// 8a. 仅传 module_ids 关联至服务端进程 P1 (原端口 19001)，不应误触发端口 0 校验报错，且保持原端口与命令行特征不变
+	bindModPayload, _ := json.Marshal(map[string]interface{}{
+		"module_ids": []uint64{mod1.ID},
+	})
+	req = httptest.NewRequest(http.MethodPut, fmt.Sprintf("/api/arch/processes/%d", p1.ID), bytes.NewReader(bindModPayload))
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("仅传 module_ids 关联至 P1 期望返回 200，实际: %d (body: %s)", w.Code, w.Body.String())
+	}
+	var dbP1AfterBind models.ArchProcess
+	_ = db.Preload("Modules").First(&dbP1AfterBind, p1.ID)
+	if dbP1AfterBind.DefaultListenPort != 19001 || dbP1AfterBind.DefaultCmdPattern != "./bin/p1" {
+		t.Fatalf("关联模块后 P1 原有端口或命令行特征被意外篡改: %+v", dbP1AfterBind)
+	}
+	if len(dbP1AfterBind.Modules) != 1 || dbP1AfterBind.Modules[0].ID != mod1.ID {
+		t.Fatalf("期望 P1 已关联模块 mod1，实际: %+v", dbP1AfterBind.Modules)
+	}
+
+	// 8b. 仅编辑 P1 基础信息（不传 module_ids），不应清空已绑定的 mod1
+	editBasicPayload, _ := json.Marshal(map[string]interface{}{
+		"group_id":            grp.ID,
+		"code":                "PROC_P1",
+		"name":                "进程P1-重命名",
+		"default_listen_port": 19001,
+		"default_cmd_pattern": "./bin/p1-v2",
+		"sort_order":          5,
+		"description":         "更新后的进程描述",
+	})
+	req = httptest.NewRequest(http.MethodPut, fmt.Sprintf("/api/arch/processes/%d", p1.ID), bytes.NewReader(editBasicPayload))
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("编辑 P1 基础信息期望返回 200，实际: %d (body: %s)", w.Code, w.Body.String())
+	}
+	var dbP1AfterEdit models.ArchProcess
+	_ = db.Preload("Modules").First(&dbP1AfterEdit, p1.ID)
+	if dbP1AfterEdit.Name != "进程P1-重命名" || dbP1AfterEdit.DefaultCmdPattern != "./bin/p1-v2" {
+		t.Fatalf("P1 基础信息未生效: %+v", dbP1AfterEdit)
+	}
+	if len(dbP1AfterEdit.Modules) != 1 || dbP1AfterEdit.Modules[0].ID != mod1.ID {
+		t.Fatalf("编辑 P1 基础信息后已绑定模块不应丢失，实际: %+v", dbP1AfterEdit.Modules)
+	}
+
+	// 8c. 创建纯客户端进程 P3 (端口 0)，并仅传 module_ids 关联 mod2，同样应成功
+	p3Payload, _ := json.Marshal(map[string]interface{}{
+		"group_id":            grp.ID,
+		"code":                "PROC_P3_CLIENT",
+		"name":                "纯客户端进程P3",
+		"default_listen_port": 0,
+		"default_cmd_pattern": "re:.*client-p3.*",
+	})
+	req = httptest.NewRequest(http.MethodPost, "/api/arch/processes", bytes.NewReader(p3Payload))
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("创建纯客户端进程 P3 失败: %d (body: %s)", w.Code, w.Body.String())
+	}
+	var p3 models.ArchProcess
+	_ = json.Unmarshal(w.Body.Bytes(), &p3)
+
+	bindClientModPayload, _ := json.Marshal(map[string]interface{}{
+		"module_ids": []uint64{mod2.ID},
+	})
+	req = httptest.NewRequest(http.MethodPut, fmt.Sprintf("/api/arch/processes/%d", p3.ID), bytes.NewReader(bindClientModPayload))
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("纯客户端进程 P3 仅传 module_ids 关联模块期望返回 200，实际: %d (body: %s)", w.Code, w.Body.String())
+	}
+	var dbP3AfterBind models.ArchProcess
+	_ = db.Preload("Modules").First(&dbP3AfterBind, p3.ID)
+	if dbP3AfterBind.DefaultCmdPattern != "re:.*client-p3.*" || len(dbP3AfterBind.Modules) != 1 {
+		t.Fatalf("纯客户端进程 P3 关联模块后状态异常: %+v", dbP3AfterBind)
+	}
+
+	// 8d. 传空数组 {"module_ids": []} 解除 P1 的模块关联
+	unbindModPayload, _ := json.Marshal(map[string]interface{}{
+		"module_ids": []uint64{},
+	})
+	req = httptest.NewRequest(http.MethodPut, fmt.Sprintf("/api/arch/processes/%d", p1.ID), bytes.NewReader(unbindModPayload))
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("解除 P1 模块关联期望返回 200，实际: %d (body: %s)", w.Code, w.Body.String())
+	}
+	var dbP1AfterUnbind models.ArchProcess
+	_ = db.Preload("Modules").First(&dbP1AfterUnbind, p1.ID)
+	if len(dbP1AfterUnbind.Modules) != 0 || dbP1AfterUnbind.DefaultListenPort != 19001 {
+		t.Fatalf("解除模块关联后 P1 状态异常: %+v", dbP1AfterUnbind)
+	}
 }
 
 // TestBatchProcessMounts_OptimisticLock_AndDisarm 测试批量全量挂载乐观锁、冲突防卫与一键/单进程卸载探针 (ADR-09, AC-M10-02)

@@ -65,9 +65,9 @@ export const ArchProcessDetailPane: React.FC<ArchProcessDetailPaneProps> = ({
 
   const isClient = archProcess.default_listen_port === 0;
 
-  // 待关联模块候选列表（排除当前已关联模块）
+  // 待关联模块候选列表（排除当前已关联模块及已被其他架构进程占用的模块，遵循 A-03）
   const candidateModules = allModules.filter(
-    (m) => !modules.some((cur) => String(cur.id) === String(m.id))
+    (m) => !modules.some((cur) => String(cur.id) === String(m.id)) && !m.arch_process_id
   );
 
   const handleExecuteBind = async () => {
@@ -77,6 +77,8 @@ export const ArchProcessDetailPane: React.FC<ArchProcessDetailPaneProps> = ({
       await onBindModule(selectedModuleIdToBind);
       setBindDrawerOpen(false);
       setSelectedModuleIdToBind('');
+    } catch {
+      // 错误提示已由父组件统一展示，保持抽屉开启以便用户调整重试
     } finally {
       setBindingSubmitting(false);
     }
