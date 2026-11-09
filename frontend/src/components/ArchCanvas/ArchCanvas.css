@@ -788,8 +788,40 @@
 /* ==============================================================================
    连线与边上标签 (Edge & Badges)
    ============================================================================== */
+.code-arch-edge-group {
+  cursor: pointer;
+}
+
 .code-arch-edge {
-  transition: stroke 0.15s ease, stroke-width 0.15s ease;
+  transition: stroke 0.15s ease, stroke-width 0.15s ease, stroke-opacity 0.15s ease;
+}
+
+.code-arch-edge-group--hovered .code-arch-edge,
+.code-arch-edge-group:hover .code-arch-edge {
+  stroke-opacity: 0.35;
+}
+
+.code-arch-edge__flow-stream {
+  opacity: 0;
+  pointer-events: none;
+  stroke-dasharray: 8 6;
+  stroke-linecap: round;
+  transition: opacity 0.15s ease;
+}
+
+.code-arch-edge__flow-stream--active,
+.code-arch-edge-group:hover .code-arch-edge__flow-stream {
+  opacity: 1;
+  animation: code-arch-edge-flow 0.6s linear infinite;
+}
+
+@keyframes code-arch-edge-flow {
+  from {
+    stroke-dashoffset: 28;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
 }
 
 .code-arch-edge--violation {
@@ -824,7 +856,8 @@
   transition: all 0.15s ease;
 }
 
-.code-arch-edge-badge:hover {
+.code-arch-edge-badge:hover,
+.code-arch-edge-badge--hovered {
   border-color: var(--color-primary);
   color: var(--color-primary);
   transform: scale(1.05);

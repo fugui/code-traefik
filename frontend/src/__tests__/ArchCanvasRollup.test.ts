@@ -4,7 +4,7 @@ import type { ConsistencyReportDTO } from '../types/traffic';
 import { buildTreeIndex, findLCA, getFullAncestry } from '../components/ArchCanvas/model/hierarchy';
 import { rep, rollupEdges, mergeStatus, STATUS_PRIORITY } from '../components/ArchCanvas/model/rollup';
 import { detectCycles } from '../components/ArchCanvas/model/metrics';
-import { processLayoutCoordinates } from '../components/ArchCanvas/layout/layoutProcessor';
+import { processLayoutCoordinates, resolveEdgeVisualStyle } from '../components/ArchCanvas/layout/layoutProcessor';
 import type { ElkNode } from 'elkjs';
 
 describe('ArchCanvasRollup Model Suite', () => {
@@ -580,6 +580,28 @@ describe('ArchCanvasRollup Model Suite', () => {
     // 断言 3: 边渲染模式自动切换为 isDraggedDegraded = true
     const edgeDragged = resultDragged.edges[0];
     expect(edgeDragged.data?.isDraggedDegraded).toBe(true);
+
+    // 断言 4: 生成的边包含指向被调目标节点的同色实心箭头配置 (markerEnd)
+    expect(edgeNormal.markerEnd).toBeDefined();
+    expect(typeof edgeNormal.markerEnd === 'object' && edgeNormal.markerEnd.type).toBe('arrowclosed');
+    expect(typeof edgeNormal.markerEnd === 'object' && edgeNormal.markerEnd.color).toBe('var(--color-primary)');
+
+    // 断言 5: 不同状态与分类边的颜色及虚线样式解析与箭头同色对齐
+    expect(resolveEdgeVisualStyle({ kind: 'EXTERNAL_UNREGISTERED' })).toEqual({
+      statusClass: 'code-arch-edge--external',
+      strokeColor: 'var(--color-warning)',
+      strokeDasharray: '6 3',
+    });
+    expect(resolveEdgeVisualStyle({ status: 'VIOLATION' })).toEqual({
+      statusClass: 'code-arch-edge--violation',
+      strokeColor: 'var(--color-danger)',
+      strokeDasharray: undefined,
+    });
+    expect(resolveEdgeVisualStyle({ status: 'VERIFIED' })).toEqual({
+      statusClass: 'code-arch-edge--verified',
+      strokeColor: 'var(--color-success)',
+      strokeDasharray: undefined,
+    });
   });
 
   it('TC-ROLLUP-09: ELK 复合容器展开排版兼容性测试（防 width/height=undefined 引发 .oe() 异常）', async () => {

@@ -1,11 +1,11 @@
-import React from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   type EdgeProps,
   getSmoothStepPath,
   EdgeLabelRenderer,
   BaseEdge,
 } from '@xyflow/react';
-import type { ArchCanvasEdge } from '../layout/layoutProcessor';
+import { resolveEdgeVisualStyle, type ArchCanvasEdge } from '../layout/layoutProcessor';
 
 export const RollupEdge: React.FC<EdgeProps<ArchCanvasEdge>> = ({
   id,
@@ -16,8 +16,17 @@ export const RollupEdge: React.FC<EdgeProps<ArchCanvasEdge>> = ({
   sourcePosition,
   targetPosition,
   data,
-  markerEnd,
 }) => {
+  const [isHovered, setIsHovered] = useState(false);
+
+  const handleMouseEnter = useCallback(() => {
+    setIsHovered(true);
+  }, []);
+
+  const handleMouseLeave = useCallback(() => {
+    setIsHovered(false);
+  }, []);
+
   const isDegraded = Boolean(data?.isDraggedDegraded);
   const bendPoints = data?.bendPoints;
 
@@ -26,7 +35,13 @@ export const RollupEdge: React.FC<EdgeProps<ArchCanvasEdge>> = ({
   let labelY = (sourceY + targetY) / 2;
 
   if (!isDegraded && bendPoints && bendPoints.length > 0) {
-    const pts = [{ x: sourceX, y: sourceY }, ...bendPoints, { x: targetX, y: targetY }];
+    // 过滤与起止点距离过近的冗余拐点，确保末端折线具有清晰的方向向量供箭头 orient="auto" 计算
+    const validBendPoints = bendPoints.filter((bp) => {
+      const distStart = Math.hypot(bp.x - sourceX, bp.y - sourceY);
+      const distEnd = Math.hypot(bp.x - targetX, bp.y - targetY);
+      return distStart > 4 && distEnd > 4;
+    });
+    const pts = [{ x: sourceX, y: sourceY }, ...validBendPoints, { x: targetX, y: targetY }];
     edgePath = pts.reduce((acc, pt, i) => `${acc} ${i === 0 ? 'M' : 'L'} ${pt.x} ${pt.y}`, '');
 
     const midIdx = Math.floor(pts.length / 2);
@@ -50,51 +65,10 @@ export const RollupEdge: React.FC<EdgeProps<ArchCanvasEdge>> = ({
   const contractCount = data?.services?.length || 1;
   const strokeWidth = Math.max(1.5, Math.min(5, 1.5 + Math.log2(contractCount + 1)));
 
-  // 依据状态收敛与六分类决定连线颜色与样式类
-  let statusClass = 'code-arch-edge--default';
-  let strokeColor = 'var(--color-primary)';
-  let strokeDasharray: string | undefined;
+  const { statusClass, strokeColor, strokeDasharray } = resolveEdgeVisualStyle(data);
 
-  if (data?.status) {
-    statusClass = `code-arch-edge--${data.status.toLowerCase()}`;
-    switch (data.status) {
-      case 'VIOLATION':
-        strokeColor = 'var(--color-danger)';
-        break;
-      case 'UNATTRIBUTED':
-        strokeColor = 'var(--color-warning)';
-        break;
-      case 'VERIFIED':
-        strokeColor = 'var(--color-success)';
-        break;
-      case 'OUTBOUND_VERIFIED':
-        strokeColor = 'var(--color-info)';
-        strokeDasharray = '6 3';
-        break;
-      case 'UNCOVERED':
-        strokeColor = 'var(--color-text-muted)';
-        strokeDasharray = '5 5';
-        break;
-      case 'NOT_MONITORED':
-        strokeColor = 'var(--color-text-muted)';
-        strokeDasharray = '2 4';
-        break;
-      case 'NOT_OBSERVABLE':
-        strokeColor = 'var(--color-info)';
-        break;
-    }
-  } else if (data?.isCycle) {
-    statusClass = 'code-arch-edge--cycle';
-    strokeColor = 'var(--color-danger)';
-  } else if (data?.kind === 'INTRA_PROCESS') {
-    statusClass = 'code-arch-edge--intra';
-    strokeColor = 'var(--color-border-hover)';
-    strokeDasharray = '4 4';
-  } else if (data?.kind === 'EXTERNAL_UNREGISTERED') {
-    statusClass = 'code-arch-edge--external';
-    strokeColor = 'var(--color-warning)';
-    strokeDasharray = '6 3';
-  }
+  const safeMarkerId = `code-arch-arrow-${id.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+  const markerEndUrl = `url(#${safeMarkerId})`;
 
   const labelText =
     data?.totalCalls && data.totalCalls > 0
@@ -103,17 +77,54 @@ export const RollupEdge: React.FC<EdgeProps<ArchCanvasEdge>> = ({
 
   return (
     <>
-      <BaseEdge
-        id={id}
-        path={edgePath}
-        markerEnd={markerEnd}
-        className={`code-arch-edge ${statusClass}`}
-        style={{
-          stroke: strokeColor,
-          strokeWidth,
-          strokeDasharray,
-        }}
-      />
+      <defs>
+        <marker
+          id={safeMarkerId}
+          viewBox="0 0 12 12"
+          markerWidth={isHovered ? 12 : 10}
+          markerHeight={isHovered ? 12 : 10}
+          refX="9.5"
+          refY="6"
+          orient="auto"
+          markerUnits="userSpaceOnUse"
+        >
+          <path
+            d="M 1 2 L 10.5 6 L 1 10 L 2.8 6 Z"
+            fill={strokeColor}
+            stroke={strokeColor}
+            strokeWidth="0.8"
+            strokeLinejoin="round"
+          />
+        </marker>
+      </defs>
+
+      <g
+        className={`code-arch-edge-group ${isHovered ? 'code-arch-edge-group--hovered' : ''}`}
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={handleMouseLeave}
+      >
+        <BaseEdge
+          id={id}
+          path={edgePath}
+          markerEnd={markerEndUrl}
+          className={`code-arch-edge ${statusClass} ${isHovered ? 'code-arch-edge--hovered' : ''}`}
+          style={{
+            stroke: strokeColor,
+            strokeWidth: isHovered ? strokeWidth + 0.6 : strokeWidth,
+            strokeDasharray,
+          }}
+        />
+        <path
+          d={edgePath}
+          fill="none"
+          className={`code-arch-edge__flow-stream ${isHovered ? 'code-arch-edge__flow-stream--active' : ''}`}
+          style={{
+            stroke: strokeColor,
+            strokeWidth: strokeWidth + 0.8,
+          }}
+        />
+      </g>
+
       <EdgeLabelRenderer>
         <div
           style={{
@@ -122,10 +133,12 @@ export const RollupEdge: React.FC<EdgeProps<ArchCanvasEdge>> = ({
             pointerEvents: 'all',
           }}
           className="nodrag nopan"
+          onMouseEnter={handleMouseEnter}
+          onMouseLeave={handleMouseLeave}
         >
           <span
-            className={`code-arch-edge-badge ${statusClass}`}
-            title={`调用清单: ${contractCount} 个契约`}
+            className={`code-arch-edge-badge ${statusClass} ${isHovered ? 'code-arch-edge-badge--hovered' : ''}`}
+            title={`调用方向: ${data?.source || ''} → ${data?.target || ''} (${contractCount} 个契约)`}
           >
             {labelText}
           </span>

@@ -1,5 +1,5 @@
 import type { ElkNode, ElkExtendedEdge } from 'elkjs';
-import type { Node, Edge } from '@xyflow/react';
+import { MarkerType, type Node, type Edge } from '@xyflow/react';
 import type {
   GraphNode,
   RollupEdgeModel,
@@ -7,6 +7,62 @@ import type {
   BendPoint,
 } from '../../../types/topology_graph';
 import { findLCA } from '../model/hierarchy';
+
+/**
+ * 依据边的一致性状态、环路标记与分类解析视觉样式与语义颜色 Token
+ */
+export function resolveEdgeVisualStyle(data?: Partial<RollupEdgeModel>): {
+  statusClass: string;
+  strokeColor: string;
+  strokeDasharray?: string;
+} {
+  let statusClass = 'code-arch-edge--default';
+  let strokeColor = 'var(--color-primary)';
+  let strokeDasharray: string | undefined;
+
+  if (data?.status) {
+    statusClass = `code-arch-edge--${data.status.toLowerCase()}`;
+    switch (data.status) {
+      case 'VIOLATION':
+        strokeColor = 'var(--color-danger)';
+        break;
+      case 'UNATTRIBUTED':
+        strokeColor = 'var(--color-warning)';
+        break;
+      case 'VERIFIED':
+        strokeColor = 'var(--color-success)';
+        break;
+      case 'OUTBOUND_VERIFIED':
+        strokeColor = 'var(--color-info)';
+        strokeDasharray = '6 3';
+        break;
+      case 'UNCOVERED':
+        strokeColor = 'var(--color-text-muted)';
+        strokeDasharray = '5 5';
+        break;
+      case 'NOT_MONITORED':
+        strokeColor = 'var(--color-text-muted)';
+        strokeDasharray = '2 4';
+        break;
+      case 'NOT_OBSERVABLE':
+        strokeColor = 'var(--color-info)';
+        break;
+    }
+  } else if (data?.isCycle) {
+    statusClass = 'code-arch-edge--cycle';
+    strokeColor = 'var(--color-danger)';
+  } else if (data?.kind === 'INTRA_PROCESS') {
+    statusClass = 'code-arch-edge--intra';
+    strokeColor = 'var(--color-border-hover)';
+    strokeDasharray = '4 4';
+  } else if (data?.kind === 'EXTERNAL_UNREGISTERED') {
+    statusClass = 'code-arch-edge--external';
+    strokeColor = 'var(--color-warning)';
+    strokeDasharray = '6 3';
+  }
+
+  return { statusClass, strokeColor, strokeDasharray };
+}
 
 export interface LayoutedNodeInfo {
   id: string;
@@ -208,12 +264,20 @@ export function processLayoutCoordinates(
       isDraggedDegraded: isDegraded,
     };
 
+    const { strokeColor } = resolveEdgeVisualStyle(updatedModel);
+
     edges.push({
       id: re.id,
       source: re.source,
       target: re.target,
       type: 'rollupEdge',
       data: updatedModel,
+      markerEnd: {
+        type: MarkerType.ArrowClosed,
+        width: 16,
+        height: 16,
+        color: strokeColor,
+      },
     });
   }
 
