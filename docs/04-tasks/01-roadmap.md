@@ -1,11 +1,11 @@
 # 架构与活体契约治理 (`code-traefik`) TDD 工程实施路线图与质量门禁
 
 - **文档编号**：`01-roadmap.md`
-- **文档版本**：v1.7.0
+- **文档版本**：v1.7.1
 - **更新日期**：2026-11-09
 - **归属阶段**：阶段三/四：TDD 实施路线图与全局门禁 (`04-tasks`)
 - **状态**：M1~M18 已交付，M19 已规划待实施 (Planned)
-- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.14.0)、[`01-system-architecture.md`](../02-design/01-system-architecture.md)、[`05-database-schema.md`](../02-design/05-database-schema.md) (v1.5.0)、[`01-http-api-contract.md`](../03-api/01-http-api-contract.md) (v1.5.0)、[`12-packet-causality-call-tree-and-sequence-ux-adr.md`](../05-adr/12-packet-causality-call-tree-and-sequence-ux-adr.md) (ADR-12 v1.0.0)、[`14-governance-dashboard-golden-suite-and-ci-gate-adr.md`](../05-adr/14-governance-dashboard-golden-suite-and-ci-gate-adr.md) (ADR-14 v1.1.0)、[`15-scalable-topology-focus-and-layout-persistence-adr.md`](../05-adr/15-scalable-topology-focus-and-layout-persistence-adr.md) (ADR-15 v1.0.0)
+- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.14.1)、[`01-system-architecture.md`](../02-design/01-system-architecture.md)、[`05-database-schema.md`](../02-design/05-database-schema.md) (v1.5.1)、[`01-http-api-contract.md`](../03-api/01-http-api-contract.md) (v1.5.1)、[`12-packet-causality-call-tree-and-sequence-ux-adr.md`](../05-adr/12-packet-causality-call-tree-and-sequence-ux-adr.md) (ADR-12 v1.0.0)、[`14-governance-dashboard-golden-suite-and-ci-gate-adr.md`](../05-adr/14-governance-dashboard-golden-suite-and-ci-gate-adr.md) (ADR-14 v1.1.0)、[`15-scalable-topology-focus-and-layout-persistence-adr.md`](../05-adr/15-scalable-topology-focus-and-layout-persistence-adr.md) (ADR-15 v1.1.0)
 
 ---
 
@@ -63,7 +63,7 @@ flowchart LR
     M16["M16: 设计态契约破坏性变更阻断雷达<br/>(Protobuf AST 比对 + Tag/类型/删除强阻断 + 下游消费者推导)"]
     M17["M17: CI/CD 自动化强阻断门禁与凭据报告<br/>(POST /api/gates/evaluate + Violation/Diff双重红阻 + MR报告)"]
     M18["M18: 面向业务视角的报文透视与双模解剖抽屉<br/>(业务概览 + 入参出参并排对比 + 耗时瀑布 + 专家折叠)"]
-    M19["M19: 大规模拓扑下钻聚焦与双层混合布局持久化<br/>(C4下钻+1跳外部卡 + 多维降噪/聚光灯 + Pinned混合布局&书签)"]
+    M19["M19: 大规模拓扑下钻聚焦与双层混合布局持久化<br/>(P1~P7: 五段管线 + 聚焦/邻域/统一守卫 + 降噪 + 位置记忆布局 + 基准/书签)"]
 ```
 
 | 里程碑 | 状态 | 作战卡文档 | 核心职责与交付边界 | 准出质量门禁 (Exit Gate) |
@@ -86,11 +86,11 @@ flowchart LR
 | **M16** | ✅ 已交付 | [`17-m16-design-time-breaking-change-radar.md`](./17-m16-design-time-breaking-change-radar.md) | 设计态契约破坏性变更阻断雷达与回滚逃生舱（ADR-14 v1.1.0）：基于 `FileDescriptorSet` 实现全维度 AST 比对引擎（覆盖 Service/Method 删改、字段 Tag/类型/`oneof`/`map` 变异、`DescriptorProto.GetReservedRange()` 数字区间核验与枚举篡改）；默认返回结构化 `409 BREAKING_CHANGE_DETECTED` 与下游消费者血缘清单；支持管理员 `allow_breaking + breaking_reason` 紧急回滚逃生与 `P1` 审计 | AST 全规则比对单测覆盖率 `100%` + 下游消费者推导与 `allow_breaking` 回滚审计单测全绿 + 拦截抽屉 Vitest 通过 |
 | **M17** | ✅ 已交付 | [`18-m17-ci-cd-quality-gate-and-automated-enforcement.md`](./18-m17-ci-cd-quality-gate-and-automated-enforcement.md) | CI/CD 自动化强阻断门禁、实测边回传与排他锁有界排队（ADR-14 v1.1.0）：Agent 重放回传 `ObservedEgressCalls` 支撑控制面单次闭环判定 `GATED_VIOLATION`；实现 `X-Traefik-CI-Token` SHA-256 `ConstantTimeCompare` 机器鉴权与轮换 API；实现 `POST /api/gates/evaluate`（内置 `wait_lease_seconds` 排队防并发踩踏，正交区分 `503` 环境忙/未就绪 vs `422` 违规/劣化红阻 vs `200` 准出）及 Markdown PR/MR 报告 | 重放实测边 `422 GATED_VIOLATION` / `GATED_BREAKING_DIFF`、并发排队零误杀、`503` 环境隔离及 CI Token 安全单测全绿 |
 | **M18** | ✅ 已交付 | [`19-m18-business-centric-packet-inspector-redesign.md`](./19-m18-business-centric-packet-inspector-redesign.md) | 面向业务视角的 RPC 报文透视与双模解剖抽屉重构（F-15.2）：废弃 Wireshark 式二进制反直觉视觉，默认突出点分服务/方法大标题、状态码徽章、TraceID 复制、架构链路与往返总耗时；请求入参 vs 返回结果左右双栏同屏孪生对比（Split View），带 JSON 高亮与一键复制；微秒级阶段耗时彩色甘特拆解；底层 24B 位图/二进制字段/16B Hex 渐进式折叠收纳为专家排错区 | 前端 Vitest 单测覆盖业务总览、入参出参并排、非零业务错误高亮、阶段耗时瀑布、底层折叠区兼容及 XSS 安全防御全绿 + `make lint && make build` 零警告 |
-| **M19** | 📋 待实施 | [`20-m19-scalable-topology-focus-and-layout-persistence.md`](./20-m19-scalable-topology-focus-and-layout-persistence.md) | 大规模架构拓扑渐进式下钻聚焦、多维降噪与双层混合布局持久化（ADR-15, `F-04.1`~`F-04.3`）：升级至 **18 张业务表**（新增 `traefik_topology_layouts` 承载 `SHARED` 团队官方基准布局与 `PRIVATE` 个人视图书签）；默认 `L0` 顶层折叠秒开、子系统/功能组/进程组下钻聚焦画布（自动收敛 `1-Hop` 外部上下游邻居卡）与 `>150` 可见节点全展防卡死守卫；多维过滤、搜索平滑飞跃定位、`1-Hop` 聚光灯、高扇出 Hub（`>=8` 边）总线胶囊折叠与三档语义缩放 LOD；`Pinned` 节点坐标钉死、AABB 同层碰撞推开、局部展开/折叠保持当前镜头视口及 `ModelVersion` 增量混合布局合并 | `testdb` 18 表迁移与双层布局 RBAC/Anti-IDOR 单测全绿 + 子图/混合布局纯函数 Vitest 覆盖率 `≥ 90%` + 工作台交互单测全绿 + `make test && make lint && make build` 零警告 |
+| **M19** | 📋 待实施 | [`20-m19-scalable-topology-focus-and-layout-persistence.md`](./20-m19-scalable-topology-focus-and-layout-persistence.md) | 大规模架构拓扑渐进式下钻聚焦、多维降噪与双层混合布局持久化（ADR-15 v1.1.0, `F-04.1`~`F-04.3`, `SC-11`），单里程碑内分 7 个子阶段：**P1** 后端 `structure_version`、`MODULE.meta.owner_id`、Graph `gzip` 与第 18 张表 `traefik_topology_layouts`（位置层 `SHARED` 按视图唯一 + 乐观锁、视角层 `PRIVATE` 书签差量）及 7 个布局 API；**P2** 画布管线重构（拆出 `synthesizeOverlay`、显式可见集、拖拽不重排、`fitView` 收紧）；**P3** 聚焦/透明祖先/LCA 外部邻居卡/有向邻域/多维过滤/统一守卫与 Hub/聚光灯纯算法；**P4** 位置记忆 + 局部子树排版 + 自底向上碰撞消解 + 节点集合 Diff + 加载优先级纯算法；**P5** 画布交互与渲染；**P6** `topo_*` URL、书签抽屉、基准发布与草稿闭环；**P7** 大规模数据集、性能单测与 `SC-11` 验收 | `testdb` 18 表迁移与布局 API 并发/RBAC/Anti-IDOR 单测全绿 + 新增纯函数文件 Vitest 行覆盖率 `≥ 90%`（带 `--coverage` 阈值门禁）+ 工作台交互单测全绿 + 管线性能单测达标 + `SC-11` 实测达标 + `make test && make lint && make build` 零警告 |
 
 ---
 
-## 3. 特性矩阵 (`F-01`~`F-16`, `F-24`~`F-27`) 与验收场景 (`SC-01`~`SC-10`) 落位映射表
+## 3. 特性矩阵 (`F-01`~`F-16`, `F-24`~`F-27`) 与验收场景 (`SC-01`~`SC-11`) 落位映射表
 
 ### 3.1 核心特性 (`F-01` ~ `F-16`) TDD 落位追踪
 
@@ -107,9 +107,9 @@ flowchart LR
 | **F-03.6** | 跨 `.pb` 去重拓扑依赖闭包解析、停用防破坏与批量原子激活 | M11 | `internal/server/decoder/decoder_test.go`<br>`handlers/arch_proto_agent_test.go` | `TestCrossSchemaClosure_DeduplicateBundledBase_ZeroServiceBaseLib_AndOwnFileOpsOnly`<br>`TestCompileTrialPool_BatchActivate_DeactivateReverseDep_AndUnifiedRuntimeDecode` |
 | **F-03.7** | 全局服务与接口目录跨 `.pb` 溯源检索与孤儿服务治理 | M11 | `handlers/arch_proto_agent_test.go`<br>`frontend/src/__tests__/ProtoNestedTable.test.tsx` | `TestListProtoServices_ServiceLevelPagination_SourceSchemaBadge_AndUnclaimedFilter`<br>`testGlobalServiceCatalog_ServicePagination_SourceBadge_UnclaimedFilterAndLegacyDeepLink` |
 | **F-04** | 分层复合架构拓扑与一致性画布（含零 Agent 物理拓扑直推） | M2, M5, M6, M10, M19 | `internal/server/topology/graph_topology_test.go`<br>`frontend/src/__tests__/ArchCanvasRollup.test.ts` | `TestBuildTopologyGraph_Logical`<br>`TestBuildTopologyGraph_Physical_ZeroAgentsAndCompileDownstreams`<br>`testRollup_AllCollapsedAndInternalBadge`<br>`testLayout_ParentFirstOrderAndCompoundBendPoints` |
-| **F-04.1** | C4 渐进式探索、作用域下钻聚焦画布 (`Focus Sub-Canvas`) 与大节点防卡死守卫 | M19 | `frontend/src/__tests__/ArchCanvasSubgraphAndHybridLayout.test.ts`<br>`frontend/src/__tests__/TopologyFocusAndPersistenceWorkbench.test.tsx` | `testExtractScopedSubgraph_SubsystemFocusAnd1HopExternalContext`<br>`testFullExpandGuard_BlocksOver150NodesInGlobalScope`<br>`testProgressiveDrillDown_BreadcrumbNavigation_AndSearchFlyTo` |
-| **F-04.2** | 多维正交过滤、搜索飞跃定位、`1-Hop` 聚光灯、Hub 匯流折叠与语义缩放 LOD | M19 | `frontend/src/__tests__/ArchCanvasSubgraphAndHybridLayout.test.ts`<br>`frontend/src/__tests__/TopologyFocusAndPersistenceWorkbench.test.tsx` | `testMultiDimensionalFilters_StatusEgoNetworkAndIsolatedPruning`<br>`testFoldHighDegreeHubEdges_CollapsesOver8CrossEdges`<br>`testSpotlightDimming_PinBadgeToggle_AndCameraRetentionOnLocalExpand` |
-| **F-04.3** | 混合增量布局引擎 (`Pinned + Incremental ELK`)、镜头保持与双层布局持久化 (`SHARED + PRIVATE`) | M19 | `handlers/topology_layout_test.go`<br>`frontend/src/__tests__/ArchCanvasSubgraphAndHybridLayout.test.ts`<br>`frontend/src/__tests__/TopologyFocusAndPersistenceWorkbench.test.tsx` | `TestTopologyLayout_CanonicalUpsertAndReset_RBAC`<br>`TestTopologyLayout_PersonalCRUD_DefaultMutex_AndAntiIDOR`<br>`testMergeIncrementalLayout_PreservesPinnedNodes_ResolvesAABBCollision_AndDiffsModelVersion`<br>`testDualTierLayoutPersistence_SavePersonalView_AdminPublishCanonical_AndDiffBanner` |
+| **F-04.1** | C4 渐进式探索、容器下钻聚焦（透明祖先 + LCA 外部邻居卡）、有向 N-Hop 邻域与统一可见规模守卫 | M19 | `internal/server/topology/graph_topology_test.go`<br>`frontend/src/__tests__/ArchCanvasScopeAndFilter.test.ts`<br>`frontend/src/__tests__/TopologyFocusAndPersistenceWorkbench.test.tsx` | `TestBuildTopologyGraph_StructureVersion_IgnoresEdgesMetaAndEnv`<br>`testSynthesizeOverlay_IndexedStaticMatch_AndDynamicViolationEdges`<br>`testFocusScope_TransparentAncestors_RelativeDepth_DefaultExpandOneLevel`<br>`testExternalRep_LcaChild_SiblingGroup_ExternalSystemStandalone`<br>`testFocusScope_ViolationEdgeProducesNeighborCard_NoEdgeDropped`<br>`testEgoNetwork_DirectionalHops_NoSiblingCallerLeak`<br>`testVisibilityGuard_GlobalL2Blocked_FocusRelativeL2Allowed`<br>`testFocusDrillDown_BreadcrumbNeighborCard_AndTopoUrlParams`<br>`testGuardDialog_AllEntryPointsRoutedThroughChokePoint` |
+| **F-04.2** | 多维切片过滤（含 `MODULE.meta.owner_id`）、搜索候选飞跃、`1-Hop` 聚光灯、Hub 插头折叠（违规边豁免）与语义 LOD | M19 | `internal/server/topology/graph_topology_test.go`<br>`frontend/src/__tests__/ArchCanvasScopeAndFilter.test.ts`<br>`frontend/src/__tests__/TopologyFocusAndPersistenceWorkbench.test.tsx` | `TestBuildTopologyGraph_ModuleOwnerIDInMeta_LogicalAndPhysical`<br>`testSliceFilters_SubsystemsMyScopeAbnormal_IntersectAndAncestorsKept`<br>`testPruneIsolated_AfterRollup_CascadeEmptyContainers`<br>`testHubFolding_DistinctCallerThreshold_ViolationExempt_PillWorstStatus`<br>`testSpotlightSet_OneHopWithAncestorContainers`<br>`testSearchDropdown_SingleAncestorChain_FlyTo_NoAutoExpandAll`<br>`testSpotlightLodPinAndNewBadges_BemClasses` |
+| **F-04.3** | 位置记忆混合布局引擎（局部子树排版 + 自底向上碰撞消解）、镜头保持与位置层/视角层双层持久化 (`SHARED + PRIVATE`) | M19 | `handlers/topology_layout_test.go`<br>`handlers/arch_proto_agent_test.go`<br>`frontend/src/__tests__/ArchCanvasHybridLayout.test.ts`<br>`frontend/src/__tests__/TopologyFocusAndPersistenceWorkbench.test.tsx`<br>`frontend/src/__tests__/ArchCanvasScale.perf.test.ts` | `TestTopologyLayout_SchemaConstraints_ScopeOwnerAndPartialUniques`<br>`TestTopologyLayout_CanonicalUpsert_RevisionConflictAndReset_RBAC`<br>`TestTopologyLayout_PersonalCRUD_DefaultMutex_QuotaAndAntiIDOR`<br>`TestTopologyLayout_ConcurrentCreate_QuotaAndDefaultNeverViolated`<br>`TestTopologyLayout_InputGuards_PayloadLimitMassAssignmentAndNaN`<br>`TestTopologyLayout_ListOmitsPayload_DetailOwnerOnly`<br>`TestGetTopologyGraph_GzipNegotiation`<br>`testResolveOverlapsBottomUp_AnchorFixed_ParentGrows_Terminates`<br>`testDiffLayoutAgainstGraph_EdgeOnlyChangeNoBanner_AddedRemovedCounted`<br>`testResolveInitialLayout_PriorityMatrix_DraftBaseMismatchDiscarded`<br>`testDragStopDoesNotTriggerElkRelayout`<br>`testDualTierPersistence_BookmarkSave_AdminPublishMerge_RevisionConflict`<br>`testScalePipeline_2775Nodes_10kEdges_P95Budget` |
 | **F-05** | 实测调用拓扑还原与架构一致性验证 | M4, M6 | `internal/server/topology/consistency_test.go`<br>`frontend/src/__tests__/ArchCanvasRollup.test.ts` | `TestResolveSourceModuleThreeTierPriority`<br>`TestVerifySessionTopologySixCategories`<br>`testOverlay_WorstStatusAndDynamicViolationUnattributed` |
 | **F-06** | Agent 公私域纳管与动态排他租约 | M2 | `internal/server/hub/hub_test.go`<br>`handlers/arch_proto_agent_test.go` | `TestAgentPublicPrivateScopeAndAntiIDOR`<br>`TestAcquireAgentLeasesMutexAndHeartbeatReconcile` |
 | **F-07** | 主控—Agent 受控信道（HTTP + WS） | M1, M3 | `pkg/agentproto/envelope_test.go`<br>`internal/agent/server/server_test.go` | `TestAgentIPAllowlistAndClaimCode`<br>`TestBoundedSessionBufferBackpressureAndGracePurge` |
@@ -133,7 +133,7 @@ flowchart LR
 | **F-26** | 设计态契约破坏性变更阻断雷达与回滚逃生舱 | M16 | `internal/server/decoder/breaking_change_test.go`<br>`handlers/proto_breaking_test.go`<br>`frontend/src/__tests__/BreakingChangeDrawer.test.tsx` | `TestDetectBreakingChanges_ServiceMethod_Tag_Type_AndReservedRange`<br>`TestBlockBreakingProtoActivation_DownstreamBloodline_AndAllowBreakingEscapeHatch` |
 | **F-27** | CI/CD 自动化强阻断门禁、实测边回传与排他锁排队 | M17 | `pkg/replay/replay_test.go`<br>`handlers/gate_evaluate_test.go` | `TestGateEvaluate_ObservedEgressCallsBlocksViolationWith422`<br>`TestGateEvaluate_ConcurrentLeaseWaitQueue_And503EnvBusy`<br>`TestGateEvaluate_CITokenConstantTimeAuth_AndPassedMarkdown` |
 
-### 3.2 端到端业务验收场景 (`SC-01` ~ `SC-10`) 追踪矩阵
+### 3.2 端到端业务验收场景 (`SC-01` ~ `SC-11`) 追踪矩阵
 
 | 场景编号 | 场景名称 | 落位里程碑 | 自动化验收测试入口 |
 | :--- | :--- | :--- | :--- |
@@ -147,13 +147,14 @@ flowchart LR
 | **SC-08** | 业务突变与 Mock 未命中零外泄检出 | M3, M4, M5, M10 | `handlers/recording_replay_test.go`: `TestSC08_MutationDiffAndMockMissZeroLeakage` |
 | **SC-09** | 设计态破坏性变更阻断与下游影响面透视 | M16 | `handlers/proto_breaking_test.go`: `TestSC09_BreakingChangeDetectionAndDownstreamAlert` |
 | **SC-10** | CI/CD 质量门禁端到端评估与自动化红阻 | M17 | `handlers/gate_evaluate_test.go`: `TestSC10_CICDQualityGateHardEvaluationAndReport` |
+| **SC-11** | 大规模架构拓扑下钻聚焦、守卫与布局持久化端到端验收 | M19 | `frontend/src/__tests__/ArchCanvasScale.perf.test.ts`: `testScalePipeline_2775Nodes_10kEdges_P95Budget`；`scripts/seed-large-topology/main.go` + [`06-ops/01-verification-and-deployment-guide.md`](../06-ops/01-verification-and-deployment-guide.md) 浏览器实测记录（局部/全局 ELK、快轨直出、Graph 压缩体积） |
 
 ---
 
 ## 4. 全局质量红线与安全验证计划 (Quality Gates & Security Verification Plan)
 
 ### 4.1 工程与架构门禁
-1. **表名前缀与隔离数据库铁律**：全部 17 张业务表（M15 起新增 `traefik_golden_suites` / `traefik_golden_suite_items`）+ `traefik_settings` 必须以 `traefik_` 开头；所有数据库单测强制调用 `testdb.SetupIsolatedDB(t)`，严禁将 `TEST_DB_DSN` 指向生产或团队共享库。
+1. **表名前缀与隔离数据库铁律**：全部 18 张业务表（M15 起新增 `traefik_golden_suites` / `traefik_golden_suite_items`，M19 起新增 `traefik_topology_layouts`）+ `traefik_settings` 必须以 `traefik_` 开头；所有数据库单测强制调用 `testdb.SetupIsolatedDB(t)`，严禁将 `TEST_DB_DSN` 指向生产或团队共享库。
 2. **主从物理防腐门禁**：`go list -deps ./cmd/agent` 输出中严禁出现 `gorm.io`、`code-common/backend/gormdb`、`dynamicpb` 或 `protoregistry`（M17 Agent 回传 `ObservedEgressCalls` 仅依赖 `pkg/crosrpc` 二进制头解析）。
 3. **eBPF 双层测试门禁**：内核探针挂载测试以 `//go:build linux && ebpf` 隔离（无 `CAP_BPF` 时自动 `t.Skip` 并输出原因）；分帧、Mock 匹配、头部自愈与 `/proc` 解析必须在普通非特权环境下 100% 单元测试覆盖。
 4. **后台进程与内核探针卫生**：任何构建、测试或联调结束前，必须确保 `:8091`、`:5181` 及临时 Mock 端口全部关闭，`bpf_link` 探针 100% 卸载。

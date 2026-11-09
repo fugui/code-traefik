@@ -1,11 +1,11 @@
 # 架构与活体契约治理 (`code-traefik`) 数据库物理模型与 GORM 建模字典
 
 - **文档编号**：`05-database-schema.md`
-- **文档版本**：v1.5.0
+- **文档版本**：v1.5.1
 - **更新日期**：2026-11-09
 - **归属阶段**：阶段二：系统架构与数据模型设计 (`02-design`)
 - **状态**：已批准待实施 (Approved for M14~M19)
-- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.14.0)、[`01-system-architecture.md`](./01-system-architecture.md)、[`04-traffic-storage-partitioning-and-relational-normalization.md`](../05-adr/04-traffic-storage-partitioning-and-relational-normalization.md)、[`09-arch-process-ssot-and-ebpf-premount-standby-adr.md`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md) (ADR-09 v1.1.0)、[`12-packet-causality-call-tree-and-sequence-ux-adr.md`](../05-adr/12-packet-causality-call-tree-and-sequence-ux-adr.md) (ADR-12 v1.0.0)、[`14-governance-dashboard-golden-suite-and-ci-gate-adr.md`](../05-adr/14-governance-dashboard-golden-suite-and-ci-gate-adr.md) (ADR-14 v1.1.0)、[`15-scalable-topology-focus-and-layout-persistence-adr.md`](../05-adr/15-scalable-topology-focus-and-layout-persistence-adr.md) (ADR-15 v1.0.0)
+- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.14.1)、[`01-system-architecture.md`](./01-system-architecture.md)、[`04-traffic-storage-partitioning-and-relational-normalization.md`](../05-adr/04-traffic-storage-partitioning-and-relational-normalization.md)、[`09-arch-process-ssot-and-ebpf-premount-standby-adr.md`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md) (ADR-09 v1.1.0)、[`12-packet-causality-call-tree-and-sequence-ux-adr.md`](../05-adr/12-packet-causality-call-tree-and-sequence-ux-adr.md) (ADR-12 v1.0.0)、[`14-governance-dashboard-golden-suite-and-ci-gate-adr.md`](../05-adr/14-governance-dashboard-golden-suite-and-ci-gate-adr.md) (ADR-14 v1.1.0)、[`15-scalable-topology-focus-and-layout-persistence-adr.md`](../05-adr/15-scalable-topology-focus-and-layout-persistence-adr.md) (ADR-15 v1.1.0)
 
 ---
 
@@ -18,7 +18,7 @@
    - 将 **`traefik_processes`** 收敛为环境 Agent `1:1` 挂载实例表，通过强唯一索引 **`UNIQUE(agent_id, arch_process_id)`** 保障单环境单实例约束、通过部分唯一索引 **`UNIQUE(agent_id, effective_listen_port) WHERE effective_listen_port > 0`** 保障同机非零监听端口互斥（`A-02`）并兼容多纯客户端进程（端口 `0`），内置本地覆盖列与统一 **7 态探针就绪快照列**；
    - **运行期录制快照、黄金套件自包含快照与历史挂载解耦（[`ADR-14`](../05-adr/14-governance-dashboard-golden-suite-and-ci-gate-adr.md)）**：`traefik_recording_sessions.process_snapshots` (`jsonb`) 固化录制时刻各参与进程的 `arch_process_id` 与装载 `module_ids` 快照；**`traefik_golden_suites` / `traefik_golden_suite_items`** 将沉淀事务的入站/应答二进制帧与下游 `ScopedMocks` 完整深拷贝持久化，彻底脱离 `traefik_traffic_records` 30 天分区生命周期；`traefik_replay_tasks` 将 `session_id` 设为可空并支持 `golden_suite_id` 双源驱动，同时将 `source_process_id / target_process_id` 设为 `ON DELETE SET NULL`，确保后续卸载空闲挂载进程或清理过期流量分区后，黄金套件与历史任务永久独立可回放；
    - **`traefik_replay_items`** 物理条目表为每条被测请求独立一行持久化 `raw_actual_packet`（`bytea`）与 `field_diffs`（`jsonb`），支持标准服务端分页查询与历史多次 Diff 重跑；
-   - **双层混合拓扑布局与个人视图书签持久化（[`ADR-15`](../05-adr/15-scalable-topology-focus-and-layout-persistence-adr.md)）**：`traefik_topology_layouts` 统一承载架构师发布的团队官方基准布局（`scope='SHARED'`，按 `(view, focus_scope)` 部分唯一）与普通成员保存的个人专题视图书签（`scope='PRIVATE'`，含节点相对坐标、钉死标记、展开层级、过滤条件与镜头视口快照），通过 `base_model_version` 支撑架构演进时的增量混合布局合并。
+   - **位置层 + 视角层双层拓扑布局持久化（[`ADR-15`](../05-adr/15-scalable-topology-focus-and-layout-persistence-adr.md) v1.1.0）**：`traefik_topology_layouts` 统一承载架构师发布的**团队基准布局**（`scope='SHARED'`，每个 `view` 至多 1 条，完整相对父坐标 + 默认展开态/视口，`revision` 乐观锁）与普通成员保存的**个人视图书签**（`scope='PRIVATE'`，每人 ≤ 20 条，保存聚焦域、过滤条件、展开态、视口与**相对团队基准的坐标差量**）；坐标为相对父容器坐标、与聚焦域无关，故位置层按视图统一；通过 `structure_version`（树结构指纹）支撑架构演进时的增量 Diff 合并。
 3. **新系统免历史数据迁移的干净重建策略 (`Clean Schema Rebuild`)**：
    - 本项目尚处上线前新系统阶段，无历史生产数据兼容包袱，**不编写旧版单层表历史数据回填迁移脚本**；
    - 在 `models/db.go` `SetupWithDB` 启动迁移前，若检测到旧版表结构（如存在 `traefik_process_modules` 表，或 `traefik_processes` 表尚未包含 `arch_process_id` 列），直接执行一次性幂等清理：`DROP TABLE IF EXISTS traefik_replay_items, traefik_replay_tasks, traefik_recording_sessions, traefik_process_modules, traefik_processes CASCADE`、清空 `traefik_traffic_records` 并执行 `ALTER TABLE traefik_modules DROP COLUMN IF EXISTS process_id`、重置 `traefik_agents` 残留租约列，随后干净创建最新 18 表结构与完整约束。
@@ -42,7 +42,7 @@ erDiagram
     USERS ||--o{ TRAEFIK_AGENTS : "owner_id (PRIVATE) & lease_holder_id"
     USERS ||--o{ TRAEFIK_RECORDING_SESSIONS : "owner_id (SHARED / PRIVATE)"
     USERS ||--o{ TRAEFIK_REPLAY_TASKS : "owner_id"
-    USERS ||--o{ TRAEFIK_TOPOLOGY_LAYOUTS : "owner_id (PRIVATE) / created_by (SHARED)"
+    USERS ||--o{ TRAEFIK_TOPOLOGY_LAYOUTS : "owner_id (PRIVATE 书签) / created_by·updated_by (SHARED 基准)"
 
     TRAEFIK_SUBSYSTEMS ||--o{ TRAEFIK_FUNCTIONAL_GROUPS : "subsystem_id (RESTRICT)"
     TRAEFIK_FUNCTIONAL_GROUPS ||--o{ TRAEFIK_FUNCTIONAL_GROUPS : "parent_id (RESTRICT, <=8级)"
@@ -645,31 +645,66 @@ func (GoldenSuiteItem) TableName() string { return config.TablePrefix + "golden_
 ### 3.7 拓扑画布双层布局与个人视图书签表（表 18，`F-04.3`, [`ADR-15`](../05-adr/15-scalable-topology-focus-and-layout-persistence-adr.md)）
 
 ```go
-// 18. TopologyLayout 拓扑画布双层布局与个人视图书签表 (traefik_topology_layouts)
-// 统一承载团队官方基准布局 (scope='SHARED') 与个人自定义视图书签 (scope='PRIVATE')：
-//   - SHARED 域：同一 (view, focus_scope) 至多 1 条记录，由 traefik_admin 发布，全员默认加载；
-//   - PRIVATE 域：个人保存的常用聚焦域、过滤条件、节点坐标与镜头视口书签，单人上限 20 个。
+// 18. TopologyLayout 拓扑画布双层布局表 (traefik_topology_layouts)，位置层 + 视角层分离 (ADR-15 v1.1.0 §4.2)：
+//   - SHARED（团队基准布局 / 位置层）：每个 view 至多 1 条 (uk_traefik_topo_layout_shared)，由 traefik_admin 发布；
+//     owner_id 为 NULL、focus_scope 恒为 'GLOBAL'；node_positions 为全视图完整相对父坐标；revision 乐观锁防并发覆盖；
+//   - PRIVATE（个人视图书签 / 视角层）：单人上限 20 条，保存聚焦域、过滤条件、展开态与视口，
+//     node_positions 仅存相对团队基准的坐标差量覆写（团队基准更新后未覆写节点自动继承）；
+//   - 坐标均为相对 parentId 父容器的局部坐标，与聚焦域无关；聚焦根与外部邻居卡坐标不落库。
+//   - 约束：chk_traefik_topo_layout_scope / chk_traefik_topo_layout_view / chk_traefik_topo_layout_owner（见 §4 约束说明）。
 type TopologyLayout struct {
-	ID               uint64            `gorm:"primaryKey;autoIncrement" json:"id"`
-	Name             string            `gorm:"size:128;not null" json:"name"`                                               // 布局/视图名称（SHARED 默认为 "团队官方基准布局"）
-	View             string            `gorm:"size:16;not null;index:idx_traefik_topo_layout_lookup,priority:1" json:"view"` // LOGICAL | PHYSICAL
-	FocusScope       string            `gorm:"size:64;not null;default:'GLOBAL';index:idx_traefik_topo_layout_lookup,priority:2" json:"focus_scope"` // "GLOBAL" 或下钻根容器 ID（如 "sub_1", "grp_12", "pgrp_3"）
-	Scope            string            `gorm:"size:16;not null;default:'PRIVATE';index:idx_traefik_topo_layout_lookup,priority:3" json:"scope"`      // SHARED | PRIVATE
-	OwnerID          *uint             `gorm:"index:idx_traefik_topo_layout_owner" json:"owner_id"`                         // PRIVATE 归属人 ID；SHARED 为 NULL
+	ID               uint64             `gorm:"primaryKey;autoIncrement" json:"id"`
+	Scope            string             `gorm:"size:16;not null;default:'PRIVATE';index:idx_traefik_topo_layout_owner_view,priority:3" json:"scope"` // SHARED | PRIVATE
+	View             string             `gorm:"size:16;not null;index:idx_traefik_topo_layout_owner_view,priority:2" json:"view"`                    // LOGICAL | PHYSICAL
+	OwnerID          *uint              `gorm:"index:idx_traefik_topo_layout_owner_view,priority:1" json:"owner_id"`                                 // PRIVATE 归属人 ID；SHARED 为 NULL
 	Owner            *commonModels.User `gorm:"foreignKey:OwnerID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"owner,omitempty"`
-	IsDefault        bool              `gorm:"not null;default:false" json:"is_default"`                                    // 个人视图中是否作为该 (view, focus_scope) 的首选默认视图
-	BaseModelVersion string            `gorm:"size:64;not null;default:''" json:"base_model_version"`                       // 保存时刻对应的 TopologyGraphDTO.model_version，供增量 Diff 合并
-	NodePositions    datatypes.JSON    `gorm:"type:jsonb;not null;default:'{}'" json:"node_positions"`                      // map[nodeID]{x, y, w?, h?, pinned: bool} 相对父容器坐标
-	ExpandState      datatypes.JSON    `gorm:"type:jsonb;not null;default:'{}'" json:"expand_state"`                        // {level: 0|1|2, overrides: map[nodeID]bool}
-	FilterState      datatypes.JSON    `gorm:"type:jsonb;not null;default:'{}'" json:"filter_state"`                        // {subsystemIds?, statusFilter?, egoCenterId?, egoHops?, hideIsolated?}
-	Viewport         datatypes.JSON    `gorm:"type:jsonb;not null;default:'{}'" json:"viewport"`                            // {x: float64, y: float64, zoom: float64}
-	Description      string            `gorm:"size:512" json:"description"`
-	CreatedBy        uint              `gorm:"not null;default:0" json:"created_by"`
-	UpdatedBy        uint              `gorm:"not null;default:0" json:"updated_by"`
-	CreatedAt        time.Time         `json:"created_at"`
-	UpdatedAt        time.Time         `json:"updated_at"`
+	Name             string             `gorm:"size:128;not null" json:"name"`                                // 书签名称（SHARED 固定为 "团队基准布局"）
+	Description      string             `gorm:"size:512;not null;default:''" json:"description"`
+	FocusScope       string             `gorm:"size:64;not null;default:'GLOBAL'" json:"focus_scope"`         // 书签聚焦根容器 ID（"GLOBAL" | "sub_1" | "grp_12" | "pgrp_3" | "proc_7" ...）；SHARED 恒为 "GLOBAL"
+	IsDefault        bool               `gorm:"not null;default:false" json:"is_default"`                     // PRIVATE：是否为该 (view, focus_scope) 默认书签；SHARED 恒为 false
+	SchemaVersion    int                `gorm:"not null;default:1" json:"schema_version"`                     // JSON 载荷结构版本，前端按版本迁移或降级
+	StructureVersion string             `gorm:"size:64;not null;default:''" json:"structure_version"`         // 保存时刻 TopologyGraphDTO.structure_version（树结构指纹），供增量 Diff 合并
+	Revision         int                `gorm:"not null;default:1" json:"revision"`                           // 乐观锁版本号，每次更新 +1
+	NodePositions    datatypes.JSON     `gorm:"type:jsonb;not null;default:'{}'" json:"node_positions"`       // map[nodeID]SavedNodePosition{x, y, pinned?}；SHARED 为完整坐标，PRIVATE 为差量
+	ExpandState      datatypes.JSON     `gorm:"type:jsonb;not null;default:'{}'" json:"expand_state"`         // SavedExpandState{level: 0..16 (相对聚焦根深度), overrides: map[nodeID]bool}
+	FilterState      datatypes.JSON     `gorm:"type:jsonb;not null;default:'{}'" json:"filter_state"`         // SavedFilterState{subsystem_ids?, only_my_scope?, status?, ego_node_id?, ego_hops?, hide_isolated?, hub_fold?}
+	Viewport         datatypes.JSON     `gorm:"type:jsonb;not null;default:'{}'" json:"viewport"`             // SavedViewport{x, y, zoom ∈ [0.15, 2.0]}
+	CreatedBy        uint               `gorm:"not null;default:0" json:"created_by"`
+	UpdatedBy        uint               `gorm:"not null;default:0" json:"updated_by"`
+	CreatedAt        time.Time          `json:"created_at"`
+	UpdatedAt        time.Time          `json:"updated_at"`
 }
 
+// SavedNodePosition 单节点相对父容器坐标（x/y 必须为有限实数，键为节点 ID 且长度 <= 128，条目数 <= 5000）
+type SavedNodePosition struct {
+	X      float64 `json:"x"`
+	Y      float64 `json:"y"`
+	Pinned bool    `json:"pinned,omitempty"`
+}
+
+// SavedExpandState 展开态快照（level 为相对聚焦根的深度档位；overrides 条目数 <= 5000）
+type SavedExpandState struct {
+	Level     int             `json:"level"`
+	Overrides map[string]bool `json:"overrides,omitempty"`
+}
+
+// SavedFilterState 过滤条件快照（与前端 TopologyFilterState 字段一一对应）
+type SavedFilterState struct {
+	SubsystemIDs []string `json:"subsystem_ids,omitempty"` // <= 100 项
+	OnlyMyScope  bool     `json:"only_my_scope,omitempty"`
+	Status       string   `json:"status,omitempty"`        // ALL | ABNORMAL | VIOLATION_ONLY
+	EgoNodeID    string   `json:"ego_node_id,omitempty"`
+	EgoHops      int      `json:"ego_hops,omitempty"`      // 1 | 2
+	HideIsolated bool     `json:"hide_isolated,omitempty"`
+	HubFold      bool     `json:"hub_fold,omitempty"`
+}
+
+// SavedViewport 镜头视口快照
+type SavedViewport struct {
+	X    float64 `json:"x"`
+	Y    float64 `json:"y"`
+	Zoom float64 `json:"zoom"`
+}
 func (TopologyLayout) TableName() string { return config.TablePrefix + "topology_layouts" }
 ```
 
@@ -751,8 +786,10 @@ func (TopologyLayout) TableName() string { return config.TablePrefix + "topology
 | `traefik_replay_items` | `uk_traefik_replay_task_seq` | `UNIQUE (task_id, seq_no)` | **F-12 & F-25**：单重放任务内请求执行序号唯一（同时兼容录制批次源 `record_id` 与黄金套件源 `suite_item_id`） |
 | `traefik_golden_suites` | `uk_traefik_golden_suite_code` | `UNIQUE (code)` | **F-25 (ADR-14)**：黄金契约套件编码全局唯一 |
 | `traefik_golden_suite_items` | `uk_traefik_golden_item_order` | `UNIQUE (suite_id, order_no)` | **F-25 (ADR-14)**：同一黄金套件内事务执行顺序严格唯一不冲突 |
-| `traefik_topology_layouts` | `uk_traefik_topo_layout_shared` | `UNIQUE (view, focus_scope) WHERE scope = 'SHARED'` | **F-04.3 (ADR-15)**：同一视图类型与聚焦域下全局至多 1 份团队官方基准布局 |
-| `traefik_topology_layouts` | `uk_traefik_topo_layout_private_name` | `UNIQUE (owner_id, view, focus_scope, name) WHERE scope = 'PRIVATE'` | **F-04.3 (ADR-15)**：同一用户在同一视图与聚焦域下的个人书签名称唯一 |
+| `traefik_topology_layouts` | `uk_traefik_topo_layout_shared` | `UNIQUE (view) WHERE scope = 'SHARED'` | **F-04.3 (ADR-15)**：每个视图类型全局至多 1 份团队基准布局（位置层按视图统一，与聚焦域无关） |
+| `traefik_topology_layouts` | `uk_traefik_topo_layout_private_name` | `UNIQUE (owner_id, view, name) WHERE scope = 'PRIVATE'` | **F-04.3 (ADR-15)**：同一用户在同一视图下的个人书签名称唯一 |
+| `traefik_topology_layouts` | `uk_traefik_topo_layout_private_default` | `UNIQUE (owner_id, view, focus_scope) WHERE scope = 'PRIVATE' AND is_default` | **F-04.3 (ADR-15)**：同一用户每个 `(view, focus_scope)` 至多 1 个默认书签（数据库兜底并发互斥） |
+| `traefik_topology_layouts` | `chk_traefik_topo_layout_scope` / `chk_traefik_topo_layout_view` / `chk_traefik_topo_layout_owner` | `CHECK (scope IN ('SHARED','PRIVATE'))`；`CHECK (view IN ('LOGICAL','PHYSICAL'))`；`CHECK ((scope='SHARED' AND owner_id IS NULL AND focus_scope='GLOBAL' AND is_default=false) OR (scope='PRIVATE' AND owner_id IS NOT NULL))` | **F-04.3 (ADR-15)**：在数据库层保证公私域与归属人组合合法，不依赖应用层单点校验 |
 | `traefik_traffic_records` | `idx_traefik_tr_session_req_ns` | `BTREE (session_id, req_captured_at_ns, id)` | **F-11 & F-15.6 (ADR-12)**：保障单批次报文严格按请求发起时刻 `O(log N)` 有序读取与事务调用树构建 |
 | `traefik_traffic_records` | `idx_traefik_tr_payload_gin` | `GIN (payload_json jsonb_path_ops)` | **F-11**：加速 `payload_json` 结构化请求/应答载荷的明文键值条件检索 |
 
@@ -781,8 +818,8 @@ func (TopologyLayout) TableName() string { return config.TablePrefix + "topology
 | 删除 `ProtoSchema` | 当前处于 `is_active = true` 生效态（须先执行 `deactivate` 停用或切换至新版本） | `409 Conflict` | 非生效历史版本允许删除：`ProtoOperation` 级联 `CASCADE` 删除 |
 | 删除 `RecordingSession` | 当前处于 `RECORDING` / `STOPPING` 态，或存在未结束 `ReplayTask` 引用 | `409 Conflict` | 已完成批次删除时历史 `ReplayTask.session_id` 自动 `ON DELETE SET NULL`，已沉淀的 `GoldenSuiteItem` 因自包含深拷贝毫发无损 |
 | 删除 `ArchProcess`（补充黄金套件守卫） | 存在关联的 `GoldenSuite` 黄金契约套件（`traefik_golden_suites`） | `409 Conflict` | `ON DELETE RESTRICT`（防止误删权威门禁绑定的架构标准进程） |
-| 发布/重置团队官方拓扑基准布局 (`SHARED` `TopologyLayout`) | 非 `traefik_admin` 尝试调用 `PUT/DELETE /api/arch/topology/layouts/canonical` | `403 Forbidden` | `AdminOnly` 守卫 + `uk_traefik_topo_layout_shared` 部分唯一索引幂等 Upsert |
-| 读写个人拓扑视图书签 (`PRIVATE` `TopologyLayout`) | 1. 非 `owner_id` 本人尝试修改/删除他人个人视图书签（管理员仅可删除违规项）；<br>2. 单人个人视图书签总数超过 `20` 个配额或同域重名 | `403 Forbidden`<br>`400 / 409` | 应用层 `owner_id` Anti-IDOR 校验 + 配额守卫 + `uk_traefik_topo_layout_private_name` |
+| 发布/重置团队基准布局 (`SHARED` `TopologyLayout`) | 1. 非 `traefik_admin` 调用 `PUT/DELETE /api/arch/topology/layouts/canonical`；<br>2. `expected_revision` 与当前 `revision` 不一致或并发首次创建 | `403 Forbidden`<br>`409 LAYOUT_REVISION_CONFLICT` | `requireAdmin` 守卫 + 事务内 `SELECT ... FOR UPDATE` 乐观锁 + `uk_traefik_topo_layout_shared` 兜底；审计仅记录摘要（视图、坐标条目数、`structure_version`、`revision`） |
+| 读写个人视图书签 (`PRIVATE` `TopologyLayout`) | 1. 非 `owner_id` 本人读取/修改他人书签，或非本人且非管理员删除他人书签；<br>2. 单人书签总数超过 `20` 个；<br>3. 同视图重名；<br>4. 请求体超过 `1MB` | `403 Forbidden`<br>`400 PERSONAL_VIEW_QUOTA_EXCEEDED`<br>`409 Conflict`<br>`413 PAYLOAD_TOO_LARGE` | 应用层 `owner_id` Anti-IDOR 校验 + 事务内 `pg_advisory_xact_lock(hashtext('traefik_topo_layout_quota'), owner_id)` 串行化配额计数 + `uk_traefik_topo_layout_private_name` / `uk_traefik_topo_layout_private_default` + 专用 DTO 绑定防批量赋值 |
 | CI/CD 门禁评估 `POST /api/gates/evaluate` | 1. 目标 Agent 离线、进程 `NEED_RECONNECT` 或排他锁等待超过 `wait_lease_seconds` 仍繁忙；<br>2. 重放检出未报备 `Violation` 或套件 `FAILED Diff / MOCK_MISS` | `503` (环境忙/未就绪)<br>`422` (质量门禁阻断) | 服务端有界退避排队获取 `REPLAY` 租约，区分环境瞬态不可用 (`503`) 与代码违规红牌 (`422`) |
 
 ---

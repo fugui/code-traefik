@@ -3,7 +3,7 @@
 - **文档编号**：`05-hierarchical-topology-canvas-redesign.md`
 - **文档版本**：v1.1.0
 - **日期**：2026-10-31
-- **状态**：已采纳 (Accepted)
+- **状态**：已采纳 (Accepted)；**§2 决策项 #3「布局持久化策略」已被 [`ADR-15`](./15-scalable-topology-focus-and-layout-persistence-adr.md) (v1.1.0) 取代**，其余决策继续有效
 - **关联特性**：`F-04`（静态架构拓扑视图）、`F-05`（实测调用拓扑还原与架构一致性验证）
 - **关联设计**：[`docs/02-design/03-architecture-elements-and-topology.md` §4~§5](../02-design/03-architecture-elements-and-topology.md)、[`docs/02-design/04-control-plane-and-web-console.md` §4](../02-design/04-control-plane-and-web-console.md)
 - **关联作战卡**：[`docs/04-tasks/07-m6-hierarchical-topology-canvas.md`](../04-tasks/07-m6-hierarchical-topology-canvas.md) (M6)
@@ -27,7 +27,7 @@
 | :---: | :--- | :--- | :--- |
 | **1** | **技术选型** | **React Flow (`@xyflow/react` v12) + ELK.js** | 采用 React Flow v12 作为交互渲染底座（原生 `parentId` 嵌套容器支持），ELK 在内联 Web Worker（`?worker&inline`）中负责分层复合图正交折线布局计算，DOM 节点样式严格基于平台 `--color-*` Design Tokens。 |
 | **2** | **展开收起交互** | **双击 + 层级滑杆显式展开，语义自动展开作为可选开关** | 默认由用户双击容器节点或调节顶部工具栏 `层级滑杆 (L0 ~ Ln)` 进行展开/折叠，保证布局绝对稳定受控；基于视口面积占比的滚轮自动展开做成工具栏复选开关（默认关闭）。 |
-| **3** | **布局持久化策略** | **手动拖动后的排版不保存，拖拽边动态跟随** | 画布节点的手动拖拽调整仅作为当前会话的临时观察态，不落库也不存 `localStorage`；拖拽节点关联的边自动从静态 ELK 拐点退化为动态 `SmoothStep` 正交线跟随连接点，提供“重置布局”按钮随时一键恢复 ELK 全局最优排版。 |
+| **3** | **布局持久化策略**（⚠️ 已被 ADR-15 取代） | **手动拖动后的排版不保存，拖拽边动态跟随** | 画布节点的手动拖拽调整仅作为当前会话的临时观察态，不落库也不存 `localStorage`；拖拽节点关联的边自动从静态 ELK 拐点退化为动态 `SmoothStep` 正交线跟随连接点，提供“重置布局”按钮随时一键恢复 ELK 全局最优排版。<br>**【已取代】** 自 M19 起由 [`ADR-15`](./15-scalable-topology-focus-and-layout-persistence-adr.md) 的「位置记忆 + 局部子树排版」与「团队基准（位置层）+ 个人书签（视角层）+ `localStorage` 草稿」双层持久化替代。 |
 | **4** | **物理部署视图模型** | **严格收敛为「进程组 (`ProcessGroup`) → 进程 (`Process`) → 模块 (`Module`)」** | **彻底剔除 Agent 节点**。Agent 仅作为数据面无状态探测器与 eBPF 采集载体，不属于系统业务架构的构成元素。物理图只体现进程的分组归属、有效监听端点 (`EffectiveIP:ListenPort`) 与承载模块。 |
 | **5** | **一致性验证整合** | **「架构一致性比对」合并为拓扑画布的“动态叠加层 (Overlay)”** | 取消割裂的独立验证页签并清理旧版冗余组件。在拓扑画布上一键挂载选定的录制批次（`session_id`），支持动态合成未声明 `VIOLATION` 违规边与 `UNATTRIBUTED` 归属边，直接在拓扑边上渲染六分类状态并穿透四段报文解剖。 |
 | **6** | **架构图去 Agent 化** | **拓扑契约与前端模型同 Agent 彻底解耦** | 后端 `GET /api/arch/topology/graph` 响应节点与 `meta` 中彻底移除 `AGENT` 节点类型及 `agent_id` 字段，架构设计与物理拓扑只关注业务逻辑与网络服务进程。 |

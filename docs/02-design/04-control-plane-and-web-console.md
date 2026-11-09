@@ -301,19 +301,28 @@ src/
 │   │   ├── ArchCanvas.css                  # 100% --color-* Token 样式及 .react-flow__* 亮暗主题覆写
 │   │   ├── layout/
 │   │   │   ├── elk.worker.ts               # ELK 复合图分层正交排版内联 Worker (?worker&inline)
-│   │   │   └── useElkLayout.ts             # 父先于子拓扑序、跨层拐点全局坐标换算、锚点保持与拖拽 SmoothStep 退化
+│   │   │   ├── useElkLayout.ts             # 父先于子拓扑序、跨层拐点全局坐标换算；全局/局部/快轨三模式排版 (拖拽不触发 ELK)
+│   │   │   ├── layoutProcessor.ts          # ELK 坐标后处理、React Flow 节点/边模型构建与边退化标记
+│   │   │   ├── layoutMerger.ts             # [M19] 位置记忆、局部子树排版规划、自底向上碰撞消解、边退化判定与节点集合 Diff
+│   │   │   └── layoutPersistence.ts        # [M19] 加载优先级、团队基准/书签差量/草稿坐标叠加与聚焦态持久化切片
 │   │   ├── model/
 │   │   │   ├── hierarchy.ts                # 树索引、祖先物化路径与 LCA (最近公共祖先) 纯函数
-│   │   │   ├── rollup.ts                   # 纯前端边汇总 (rep)、动态 VIOLATION/UNATTRIBUTED 融合与最差状态收敛
+│   │   │   ├── overlay.ts                  # [M19] 一致性叠加合成: 动态 VIOLATION/UNATTRIBUTED 边/虚拟节点与静态边状态映射 (按模块对索引)
+│   │   │   ├── rollup.ts                   # 纯前端边汇总 (rep) 与最差状态收敛 (rollupEdges 保留为兼容门面)
+│   │   │   ├── subgraph.ts                 # [M19] 聚焦/透明祖先/LCA 外部邻居、有向邻域、多维切片过滤、孤立裁剪与可见规模预估
+│   │   │   ├── noiseReduction.ts           # [M19] Hub 插头折叠 (违规边豁免) 与 1-Hop 聚光灯集合
 │   │   │   └── metrics.ts                  # Tarjan SCC 循环依赖分析与扇入扇出统计
 │   │   ├── nodes/
-│   │   │   ├── ContainerNode.tsx           # 矩形嵌套容器 (子系统/功能组/进程组/物理进程，支持双击下钻)
-│   │   │   ├── ModuleLeafNode.tsx          # 功能模块叶子卡片 (未装载虚线告警)
+│   │   │   ├── ContainerNode.tsx           # 矩形嵌套容器 (双击展开/折叠、[🎯 聚焦] 按钮、📌 图钉、Hub 插头徽章)
+│   │   │   ├── ModuleNode.tsx              # 功能模块叶子卡片 (未装载虚线告警、📌 图钉、✨ 新增徽标)
+│   │   │   ├── ExternalContextNode.tsx     # [M19] 聚焦视图外部上下游邻居卡 (方向修饰 + 切换聚焦)
 │   │   │   └── ExternalNode.tsx            # 外部系统/外部端点/未登记接口卡片
 │   │   ├── edges/
 │   │   │   └── RollupEdge.tsx              # 正交折线汇总边 (对数线宽、六分类着色、脉冲告警与拖拽自适应)
 │   │   └── panels/
-│   │       ├── ArchCanvasToolbar.tsx       # 工具栏: 逻辑/物理切换、L0~Ln 层级滑杆、自动展开开关、批次选择与重置布局
+│   │       ├── ArchCanvasToolbar.tsx       # 工具栏: 逻辑/物理切换、层级滑杆、面包屑、搜索候选飞跃、多维过滤、书签/基准发布与重新自动排版
+│   │       ├── TopologyBookmarkDrawer.tsx  # [M19] 个人视图书签管理抽屉 (基于 @code/common Drawer)
+│   │       ├── VisibilityGuardDialog.tsx   # [M19] 可见节点守卫引导弹窗 (先聚焦 / 先过滤 / 仍要展开)
 │   │       ├── ArchSummaryBar.tsx          # 一致性比对六分类摘要栏与待定归属待办入口
 │   │       ├── NodeInspectDrawer.tsx       # 选中节点属性画像与 PROVIDE/DEPEND 快速跳转抽屉
 │   │       └── EdgeDetailDrawer.tsx        # 汇总边底层契约明细与一致性抽样报文联动抽屉
@@ -861,7 +870,7 @@ export interface ReplayClosurePreviewDTO {
 }
 ```
 
-### 4.7 面向业务开发者的报文调用与结果透视抽屉架构设计 (ADR-15 / M18)
+### 4.7 面向业务开发者的报文调用与结果透视抽屉架构设计 (F-15.2 / M18)
 
 #### 4.7.1 设计目标与信息架构分层
 将原本偏向 Wireshark/网络协议抓包的四段二进制界面彻底重构为**以业务工程师日常排查为核心的高质感视窗**：
