@@ -1030,12 +1030,20 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
   // 节点与边点击检视：单击仅选中锁定聚光灯（若抽屉已打开则自动跟随切换），通过操作条或双击显式打开抽屉
   const handleSelectNode = useCallback((node: GraphNode | null) => {
     setSelectedNode(node);
+    if (!node) {
+      setIsNodeDrawerOpen(false);
+      setIsEdgeDrawerOpen(false);
+    }
   }, []);
 
   const handleInspectNode = useCallback((node: GraphNode, tab: NodeInspectTab = 'RELATIONS') => {
     setSelectedNode(node);
     setNodeDrawerTab(tab);
     setIsNodeDrawerOpen(true);
+    // 互斥关闭右侧其他侧边抽屉，防止 mask={false} 下 520px 的边画像与 480px 的节点画像层叠露边
+    setIsEdgeDrawerOpen(false);
+    setIsBookmarkDrawerOpen(false);
+    setIsPendingDrawerOpen(false);
   }, []);
 
   const handleJumpToNode = useCallback((peerNode: GraphNode) => {
@@ -1054,6 +1062,10 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
   const handleSelectEdge = useCallback((edge: RollupEdgeModel) => {
     setSelectedEdge(edge);
     setIsEdgeDrawerOpen(true);
+    // 互斥关闭右侧其他侧边抽屉
+    setIsNodeDrawerOpen(false);
+    setIsBookmarkDrawerOpen(false);
+    setIsPendingDrawerOpen(false);
   }, []);
 
   const handleViewTrafficRecord = useCallback(
@@ -1208,7 +1220,12 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
         bookmarkQuotaText={
           layoutList?.quota ? `${layoutList.quota.used}/${layoutList.quota.limit}` : undefined
         }
-        onOpenBookmarkDrawer={() => setIsBookmarkDrawerOpen(true)}
+        onOpenBookmarkDrawer={() => {
+          setIsBookmarkDrawerOpen(true);
+          setIsNodeDrawerOpen(false);
+          setIsEdgeDrawerOpen(false);
+          setIsPendingDrawerOpen(false);
+        }}
       />
 
       {/* 软阈值 (46..120) 黄色降噪建议横幅 */}
@@ -1254,7 +1271,12 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
         <ArchSummaryBar
           report={consistencyReport}
           unattributedPendingList={unattributedPendingList}
-          onOpenPendingList={() => setIsPendingDrawerOpen(true)}
+          onOpenPendingList={() => {
+            setIsPendingDrawerOpen(true);
+            setIsNodeDrawerOpen(false);
+            setIsEdgeDrawerOpen(false);
+            setIsBookmarkDrawerOpen(false);
+          }}
         />
       )}
 

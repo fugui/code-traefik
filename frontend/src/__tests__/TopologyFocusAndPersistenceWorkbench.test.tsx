@@ -512,6 +512,15 @@ describe('M19-P5 & M19-P6: TopologyFocusAndPersistenceWorkbench Suite', () => {
     expect(archCanvasContent).toContain('selectedId');
     expect(archCanvasContent).toContain('hoverId');
     expect(archCanvasContent).toContain('zoomOnDoubleClick={false}');
+
+    // 4. 右侧侧边抽屉互斥守卫：打开节点/边/书签/待办抽屉时必须互斥关闭其他侧边抽屉，防止 mask={false} 下 520px 的边画像与 480px 的节点画像层叠露边
+    const tabPaneContent = fs.readFileSync(
+      path.join(srcRoot, 'pages/ArchitectureWorkbenchPage/ArchTopologyTabPane.tsx'),
+      'utf-8'
+    );
+    expect(tabPaneContent).toContain('// 互斥关闭右侧其他侧边抽屉');
+    expect(tabPaneContent).toContain('setIsEdgeDrawerOpen(false);');
+    expect(tabPaneContent).toContain('setIsNodeDrawerOpen(false);');
   });
 
   // §3.7: testThreeStateInteraction_DoubleClickDrillIn_ActionBar_AndRelationsDrawer
