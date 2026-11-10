@@ -50,7 +50,11 @@ import {
   type OwnerFilterOption,
 } from '../../components/ArchCanvas/panels/ArchCanvasToolbar';
 import { ArchSummaryBar } from '../../components/ArchCanvas/panels/ArchSummaryBar';
-import { NodeInspectDrawer } from '../../components/ArchCanvas/panels/NodeInspectDrawer';
+import {
+  NodeInspectDrawer,
+  type NodeInspectTab,
+} from '../../components/ArchCanvas/panels/NodeInspectDrawer';
+import { computeNodeRelations } from '../../components/ArchCanvas/model/noiseReduction';
 import { EdgeDetailDrawer } from '../../components/ArchCanvas/panels/EdgeDetailDrawer';
 import { VisibilityGuardDialog } from '../../components/ArchCanvas/panels/VisibilityGuardDialog';
 import { TopologyBookmarkDrawer } from '../../components/ArchCanvas/panels/TopologyBookmarkDrawer';
@@ -288,6 +292,11 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
   // 4. 抽屉状态
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
   const [isNodeDrawerOpen, setIsNodeDrawerOpen] = useState(false);
+  const [nodeDrawerTab, setNodeDrawerTab] = useState<NodeInspectTab>('RELATIONS');
+  const [visibleRollupEdges, setVisibleRollupEdges] = useState<RollupEdgeModel[]>([]);
+  const [panToNodeRequest, setPanToNodeRequest] = useState<{ nodeId: string; seq: number } | null>(
+    null
+  );
   const [selectedEdge, setSelectedEdge] = useState<RollupEdgeModel | null>(null);
   const [isEdgeDrawerOpen, setIsEdgeDrawerOpen] = useState(false);
   const [isPendingDrawerOpen, setIsPendingDrawerOpen] = useState(false);
@@ -780,29 +789,46 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
     [scheduleSaveDraft]
   );
 
-  // 单节点拖拽停止后记录最新相对坐标并写入草稿
+  // 单节点拖拽停止后记录最新相对坐标并写入草稿（同时联动撑大父容器保存尺寸）
   const handleNodePositionChange = useCallback(
     (nodeId: string, pos: { x: number; y: number }) => {
       setSavedPositions((prev) => {
         const base = prev || {};
         const existing = base[nodeId];
+        const gn = graphData?.nodes?.find((n) => n.id === nodeId);
+        const parentId = existing?.parent_id ?? gn?.parent_id ?? null;
+        const childW = existing?.width ?? (gn?.type === 'MODULE' ? 220 : 260);
+        const childH = existing?.height ?? (gn?.type === 'MODULE' ? 74 : 80);
+
         const next: Record<string, SavedNodePosition> = {
           ...base,
           [nodeId]: {
             x: pos.x,
             y: pos.y,
-            parent_id: existing?.parent_id ?? null,
+            parent_id: parentId,
             is_expanded: Boolean(expandState[nodeId]),
             pinned: pinnedNodeIds.has(nodeId) || existing?.pinned,
             width: existing?.width,
             height: existing?.height,
           },
         };
+
+        if (parentId && next[parentId]) {
+          const parentPos = next[parentId];
+          const reqW = pos.x + childW + 16;
+          const reqH = pos.y + childH + 16;
+          next[parentId] = {
+            ...parentPos,
+            width: Math.max(parentPos.width ?? 260, reqW),
+            height: Math.max(parentPos.height ?? 140, reqH),
+          };
+        }
+
         scheduleSaveDraft(next);
         return next;
       });
     },
-    [expandState, pinnedNodeIds, scheduleSaveDraft]
+    [graphData, expandState, pinnedNodeIds, scheduleSaveDraft]
   );
 
   // 展开高扇出 Hub 节点折叠边
@@ -1001,11 +1027,29 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
     [activeLayoutId, updateUrlParams, refreshLayoutList, toast]
   );
 
-  // 节点与边点击检视
-  const handleSelectNode = useCallback((node: GraphNode) => {
+  // 节点与边点击检视：单击仅选中锁定聚光灯（若抽屉已打开则自动跟随切换），通过操作条或双击显式打开抽屉
+  const handleSelectNode = useCallback((node: GraphNode | null) => {
     setSelectedNode(node);
+  }, []);
+
+  const handleInspectNode = useCallback((node: GraphNode, tab: NodeInspectTab = 'RELATIONS') => {
+    setSelectedNode(node);
+    setNodeDrawerTab(tab);
     setIsNodeDrawerOpen(true);
   }, []);
+
+  const handleJumpToNode = useCallback((peerNode: GraphNode) => {
+    setSelectedNode(peerNode);
+    setPanToNodeRequest((prev) => ({
+      nodeId: peerNode.id,
+      seq: (prev?.seq ?? 0) + 1,
+    }));
+  }, []);
+
+  const selectedNodeRelations = useMemo(
+    () => computeNodeRelations(selectedNode?.id, graphData?.nodes ?? [], visibleRollupEdges),
+    [selectedNode?.id, graphData?.nodes, visibleRollupEdges]
+  );
 
   const handleSelectEdge = useCallback((edge: RollupEdgeModel) => {
     setSelectedEdge(edge);
@@ -1230,7 +1274,9 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
           expandState={expandState}
           onToggleExpand={handleToggleExpand}
           onSelectNode={handleSelectNode}
+          onInspectNode={handleInspectNode}
           onSelectEdge={handleSelectEdge}
+          selectedNodeId={selectedNode?.id ?? null}
           consistencyReport={consistencyReport}
           view={view}
           resetKey={resetKey}
@@ -1243,6 +1289,14 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
           seedNodeId={selectedNode?.id ?? null}
           neighborhoodHop={neighborhoodHop}
           neighborhoodDirection={neighborhoodDirection}
+          onNeighborhoodHopChange={(hop) => {
+            setNeighborhoodHop(hop);
+            updateUrlParams(buildTopoUrlParams({ neighborhoodHop: hop }));
+          }}
+          onNeighborhoodDirectionChange={(dir) => {
+            setNeighborhoodDirection(dir);
+            updateUrlParams(buildTopoUrlParams({ neighborhoodDirection: dir }));
+          }}
           ownerId={ownerId}
           consistencyOnly={consistencyOnly}
           hideIsolated={hideIsolated}
@@ -1255,11 +1309,13 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
           onTogglePin={handleTogglePin}
           onNodePositionChange={handleNodePositionChange}
           onPositionsComputed={(computed) => {
-            setSavedPositions((prev) => prev || computed);
+            setSavedPositions((prev) => (prev ? { ...prev, ...computed } : computed));
           }}
           initialViewport={restoredViewport}
           onViewportChange={setCurrentViewport}
           containerSearchMatchCounts={searchDecision.containerMatchCounts}
+          onVisibleRollupEdgesChange={setVisibleRollupEdges}
+          panToNodeRequest={panToNodeRequest}
           className="code-arch-canvas--full"
         />
       </div>
@@ -1324,6 +1380,12 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
         open={isNodeDrawerOpen}
         onClose={() => setIsNodeDrawerOpen(false)}
         node={selectedNode}
+        activeTab={nodeDrawerTab}
+        onTabChange={setNodeDrawerTab}
+        relations={selectedNodeRelations}
+        onJumpToNode={handleJumpToNode}
+        onInspectEdge={handleSelectEdge}
+        onFocusScope={handleFocusScopeChange}
       />
 
       {/* 边画像抽屉 */}

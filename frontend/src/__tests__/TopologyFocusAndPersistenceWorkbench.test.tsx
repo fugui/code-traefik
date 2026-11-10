@@ -16,6 +16,7 @@ import { ExternalContextNode } from '../components/ArchCanvas/nodes/ExternalCont
 import { VisibilityGuardDialog } from '../components/ArchCanvas/panels/VisibilityGuardDialog';
 import { TopologyBookmarkDrawer } from '../components/ArchCanvas/panels/TopologyBookmarkDrawer';
 import { ArchCanvasToolbar } from '../components/ArchCanvas/panels/ArchCanvasToolbar';
+import { NodeInspectDrawer } from '../components/ArchCanvas/panels/NodeInspectDrawer';
 import {
    evaluateVisibilityGuard,
   computeSearchExpandDecision,
@@ -501,13 +502,129 @@ describe('M19-P5 & M19-P6: TopologyFocusAndPersistenceWorkbench Suite', () => {
     expect(nodeInspectContent).toContain('mask={false}');
     expect(edgeDetailContent).toContain('mask={false}');
 
-    // 2. 容器节点具备双击展开/折叠语义提示
-    expect(containerNodeContent).toContain('title="双击展开容器查看内部节点"');
-    expect(containerNodeContent).toContain('title="双击折叠容器"');
+    // 2. 容器节点遵循单向渐进下钻语义（严禁再残留反直觉的 title="双击折叠容器"）
+    expect(containerNodeContent).not.toContain('title="双击折叠容器"');
+    expect(containerNodeContent).toContain('双击下钻聚焦至此容器');
+    expect(containerNodeContent).toContain('双击展开容器查看内部节点');
 
-    // 3. 画布核心挂载 onNodeDoubleClick，并且在双击时清除延时消抖计时器
+    // 3. 画布核心挂载 onNodeDoubleClick，且已移除 220ms 单击延迟计时器，拆分 hoverId 与 selectedId
     expect(archCanvasContent).toContain('onNodeDoubleClick={handleNodeDoubleClick}');
-    expect(archCanvasContent).toContain('window.setTimeout');
-    expect(archCanvasContent).toContain('window.clearTimeout');
+    expect(archCanvasContent).toContain('selectedId');
+    expect(archCanvasContent).toContain('hoverId');
+    expect(archCanvasContent).toContain('zoomOnDoubleClick={false}');
+  });
+
+  // §3.7: testThreeStateInteraction_DoubleClickDrillIn_ActionBar_AndRelationsDrawer
+  it('testThreeStateInteraction_DoubleClickDrillIn_ActionBar_AndRelationsDrawer', () => {
+    const sampleNode: GraphNode = {
+      id: 'mod_101',
+      type: 'MODULE',
+      parent_id: 'grp_11',
+      ancestors: ['sub_1', 'grp_11'],
+      depth: 2,
+      code: 'ORDER_CORE',
+      name: '订单交易核心模块',
+      sort_order: 1,
+      meta: { endpoint: '127.0.0.1:9001', provide_count: 3 },
+    };
+
+    const upstreamPeer: GraphNode = {
+      id: 'mod_301',
+      type: 'MODULE',
+      parent_id: 'grp_31',
+      ancestors: ['sub_2', 'grp_31'],
+      depth: 2,
+      code: 'CLIENT_TUI',
+      name: '客户端交互终端模块',
+      sort_order: 1,
+    };
+
+    const downstreamPeer: GraphNode = {
+      id: 'mod_201',
+      type: 'MODULE',
+      parent_id: 'grp_21',
+      ancestors: ['sub_1', 'grp_21'],
+      depth: 2,
+      code: 'INVENTORY_CORE',
+      name: '仓储库存履约模块',
+      sort_order: 1,
+    };
+
+    const mockEdgeModel = {
+      id: 'rollup_mod_301_mod_101',
+      source: 'mod_301',
+      target: 'mod_101',
+      kind: 'CROSS_PROCESS',
+      status: 'VIOLATION' as const,
+      totalCalls: 18,
+      services: [{ service_name: 'demo.order.OrderService' }],
+      rawEdges: [],
+    };
+
+    // 1. 渲染 NodeInspectDrawer 的「上下游关系」页 (RELATIONS)
+    const relationsHtml = renderToString(
+      <NodeInspectDrawer
+        open={true}
+        onClose={() => {}}
+        node={sampleNode}
+        activeTab="RELATIONS"
+        onTabChange={() => {}}
+        relations={{
+          upstream: [
+            {
+              edgeId: 'rollup_mod_301_mod_101',
+              peerNode: upstreamPeer,
+              direction: 'UPSTREAM',
+              contractCount: 1,
+              totalCalls: 18,
+              status: 'VIOLATION',
+              services: [{ service_name: 'demo.order.OrderService' }],
+              edgeModel: mockEdgeModel,
+            },
+          ],
+          downstream: [
+            {
+              edgeId: 'rollup_mod_101_mod_201',
+              peerNode: downstreamPeer,
+              direction: 'DOWNSTREAM',
+              contractCount: 2,
+              totalCalls: 120,
+              status: 'VERIFIED',
+              services: [{ service_name: 'demo.inventory.InventoryService' }],
+              edgeModel: {
+                ...mockEdgeModel,
+                id: 'rollup_mod_101_mod_201',
+                source: 'mod_101',
+                target: 'mod_201',
+                status: 'VERIFIED',
+              },
+            },
+          ],
+          internalCount: 0,
+        }}
+        onJumpToNode={() => {}}
+        onInspectEdge={() => {}}
+      />
+    );
+
+    expect(relationsHtml).toContain('上下游关系');
+    expect(relationsHtml).toContain('基础画像');
+    expect(relationsHtml).toContain('客户端交互终端模块');
+    expect(relationsHtml).toContain('仓储库存履约模块');
+    expect(relationsHtml).toContain('VIOLATION');
+    expect(relationsHtml).toContain('demo.order.OrderService');
+
+    // 2. 渲染 NodeInspectDrawer 的「基础画像」页 (OVERVIEW)
+    const overviewHtml = renderToString(
+      <NodeInspectDrawer
+        open={true}
+        onClose={() => {}}
+        node={sampleNode}
+        activeTab="OVERVIEW"
+        onTabChange={() => {}}
+      />
+    );
+    expect(overviewHtml).toContain('ORDER_CORE');
+    expect(overviewHtml).toContain('127.0.0.1:9001');
   });
 });

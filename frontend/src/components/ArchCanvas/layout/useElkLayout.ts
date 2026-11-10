@@ -21,7 +21,7 @@ import {
   type ArchCanvasEdge,
   type LodMode,
 } from './layoutProcessor';
-import { mergeLocalLayout, type NodeBox } from './layoutMerger';
+import { mergeLocalLayout, resolveOverlapsBottomUp, type NodeBox } from './layoutMerger';
 
 // 内联 Web Worker 引用 (Vite ?worker&inline 模式，微前端安全，无跨域脚本加载异常)
 import ElkWorker from './elk.worker?worker&inline';
@@ -348,18 +348,35 @@ export function useElkLayout({
           localTouchedIds.add(tid);
         }
       } else if (currSaved && Object.keys(currSaved).length > 0) {
+        const boxMap = new Map<string, NodeBox>();
         for (const vn of scoped.visibleNodes) {
           const c = elkCoords.get(vn.id);
           const sp = currSaved[vn.id];
-          effectivePositions[vn.id] = {
+          boxMap.set(vn.id, {
+            id: vn.id,
+            parentId: vn.parent_id ?? null,
             x: sp ? sp.x : c?.x ?? 0,
             y: sp ? sp.y : c?.y ?? 0,
-            parent_id: vn.parent_id ?? null,
-            is_expanded: Boolean(expandState[vn.id]),
+            width: c?.width ?? sp?.width ?? 260,
+            height: c?.height ?? sp?.height ?? 80,
             pinned: pinnedNodeIdsRef.current?.has(vn.id) || sp?.pinned,
-            width: c?.width ?? sp?.width,
-            height: c?.height ?? sp?.height,
+            isExpanded: Boolean(expandState[vn.id]),
+          });
+        }
+        const resolved = resolveOverlapsBottomUp(boxMap, scoped.visibleNodes);
+        for (const [id, box] of resolved.boxes.entries()) {
+          effectivePositions[id] = {
+            x: box.x,
+            y: box.y,
+            parent_id: box.parentId ?? null,
+            is_expanded: Boolean(expandState[id]),
+            pinned: box.pinned,
+            width: box.width,
+            height: box.height,
           };
+        }
+        for (const tid of resolved.touchedIds) {
+          localTouchedIds.add(tid);
         }
       } else {
         for (const vn of scoped.visibleNodes) {

@@ -1053,11 +1053,48 @@
 }
 
 /* ==============================================================================
-   M19 节点状态修饰符: Pinned 固定态、Spotlight 聚光灯压暗、LOD 极简模式
+   M19 & M19.1 节点状态修饰符: Pinned 固定态、三态聚光灯分层、LOD 极简模式
    ============================================================================== */
 .code-arch-node--pinned {
   border-color: var(--color-primary) !important;
   box-shadow: var(--shadow-md);
+}
+
+.code-arch-canvas .code-arch-node--selected > .code-arch-container,
+.code-arch-canvas .code-arch-node--selected > .code-arch-module,
+.code-arch-canvas .code-arch-node--selected > .code-arch-external,
+.code-arch-canvas .code-arch-node--selected > .code-arch-ext-ctx {
+  border-color: var(--color-primary) !important;
+  box-shadow: 0 0 0 2px var(--color-primary), var(--shadow-md) !important;
+}
+
+.code-arch-canvas .code-arch-node--hovered > .code-arch-container--collapsed,
+.code-arch-canvas .code-arch-node--hovered > .code-arch-module,
+.code-arch-canvas .code-arch-node--hovered > .code-arch-external,
+.code-arch-canvas .code-arch-node--hovered > .code-arch-ext-ctx {
+  border-color: var(--color-primary-hover) !important;
+  box-shadow: var(--shadow-md);
+}
+
+.code-arch-canvas .code-arch-node--spotlight-upstream > .code-arch-container--collapsed,
+.code-arch-canvas .code-arch-node--spotlight-upstream > .code-arch-module,
+.code-arch-canvas .code-arch-node--spotlight-upstream > .code-arch-external,
+.code-arch-canvas .code-arch-node--spotlight-upstream > .code-arch-ext-ctx {
+  border-color: var(--color-purple) !important;
+  box-shadow: 0 0 0 1.5px var(--color-purple-border), var(--shadow-sm);
+}
+
+.code-arch-canvas .code-arch-node--spotlight-downstream > .code-arch-container--collapsed,
+.code-arch-canvas .code-arch-node--spotlight-downstream > .code-arch-module,
+.code-arch-canvas .code-arch-node--spotlight-downstream > .code-arch-external,
+.code-arch-canvas .code-arch-node--spotlight-downstream > .code-arch-ext-ctx {
+  border-color: var(--color-info) !important;
+  box-shadow: 0 0 0 1.5px var(--color-info-border), var(--shadow-sm);
+}
+
+.code-arch-node--spotlight-context {
+  opacity: 0.78;
+  transition: opacity 0.18s ease;
 }
 
 .code-arch-node--spotlight-dimmed {
@@ -1068,6 +1105,18 @@
 .code-arch-edge--spotlight-dimmed {
   opacity: 0.14;
   transition: opacity 0.18s ease;
+}
+
+.code-arch-edge-badge.code-arch-edge--spotlight-upstream {
+  border-color: var(--color-purple-border);
+  background-color: var(--color-purple-subtle);
+  color: var(--color-purple);
+}
+
+.code-arch-edge-badge.code-arch-edge--spotlight-downstream {
+  border-color: var(--color-info-border);
+  background-color: var(--color-info-subtle);
+  color: var(--color-info);
 }
 
 .code-arch-node--lod-compact .code-arch-module__footer,
@@ -1579,4 +1628,265 @@
 
 .code-arch-legend-badge--edge {
   background-color: var(--color-success);
+}
+
+/* ==============================================================================
+   M19.1 选中节点上下文浮动操作条 (Selection Floating Action Bar)
+   ============================================================================== */
+.code-arch-action-bar {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 12;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background-color: var(--color-bg-elevated);
+  border: 1px solid var(--color-border-primary);
+  border-radius: var(--radius-md, 8px);
+  box-shadow: var(--shadow-lg);
+  max-width: calc(100% - 280px);
+  user-select: none;
+}
+
+.code-arch-action-bar__identity {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.code-arch-action-bar__name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.code-arch-action-bar__divider {
+  width: 1px;
+  height: 16px;
+  background-color: var(--color-border-primary);
+  flex-shrink: 0;
+}
+
+.code-arch-action-bar__buttons {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.code-arch-action-bar__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 8px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  background-color: var(--color-bg-surface);
+  border: 1px solid var(--color-border-primary);
+  border-radius: 5px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.code-arch-action-bar__btn:hover {
+  color: var(--color-text-primary);
+  background-color: var(--color-bg-hover);
+  border-color: var(--color-border-hover);
+}
+
+.code-arch-action-bar__btn--primary {
+  color: var(--color-primary);
+  background-color: var(--color-primary-subtle);
+  border-color: var(--color-primary-border);
+}
+
+.code-arch-action-bar__btn--primary:hover {
+  color: var(--color-text-white);
+  background-color: var(--color-primary);
+  border-color: var(--color-primary);
+}
+
+.code-arch-action-bar__btn--active {
+  color: var(--color-primary);
+  background-color: var(--color-primary-subtle);
+  border-color: var(--color-primary);
+}
+
+.code-arch-action-bar__btn--close {
+  padding: 0 5px;
+  color: var(--color-text-muted);
+}
+
+/* ==============================================================================
+   M19.1 节点画像抽屉「上下游关系」页样式 (NodeInspectDrawer Relations)
+   ============================================================================== */
+.code-node-inspect {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.code-node-inspect__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.code-node-inspect__relations,
+.code-node-inspect__overview {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.code-node-inspect__summary-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.code-node-inspect__section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.code-node-inspect__heading {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.code-node-inspect__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  padding: 4px 0;
+  border-bottom: 1px dashed var(--color-border-subtle);
+}
+
+.code-node-inspect__label {
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+}
+
+.code-node-inspect__value {
+  color: var(--color-text-primary);
+  word-break: break-all;
+  text-align: right;
+}
+
+.code-node-inspect__empty {
+  padding: 12px;
+  font-size: 12px;
+  color: var(--color-text-muted);
+  background-color: var(--color-bg-muted);
+  border: 1px dashed var(--color-border-primary);
+  border-radius: 6px;
+  text-align: center;
+}
+
+.code-node-inspect__rel-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.code-node-inspect__rel-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  background-color: var(--color-bg-surface);
+  border: 1px solid var(--color-border-primary);
+  border-radius: 6px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.code-node-inspect__rel-card:hover {
+  border-color: var(--color-border-hover);
+  box-shadow: var(--shadow-sm);
+}
+
+.code-node-inspect__rel-card--upstream {
+  border-left: 3px solid var(--color-purple);
+}
+
+.code-node-inspect__rel-card--downstream {
+  border-left: 3px solid var(--color-info);
+}
+
+.code-node-inspect__rel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.code-node-inspect__rel-peer {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.code-node-inspect__rel-code {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+
+.code-node-inspect__rel-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.code-node-inspect__rel-services {
+  font-size: 11px;
+  font-family: monospace;
+  color: var(--color-text-secondary);
+  background-color: var(--color-bg-muted);
+  padding: 3px 6px;
+  border-radius: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.code-node-inspect__rel-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.code-node-inspect__rel-metrics,
+.code-node-inspect__rel-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }

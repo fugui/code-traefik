@@ -29,6 +29,15 @@ export const RollupEdge: React.FC<EdgeProps<ArchCanvasEdge>> = ({
 
   const isDegraded = Boolean(data?.isDraggedDegraded);
   const isSpotlightDimmed = Boolean(data?.isSpotlightDimmed);
+  const spotlightRole = data?.spotlightRole as
+    | 'UPSTREAM'
+    | 'DOWNSTREAM'
+    | 'INTERNAL'
+    | undefined;
+  const isSpotlightExternal = spotlightRole === 'UPSTREAM' || spotlightRole === 'DOWNSTREAM';
+  const spotlightClass = spotlightRole
+    ? `code-arch-edge--spotlight-${spotlightRole.toLowerCase()}`
+    : '';
   const isHubSummary = Boolean(data?.isHubSummary);
   const foldedPeerCount = Number(data?.foldedPeerCount || 0);
   const bendPoints = data?.bendPoints;
@@ -114,7 +123,7 @@ export const RollupEdge: React.FC<EdgeProps<ArchCanvasEdge>> = ({
       </defs>
 
       <g
-        className={`code-arch-edge-group ${isHovered ? 'code-arch-edge-group--hovered' : ''} ${
+        className={`code-arch-edge-group ${isHovered ? 'code-arch-edge-group--hovered' : ''} ${spotlightClass} ${
           isSpotlightDimmed ? 'code-arch-edge--spotlight-dimmed' : ''
         }`}
         onMouseEnter={handleMouseEnter}
@@ -124,19 +133,21 @@ export const RollupEdge: React.FC<EdgeProps<ArchCanvasEdge>> = ({
           id={id}
           path={edgePath}
           markerEnd={markerEndUrl}
-          className={`code-arch-edge ${statusClass} ${isHovered ? 'code-arch-edge--hovered' : ''} ${
+          className={`code-arch-edge ${statusClass} ${isHovered ? 'code-arch-edge--hovered' : ''} ${spotlightClass} ${
             isSpotlightDimmed ? 'code-arch-edge--spotlight-dimmed' : ''
           }`}
           style={{
             stroke: strokeColor,
-            strokeWidth: isHovered ? strokeWidth + 0.6 : strokeWidth,
+            strokeWidth: isHovered || isSpotlightExternal ? strokeWidth + 0.6 : strokeWidth,
             strokeDasharray: isHubSummary ? '6 4' : strokeDasharray,
           }}
         />
         <path
           d={edgePath}
           fill="none"
-          className={`code-arch-edge__flow-stream ${isHovered ? 'code-arch-edge__flow-stream--active' : ''}`}
+          className={`code-arch-edge__flow-stream ${
+            isHovered || isSpotlightExternal ? 'code-arch-edge__flow-stream--active' : ''
+          }`}
           style={{
             stroke: strokeColor,
             strokeWidth: strokeWidth + 0.8,
@@ -158,7 +169,7 @@ export const RollupEdge: React.FC<EdgeProps<ArchCanvasEdge>> = ({
           <span
             className={`code-arch-edge-badge ${statusClass} ${isHovered ? 'code-arch-edge-badge--hovered' : ''} ${
               isHubSummary ? 'code-arch-edge-badge--hub-more' : ''
-            } ${isSpotlightDimmed ? 'code-arch-edge--spotlight-dimmed' : ''}`}
+            } ${spotlightClass} ${isSpotlightDimmed ? 'code-arch-edge--spotlight-dimmed' : ''}`}
             onClick={isHubSummary ? handleHubExpandClick : undefined}
             data-testid={isHubSummary ? `hub-expand-badge-${id}` : undefined}
             title={

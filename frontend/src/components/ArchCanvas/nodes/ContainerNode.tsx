@@ -142,11 +142,13 @@ export const ContainerNode: React.FC<NodeProps<ContainerNodeType>> = ({ id, data
         className={`code-arch-container code-arch-container--expanded code-arch-container--${graphNode.type.toLowerCase()} ${
           isUnmounted ? 'code-arch-container--unmounted' : ''
         } ${isPinned ? 'code-arch-node--pinned' : ''}`}
-        title="双击折叠容器"
       >
         <Handle type="target" position={Position.Left} className="code-arch-handle" />
 
-        <div className="code-arch-container__header">
+        <div
+          className="code-arch-container__header"
+          title="单击选中 · 双击下钻聚焦至此容器"
+        >
           <button
             type="button"
             className="code-arch-container__toggle"
@@ -213,7 +215,7 @@ export const ContainerNode: React.FC<NodeProps<ContainerNodeType>> = ({ id, data
       className={`code-arch-container code-arch-container--collapsed code-arch-container--${graphNode.type.toLowerCase()} ${
         isUnmounted ? 'code-arch-container--unmounted' : ''
       } ${isPinned ? 'code-arch-node--pinned' : ''}`}
-      title="双击展开容器查看内部节点"
+      title="单击选中 · 双击展开容器查看内部节点"
     >
       <Handle type="target" position={Position.Left} className="code-arch-handle" />
 

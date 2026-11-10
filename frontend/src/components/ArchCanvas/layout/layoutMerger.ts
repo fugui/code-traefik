@@ -444,9 +444,21 @@ export function diffLayoutAgainstGraph(
     };
   }
 
+  const activeParentIds = new Set<string>();
+  for (const [id, pos] of Object.entries(validSaved)) {
+    if (pos.is_expanded) {
+      activeParentIds.add(id);
+    }
+    if (pos.parent_id) {
+      activeParentIds.add(pos.parent_id);
+    }
+  }
+
   for (const n of nodes) {
     if (!validSaved[n.id] && !reparentedIds.includes(n.id)) {
-      newIds.push(n.id);
+      if (!n.parent_id || activeParentIds.has(n.parent_id)) {
+        newIds.push(n.id);
+      }
     }
   }
 

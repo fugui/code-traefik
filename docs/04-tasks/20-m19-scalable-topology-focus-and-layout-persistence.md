@@ -20,6 +20,7 @@
 | :--- | :--- | :--- |
 | v1.0.0 | 2026-11-09 | 初版：`M19-P1` ~ `M19-P4` 四阶段拆解 |
 | v1.1.0 | 2026-11-09 | 依据 ADR-15 v1.1.0 架构深度检视加固：扩展为 `M19-P1` ~ `M19-P7` 七个子阶段；新增管线重构（`P2`）与规模验收（`P7`）阶段；交付物补齐 `structure_version`、Module `owner_id`、`gzip`、`overlay.ts` / `noiseReduction.ts` / `layoutPersistence.ts`；修正文件路径（`handlers/routes.go`、`nodes/ModuleNode.tsx`）；统一参数、URL 与 CSS 命名；补齐并发、约束、越权、守卫绕过与性能用例及可执行的覆盖率门禁命令 |
+| v1.2.0 | 2026-11-10 | 依据 ADR-15 v1.2.0 增补 `M19.1` 交互与布局精修：1. `computeSpotlightSet` 升级为子树级聚光灯（包含可见后代与内部边，并区分 `upstream` / `downstream` / `context`）；2. `ArchCanvas` 拆分 `hoverId` 与 `selectedId` 三态模型，移除 220ms 单击防抖，单击选中不自动弹抽屉（抽屉开启时跟随切换），鼠标移出不清除选中，双击统一为渐进下钻（折叠容器展开、已展开容器进入隔离聚焦、叶子模块打开关系页、空白处返回上一层）；3. 新增选中浮动操作条与 `NodeInspectDrawer`「上下游关系」页（支持逐跳定位对端）；4. 修复未展开容器内子节点被误判为新增节点及父容器包围盒溢出缺陷 |
 
 ---
 
@@ -252,6 +253,21 @@ flowchart LR
 | 测试用例名 | 核心断言内容 |
 | :--- | :--- |
 | `testScalePipeline_2775Nodes_10kEdges_P95Budget` | 基于 `largeTopology.ts`（含一致性报告）连续执行 20 次「叠加合成 + 裁剪过滤 + 边上卷」，P95 `≤ 60ms`（CI 阈值） |
+
+### 3.7 `M19.1` 三态交互、子树聚光灯与父容器包围盒精修测试
+
+| 测试用例名 | 所在文件 | 核心断言内容 |
+| :--- | :--- | :--- |
+| `testSpotlightSet_ExpandedContainerSubtree_ChildrenAndInternalEdgesLit_UpstreamDownstreamClassified` | `ArchCanvasScopeAndFilter.test.ts` | 选中/悬停已展开父容器时，其全部可见后代（`subjectNodeIds`）与内部边（`internalEdgeIds`）100% 高亮不压暗；跨边界边精准区分为 `upstreamEdgeIds` / `downstreamEdgeIds`，外部对端进入 `upstreamNodeIds` / `downstreamNodeIds`，祖先外壳进入 `contextAncestorIds` |
+| `testComputeNodeRelations_SortsViolationsFirst_AndGroupsUpstreamDownstream` | `ArchCanvasScopeAndFilter.test.ts` | `computeNodeRelations` 按上游调用方与下游被调方分组，且 `VIOLATION` / `UNATTRIBUTED` 异常边优先排在首位 |
+| `testDiffLayoutAgainstGraph_UnexpandedContainerChildrenNotMarkedNew` | `ArchCanvasHybridLayout.test.ts` | 当保存的布局仅含 `L0` 折叠容器坐标时，未展开容器内的子节点不会被误判为 `newIds` 或横向溢出堆叠；坐标后处理自底向上自动撑大父容器包围盒 |
+| `testThreeStateInteraction_DoubleClickDrillIn_ActionBar_AndRelationsDrawer` | `TopologyFocusAndPersistenceWorkbench.test.tsx` | 1. 单击选中不弹抽屉、鼠标移出不清除选中、展示浮动操作条；2. 折叠容器双击展开、已展开容器双击进入隔离聚焦、叶子模块双击打开关系页；3. `NodeInspectDrawer` 支持「上下游关系」与「基础画像」切换及对端逐跳定位 |
+
+### 3.8 安全验证计划 (Security Verification Plan)
+
+- **前端 XSS 与 DOM 安全**：所有新增/修改组件（`ArchCanvas.tsx`、`NodeInspectDrawer.tsx`、`ContainerNode.tsx` 等）100% 依赖 React JSX 原生自动转义，严禁使用 `dangerouslySetInnerHTML`、`innerHTML`、`outerHTML`、`document.write` 或原生阻塞弹窗 `alert()` / `confirm()` / `prompt()`。
+- **敏感数据与会话卫生**：`localStorage` 仅存储与用户 ID 绑定的非敏感拓扑坐标草稿（`traefik_topo_draft_v2_${userId}_${view}`），严禁写入任何会话 Token 或认证凭据，且在登出时清理；严禁在控制台打印用户敏感对象。
+- **主题与样式合规**：所有新增样式 100% 采用 `theme.css` 中的 `--color-*` 语义 Token，零硬编码色值（由 `testThemeCompliance_ZeroHardcodedColors_LightAndDarkTokens` 自动化门禁强制守护）。
 
 ---
 

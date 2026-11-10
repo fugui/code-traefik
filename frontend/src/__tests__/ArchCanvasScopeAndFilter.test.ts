@@ -11,6 +11,7 @@ import {
 import {
   foldHubEdges,
   computeSpotlightSet,
+  computeNodeRelations,
   HUB_FANOUT_THRESHOLD,
   HUB_TOP_K_EDGES,
 } from '../components/ArchCanvas/model/noiseReduction';
@@ -462,5 +463,137 @@ describe('M19-P2 & M19-P3: ArchCanvasScopeAndFilter Suite', () => {
     const facade = rollupEdges(baseNodes, staticEdges, expand, report, 'LOGICAL');
     expect(agg.rollupEdges).toEqual(facade.rollupEdges);
     expect(agg.badgeCounts).toEqual(facade.badgeCounts);
+  });
+
+  // 10. testSpotlightSet_ExpandedContainerSubtree_ChildrenAndInternalEdgesLit_UpstreamDownstreamClassified
+  it('testSpotlightSet_ExpandedContainerSubtree_ChildrenAndInternalEdgesLit_UpstreamDownstreamClassified', () => {
+    const visibleNodes = baseNodes;
+    const rollupEdgeModels = [
+      // 内部边: mod_101 -> mod_102 (均在 sub_1 内)
+      {
+        id: 'edge_internal_101_102',
+        source: 'mod_101',
+        target: 'mod_102',
+        kind: 'CROSS_PROCESS',
+        services: [{ service_name: 'trade.v1.Pay' }],
+        rawEdges: [],
+      },
+      // 上游入边: mod_301 (sub_3) -> mod_101 (sub_1)
+      {
+        id: 'edge_upstream_301_101',
+        source: 'mod_301',
+        target: 'mod_101',
+        kind: 'CROSS_PROCESS',
+        services: [{ service_name: 'trade.v1.Order' }],
+        rawEdges: [],
+      },
+      // 下游出边: mod_102 (sub_1) -> mod_201 (sub_2)
+      {
+        id: 'edge_downstream_102_201',
+        source: 'mod_102',
+        target: 'mod_201',
+        kind: 'CROSS_PROCESS',
+        services: [{ service_name: 'risk.v1.Check' }],
+        rawEdges: [],
+      },
+      // 完全无关边: mod_202 -> mod_203
+      {
+        id: 'edge_unrelated_202_203',
+        source: 'mod_202',
+        target: 'mod_203',
+        kind: 'CROSS_PROCESS',
+        services: [{ service_name: 'risk.v1.Profile' }],
+        rawEdges: [],
+      },
+    ];
+
+    const spot = computeSpotlightSet('sub_1', visibleNodes, rollupEdgeModels);
+    expect(spot.active).toBe(true);
+
+    // 1. 主体子树 S = {sub_1, grp_11, mod_101, mod_102} 全部保亮且归入 subjectNodeIds
+    expect(spot.subjectNodeIds.has('sub_1')).toBe(true);
+    expect(spot.subjectNodeIds.has('grp_11')).toBe(true);
+    expect(spot.subjectNodeIds.has('mod_101')).toBe(true);
+    expect(spot.subjectNodeIds.has('mod_102')).toBe(true);
+    expect(spot.highlightedNodeIds.has('grp_11')).toBe(true);
+    expect(spot.highlightedNodeIds.has('mod_101')).toBe(true);
+    expect(spot.highlightedNodeIds.has('mod_102')).toBe(true);
+
+    // 2. 子树内部边与跨界入边/出边全部保亮，且分层准确
+    expect(spot.internalEdgeIds.has('edge_internal_101_102')).toBe(true);
+    expect(spot.upstreamEdgeIds.has('edge_upstream_301_101')).toBe(true);
+    expect(spot.downstreamEdgeIds.has('edge_downstream_102_201')).toBe(true);
+    expect(spot.highlightedEdgeIds.has('edge_internal_101_102')).toBe(true);
+    expect(spot.highlightedEdgeIds.has('edge_upstream_301_101')).toBe(true);
+    expect(spot.highlightedEdgeIds.has('edge_downstream_102_201')).toBe(true);
+    expect(spot.highlightedEdgeIds.has('edge_unrelated_202_203')).toBe(false);
+
+    // 3. 上游对端 mod_301 与下游对端 mod_201 分类准确，其父容器归入 contextAncestorIds
+    expect(spot.upstreamNodeIds.has('mod_301')).toBe(true);
+    expect(spot.downstreamNodeIds.has('mod_201')).toBe(true);
+    expect(spot.contextAncestorIds.has('grp_31')).toBe(true);
+    expect(spot.contextAncestorIds.has('sub_3')).toBe(true);
+    expect(spot.contextAncestorIds.has('grp_21')).toBe(true);
+    expect(spot.contextAncestorIds.has('sub_2')).toBe(true);
+
+    // 4. 无关节点 mod_202 / mod_203 必须被压暗
+    expect(spot.highlightedNodeIds.has('mod_202')).toBe(false);
+    expect(spot.highlightedNodeIds.has('mod_203')).toBe(false);
+  });
+
+  // 11. testComputeNodeRelations_SortsViolationsFirst_AndGroupsUpstreamDownstream
+  it('testComputeNodeRelations_SortsViolationsFirst_AndGroupsUpstreamDownstream', () => {
+    const rollupEdgeModels = [
+      {
+        id: 'e_up_verified',
+        source: 'mod_301',
+        target: 'mod_101',
+        kind: 'CROSS_PROCESS',
+        status: 'VERIFIED' as const,
+        totalCalls: 500,
+        services: [{ service_name: 'svc.A' }],
+        rawEdges: [],
+      },
+      {
+        id: 'e_up_violation',
+        source: 'mod_203',
+        target: 'mod_102',
+        kind: 'CROSS_PROCESS',
+        status: 'VIOLATION' as const,
+        totalCalls: 2,
+        services: [{ service_name: 'svc.Illegal' }],
+        rawEdges: [],
+      },
+      {
+        id: 'e_down_normal',
+        source: 'mod_101',
+        target: 'mod_201',
+        kind: 'CROSS_PROCESS',
+        status: 'VERIFIED' as const,
+        totalCalls: 120,
+        services: [{ service_name: 'svc.Risk1' }, { service_name: 'svc.Risk2' }],
+        rawEdges: [],
+      },
+      {
+        id: 'e_internal',
+        source: 'mod_101',
+        target: 'mod_102',
+        kind: 'CROSS_PROCESS',
+        services: [{ service_name: 'svc.Internal' }],
+        rawEdges: [],
+      },
+    ];
+
+    const rel = computeNodeRelations('sub_1', baseNodes, rollupEdgeModels);
+    expect(rel.internalCount).toBe(1);
+    expect(rel.upstream).toHaveLength(2);
+    // VIOLATION 异常边即使调用量小也必须排在第一位
+    expect(rel.upstream[0].edgeId).toBe('e_up_violation');
+    expect(rel.upstream[0].peerNode.id).toBe('mod_203');
+    expect(rel.upstream[1].edgeId).toBe('e_up_verified');
+
+    expect(rel.downstream).toHaveLength(1);
+    expect(rel.downstream[0].peerNode.id).toBe('mod_201');
+    expect(rel.downstream[0].contractCount).toBe(2);
   });
 });

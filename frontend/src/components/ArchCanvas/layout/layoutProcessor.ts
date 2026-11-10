@@ -186,14 +186,30 @@ export function processLayoutCoordinates(
   });
 
   const nodes: ArchCanvasNode[] = [];
+  const flowNodeById = new Map<string, ArchCanvasNode>();
+  const displacedNodeIds = new Set<string>();
 
   for (const gn of sortedGraphNodes) {
     const layout = coordMap.get(gn.id);
     const saved = savedPositions?.[gn.id];
-    const posX = saved && Number.isFinite(saved.x) ? saved.x : layout?.x ?? 0;
-    const posY = saved && Number.isFinite(saved.y) ? saved.y : layout?.y ?? 0;
+    const hasParent = Boolean(gn.parent_id && nodeMap.has(gn.parent_id));
+    const hasSavedCoord = Boolean(saved && Number.isFinite(saved.x) && Number.isFinite(saved.y));
+    const posX = hasSavedCoord
+      ? hasParent
+        ? Math.max(16, saved!.x)
+        : saved!.x
+      : layout?.x ?? 0;
+    const posY = hasSavedCoord
+      ? hasParent
+        ? Math.max(52, saved!.y)
+        : saved!.y
+      : layout?.y ?? 0;
     const isExpanded = Boolean(expandState[gn.id]);
     const isPinned = Boolean(pinnedNodeIds?.has(gn.id) || saved?.pinned);
+
+    if (hasSavedCoord && layout && (Math.abs(posX - layout.x) > 1 || Math.abs(posY - layout.y) > 1)) {
+      displacedNodeIds.add(gn.id);
+    }
 
     let nodeType:
       | 'containerNode'
@@ -249,11 +265,38 @@ export function processLayoutCoordinates(
       },
     };
 
-    if (gn.parent_id && nodeMap.has(gn.parent_id)) {
+    if (hasParent && gn.parent_id) {
       flowNode.parentId = gn.parent_id;
     }
 
     nodes.push(flowNode);
+    flowNodeById.set(gn.id, flowNode);
+  }
+
+  // 1b. 自底向上 (Bottom-Up) 强制撑大展开态父容器包围盒，彻底杜绝子容器/子模块溢出父容器框外
+  for (let i = nodes.length - 1; i >= 0; i--) {
+    const child = nodes[i];
+    if (!child.parentId) continue;
+    const parent = flowNodeById.get(child.parentId);
+    if (!parent || !parent.data.isExpanded) continue;
+
+    const defaultChildW = child.type === 'containerNode' ? 260 : 220;
+    const defaultChildH = child.type === 'containerNode' ? 80 : 74;
+    const childW = Number(child.style?.width) || defaultChildW;
+    const childH = Number(child.style?.height) || defaultChildH;
+
+    const requiredWidth = child.position.x + childW + 16;
+    const requiredHeight = child.position.y + childH + 16;
+    const currParentW = Number(parent.style?.width) || 260;
+    const currParentH = Number(parent.style?.height) || 140;
+
+    if (requiredWidth > currParentW || requiredHeight > currParentH) {
+      parent.style = {
+        ...parent.style,
+        width: Math.max(currParentW, requiredWidth),
+        height: Math.max(currParentH, requiredHeight),
+      };
+    }
   }
 
   // 2. 收集 ELK 输出的边拐点 sections
@@ -284,10 +327,11 @@ export function processLayoutCoordinates(
   collectEdgeSections(layoutedRoot);
 
   // 3. 构建 React Flow 边模型，累加跨复合容器全局坐标偏移与拖拽/重排退化标记
-  const effectiveTouched = new Set<string>(draggedNodeIds);
-  if (draggedNodeIds.size > 0) {
+  const baseTouched = new Set<string>([...draggedNodeIds, ...displacedNodeIds]);
+  const effectiveTouched = new Set<string>(baseTouched);
+  if (baseTouched.size > 0) {
     for (const gn of visibleNodes) {
-      if (gn.ancestors.some((anc) => draggedNodeIds.has(anc))) {
+      if (gn.ancestors.some((anc) => baseTouched.has(anc))) {
         effectiveTouched.add(gn.id);
       }
     }

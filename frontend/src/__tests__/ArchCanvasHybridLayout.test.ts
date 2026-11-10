@@ -16,6 +16,7 @@ import {
   computeViewportCompensation,
   type NodeBox,
 } from '../components/ArchCanvas/layout/layoutMerger';
+import { processLayoutCoordinates } from '../components/ArchCanvas/layout/layoutProcessor';
 import {
   resolveInitialLayout,
   composeEffectivePositions,
@@ -489,5 +490,85 @@ describe('M19-P4: ArchCanvasHybridLayout Suite', () => {
         nodes: sampleNodes,
       })
     ).toEqual({ mode: 'ELK_SUBTREE', subtreeRootId: 'sub_1' });
+  });
+
+  // 11. testDiffLayoutAgainstGraph_UnexpandedContainerChildrenNotMarkedNew
+  it('testDiffLayoutAgainstGraph_UnexpandedContainerChildrenNotMarkedNew', () => {
+    // 场景 A: 仅保存了 L0 折叠态顶层容器坐标
+    const l0Saved: Record<string, SavedNodePosition> = {
+      sub_1: { x: 20, y: 20, parent_id: null, is_expanded: false, width: 260, height: 80 },
+      sub_2: { x: 340, y: 20, parent_id: null, is_expanded: false, width: 260, height: 80 },
+      sub_3: { x: 660, y: 20, parent_id: null, is_expanded: false, width: 260, height: 80 },
+    };
+
+    const diff = diffLayoutAgainstGraph(l0Saved, sampleNodes, []);
+    // 未展开容器 sub_1 内部的 grp_11 / grp_12 / mod_101 / mod_102 不应被误判为新增节点
+    expect(diff.newIds).toEqual([]);
+    expect(diff.driftCount).toBe(0);
+    expect(diff.reconciledPositions['grp_11']).toBeUndefined();
+
+    // 场景 B: processLayoutCoordinates 必须自底向上撑大展开态父容器包围盒，绝不允许子容器画到父框外
+    const elkRoot = {
+      id: 'root',
+      x: 0,
+      y: 0,
+      width: 600,
+      height: 300,
+      children: [
+        {
+          id: 'sub_1',
+          x: 20,
+          y: 20,
+          width: 496,
+          height: 256,
+          children: [
+            { id: 'grp_11', x: 16, y: 52, width: 260, height: 80 },
+            { id: 'grp_12', x: 296, y: 52, width: 260, height: 80 },
+          ],
+        },
+      ],
+    };
+
+    // 模拟 grp_12 在保存坐标中位于 x=380, y=220 (超出了 ELK 给 sub_1 的 496x256)
+    const savedWithDisplacedChild: Record<string, SavedNodePosition> = {
+      sub_1: { x: 20, y: 20, parent_id: null, is_expanded: true, width: 496, height: 256 },
+      grp_11: { x: 16, y: 52, parent_id: 'sub_1', is_expanded: false, width: 260, height: 80 },
+      grp_12: { x: 380, y: 220, parent_id: 'sub_1', is_expanded: false, width: 260, height: 80 },
+    };
+
+    const visibleSub = sampleNodes.filter((n) => ['sub_1', 'grp_11', 'grp_12'].includes(n.id));
+    const rollupEdges: RollupEdgeModel[] = [
+      {
+        id: 'e_grp11_grp12',
+        source: 'grp_11',
+        target: 'grp_12',
+        kind: 'CROSS_PROCESS',
+        services: [{ service_name: 'svc.Test' }],
+        rawEdges: [],
+      },
+    ];
+
+    const processed = processLayoutCoordinates(
+      elkRoot,
+      visibleSub,
+      rollupEdges,
+      new Set(),
+      { sub_1: true },
+      {},
+      undefined,
+      { sub_1: 2, grp_11: 2, grp_12: 0 },
+      { savedPositions: savedWithDisplacedChild }
+    );
+
+    const sub1Node = processed.nodes.find((n) => n.id === 'sub_1')!;
+    const grp12Node = processed.nodes.find((n) => n.id === 'grp_12')!;
+    expect(Number(sub1Node.style?.width)).toBeGreaterThanOrEqual(
+      grp12Node.position.x + Number(grp12Node.style?.width ?? 260) + 16
+    );
+    expect(Number(sub1Node.style?.height)).toBeGreaterThanOrEqual(
+      grp12Node.position.y + Number(grp12Node.style?.height ?? 80) + 16
+    );
+    // 由于 grp_12 相对 ELK 坐标发生偏移，关联边必须自动标记为 isDraggedDegraded = true (SmoothStep)
+    expect(processed.edges[0].data?.isDraggedDegraded).toBe(true);
   });
 });
