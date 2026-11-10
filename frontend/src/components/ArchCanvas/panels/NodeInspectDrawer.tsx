@@ -12,7 +12,13 @@ export const NodeInspectDrawer: React.FC<NodeInspectDrawerProps> = ({ open, onCl
   if (!node) return null;
 
   return (
-    <Drawer open={open} onClose={onClose} title={`架构元素画像: ${node.name}`} width={460}>
+    <Drawer
+      open={open}
+      onClose={onClose}
+      title={`架构元素画像: ${node.name}`}
+      width={460}
+      mask={false}
+    >
       <div className="code-node-inspect">
         <div className="code-node-inspect__section">
           <h4 className="code-node-inspect__heading">基础标识</h4>

@@ -119,6 +119,17 @@ export const ArchCanvas: React.FC<ArchCanvasProps> = ({
   const [lodMode, setLodMode] = useState<LodMode>('STANDARD');
   const [spotlightId, setSpotlightId] = useState<string | null>(null);
   const initialFitDoneRef = useRef<boolean>(false);
+  const clickTimerRef = useRef<number | null>(null);
+
+  // 组件卸载时安全清理点击消抖计时器
+  React.useEffect(() => {
+    return () => {
+      if (clickTimerRef.current) {
+        window.clearTimeout(clickTimerRef.current);
+        clickTimerRef.current = null;
+      }
+    };
+  }, []);
 
   // 响应重置布局触发
   React.useEffect(() => {
@@ -224,16 +235,62 @@ export const ArchCanvas: React.FC<ArchCanvasProps> = ({
     [onNodePositionChange]
   );
 
+  // 节点单击/双击防抖调度：
+  // 延时 220ms 区分单击与双击。若在时限内捕获到双击，则立刻取消单击打开画像抽屉，优先满足展开/折叠容器诉求
   const handleNodeClick: NodeMouseHandler = useCallback(
     (_, node) => {
-      setSpotlightId((prev) => (prev === node.id ? null : node.id));
-      const gn = (node.data as { graphNode?: GraphNode })?.graphNode;
-      if (gn && onSelectNode) {
-        onSelectNode(gn);
+      if (clickTimerRef.current) {
+        window.clearTimeout(clickTimerRef.current);
+        clickTimerRef.current = null;
       }
+
+      clickTimerRef.current = window.setTimeout(() => {
+        clickTimerRef.current = null;
+        setSpotlightId((prev) => (prev === node.id ? null : node.id));
+        const gn = (node.data as { graphNode?: GraphNode })?.graphNode;
+        if (gn && onSelectNode) {
+          onSelectNode(gn);
+        }
+      }, 220);
     },
     [onSelectNode]
   );
+
+  const handleNodeDoubleClick: NodeMouseHandler = useCallback(
+    (_, node) => {
+      // 1. 立即清除单击延时计时器，避免触发单击打开画像抽屉拦截双击
+      if (clickTimerRef.current) {
+        window.clearTimeout(clickTimerRef.current);
+        clickTimerRef.current = null;
+      }
+
+      // 2. 检查节点类型，容器节点双击触发展开/折叠下钻
+      const gn = (node.data as { graphNode?: GraphNode })?.graphNode;
+      const isContainer =
+        gn &&
+        (gn.type === 'SUBSYSTEM' ||
+          gn.type === 'FUNCTIONAL_GROUP' ||
+          gn.type === 'PROCESS_GROUP' ||
+          gn.type === 'PROCESS' ||
+          gn.type === 'UNDEPLOYED_CONTAINER' ||
+          gn.type === 'EXTERNAL_CONTAINER');
+
+      if (isContainer && onToggleExpand) {
+        onToggleExpand(node.id);
+      } else if (gn && onSelectNode) {
+        onSelectNode(gn);
+      }
+    },
+    [onToggleExpand, onSelectNode]
+  );
+
+  const handlePaneClick = useCallback(() => {
+    if (clickTimerRef.current) {
+      window.clearTimeout(clickTimerRef.current);
+      clickTimerRef.current = null;
+    }
+    setSpotlightId(null);
+  }, []);
 
   const handleNodeMouseEnter: NodeMouseHandler = useCallback((_, node) => {
     setSpotlightId(node.id);
@@ -414,6 +471,8 @@ export const ArchCanvas: React.FC<ArchCanvasProps> = ({
         onNodeDrag={handleNodeDrag}
         onNodeDragStop={handleNodeDragStop}
         onNodeClick={handleNodeClick}
+        onNodeDoubleClick={handleNodeDoubleClick}
+        onPaneClick={handlePaneClick}
         onNodeMouseEnter={handleNodeMouseEnter}
         onNodeMouseLeave={handleNodeMouseLeave}
         onEdgeClick={handleEdgeClick}

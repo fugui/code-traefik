@@ -21,7 +21,13 @@ export const EdgeDetailDrawer: React.FC<EdgeDetailDrawerProps> = ({
   const totalCalls = edge.totalCalls || 0;
 
   return (
-    <Drawer open={open} onClose={onClose} title="架构依赖契约与实测边画像" width={520}>
+    <Drawer
+      open={open}
+      onClose={onClose}
+      title="架构依赖契约与实测边画像"
+      width={520}
+      mask={false}
+    >
       <div className="code-edge-detail">
         {/* 顶部两端节点信息 */}
         <div className="code-edge-detail__endpoints">

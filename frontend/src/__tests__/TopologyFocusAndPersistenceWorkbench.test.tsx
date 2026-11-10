@@ -476,4 +476,38 @@ describe('M19-P5 & M19-P6: TopologyFocusAndPersistenceWorkbench Suite', () => {
 
     expect(violations).toEqual([]);
   });
+
+  // 验证容器双击与画像抽屉非模态(mask=false)无遮挡特性
+  it('testContainerDoubleClickAndDrawerMaskless', () => {
+    const srcRoot = path.resolve(__dirname, '..');
+    const nodeInspectContent = fs.readFileSync(
+      path.join(srcRoot, 'components/ArchCanvas/panels/NodeInspectDrawer.tsx'),
+      'utf-8'
+    );
+    const edgeDetailContent = fs.readFileSync(
+      path.join(srcRoot, 'components/ArchCanvas/panels/EdgeDetailDrawer.tsx'),
+      'utf-8'
+    );
+    const containerNodeContent = fs.readFileSync(
+      path.join(srcRoot, 'components/ArchCanvas/nodes/ContainerNode.tsx'),
+      'utf-8'
+    );
+    const archCanvasContent = fs.readFileSync(
+      path.join(srcRoot, 'components/ArchCanvas/ArchCanvas.tsx'),
+      'utf-8'
+    );
+
+    // 1. 画像抽屉必须是无遮罩(mask={false})，避免拦截画布鼠标点击与双击
+    expect(nodeInspectContent).toContain('mask={false}');
+    expect(edgeDetailContent).toContain('mask={false}');
+
+    // 2. 容器节点具备双击展开/折叠语义提示
+    expect(containerNodeContent).toContain('title="双击展开容器查看内部节点"');
+    expect(containerNodeContent).toContain('title="双击折叠容器"');
+
+    // 3. 画布核心挂载 onNodeDoubleClick，并且在双击时清除延时消抖计时器
+    expect(archCanvasContent).toContain('onNodeDoubleClick={handleNodeDoubleClick}');
+    expect(archCanvasContent).toContain('window.setTimeout');
+    expect(archCanvasContent).toContain('window.clearTimeout');
+  });
 });

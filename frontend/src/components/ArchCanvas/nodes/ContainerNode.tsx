@@ -34,13 +34,6 @@ export const ContainerNode: React.FC<NodeProps<ContainerNodeType>> = ({ id, data
     }
   };
 
-  const handleDoubleClick = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (onToggleExpand) {
-      onToggleExpand(id);
-    }
-  };
-
   const handleFocusClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (onFocusScope) {
@@ -149,7 +142,6 @@ export const ContainerNode: React.FC<NodeProps<ContainerNodeType>> = ({ id, data
         className={`code-arch-container code-arch-container--expanded code-arch-container--${graphNode.type.toLowerCase()} ${
           isUnmounted ? 'code-arch-container--unmounted' : ''
         } ${isPinned ? 'code-arch-node--pinned' : ''}`}
-        onDoubleClick={handleDoubleClick}
         title="双击折叠容器"
       >
         <Handle type="target" position={Position.Left} className="code-arch-handle" />
@@ -221,7 +213,6 @@ export const ContainerNode: React.FC<NodeProps<ContainerNodeType>> = ({ id, data
       className={`code-arch-container code-arch-container--collapsed code-arch-container--${graphNode.type.toLowerCase()} ${
         isUnmounted ? 'code-arch-container--unmounted' : ''
       } ${isPinned ? 'code-arch-node--pinned' : ''}`}
-      onDoubleClick={handleDoubleClick}
       title="双击展开容器查看内部节点"
     >
       <Handle type="target" position={Position.Left} className="code-arch-handle" />
