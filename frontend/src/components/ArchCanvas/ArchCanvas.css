@@ -661,9 +661,16 @@
 }
 
 .code-arch-container__action-btn--active {
-  color: var(--color-primary);
-  background-color: var(--color-bg-muted);
-  border-color: var(--color-primary);
+  color: var(--color-text-white) !important;
+  background-color: var(--color-primary) !important;
+  border-color: var(--color-primary) !important;
+  box-shadow: var(--shadow-sm);
+}
+
+.code-arch-container__action-btn--active:hover {
+  background-color: var(--color-primary-hover) !important;
+  border-color: var(--color-primary-hover) !important;
+  color: var(--color-text-white) !important;
 }
 
 .code-arch-container__icon {
@@ -1055,9 +1062,11 @@
 /* ==============================================================================
    M19 & M19.1 节点状态修饰符: Pinned 固定态、三态聚光灯分层、LOD 极简模式
    ============================================================================== */
-.code-arch-node--pinned {
+.code-arch-node--pinned,
+.code-arch-container.code-arch-node--pinned,
+.code-arch-module.code-arch-node--pinned {
   border-color: var(--color-primary) !important;
-  box-shadow: var(--shadow-md);
+  box-shadow: 0 0 0 1.5px var(--color-primary), var(--shadow-sm) !important;
 }
 
 .code-arch-canvas .code-arch-node--selected > .code-arch-container,

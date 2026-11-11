@@ -244,6 +244,31 @@ export function useElkLayout({
     );
   }, [draggedNodeIds]);
 
+  // 保持现有 flowNodes 中的 isPinned 状态与外部 pinnedNodeIds / savedPositions 同步，无需触发昂贵的 ELK Worker 重排
+  useEffect(() => {
+    setFlowNodes((prevNodes) => {
+      if (prevNodes.length === 0) return prevNodes;
+      let hasChanges = false;
+      const nextNodes = prevNodes.map((n) => {
+        const currentlyPinned = Boolean(
+          pinnedNodeIds?.has(n.id) || savedPositions?.[n.id]?.pinned
+        );
+        if (n.data?.isPinned !== currentlyPinned) {
+          hasChanges = true;
+          return {
+            ...n,
+            data: {
+              ...n.data,
+              isPinned: currentlyPinned,
+            },
+          };
+        }
+        return n;
+      });
+      return hasChanges ? nextNodes : prevNodes;
+    });
+  }, [pinnedNodeIds, savedPositions]);
+
   const runLayout = useCallback(async () => {
     if (nodes.length === 0) {
       setFlowNodes([]);

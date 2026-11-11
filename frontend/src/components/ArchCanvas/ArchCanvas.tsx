@@ -263,6 +263,30 @@ export const ArchCanvas: React.FC<ArchCanvasProps> = ({
     setFlowEdges(layoutEdges);
   }, [layoutNodes, layoutEdges, setFlowNodes, setFlowEdges]);
 
+  // 当 pinnedNodeIds 或 savedPositions 发生轻量变更时，就地同步 flowNodes 内部的 isPinned，无延迟即时反馈
+  React.useEffect(() => {
+    setFlowNodes((prevNodes) => {
+      let changed = false;
+      const next = prevNodes.map((node) => {
+        const isPinned = Boolean(
+          pinnedNodeIds?.has(node.id) || savedPositions?.[node.id]?.pinned
+        );
+        if (node.data?.isPinned !== isPinned) {
+          changed = true;
+          return {
+            ...node,
+            data: {
+              ...node.data,
+              isPinned,
+            },
+          };
+        }
+        return node;
+      });
+      return changed ? next : prevNodes;
+    });
+  }, [pinnedNodeIds, savedPositions, setFlowNodes]);
+
   // 仅在冷启动首次排版完成且无预设视口时执行一次 fitView，严禁在单容器展开/折叠时触发全局 fitView
   React.useEffect(() => {
     if (!rfInstance || layoutNodes.length === 0 || isLayouting) return;

@@ -13,6 +13,8 @@ import type {
 } from '../types/topology_graph';
 import * as archApi from '../api/arch';
 import { ExternalContextNode } from '../components/ArchCanvas/nodes/ExternalContextNode';
+import { ContainerNode } from '../components/ArchCanvas/nodes/ContainerNode';
+import { ModuleNode } from '../components/ArchCanvas/nodes/ModuleNode';
 import { VisibilityGuardDialog } from '../components/ArchCanvas/panels/VisibilityGuardDialog';
 import { TopologyBookmarkDrawer } from '../components/ArchCanvas/panels/TopologyBookmarkDrawer';
 import { ArchCanvasToolbar } from '../components/ArchCanvas/panels/ArchCanvasToolbar';
@@ -635,5 +637,108 @@ describe('M19-P5 & M19-P6: TopologyFocusAndPersistenceWorkbench Suite', () => {
     );
     expect(overviewHtml).toContain('ORDER_CORE');
     expect(overviewHtml).toContain('127.0.0.1:9001');
+  });
+
+  // 验证图钉(Pin)固定与取消固定时的高亮激活样式反馈与 TabPane 状态固化/Toast
+  it('testNodePinToggle_InstantVisualFeedback_AndToast', () => {
+    const srcRoot = path.resolve(__dirname, '..');
+    const tabPaneContent = fs.readFileSync(
+      path.join(srcRoot, 'pages/ArchitectureWorkbenchPage/ArchTopologyTabPane.tsx'),
+      'utf-8'
+    );
+    const archCanvasContent = fs.readFileSync(
+      path.join(srcRoot, 'components/ArchCanvas/ArchCanvas.tsx'),
+      'utf-8'
+    );
+    const useElkContent = fs.readFileSync(
+      path.join(srcRoot, 'components/ArchCanvas/layout/useElkLayout.ts'),
+      'utf-8'
+    );
+    const cssContent = fs.readFileSync(
+      path.join(srcRoot, 'components/ArchCanvas/ArchCanvas.css'),
+      'utf-8'
+    );
+
+    // 1. 验证 ArchTopologyTabPane 在 handleTogglePin 中包含即时 Toast 提示与草稿调度保存
+    expect(tabPaneContent).toContain('handleTogglePin');
+    expect(tabPaneContent).toContain('toast.info(`已固定「${displayName}」位置，重新排版时将保留原位`);');
+    expect(tabPaneContent).toContain('toast.info(`已取消「${displayName}」位置固定`);');
+    expect(tabPaneContent).toContain('scheduleSaveDraft(next);');
+
+    // 2. 验证 ArchCanvas 与 useElkLayout 拥有就地响应 pinnedNodeIds 变更更新 isPinned 的轻量同步机制
+    expect(archCanvasContent).toContain('pinnedNodeIds?.has(node.id)');
+    expect(useElkContent).toContain('pinnedNodeIds?.has(n.id)');
+
+    // 3. 验证 CSS 中激活按钮具有醒目的主题色背景和白色文字，节点外框具有发光轮廓
+    expect(cssContent).toContain('.code-arch-container__action-btn--active');
+    expect(cssContent).toContain('.code-arch-node--pinned');
+    expect(cssContent).toContain('var(--color-primary)');
+
+    // 4. 验证 ContainerNode 在 isPinned=true 时渲染激活样式与 tooltip
+    const containerProps = {
+      id: 'sub_1',
+      data: {
+        graphNode: {
+          id: 'sub_1',
+          name: '电商交易微服务系统',
+          type: 'SUBSYSTEM' as const,
+          depth: 0,
+          code: 'ECOMMERCE',
+        },
+        isExpanded: true,
+        isPinned: true,
+        onTogglePin: () => {},
+      },
+    };
+
+    const containerHtml = renderToString(
+      <ReactFlowProvider>
+        <ContainerNode {...(containerProps as unknown as React.ComponentProps<typeof ContainerNode>)} />
+      </ReactFlowProvider>
+    );
+    expect(containerHtml).toContain('code-arch-node--pinned');
+    expect(containerHtml).toContain('code-arch-container__action-btn--active');
+    expect(containerHtml).toContain('取消固定位置');
+
+    // 5. 验证 ModuleNode 在 isPinned=true 时渲染激活样式与 tooltip
+    const moduleProps = {
+      id: 'mod_101',
+      data: {
+        graphNode: {
+          id: 'mod_101',
+          name: '订单交易核心模块',
+          type: 'MODULE' as const,
+          depth: 2,
+          code: 'ORDER_CORE',
+        },
+        isPinned: true,
+        onTogglePin: () => {},
+      },
+    };
+
+    const moduleHtml = renderToString(
+      <ReactFlowProvider>
+        <ModuleNode {...(moduleProps as unknown as React.ComponentProps<typeof ModuleNode>)} />
+      </ReactFlowProvider>
+    );
+    expect(moduleHtml).toContain('code-arch-node--pinned');
+    expect(moduleHtml).toContain('code-arch-container__action-btn--active');
+    expect(moduleHtml).toContain('取消固定位置');
+
+    // 6. 验证 isPinned=false 时不携带 active 类名
+    const unpinnedContainerProps = {
+      id: 'sub_1',
+      data: {
+        ...containerProps.data,
+        isPinned: false,
+      },
+    };
+    const unpinnedHtml = renderToString(
+      <ReactFlowProvider>
+        <ContainerNode {...(unpinnedContainerProps as unknown as React.ComponentProps<typeof ContainerNode>)} />
+      </ReactFlowProvider>
+    );
+    expect(unpinnedHtml).not.toContain('code-arch-container__action-btn--active');
+    expect(unpinnedHtml).toContain('固定容器位置');
   });
 });

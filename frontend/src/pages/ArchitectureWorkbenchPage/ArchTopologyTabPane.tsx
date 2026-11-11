@@ -770,23 +770,58 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
   // 固定/解锁节点位置
   const handleTogglePin = useCallback(
     (nodeId: string) => {
+      const willPin = !pinnedNodeIds.has(nodeId);
+
       setPinnedNodeIds((prev) => {
         const next = new Set(prev);
         if (next.has(nodeId)) next.delete(nodeId);
         else next.add(nodeId);
         return next;
       });
+
+      const gn = graphData?.nodes?.find((n) => n.id === nodeId);
+      const displayName = gn?.name || gn?.code || nodeId;
+
       setSavedPositions((prev) => {
-        if (!prev || !prev[nodeId]) return prev;
+        const base = prev || {};
+        const existing = base[nodeId];
+        let nextNodePos: SavedNodePosition;
+
+        if (existing) {
+          nextNodePos = {
+            ...existing,
+            pinned: willPin,
+          };
+        } else {
+          const parentId = gn?.parent_id ?? null;
+          const defaultW = gn?.type === 'MODULE' ? 220 : 260;
+          const defaultH = gn?.type === 'MODULE' ? 74 : (expandState[nodeId] ? 140 : 80);
+          nextNodePos = {
+            x: 0,
+            y: 0,
+            parent_id: parentId,
+            is_expanded: Boolean(expandState[nodeId]),
+            pinned: willPin,
+            width: defaultW,
+            height: defaultH,
+          };
+        }
+
         const next = {
-          ...prev,
-          [nodeId]: { ...prev[nodeId], pinned: !prev[nodeId].pinned },
+          ...base,
+          [nodeId]: nextNodePos,
         };
         scheduleSaveDraft(next);
         return next;
       });
+
+      if (willPin) {
+        toast.info(`已固定「${displayName}」位置，重新排版时将保留原位`);
+      } else {
+        toast.info(`已取消「${displayName}」位置固定`);
+      }
     },
-    [scheduleSaveDraft]
+    [pinnedNodeIds, graphData, expandState, scheduleSaveDraft, toast]
   );
 
   // 单节点拖拽停止后记录最新相对坐标并写入草稿（同时联动撑大父容器保存尺寸）
