@@ -19,6 +19,7 @@ export function detectCycles(
   }
 
   for (const e of rollupEdges) {
+    if (e.kind === 'REALIZATION') continue; // 实现关系边不参与循环依赖检测
     if (adj.has(e.source) && adj.has(e.target)) {
       adj.get(e.source)?.push(e.target);
     }
@@ -83,6 +84,12 @@ export function detectCycles(
   });
 
   const updatedEdges = rollupEdges.map((e) => {
+    if (e.kind === 'REALIZATION') {
+      return {
+        ...e,
+        isCycle: false,
+      };
+    }
     const scc1 = nodeToSccId.get(e.source);
     const scc2 = nodeToSccId.get(e.target);
     const inSameCycle = scc1 !== undefined && scc2 !== undefined && scc1 === scc2;

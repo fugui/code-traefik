@@ -100,6 +100,14 @@ func RegisterAPIRoutes(r *gin.Engine) {
 		protected.GET("/arch/services/available", ListAvailableServices)
 		protected.GET("/arch/proto-services/claimable", ListClaimableProtoServices)
 
+		// 4.0 多实现服务契约域 (ADR-16, M20)
+		protected.GET("/arch/service-contracts", ListServiceContracts)
+		protected.GET("/arch/service-contracts/:id", GetServiceContract)
+		protected.POST("/arch/service-contracts", requireAdmin, CreateServiceContract)
+		protected.PUT("/arch/service-contracts/:id", requireAdmin, UpdateServiceContract)
+		protected.DELETE("/arch/service-contracts/:id", requireAdmin, DeleteServiceContract)
+		protected.POST("/arch/service-contracts/convert", requireAdmin, ConvertExclusiveToMultiImplContract)
+
 		// 4.1 物理进程蓝图域 (ADR-09, M10)
 		protected.GET("/arch/process-groups", ListArchProcessGroups)
 		protected.POST("/arch/process-groups", requireAdmin, CreateArchProcessGroup)

@@ -3,6 +3,7 @@ package topology
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	"code-traefik/models"
@@ -92,20 +93,15 @@ func ResolveSourceModule(
 
 // OfflineBatchAttribution 在录制批次停止后，统一归集全链路报文并执行结算 (OfflineBatchAttribution)
 func OfflineBatchAttribution(ctx context.Context, db *gorm.DB, sessionID uint64) error {
-	// 1. 加载全局唯一 PROVIDE 映射 (Service 级)
-	var services []models.ModuleService
-	if err := db.WithContext(ctx).Find(&services).Error; err != nil {
+	// 1. 加载契约与服务解析器 (支持独占服务与多实现契约解析)
+	resolver, err := LoadContractResolver(ctx, db)
+	if err != nil {
 		return err
 	}
-	provideMap := make(map[string]uint64, len(services))
-	for _, svc := range services {
-		key := strings.TrimSpace(svc.ServiceName)
-		provideMap[key] = svc.ModuleID
-	}
 
-	// 2. 加载全局 DEPEND 映射: moduleID -> map[serviceName]bool
+	// 2. 加载全局 DEPEND 映射: moduleID -> map[serviceName]bool (包含 DISPATCH 契约依赖)
 	var deps []models.ModuleDependency
-	if err := db.WithContext(ctx).Preload("Service").Find(&deps).Error; err != nil {
+	if err := db.WithContext(ctx).Preload("Service").Preload("Contract").Find(&deps).Error; err != nil {
 		return err
 	}
 	dependMap := make(map[uint64]map[string]bool)
@@ -115,6 +111,9 @@ func OfflineBatchAttribution(ctx context.Context, db *gorm.DB, sessionID uint64)
 		}
 		if dep.Service != nil {
 			key := strings.TrimSpace(dep.Service.ServiceName)
+			dependMap[dep.ConsumerModuleID][key] = true
+		} else if dep.Contract != nil {
+			key := strings.TrimSpace(dep.Contract.ServiceName)
 			dependMap[dep.ConsumerModuleID][key] = true
 		} else if dep.IsExternal && dep.ExternalService != "" {
 			dependMap[dep.ConsumerModuleID][strings.TrimSpace(dep.ExternalService)] = true
@@ -137,9 +136,28 @@ func OfflineBatchAttribution(ctx context.Context, db *gorm.DB, sessionID uint64)
 		}
 	}
 	processModules := make(map[uint64][]uint64)
+	procArchMap := make(map[uint64]uint64)
+	envProcesses := make(map[string]uint64)
 	for _, p := range allProcs {
+		p.FillFromArchProcess()
+		procArchMap[p.ID] = p.ArchProcessID
 		if mods, ok := archModules[p.ArchProcessID]; ok {
 			processModules[p.ID] = mods
+		}
+		if p.EffectiveListenPort > 0 && p.ArchProcessID > 0 {
+			if p.AdvertiseIP != "" {
+				envProcesses[fmt.Sprintf("%s:%d", p.AdvertiseIP, p.EffectiveListenPort)] = p.ArchProcessID
+			}
+			envProcesses[fmt.Sprintf("127.0.0.1:%d", p.EffectiveListenPort)] = p.ArchProcessID
+		}
+	}
+
+	// 3.5 加载会话级 endpoint_snapshots
+	var session models.RecordingSession
+	var snapshots []models.EndpointSnapshotItem
+	if err := db.WithContext(ctx).Where("id = ?", sessionID).First(&session).Error; err == nil {
+		if len(session.EndpointSnapshots) > 0 {
+			_ = json.Unmarshal(session.EndpointSnapshots, &snapshots)
 		}
 	}
 
@@ -156,10 +174,24 @@ func OfflineBatchAttribution(ctx context.Context, db *gorm.DB, sessionID uint64)
 	ingressMap := make(map[string]*models.TrafficRecord)
 	for i := range records {
 		rec := &records[i]
-		// 定位目标模块 (按最新契约补全或更新)
-		if dstID := ResolveDestinationModule(provideMap, rec.ServiceName); dstID != nil {
+		// 多级解析定位目标模块与契约
+		targetArchPID := procArchMap[rec.ProcessID]
+		dstID, dstContractID := resolver.ResolveDestinationFull(
+			rec.ServiceName,
+			rec.Direction,
+			targetArchPID,
+			rec.DstAddr,
+			snapshots,
+			envProcesses,
+			nil,
+		)
+		if dstID != nil {
 			rec.DstModuleID = dstID
 		}
+		if dstContractID != nil {
+			rec.DstContractID = dstContractID
+		}
+
 		if rec.Direction == models.TrafficDirIngress && rec.SpanID != "" && rec.SpanID != "0" {
 			ingressMap[rec.SpanID] = rec
 		}
@@ -185,6 +217,7 @@ func OfflineBatchAttribution(ctx context.Context, db *gorm.DB, sessionID uint64)
 
 		updates := map[string]interface{}{
 			"dst_module_id":            rec.DstModuleID,
+			"dst_contract_id":          rec.DstContractID,
 			"src_module_id":            rec.SrcModuleID,
 			"src_attribution_mode":     rec.SrcAttributionMode,
 			"src_candidate_module_ids": rec.SrcCandidateModuleIDs,

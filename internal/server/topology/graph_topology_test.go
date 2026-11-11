@@ -605,3 +605,146 @@ func TestBuildTopologyGraph_ModuleOwnerIDInMeta_LogicalAndPhysical(t *testing.T)
 		}
 	}
 }
+
+func TestBuildTopologyGraph_LogicalAndPhysicalContractLib(t *testing.T) {
+	db := setupIsolatedTopologyDB(t)
+
+	sub, _ := CreateSubsystem(db, SubsystemInput{Code: "SUB_GRAPH_LIB", Name: "拓扑图接口库测试子系统"})
+	grp, _ := CreateFunctionalGroup(db, FunctionalGroupInput{SubsystemID: sub.ID, Code: "GRP_GRAPH_LIB", Name: "功能组"})
+
+	// FM A: CONTRACT_LIB
+	modA, err := CreateModule(db, ModuleInput{
+		GroupID:    grp.ID,
+		Code:       "MOD_LIB_A_GRAPH",
+		Name:       "接口定义库A",
+		ModuleKind: models.ModuleKindContractLib,
+	})
+	if err != nil {
+		t.Fatalf("创建接口库失败: %v", err)
+	}
+
+	// FM B & FM X: BUSINESS
+	pgrp := models.ArchProcessGroup{Code: "PGRP_GRAPH", Name: "物理组"}
+	db.Create(&pgrp)
+	apB := models.ArchProcess{GroupID: pgrp.ID, Code: "ARCH_B_GRAPH", Name: "实现进程B", DefaultListenPort: 19101}
+	apX := models.ArchProcess{GroupID: pgrp.ID, Code: "ARCH_X_GRAPH", Name: "网关进程X", DefaultListenPort: 19102}
+	db.Create(&apB)
+	db.Create(&apX)
+
+	modB, err := CreateModule(db, ModuleInput{
+		GroupID:       grp.ID,
+		Code:          "MOD_IMPL_B_GRAPH",
+		Name:          "实现模块B",
+		ModuleKind:    models.ModuleKindBusiness,
+		ArchProcessID: &apB.ID,
+	})
+	if err != nil {
+		t.Fatalf("创建模块B失败: %v", err)
+	}
+
+	modX, err := CreateModule(db, ModuleInput{
+		GroupID:       grp.ID,
+		Code:          "MOD_CONS_X_GRAPH",
+		Name:          "调用方X",
+		ModuleKind:    models.ModuleKindBusiness,
+		ArchProcessID: &apX.ID,
+	})
+	if err != nil {
+		t.Fatalf("创建模块X失败: %v", err)
+	}
+
+	// 注册多实现契约
+	contract, err := CreateServiceContract(db, ServiceContractInput{
+		ServiceName:     "cros.demo.ContractGraphService",
+		DefinerModuleID: modA.ID,
+	})
+	if err != nil {
+		t.Fatalf("创建契约失败: %v", err)
+	}
+
+	// 模块 B 登记实现
+	_, err = CreateModuleService(db, ModuleServiceInput{
+		ModuleID:    modB.ID,
+		ServiceName: "cros.demo.ContractGraphService",
+		ContractID:  &contract.ID,
+		ImplKey:     "impl_b",
+	})
+	if err != nil {
+		t.Fatalf("登记实现失败: %v", err)
+	}
+
+	// 模块 X 声明 DISPATCH 契约依赖
+	_, err = CreateModuleDependency(db, ModuleDependencyInput{
+		ConsumerModuleID: modX.ID,
+		ContractID:       &contract.ID,
+	})
+	if err != nil {
+		t.Fatalf("登记契约依赖失败: %v", err)
+	}
+
+	// 1. 验证 LOGICAL 逻辑视图
+	gLog, err := BuildTopologyGraph(db, TopologyViewLogical)
+	if err != nil {
+		t.Fatalf("BuildTopologyGraph(LOGICAL) 失败: %v", err)
+	}
+
+	nodeMapLog := make(map[string]GraphNode)
+	for _, n := range gLog.Nodes {
+		nodeMapLog[n.ID] = n
+	}
+
+	// FM A 节点属性检查
+	nodeA, ok := nodeMapLog[fmt.Sprintf("mod_%d", modA.ID)]
+	if !ok {
+		t.Fatalf("逻辑视图中未找到接口库节点 mod_%d", modA.ID)
+	}
+	if nodeA.Meta["module_kind"] != string(models.ModuleKindContractLib) {
+		t.Errorf("接口库 meta.module_kind 期望 CONTRACT_LIB, got %v", nodeA.Meta["module_kind"])
+	}
+	if nodeA.Meta["contract_count"] != 1 {
+		t.Errorf("接口库 meta.contract_count 期望 1, got %v", nodeA.Meta["contract_count"])
+	}
+	if nodeA.Meta["impl_count"] != 1 {
+		t.Errorf("接口库 meta.impl_count 期望 1, got %v", nodeA.Meta["impl_count"])
+	}
+
+	// REALIZATION 边与 DISPATCH 边检查
+	foundRealization := false
+	foundDispatch := false
+	for _, edge := range gLog.Edges {
+		if edge.Kind == EdgeKindRealization {
+			if edge.SourceNodeID == fmt.Sprintf("mod_%d", modB.ID) && edge.TargetNodeID == fmt.Sprintf("mod_%d", modA.ID) {
+				foundRealization = true
+				if edge.ContractID == nil || *edge.ContractID != contract.ID {
+					t.Errorf("REALIZATION 边应携带 contract_id=%d, got %v", contract.ID, edge.ContractID)
+				}
+			}
+		}
+		if edge.Kind == EdgeKindCrossProcess {
+			if edge.SourceNodeID == fmt.Sprintf("mod_%d", modX.ID) && edge.TargetNodeID == fmt.Sprintf("mod_%d", modA.ID) {
+				foundDispatch = true
+				if edge.ContractID == nil || *edge.ContractID != contract.ID {
+					t.Errorf("DISPATCH 边应携带 contract_id=%d, got %v", contract.ID, edge.ContractID)
+				}
+			}
+		}
+	}
+	if !foundRealization {
+		t.Errorf("逻辑视图中未检出 B -> A 的 REALIZATION 实现边")
+	}
+	if !foundDispatch {
+		t.Errorf("逻辑视图中未检出 X -> A 的 DISPATCH 调用边")
+	}
+
+	// 2. 验证 PHYSICAL 物理视图
+	gPhys, err := BuildTopologyGraph(db, TopologyViewPhysical)
+	if err != nil {
+		t.Fatalf("BuildTopologyGraph(PHYSICAL) 失败: %v", err)
+	}
+
+	for _, n := range gPhys.Nodes {
+		if n.ID == fmt.Sprintf("mod_%d", modA.ID) {
+			t.Fatalf("物理视图中严禁出现 CONTRACT_LIB 纯接口库节点 mod_%d", modA.ID)
+		}
+	}
+}

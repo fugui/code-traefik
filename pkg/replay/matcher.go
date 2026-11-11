@@ -48,6 +48,7 @@ type mockEntry struct {
 	consumed  bool
 	exactKey  string
 	methodKey string
+	dstTag    string
 	rsps      [][]byte
 }
 
@@ -63,10 +64,11 @@ func newScopedPool() *scopedPool {
 	}
 }
 
-func (p *scopedPool) add(exactKey, methodKey string, rsps [][]byte) {
+func (p *scopedPool) add(exactKey, methodKey, dstTag string, rsps [][]byte) {
 	entry := &mockEntry{
 		exactKey:  exactKey,
 		methodKey: methodKey,
+		dstTag:    dstTag,
 		rsps:      rsps,
 	}
 	p.exactMap[exactKey] = append(p.exactMap[exactKey], entry)
@@ -134,7 +136,8 @@ type ScopedMockMatcher struct {
 	activeRecordID uint64
 	scopedMocks    map[uint64]*scopedPool
 	globalFallback *scopedPool
-	mngMocks       map[uint8][]byte // msgType -> raw mng packet
+	mngMocks       map[uint8][]byte  // msgType -> raw mng packet
+	endpointTags   map[string]string // "IP:Port" -> DstTag
 	mockHitCount   int
 	mockMissCount  int
 	missRecords    []MockMissRecord
@@ -148,7 +151,18 @@ func NewScopedMockMatcher() *ScopedMockMatcher {
 		scopedMocks:    make(map[uint64]*scopedPool),
 		globalFallback: newScopedPool(),
 		mngMocks:       make(map[uint8][]byte),
+		endpointTags:   make(map[string]string),
 		observedCalls:  make(map[observedCallKey]int),
+	}
+}
+
+// SetEndpointTags 设置网络端点到进程 DstTag 的映射 (IP:Port -> DstTag)
+func (m *ScopedMockMatcher) SetEndpointTags(tags map[string]string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.endpointTags = make(map[string]string, len(tags))
+	for k, v := range tags {
+		m.endpointTags[k] = v
 	}
 }
 
@@ -161,6 +175,11 @@ func (m *ScopedMockMatcher) SetActiveRecordID(recordID uint64) {
 
 // AddScopedMock 录入专属局部 Mock
 func (m *ScopedMockMatcher) AddScopedMock(recordID uint64, service, operation string, reqPayload []byte, rsps [][]byte) {
+	m.AddScopedMockWithTag(recordID, service, operation, "", reqPayload, rsps)
+}
+
+// AddScopedMockWithTag 录入带 DstTag 隔离标签的专属局部 Mock (M20)
+func (m *ScopedMockMatcher) AddScopedMockWithTag(recordID uint64, service, operation, dstTag string, reqPayload []byte, rsps [][]byte) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -171,23 +190,34 @@ func (m *ScopedMockMatcher) AddScopedMock(recordID uint64, service, operation st
 	}
 
 	methodKey := service + ":" + operation
+	if dstTag != "" {
+		methodKey = methodKey + "@" + dstTag
+	}
 	hash := sha256.Sum256(reqPayload)
 	exactKey := methodKey + ":" + hex.EncodeToString(hash[:])
-	pool.add(exactKey, methodKey, rsps)
+	pool.add(exactKey, methodKey, dstTag, rsps)
 }
 
 // AddGlobalFallback 录入全局兜底 Mock
 func (m *ScopedMockMatcher) AddGlobalFallback(service, operation string, reqPayload []byte, rsps [][]byte) {
+	m.AddGlobalFallbackWithTag(service, operation, "", reqPayload, rsps)
+}
+
+// AddGlobalFallbackWithTag 录入带 DstTag 隔离标签的全局兜底 Mock (M20)
+func (m *ScopedMockMatcher) AddGlobalFallbackWithTag(service, operation, dstTag string, reqPayload []byte, rsps [][]byte) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	methodKey := service + ":" + operation
+	if dstTag != "" {
+		methodKey = methodKey + "@" + dstTag
+	}
 	hash := sha256.Sum256(reqPayload)
 	exactKey := methodKey + ":" + hex.EncodeToString(hash[:])
-	m.globalFallback.add(exactKey, methodKey, rsps)
+	m.globalFallback.add(exactKey, methodKey, dstTag, rsps)
 }
 
-// RegisterScopedDownstreamRule 解析出站请求帧与应答帧列表，注册到指定 RecordID 的专属局部作用域 (ADR-12, M13)
+// RegisterScopedDownstreamRule 解析出站请求帧与应答帧列表，注册到指定 RecordID 的专属局部作用域 (ADR-12, M13, M20)
 func (m *ScopedMockMatcher) RegisterScopedDownstreamRule(recordID uint64, rule agentproto.MockRuleDownstream) error {
 	if len(rule.ReqPacket) < crosrpc.CommHeadLen {
 		return ErrFrameTooShort
@@ -211,11 +241,11 @@ func (m *ScopedMockMatcher) RegisterScopedDownstreamRule(recordID uint64, rule a
 	if len(rule.ReqPacket) > parsed.PayloadOffset {
 		payload = rule.ReqPacket[parsed.PayloadOffset:]
 	}
-	m.AddScopedMock(recordID, svc, op, payload, rule.RspPackets)
+	m.AddScopedMockWithTag(recordID, svc, op, rule.DstTag, payload, rule.RspPackets)
 	return nil
 }
 
-// RegisterGlobalFallbackRule 解析出站请求帧与应答帧列表，注册到全局兜底作用域 (ADR-12, M13)
+// RegisterGlobalFallbackRule 解析出站请求帧与应答帧列表，注册到全局兜底作用域 (ADR-12, M13, M20)
 func (m *ScopedMockMatcher) RegisterGlobalFallbackRule(rule agentproto.MockRuleDownstream) error {
 	if len(rule.ReqPacket) < crosrpc.CommHeadLen {
 		return ErrFrameTooShort
@@ -239,7 +269,7 @@ func (m *ScopedMockMatcher) RegisterGlobalFallbackRule(rule agentproto.MockRuleD
 	if len(rule.ReqPacket) > parsed.PayloadOffset {
 		payload = rule.ReqPacket[parsed.PayloadOffset:]
 	}
-	m.AddGlobalFallback(svc, op, payload, rule.RspPackets)
+	m.AddGlobalFallbackWithTag(svc, op, rule.DstTag, payload, rule.RspPackets)
 	return nil
 }
 
@@ -257,8 +287,19 @@ func (m *ScopedMockMatcher) MatchAndHeal(liveReq []byte) (*MatchResult, error) {
 
 // MatchAndHealWithDst 针对 liveReq 附带目的地址执行匹配与表驱动头部自愈，并记录 ObservedEgressCall (ADR-14, M17)
 func (m *ScopedMockMatcher) MatchAndHealWithDst(liveReq []byte, dstAddr string) (*MatchResult, error) {
+	return m.MatchAndHealWithDstTag(liveReq, dstAddr, "")
+}
+
+// MatchAndHealWithDstTag 针对 liveReq 附带目的地址与目的标签执行多实现隔离匹配与自愈 (ADR-16, M20)
+func (m *ScopedMockMatcher) MatchAndHealWithDstTag(liveReq []byte, dstAddr, dstTag string) (*MatchResult, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	if dstTag == "" && m.endpointTags != nil && dstAddr != "" {
+		if tag, ok := m.endpointTags[dstAddr]; ok {
+			dstTag = tag
+		}
+	}
 
 	if len(liveReq) < crosrpc.CommHeadLen {
 		return nil, ErrFrameTooShort
@@ -299,7 +340,7 @@ func (m *ScopedMockMatcher) MatchAndHealWithDst(liveReq []byte, dstAddr string) 
 		serviceName = string(bytes.TrimRight(liveReq[24+8:24+72], "\x00"))
 		operation = string(bytes.TrimRight(liveReq[24+72:24+136], "\x00"))
 	}
-	methodKey := serviceName + ":" + operation
+	baseMethodKey := serviceName + ":" + operation
 
 	// 单向调用 (Oneway) 仅记录, 不回包
 	if reqType == crosrpc.ReqTypeOneway {
@@ -325,32 +366,80 @@ func (m *ScopedMockMatcher) MatchAndHealWithDst(liveReq []byte, dstAddr string) 
 		payload = liveReq[payloadOffset:]
 	}
 	hash := sha256.Sum256(payload)
-	exactKey := methodKey + ":" + hex.EncodeToString(hash[:])
+	hashHex := hex.EncodeToString(hash[:])
+	baseExactKey := baseMethodKey + ":" + hashHex
+
+	taggedMethodKey := baseMethodKey
+	taggedExactKey := baseExactKey
+	if dstTag != "" {
+		taggedMethodKey = baseMethodKey + "@" + dstTag
+		taggedExactKey = taggedMethodKey + ":" + hashHex
+	}
 
 	// 3. 检查专属局部池
 	var matchedRsps [][]byte
 	var hitType MatchResultType
 
 	if pool, ok := m.scopedMocks[m.activeRecordID]; ok {
-		// 3.1 尝试精确哈希匹配
-		if rsps, found := pool.popExact(exactKey); found {
-			matchedRsps = rsps
-			hitType = MatchHitScoped
-		} else if rsps, found := pool.popSeq(methodKey); found {
-			// 3.2 尝试同接口次序兜底
-			matchedRsps = rsps
-			hitType = MatchHitScopedSeq
+		// 3.1 尝试带 DstTag 精确哈希匹配
+		if dstTag != "" {
+			if rsps, found := pool.popExact(taggedExactKey); found {
+				matchedRsps = rsps
+				hitType = MatchHitScoped
+			}
+		}
+		// 3.2 尝试无 DstTag 精确哈希匹配（回退到通用/独占契约规则）
+		if matchedRsps == nil {
+			if rsps, found := pool.popExact(baseExactKey); found {
+				matchedRsps = rsps
+				hitType = MatchHitScoped
+			}
+		}
+		// 3.3 尝试带 DstTag 同接口次序兜底
+		if matchedRsps == nil && dstTag != "" {
+			if rsps, found := pool.popSeq(taggedMethodKey); found {
+				matchedRsps = rsps
+				hitType = MatchHitScopedSeq
+			}
+		}
+		// 3.4 尝试无 DstTag 同接口次序兜底
+		if matchedRsps == nil {
+			if rsps, found := pool.popSeq(baseMethodKey); found {
+				matchedRsps = rsps
+				hitType = MatchHitScopedSeq
+			}
 		}
 	}
 
 	// 4. 专属池未命中，检查全局兜底池
 	if matchedRsps == nil && m.globalFallback != nil {
-		if rsps, found := m.globalFallback.popExact(exactKey); found {
-			matchedRsps = rsps
-			hitType = MatchHitGlobal
-		} else if rsps, found := m.globalFallback.popSeq(methodKey); found {
-			matchedRsps = rsps
-			hitType = MatchHitGlobal
+		// 4.1 尝试带 DstTag 全局精确哈希匹配
+		if dstTag != "" {
+			if rsps, found := m.globalFallback.popExact(taggedExactKey); found {
+				matchedRsps = rsps
+				hitType = MatchHitGlobal
+			}
+		}
+		// 4.2 尝试无 DstTag 全局精确哈希匹配
+		if matchedRsps == nil {
+			if rsps, found := m.globalFallback.popExact(baseExactKey); found {
+				matchedRsps = rsps
+				hitType = MatchHitGlobal
+			}
+		}
+		// 4.3 尝试带 DstTag 全局同接口次序兜底
+		if matchedRsps == nil && dstTag != "" {
+			if rsps, found := m.globalFallback.popSeq(taggedMethodKey); found {
+				matchedRsps = rsps
+				hitType = MatchHitGlobal
+			}
+		}
+		// 4.4 尝试无 DstTag 全局同接口次序兜底
+		if matchedRsps == nil {
+			if rsps, found := m.globalFallback.popSeq(baseMethodKey); found {
+				matchedRsps = rsps
+				hitType = MatchHitGlobal
+			}
 		}
 	}
 
@@ -377,7 +466,7 @@ func (m *ScopedMockMatcher) MatchAndHealWithDst(liveReq []byte, dstAddr string) 
 	m.missRecords = append(m.missRecords, MockMissRecord{
 		ServiceName: serviceName,
 		Operation:   operation,
-		PayloadHash: hex.EncodeToString(hash[:]),
+		PayloadHash: hashHex,
 	})
 	if serviceName != "" {
 		m.recordObservedCallLocked(serviceName, operation, dstAddr, string(MatchMiss))

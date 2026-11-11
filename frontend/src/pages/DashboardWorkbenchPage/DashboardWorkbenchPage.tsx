@@ -279,6 +279,18 @@ export const ContractAssetsCard: React.FC<ContractAssetsCardProps> = ({ contract
             </span>
             <span className="dashboard-stat-tile__label">契约认领覆盖率</span>
           </div>
+          <div className="dashboard-stat-tile">
+            <span className="dashboard-stat-tile__value" data-testid="multi-impl-contract-count">
+              {contractAssets.multi_impl_contract_count ?? 0}
+            </span>
+            <span className="dashboard-stat-tile__label">多实现契约数</span>
+          </div>
+          <div className="dashboard-stat-tile">
+            <span className="dashboard-stat-tile__value" data-testid="multi-impl-service-count">
+              {contractAssets.multi_impl_service_count ?? 0}
+            </span>
+            <span className="dashboard-stat-tile__label">实现分支服务数</span>
+          </div>
         </div>
 
         <div className="dashboard-table-container">

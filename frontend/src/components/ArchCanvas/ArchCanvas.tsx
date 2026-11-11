@@ -105,6 +105,8 @@ export interface ArchCanvasProps {
   onPositionsComputed?: (positions: Record<string, SavedNodePosition>) => void;
   initialViewport?: SavedViewport | null;
   onViewportChange?: (viewport: SavedViewport) => void;
+  showRealization?: boolean;
+  contractMode?: 'AGG' | 'EXPAND';
   containerSearchMatchCounts?: Record<string, number>;
   onVisibleRollupEdgesChange?: (edges: RollupEdgeModel[]) => void;
   panToNodeRequest?: { nodeId: string; seq: number } | null;
@@ -146,6 +148,8 @@ export const ArchCanvas: React.FC<ArchCanvasProps> = ({
   onTogglePin,
   onNodePositionChange,
   onPositionsComputed,
+  showRealization = true,
+  contractMode = 'AGG',
   initialViewport = null,
   onViewportChange,
   containerSearchMatchCounts,
@@ -253,6 +257,8 @@ export const ArchCanvas: React.FC<ArchCanvasProps> = ({
     onPositionsComputed,
     containerSearchMatchCounts,
     lodMode,
+    showRealization,
+    contractMode,
   });
 
   const [flowNodes, setFlowNodes, onNodesChange] = useNodesState<ArchCanvasNode>(layoutNodes);

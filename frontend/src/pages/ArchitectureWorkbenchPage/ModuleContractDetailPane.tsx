@@ -25,6 +25,7 @@ import type {
   ModuleDependency,
   AvailableServiceItem,
   ClaimableProtoServiceItem,
+  ServiceContract,
   Subsystem,
   FunctionalGroupTreeNode,
   Process,
@@ -48,6 +49,8 @@ export interface ModuleContractDetailPaneProps {
   onViewArchProcess?: (archProcessId: string | number) => void;
   onCreateService: (data: {
     service_name: string;
+    contract_id?: string | number | null;
+    impl_key?: string | null;
     diff_ignore_paths?: string[];
     description?: string;
   }) => Promise<void>;
@@ -58,6 +61,7 @@ export interface ModuleContractDetailPaneProps {
     external_system?: string;
     external_service?: string;
     service_id?: string;
+    contract_id?: string | number;
     description?: string;
   }) => Promise<void>;
   onDeleteDependency: (depId: string) => Promise<void>;
@@ -112,9 +116,61 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
   const [loadingClaimable, setLoadingClaimable] = useState(false);
   const [provideForm, setProvideForm] = useState({
     service_name: '',
+    impl_key: '',
     diff_ignore_paths: '',
     description: '',
   });
+
+  // M20 接口契约库 (CONTRACT_LIB) 相关状态
+  const isContractLib = selectedModule?.module_kind === 'CONTRACT_LIB';
+  const [contracts, setContracts] = useState<ServiceContract[]>([]);
+  const [loadingContracts, setLoadingContracts] = useState(false);
+  const [selectedContractId, setSelectedContractId] = useState<string | number | null>(null);
+  const [isContractDrawerOpen, setIsContractDrawerOpen] = useState(false);
+  const [contractSubmitting, setContractSubmitting] = useState(false);
+  const [contractForm, setContractForm] = useState({
+    service_name: '',
+    impl_key_label: '',
+    description: '',
+  });
+
+  // 全系统已登记多实现契约缓存（供普通业务模块在声明服务时自动检测）
+  const [allContracts, setAllContracts] = useState<ServiceContract[]>([]);
+
+  const loadContracts = React.useCallback(async (moduleId: string) => {
+    setLoadingContracts(true);
+    try {
+      const res = await archApi.listServiceContracts({ definer_module_id: moduleId });
+      const items = res.items ?? [];
+      setContracts(items);
+      if (items.length > 0 && !selectedContractId) {
+        setSelectedContractId(items[0].id);
+      }
+    } catch {
+      setContracts([]);
+    } finally {
+      setLoadingContracts(false);
+    }
+  }, [selectedContractId]);
+
+  const loadAllContracts = React.useCallback(async () => {
+    try {
+      const res = await archApi.listServiceContracts({ page_size: 200 });
+      setAllContracts(res.items ?? []);
+    } catch {
+      setAllContracts([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (selectedModule?.id && isContractLib) {
+      void loadContracts(selectedModule.id);
+    }
+  }, [selectedModule?.id, isContractLib, loadContracts]);
+
+  useEffect(() => {
+    void loadAllContracts();
+  }, [loadAllContracts]);
 
   // 打开声明供给服务抽屉时自动加载已激活的 Proto 服务
   useEffect(() => {
@@ -131,11 +187,15 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
         .finally(() => {
           setLoadingClaimable(false);
         });
+      void loadAllContracts();
     }
-  }, [isProvideDrawerOpen]);
+  }, [isProvideDrawerOpen, loadAllContracts]);
 
   const selectedClaimableItem = claimableServices.find(
     (s) => s.service_name === provideForm.service_name
+  );
+  const matchedContract = allContracts.find(
+    (c) => c.service_name === provideForm.service_name
   );
 
   // 2. 添加服务依赖 Drawer
@@ -144,12 +204,17 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
   const [dependType, setDependType] = useState<'INTERNAL' | 'EXTERNAL'>('INTERNAL');
   const [dependForm, setDependForm] = useState({
     service_id: '',
+    contract_id: '',
+    depend_mode: 'DISPATCH' as 'DISPATCH' | 'SPECIFIC',
     external_system: '',
     external_service: '',
     description: '',
   });
   const [availableServices, setAvailableServices] = useState<AvailableServiceItem[]>([]);
   const [loadingAvailable, setLoadingAvailable] = useState(false);
+
+  const selectedContract = contracts.find((c) => String(c.id) === String(selectedContractId)) || contracts[0] || null;
+  const selectedAvailableService = availableServices.find((s) => String(s.service_id) === String(dependForm.service_id));
 
   // 3. 物理进程装配/更换 Drawer
   const [isProcessDrawerOpen, setIsProcessDrawerOpen] = useState(false);
@@ -199,7 +264,11 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
   // 提交供给服务
   const handleSubmitProvide = async () => {
     if (!provideForm.service_name.trim()) return;
-    if (provideMode === 'CLAIM' && selectedClaimableItem?.is_claimed) return;
+    if (matchedContract && !provideForm.impl_key.trim()) {
+      toast.error('实现多实现契约时，分支标识 (impl_key) 为必填项');
+      return;
+    }
+    if (provideMode === 'CLAIM' && selectedClaimableItem?.is_claimed && !matchedContract) return;
     setProvideSubmitting(true);
     try {
       const paths = provideForm.diff_ignore_paths
@@ -208,14 +277,56 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
         .filter(Boolean);
       await onCreateService({
         service_name: provideForm.service_name.trim(),
+        contract_id: matchedContract ? matchedContract.id : undefined,
+        impl_key: matchedContract ? provideForm.impl_key.trim() : undefined,
         diff_ignore_paths: paths,
         description: provideForm.description.trim(),
       });
       setIsProvideDrawerOpen(false);
-      setProvideForm({ service_name: '', diff_ignore_paths: '', description: '' });
+      setProvideForm({ service_name: '', impl_key: '', diff_ignore_paths: '', description: '' });
       setProvideMode('CLAIM');
     } finally {
       setProvideSubmitting(false);
+    }
+  };
+
+  // 提交登记多实现服务契约 (CONTRACT_LIB)
+  const handleSubmitContract = async () => {
+    if (!selectedModule?.id) return;
+    if (!contractForm.service_name.trim()) {
+      toast.error('请输入或选择服务契约名称');
+      return;
+    }
+    setContractSubmitting(true);
+    try {
+      await archApi.createServiceContract({
+        definer_module_id: selectedModule.id,
+        service_name: contractForm.service_name.trim(),
+        impl_key_label: contractForm.impl_key_label.trim(),
+        description: contractForm.description.trim(),
+      });
+      toast.success(`多实现契约 [${contractForm.service_name}] 登记成功`);
+      setIsContractDrawerOpen(false);
+      setContractForm({ service_name: '', impl_key_label: '', description: '' });
+      await loadContracts(selectedModule.id);
+      await loadAllContracts();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '登记服务契约失败');
+    } finally {
+      setContractSubmitting(false);
+    }
+  };
+
+  const handleDeleteContract = async (id: string | number) => {
+    try {
+      await archApi.deleteServiceContract(id);
+      toast.success('服务契约已删除');
+      if (selectedModule?.id) {
+        await loadContracts(selectedModule.id);
+      }
+      await loadAllContracts();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '删除契约失败');
     }
   };
 
@@ -224,14 +335,21 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
     setDependSubmitting(true);
     try {
       if (dependType === 'INTERNAL') {
-        if (!dependForm.service_id) return;
-        await onCreateDependency({
-          is_external: false,
-          service_id: dependForm.service_id,
-          description: dependForm.description.trim(),
-        });
+        const target = availableServices.find((s) => String(s.service_id) === String(dependForm.service_id));
+        if (target?.contract_id && dependForm.depend_mode === 'DISPATCH') {
+          await onCreateDependency({
+            is_external: false,
+            contract_id: target.contract_id,
+            description: dependForm.description.trim(),
+          });
+        } else {
+          await onCreateDependency({
+            is_external: false,
+            service_id: dependForm.service_id,
+            description: dependForm.description.trim(),
+          });
+        }
       } else {
-        if (!dependForm.external_system.trim() || !dependForm.external_service.trim()) return;
         await onCreateDependency({
           is_external: true,
           external_system: dependForm.external_system.trim(),
@@ -242,6 +360,8 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
       setIsDependDrawerOpen(false);
       setDependForm({
         service_id: '',
+        contract_id: '',
+        depend_mode: 'DISPATCH',
         external_system: '',
         external_service: '',
         description: '',
@@ -328,7 +448,11 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
                 <div className="code-module-form-title-row">
                   <h3 className="code-module-form-title">{selectedModule.name}</h3>
                   <span className="code-badge code-badge--info code-font-mono">{selectedModule.code}</span>
-                  {selectedModule.process ? (
+                  {isContractLib ? (
+                    <span className="code-badge code-badge--primary" data-testid="module-kind-badge" title="接口契约库：仅定义 .pb 契约，供跨进程业务模块多实现">
+                      «interface» 接口契约库
+                    </span>
+                  ) : selectedModule.process ? (
                     <span className="code-badge code-badge--success" title="该功能模块已装配进具体物理进程">
                       <CheckCircle2 size={12} style={{ marginRight: '0.25rem' }} />
                       已装载物理进程
@@ -409,13 +533,37 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
                 </div>
               </div>
 
-              {/* 区块 2：物理进程装载全貌表单 */}
-              <div className="code-module-form-section">
-                <div className="code-module-form-section-header">
-                  <div className="code-module-form-section-title">
-                    <Server size={15} style={{ color: 'var(--color-primary)' }} />
-                    物理进程装配全貌
+              {/* 区块 2：物理进程装载全貌表单 (普通模块) 或 接口契约库特性 (CONTRACT_LIB) */}
+              {isContractLib ? (
+                <div className="code-module-form-section" data-testid="contract-lib-info-section">
+                  <div className="code-module-form-section-header">
+                    <div className="code-module-form-section-title">
+                      <FileCode size={15} style={{ color: 'var(--color-primary)' }} />
+                      接口契约库特性 (CONTRACT_LIB)
+                    </div>
                   </div>
+                  <div className="code-module-form-field-list">
+                    <div className="code-module-form-field">
+                      <span className="code-module-form-field__label">契约模式:</span>
+                      <span className="code-module-form-field__val">
+                        <span className="code-badge code-badge--info">«interface» 共享 IDL 契约库</span>
+                      </span>
+                    </div>
+                    <div className="code-module-form-field">
+                      <span className="code-module-form-field__label">装载特性:</span>
+                      <span className="code-module-form-field__val code-color-muted">
+                        不绑定特定宿主进程。契约由具体业务模块在各自互斥进程中实现落地。
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="code-module-form-section">
+                  <div className="code-module-form-section-header">
+                    <div className="code-module-form-section-title">
+                      <Server size={15} style={{ color: 'var(--color-primary)' }} />
+                      物理进程装配全貌
+                    </div>
                   {isAdmin && (
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
                       {selectedModule.process ? (
@@ -554,12 +702,273 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
                   </div>
                 </div>
               </div>
-            </div>
+            )}
           </div>
+        </div>
 
-          {/* 下半部分：上下两个独立的接口依赖表格 */}
+          {/* 下半部分：接口契约库模式 (CONTRACT_LIB) 显示契约定义与实现矩阵，普通模式显示双表格 */}
+          {isContractLib ? (
+            <div className="code-service-section" data-testid="service-contracts-section">
+              <div className="code-service-section-header">
+                <div className="code-service-section-title-wrap">
+                  <div className="code-service-section-title-row">
+                    <h4 className="code-service-section-title">
+                      多实现契约定义与实现矩阵 (CONTRACTS)
+                    </h4>
+                    <span className="code-badge code-badge--info" data-testid="contracts-count-badge">
+                      {contracts.length} 个契约
+                    </span>
+                  </div>
+                  <p className="code-service-section-desc">
+                    当前模块作为接口契约库 (CONTRACT_LIB) 定义多实现 Service 契约。具体业务模块基于 impl_key 实现此契约，消费方通过 DISPATCH 动态分发调用。
+                  </p>
+                </div>
 
-          {/* 上表格：对外供给服务列表 (PROVIDE Services) */}
+                {isAdmin && (
+                  <button
+                    type="button"
+                    className="code-btn code-btn--primary code-btn--xs"
+                    data-testid="add-contract-btn"
+                    onClick={() => {
+                      setContractForm({ service_name: '', impl_key_label: '', description: '' });
+                      setIsContractDrawerOpen(true);
+                    }}
+                  >
+                    <Plus size={13} /> 登记多实现服务契约
+                  </button>
+                )}
+              </div>
+
+              {/* 服务契约列表 */}
+              <div className="code-table-wrapper" style={{ marginBottom: '1.5rem' }}>
+                <table className="code-table" data-testid="service-contracts-table">
+                  <thead>
+                    <tr>
+                      <th style={{ width: '28%' }}>服务名称 (service_name)</th>
+                      <th style={{ width: '22%' }}>分支标识说明 (impl_key_label)</th>
+                      <th style={{ width: '15%' }}>实现分支数</th>
+                      <th style={{ width: '15%' }}>DISPATCH 消费方</th>
+                      <th style={{ width: '12%' }}>说明</th>
+                      {isAdmin && <th style={{ width: '8%' }}>操作</th>}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {loadingContracts ? (
+                      <tr>
+                        <td colSpan={isAdmin ? 6 : 5} className="code-table-empty">
+                          正在加载服务契约...
+                        </td>
+                      </tr>
+                    ) : (
+                      <>
+                        {contracts.map((ct) => {
+                      const isSelected = String(ct.id) === String(selectedContract?.id);
+                      const implCount = ct.implementations?.length ?? 0;
+                      const consumerCount = ct.consumer_dependencies?.length ?? 0;
+                      return (
+                        <tr
+                          key={ct.id}
+                          onClick={() => setSelectedContractId(ct.id)}
+                          style={{
+                            cursor: 'pointer',
+                            backgroundColor: isSelected ? 'var(--color-bg-active, rgba(59, 130, 246, 0.08))' : undefined,
+                          }}
+                        >
+                          <td>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              <FileCode size={14} style={{ color: 'var(--color-primary)' }} />
+                              <span className="code-font-mono" style={{ fontWeight: 600, color: 'var(--color-primary)' }}>
+                                {ct.service_name}
+                              </span>
+                            </div>
+                          </td>
+                          <td>
+                            <span className="code-tag code-tag--muted">
+                              {ct.impl_key_label || 'impl_key'}
+                            </span>
+                          </td>
+                          <td>
+                            <span className={`code-badge ${implCount > 0 ? 'code-badge--success' : 'code-badge--warning'}`}>
+                              {implCount} 个实现分支
+                            </span>
+                          </td>
+                          <td>
+                            <span className={`code-badge ${consumerCount > 0 ? 'code-badge--info' : 'code-badge--muted'}`}>
+                              {consumerCount} 个消费方
+                            </span>
+                          </td>
+                          <td>{ct.description || '-'}</td>
+                          {isAdmin && (
+                            <td>
+                              <button
+                                type="button"
+                                className="code-btn code-btn--danger code-btn--xs"
+                                data-testid={`btn-delete-contract-${ct.id}`}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  void handleDeleteContract(ct.id);
+                                }}
+                              >
+                                删除
+                              </button>
+                            </td>
+                          )}
+                        </tr>
+                      );
+                    })}
+                    {contracts.length === 0 && (
+                      <tr>
+                        <td colSpan={isAdmin ? 6 : 5} className="code-table-empty">
+                          暂无登记的多实现服务契约，点击右上角【+ 登记多实现服务契约】添加
+                        </td>
+                      </tr>
+                    )}
+                      </>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* 选中契约后的实现矩阵卡片 */}
+              {selectedContract && (
+                <div
+                  className="code-module-form-section"
+                  data-testid="selected-contract-details"
+                  style={{ marginTop: '1rem', border: '1px solid var(--color-border-primary)', borderRadius: 'var(--radius-md)' }}
+                >
+                  <div className="code-module-form-section-header" style={{ padding: '0.75rem 1rem' }}>
+                    <div className="code-module-form-section-title" style={{ fontSize: '0.9rem', fontWeight: 600 }}>
+                      契约 [{selectedContract.service_name}] 实现与消费全景
+                    </div>
+                  </div>
+
+                  <div style={{ padding: '0 1rem 1rem 1rem' }}>
+                    <h5 style={{ fontSize: '0.825rem', fontWeight: 600, marginBottom: '0.5rem', color: 'var(--color-text-secondary)' }}>
+                      实现分支列表 (IMPLEMENTATIONS)
+                    </h5>
+                    <div className="code-table-wrapper">
+                      <table className="code-table" data-testid="impl-matrix-table">
+                        <thead>
+                          <tr>
+                            <th style={{ width: '20%' }}>实现分支标识 (impl_key)</th>
+                            <th style={{ width: '25%' }}>实现模块 (Module)</th>
+                            <th style={{ width: '25%' }}>所属标准架构进程 (ArchProcess)</th>
+                            <th style={{ width: '15%' }}>负责人</th>
+                            <th style={{ width: '15%' }}>最近验证状态</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(selectedContract.implementations ?? []).map((impl) => {
+                            const implMod = impl.module;
+                            const archProc = implMod?.arch_process || implMod?.process;
+                            return (
+                              <tr key={impl.id}>
+                                <td>
+                                  <span className="code-tag code-tag--primary code-font-mono">
+                                    {impl.impl_key || '-'}
+                                  </span>
+                                </td>
+                                <td>
+                                  {implMod ? (
+                                    <button
+                                      type="button"
+                                      className="code-module-link-chip"
+                                      onClick={() => onSelectModule(implMod.id)}
+                                      title={`点击聚焦模块 ${implMod.name}`}
+                                    >
+                                      <Cpu size={12} />
+                                      <span>{implMod.name}</span>
+                                      <span className="code-font-mono code-text-xs">({implMod.code})</span>
+                                    </button>
+                                  ) : (
+                                    '-'
+                                  )}
+                                </td>
+                                <td>
+                                  {archProc ? (
+                                    <span className="code-process-link">
+                                      <Server size={12} />
+                                      {archProc.name}
+                                    </span>
+                                  ) : (
+                                    <span className="code-color-muted code-text-xs">未绑定架构进程</span>
+                                  )}
+                                </td>
+                                <td>{implMod?.owner_name || '平台管理员'}</td>
+                                <td>
+                                  <span className="code-badge code-badge--success">ACTIVE</span>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                          {(!selectedContract.implementations || selectedContract.implementations.length === 0) && (
+                            <tr>
+                              <td colSpan={5} className="code-table-empty">
+                                暂无业务模块实现该契约分支。业务模块可在其对外供给服务中声明此契约实现。
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    <h5 style={{ fontSize: '0.825rem', fontWeight: 600, marginTop: '1.25rem', marginBottom: '0.5rem', color: 'var(--color-text-secondary)' }}>
+                      消费此契约的 FM 列表 (DISPATCH CONSUMERS)
+                    </h5>
+                    <div className="code-table-wrapper">
+                      <table className="code-table" data-testid="dispatch-consumers-table">
+                        <thead>
+                          <tr>
+                            <th style={{ width: '35%' }}>消费模块 (Consumer FM)</th>
+                            <th style={{ width: '25%' }}>依赖模式</th>
+                            <th style={{ width: '40%' }}>说明</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(selectedContract.consumer_dependencies ?? []).map((dep) => {
+                            const cMod = dep.module;
+                            return (
+                              <tr key={dep.id}>
+                                <td>
+                                  {cMod ? (
+                                    <button
+                                      type="button"
+                                      className="code-module-link-chip"
+                                      onClick={() => onSelectModule(cMod.id)}
+                                      title={`点击聚焦消费模块 ${cMod.name}`}
+                                    >
+                                      <Cpu size={12} />
+                                      <span>{cMod.name}</span>
+                                      <span className="code-font-mono code-text-xs">({cMod.code})</span>
+                                    </button>
+                                  ) : (
+                                    '-'
+                                  )}
+                                </td>
+                                <td>
+                                  <span className="code-badge code-badge--info">DISPATCH 动态分发</span>
+                                </td>
+                                <td>{dep.description || '-'}</td>
+                              </tr>
+                            );
+                          })}
+                          {(!selectedContract.consumer_dependencies || selectedContract.consumer_dependencies.length === 0) && (
+                            <tr>
+                              <td colSpan={3} className="code-table-empty">
+                                暂无业务模块声明对此契约的 DISPATCH 依赖
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <>
+              {/* 上表格：对外供给服务列表 (PROVIDE Services) */}
           <div className="code-service-section">
             <div className="code-service-section-header">
               <div className="code-service-section-title-wrap">
@@ -579,7 +988,7 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
                   type="button"
                   className="code-btn code-btn--primary code-btn--xs"
                   onClick={() => {
-                    setProvideForm({ service_name: '', diff_ignore_paths: '', description: '' });
+                    setProvideForm({ service_name: '', impl_key: '', diff_ignore_paths: '', description: '' });
                     setIsProvideDrawerOpen(true);
                   }}
                 >
@@ -766,6 +1175,8 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
                     setDependType('INTERNAL');
                     setDependForm({
                       service_id: '',
+                      contract_id: '',
+                      depend_mode: 'DISPATCH',
                       external_system: '',
                       external_service: '',
                       description: '',
@@ -892,6 +1303,8 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
               </table>
             </div>
           </div>
+          </>
+          )}
         </div>
       ) : (
         <div
@@ -976,7 +1389,8 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
               disabled={
                 provideSubmitting ||
                 !provideForm.service_name.trim() ||
-                (provideMode === 'CLAIM' && selectedClaimableItem?.is_claimed)
+                (Boolean(matchedContract) && !provideForm.impl_key.trim()) ||
+                (provideMode === 'CLAIM' && selectedClaimableItem?.is_claimed && !matchedContract)
               }
             >
               {provideSubmitting ? '保存中...' : '确认声明'}
@@ -1114,6 +1528,54 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
             </div>
           )}
 
+          {matchedContract && (
+            <div
+              className="code-alert code-alert--info"
+              data-testid="contract-impl-banner"
+              style={{
+                padding: '0.75rem',
+                borderRadius: 'var(--radius-md)',
+                backgroundColor: 'rgba(59, 130, 246, 0.08)',
+                border: '1px solid var(--color-primary)',
+                color: 'var(--color-primary)',
+                marginBottom: '1rem',
+                fontSize: '0.85rem',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.5rem',
+              }}
+            >
+              <FileCode size={16} />
+              <div>
+                该服务属于接口契约库 <strong>[{matchedContract.definer_module?.name || '契约库'}]</strong> 定义的多实现契约，请录入本模块的分支标识 (impl_key)。
+              </div>
+            </div>
+          )}
+
+          {matchedContract && (
+            <div className="code-form-item" data-testid="impl-key-form-item">
+              <label className="code-form-label">
+                实现分支标识 (impl_key) *:
+                {matchedContract.impl_key_label && (
+                  <span className="code-color-muted code-text-xs" style={{ marginLeft: '0.5rem' }}>
+                    ({matchedContract.impl_key_label})
+                  </span>
+                )}
+              </label>
+              <input
+                type="text"
+                className="code-input"
+                data-testid="provide-impl-key-input"
+                value={provideForm.impl_key}
+                onChange={(e) => setProvideForm({ ...provideForm, impl_key: e.target.value })}
+                placeholder="如 subaccount, international, standard 等"
+              />
+              <span className="code-form-help">
+                多实现契约的分支唯一标识符，同一契约在不同实现模块间必须具有独立且唯一的标准架构进程。
+              </span>
+            </div>
+          )}
+
           <div className="code-form-item">
             <label className="code-form-label">默认 Diff 忽略字段路径:</label>
             <input
@@ -1212,10 +1674,37 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
                   <option value="">-- 请选择被依赖的目标 Service --</option>
                   {availableServices.map((item) => (
                     <option key={item.service_id} value={item.service_id}>
-                      {item.service_name} (供给方: {item.module_name} [{item.module_code}] / 子系统: {item.subsystem_name})
+                      {item.service_name}
+                      {item.impl_key ? ` [分支: ${item.impl_key}]` : ''}
+                      {item.is_multi_impl ? ' [多实现契约]' : ''}
+                      {' '}(供给方: {item.module_name} [{item.module_code}] / 子系统: {item.subsystem_name})
                     </option>
                   ))}
                 </select>
+              )}
+              {selectedAvailableService?.contract_id && (
+                <div className="code-form-item" data-testid="depend-mode-selector" style={{ marginTop: '0.75rem' }}>
+                  <label className="code-form-label">多实现契约依赖模式 *:</label>
+                  <div className="code-type-selector-tabs">
+                    <button
+                      type="button"
+                      className={`code-type-selector-tab ${dependForm.depend_mode === 'DISPATCH' ? 'code-type-selector-tab--active' : ''}`}
+                      onClick={() => setDependForm({ ...dependForm, depend_mode: 'DISPATCH' })}
+                    >
+                      DISPATCH 动态分发 (推荐)
+                    </button>
+                    <button
+                      type="button"
+                      className={`code-type-selector-tab ${dependForm.depend_mode === 'SPECIFIC' ? 'code-type-selector-tab--active' : ''}`}
+                      onClick={() => setDependForm({ ...dependForm, depend_mode: 'SPECIFIC' })}
+                    >
+                      SPECIFIC 固定具体 FM
+                    </button>
+                  </div>
+                  <span className="code-form-help">
+                    DISPATCH 模式下，依赖基于公共 IDL 契约，由主控或 Agent 在运行时依据请求报文 DstTag 或调用端点自动路由至具体下游。
+                  </span>
+                </div>
               )}
               {availableServices.length === 0 && !loadingAvailable && (
                 <span className="code-form-help code-color-warning">
@@ -1340,6 +1829,75 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
               })()}
             </div>
           )}
+        </div>
+      </Drawer>
+
+      {/* ─────────────────────────────────────────────────────────────
+          3.5 登记多实现服务契约 Drawer (CONTRACT_LIB)
+          ───────────────────────────────────────────────────────────── */}
+      <Drawer
+        open={isContractDrawerOpen}
+        onClose={() => setIsContractDrawerOpen(false)}
+        title={`登记多实现服务契约 [${selectedModule?.name || ''}]`}
+        subtitle="在接口契约库中定义多实现 Service 契约，供多个具体功能模块以不同 impl_key 分别实现"
+        width="md"
+        footer={
+          <div className="code-drawer-footer">
+            <button
+              type="button"
+              className="code-btn code-btn--secondary"
+              onClick={() => setIsContractDrawerOpen(false)}
+              disabled={contractSubmitting}
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              className="code-btn code-btn--primary"
+              data-testid="submit-contract-btn"
+              onClick={() => void handleSubmitContract()}
+              disabled={contractSubmitting || !contractForm.service_name.trim()}
+            >
+              {contractSubmitting ? '保存中...' : '确认登记'}
+            </button>
+          </div>
+        }
+      >
+        <div className="code-form">
+          <div className="code-form-item">
+            <label className="code-form-label">服务契约名称 (service_name) *:</label>
+            <input
+              type="text"
+              className="code-input"
+              data-testid="contract-service-name-input"
+              value={contractForm.service_name}
+              onChange={(e) => setContractForm({ ...contractForm, service_name: e.target.value })}
+              placeholder="建议格式: {package}.{serviceName}，如 dophi.payment.v1.PayService"
+            />
+            <span className="code-form-help">全平台唯一的服务契约 IDL 标识，对应 .pb 中的点分服务规范</span>
+          </div>
+          <div className="code-form-item">
+            <label className="code-form-label">分支标识说明 (impl_key_label):</label>
+            <input
+              type="text"
+              className="code-input"
+              data-testid="contract-impl-key-label-input"
+              value={contractForm.impl_key_label}
+              onChange={(e) => setContractForm({ ...contractForm, impl_key_label: e.target.value })}
+              placeholder="如 渠道标识 (alipay/wechat/unionpay)、账户类型 (personal/enterprise)"
+            />
+            <span className="code-form-help">说明该契约由各业务模块实现时的分支语义</span>
+          </div>
+          <div className="code-form-item">
+            <label className="code-form-label">契约职责说明:</label>
+            <textarea
+              className="code-input"
+              rows={3}
+              value={contractForm.description}
+              onChange={(e) => setContractForm({ ...contractForm, description: e.target.value })}
+              placeholder="描述该通用服务契约的标准输入输出及业务目标..."
+            />
+          </div>
         </div>
       </Drawer>
 

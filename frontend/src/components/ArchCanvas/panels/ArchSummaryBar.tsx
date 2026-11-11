@@ -20,6 +20,7 @@ export const ArchSummaryBar: React.FC<ArchSummaryBarProps> = ({
   const uncovered = report.uncovered_count ?? report.stats?.UNCOVERED ?? 0;
   const notMonitored = report.not_monitored_count ?? report.stats?.NOT_MONITORED ?? 0;
   const notObservable = report.not_observable_count ?? report.stats?.NOT_OBSERVABLE ?? 0;
+  const implUnresolved = report.impl_unresolved_count ?? report.stats?.IMPL_UNRESOLVED ?? 0;
 
   return (
     <div className="code-arch-summary-bar">
@@ -41,6 +42,11 @@ export const ArchSummaryBar: React.FC<ArchSummaryBarProps> = ({
       <div className="code-arch-summary-item code-arch-summary-item--violation" title="未声明越权调用或调用未登记接口">
         <AlertOctagon size={13} />
         <span>越权违规 ({violation})</span>
+      </div>
+
+      <div className="code-arch-summary-item code-arch-summary-item--impl-unresolved" title="多实现契约未解析到任何有效下游实现进程">
+        <HelpCircle size={13} />
+        <span>实现待定 ({implUnresolved})</span>
       </div>
 
       <div
@@ -72,6 +78,15 @@ export const ArchSummaryBar: React.FC<ArchSummaryBarProps> = ({
       <div className="code-arch-summary-item code-arch-summary-item--not-observable" title="同进程内调用走函数调用，不经网络栈">
         <EyeOff size={13} />
         <span>进程内不可观测 ({notObservable})</span>
+      </div>
+
+      <div
+        className="code-arch-summary-item code-arch-summary-item--impl-unresolved"
+        data-testid="summary-item-impl-unresolved"
+        title="多实现服务契约调用目标未能匹配任何已知实现分支"
+      >
+        <HelpCircle size={13} style={{ color: 'var(--color-warning)' }} />
+        <span>实现待定 ({implUnresolved})</span>
       </div>
     </div>
   );

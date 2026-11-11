@@ -116,6 +116,9 @@ func ComputeArmedDigest(processes []ProcessMonitorSpec) string {
 			copy(dsList, p.Downstreams)
 			sort.Slice(dsList, func(a, b int) bool {
 				if dsList[a].IP == dsList[b].IP {
+					if dsList[a].Port == dsList[b].Port {
+						return dsList[a].DstTag < dsList[b].DstTag
+					}
 					return dsList[a].Port < dsList[b].Port
 				}
 				return dsList[a].IP < dsList[b].IP
@@ -125,7 +128,7 @@ func ComputeArmedDigest(processes []ProcessMonitorSpec) string {
 				if di > 0 {
 					sb.WriteString(",")
 				}
-				sb.WriteString(fmt.Sprintf("%s:%d", ds.IP, ds.Port))
+				sb.WriteString(fmt.Sprintf("%s:%d:%s", ds.IP, ds.Port, ds.DstTag))
 			}
 			sb.WriteString("]")
 		}
@@ -136,8 +139,9 @@ func ComputeArmedDigest(processes []ProcessMonitorSpec) string {
 
 // DownstreamEndpoint 描述目标进程允许访问并需被透明拦截的下游 CROS RPC 地址
 type DownstreamEndpoint struct {
-	IP   string `json:"ip"`   // IPv4 点分十进制地址，如 "192.168.56.19" 或 "127.0.0.1"
-	Port uint16 `json:"port"` // 下游监听端口，1..65535
+	IP     string `json:"ip"`                // IPv4 点分十进制地址，如 "192.168.56.19" 或 "127.0.0.1"
+	Port   uint16 `json:"port"`              // 下游监听端口，1..65535
+	DstTag string `json:"dst_tag,omitempty"` // 目标进程编码/标识（用于重放多实现隔离，如 "b_proc"）
 }
 
 // ProcessMonitorSpec 单进程监控元信息（零 .pb Schema 依赖）
@@ -181,6 +185,7 @@ type ReplayIngressItem struct {
 
 // MockRuleDownstream 下游出站 Mock 成对规则（同时携带出站请求帧与应答帧列表，彻底消除下游 Mock 仅带应答帧导致的精确匹配失效与并发参数错配）
 type MockRuleDownstream struct {
+	DstTag     string   `json:"dst_tag,omitempty"` // 目标进程编码/标识隔离标签 (如 "b_proc")
 	ReqPacket  []byte   `json:"req_packet"`
 	RspPackets [][]byte `json:"rsp_packets"`
 }

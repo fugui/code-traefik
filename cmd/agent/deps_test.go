@@ -7,9 +7,9 @@ import (
 )
 
 // T-M13-10: 数据面 Agent 物理防腐红线依赖核验
-// 断言 cmd/agent, pkg/crosrpc, pkg/agentproto, pkg/replay 零 gorm、零 dynamicpb、零 internal/server 依赖
+// 断言 cmd/agent, pkg/crosrpc, pkg/agentproto, pkg/ebpf, pkg/replay 零 gorm、零 pgx、零 dynamicpb、零 internal/server 依赖
 func TestAgentDependencies_NoGormNoDynamicPBNoServer(t *testing.T) {
-	cmd := exec.Command("go", "list", "-deps", "./cmd/agent", "./pkg/crosrpc", "./pkg/agentproto", "./pkg/replay")
+	cmd := exec.Command("go", "list", "-deps", "./cmd/agent", "./pkg/crosrpc", "./pkg/agentproto", "./pkg/ebpf", "./pkg/replay")
 	cmd.Dir = "../.." // code-traefik root
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -18,6 +18,7 @@ func TestAgentDependencies_NoGormNoDynamicPBNoServer(t *testing.T) {
 
 	forbiddenKeywords := []string{
 		"gorm.io",
+		"pgx",
 		"dynamicpb",
 		"protoregistry",
 		"code-traefik/internal/server",

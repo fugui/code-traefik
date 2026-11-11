@@ -7,7 +7,8 @@ import type { ConsistencyReportDTO, ConsistencyEdge } from '../../../types/traff
 import { findLCA } from './hierarchy';
 
 export const STATUS_PRIORITY: Record<ConsistencyEdgeStatus, number> = {
-  VIOLATION: 7,
+  VIOLATION: 8,
+  IMPL_UNRESOLVED: 7,
   UNATTRIBUTED: 6,
   UNCOVERED: 5,
   NOT_MONITORED: 4,
@@ -17,8 +18,8 @@ export const STATUS_PRIORITY: Record<ConsistencyEdgeStatus, number> = {
 };
 
 /**
- * 七分类最差状态优先级合并
- * VIOLATION > UNATTRIBUTED > UNCOVERED > NOT_MONITORED > OUTBOUND_VERIFIED > NOT_OBSERVABLE > VERIFIED
+ * 八分类最差状态优先级合并
+ * VIOLATION > IMPL_UNRESOLVED > UNATTRIBUTED > UNCOVERED > NOT_MONITORED > OUTBOUND_VERIFIED > NOT_OBSERVABLE > VERIFIED
  */
 export function mergeStatus(
   a?: ConsistencyEdgeStatus,
@@ -120,7 +121,97 @@ export function synthesizeOverlay(
       const srcModuleId = item.src_module_id ?? item.source_module_id;
       const dstModuleId = item.dst_module_id ?? item.target_module_id;
 
-      if (status === 'VIOLATION') {
+      if (status === 'IMPL_UNRESOLVED') {
+        if (view === 'PHYSICAL') {
+          const virtId = `VIRTUAL_IMPL_UNRESOLVED_${item.service_name}`;
+          if (!nodeMap.has(virtId)) {
+            const virtNode: GraphNode = {
+              id: virtId,
+              type: 'UNREGISTERED_INTERFACE',
+              name: `实现待定: ${item.service_name}`,
+              depth: 0,
+              ancestors: [],
+              sort_order: 99998,
+              meta: { description: '多实现契约未解析到有效下游物理进程' },
+            };
+            dynamicNodes.push(virtNode);
+            nodeMap.set(virtId, virtNode);
+          }
+
+          let srcNodeId = 'UNATTRIBUTED_ROOT';
+          if (item.src_process_id != null && nodeMap.has(`proc_${item.src_process_id}`)) {
+            srcNodeId = `proc_${item.src_process_id}`;
+          } else if (srcModuleId != null && nodeMap.has(`mod_${srcModuleId}`)) {
+            srcNodeId = `mod_${srcModuleId}`;
+          }
+
+          const dynEdgeId = `dyn_impl_unres_${srcNodeId}_${virtId}_${item.service_name}`;
+          const dynEdge: GraphEdge = {
+            id: dynEdgeId,
+            kind: 'CROSS_PROCESS',
+            source_node_id: srcNodeId,
+            target_node_id: virtId,
+            services: [
+              {
+                service_name: item.service_name,
+                description: item.detail || '多实现契约未解析到有效下游物理进程 (IMPL_UNRESOLVED)',
+              },
+            ],
+          };
+          workingEdges.push(dynEdge);
+          edgeStatusMap.set(dynEdgeId, 'IMPL_UNRESOLVED');
+          edgeCallCountMap.set(dynEdgeId, callCount);
+          if (sampleId) edgeSampleRecordMap.set(dynEdgeId, sampleId);
+        } else {
+          // 逻辑视图下，挂载于 X ➔ A (接口库) 契约边上
+          let matched = false;
+          if (srcModuleId != null && dstModuleId != null) {
+            const pairKey = Number(srcModuleId) * 1000000 + Number(dstModuleId);
+            const candidates = staticEdgeByModulePair.get(pairKey);
+            if (candidates) {
+              for (const e of candidates) {
+                const matchSvc = e.services.some(
+                  (s) =>
+                    s.service_name === item.service_name ||
+                    s.service_name.includes(item.service_name)
+                );
+                if (matchSvc) {
+                  matched = true;
+                  const currStatus = edgeStatusMap.get(e.id);
+                  edgeStatusMap.set(e.id, mergeStatus(currStatus, 'IMPL_UNRESOLVED') || 'IMPL_UNRESOLVED');
+                  edgeCallCountMap.set(e.id, (edgeCallCountMap.get(e.id) || 0) + callCount);
+                  if (sampleId && !edgeSampleRecordMap.has(e.id)) {
+                    edgeSampleRecordMap.set(e.id, sampleId);
+                  }
+                }
+              }
+            }
+          }
+          if (!matched) {
+            const srcNodeId = srcModuleId != null ? `mod_${srcModuleId}` : 'UNATTRIBUTED_ROOT';
+            const dstNodeId = dstModuleId != null ? `mod_${dstModuleId}` : 'VIRTUAL_UNREGISTERED_INTERFACE';
+            const dynEdgeId = `dyn_impl_unres_${srcNodeId}_${dstNodeId}_${item.service_name}`;
+            const dynEdge: GraphEdge = {
+              id: dynEdgeId,
+              kind: 'CROSS_PROCESS',
+              source_node_id: srcNodeId,
+              target_node_id: dstNodeId,
+              src_module_id: srcModuleId != null ? Number(srcModuleId) : undefined,
+              dst_module_id: dstModuleId != null ? Number(dstModuleId) : undefined,
+              services: [
+                {
+                  service_name: item.service_name,
+                  description: item.detail || '实现待定 (IMPL_UNRESOLVED)',
+                },
+              ],
+            };
+            workingEdges.push(dynEdge);
+            edgeStatusMap.set(dynEdgeId, 'IMPL_UNRESOLVED');
+            edgeCallCountMap.set(dynEdgeId, callCount);
+            if (sampleId) edgeSampleRecordMap.set(dynEdgeId, sampleId);
+          }
+        }
+      } else if (status === 'VIOLATION') {
         let srcNodeId: string | null = null;
         if (srcModuleId != null) {
           srcNodeId = `mod_${srcModuleId}`;

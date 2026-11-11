@@ -342,7 +342,16 @@ func (s *ReplayScheduler) executeReplayAsync(
 		Downstreams: downstreams,
 	}
 
-	// 组装新版成对 ScopedMock 与 IngressItems
+	// 组装新版成对 ScopedMock 与 IngressItems (支持 DstTag 多实现隔离)
+	var allMods []models.Module
+	_ = s.db.Preload("ArchProcess").Where("arch_process_id IS NOT NULL").Find(&allMods).Error
+	modArchCodes := make(map[uint64]string, len(allMods))
+	for _, m := range allMods {
+		if m.ArchProcess != nil && m.ArchProcess.Code != "" {
+			modArchCodes[m.ID] = m.ArchProcess.Code
+		}
+	}
+
 	var ingressItems []agentproto.ReplayIngressItem
 	scopedEgressMocks := make(map[uint64][]agentproto.MockRuleDownstream)
 	for _, r := range records {
@@ -366,10 +375,10 @@ func (s *ReplayScheduler) executeReplayAsync(
 			}
 		}
 		if len(matchedEgress) > 0 {
-			scopedEgressMocks[r.ID] = callgraph.BuildScopedMockRules(matchedEgress)
+			scopedEgressMocks[r.ID] = callgraph.BuildScopedMockRulesWithDstTags(matchedEgress, modArchCodes)
 		}
 	}
-	globalFallbackMocks := callgraph.BuildScopedMockRules(egressRecords)
+	globalFallbackMocks := callgraph.BuildScopedMockRulesWithDstTags(egressRecords, modArchCodes)
 
 	execReq := agentproto.ExecuteReplayReq{
 		TaskID:              task.ID,

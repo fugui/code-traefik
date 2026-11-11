@@ -81,6 +81,12 @@ type ArchProcess struct {
 
 func (ArchProcess) TableName() string { return config.TablePrefix + "arch_processes" }
 
+// Module 模块类型常量 (ADR-16)
+const (
+	ModuleKindBusiness    = "BUSINESS"
+	ModuleKindContractLib = "CONTRACT_LIB"
+)
+
 // 5. Module 最小接口契约功能模块表 (traefik_modules)
 type Module struct {
 	ID            uint64           `gorm:"primaryKey;autoIncrement" json:"id"`
@@ -90,7 +96,8 @@ type Module struct {
 	Group         *FunctionalGroup `gorm:"foreignKey:GroupID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"group,omitempty"`
 	ArchProcessID *uint64          `gorm:"index:idx_traefik_modules_arch_proc" json:"arch_process_id"` // 指向全局架构标准进程蓝图 (A-03 单模块至多归属 1 个标准进程)
 	ArchProcess   *ArchProcess     `gorm:"foreignKey:ArchProcessID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"arch_process,omitempty"`
-	Code          string           `gorm:"size:64;not null;uniqueIndex:uk_traefik_modules_code" json:"code"` // 全局唯一编码
+	ModuleKind    string           `gorm:"size:16;not null;default:'BUSINESS';index:idx_traefik_modules_kind" json:"module_kind"` // BUSINESS | CONTRACT_LIB (ADR-16)
+	Code          string           `gorm:"size:64;not null;uniqueIndex:uk_traefik_modules_code" json:"code"`                      // 全局唯一编码
 	Name          string           `gorm:"size:128;not null;index:idx_traefik_modules_name" json:"name"`
 	OwnerID       *uint            `gorm:"index:idx_traefik_modules_owner" json:"owner_id"`
 	Owner         *User            `gorm:"foreignKey:OwnerID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"owner,omitempty"`
@@ -102,6 +109,27 @@ type Module struct {
 }
 
 func (Module) TableName() string { return config.TablePrefix + "modules" }
+
+// 19. ServiceContract 多实现服务契约定义表 (traefik_service_contracts, ADR-16, M20)
+const (
+	ContractProvideModeMultiImpl = "MULTI_IMPL"
+)
+
+type ServiceContract struct {
+	ID              uint64    `gorm:"primaryKey;autoIncrement" json:"id"`
+	ServiceName     string    `gorm:"size:128;not null;uniqueIndex:uk_traefik_svc_contract_name" json:"service_name"` // 格式 {package}.{serviceName}
+	DefinerModuleID uint64    `gorm:"not null;index:idx_traefik_svc_contract_definer" json:"definer_module_id"`
+	DefinerModule   *Module   `gorm:"foreignKey:DefinerModuleID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"definer_module,omitempty"`
+	ProvideMode     string    `gorm:"size:16;not null;default:'MULTI_IMPL'" json:"provide_mode"`
+	ImplKeyLabel    string    `gorm:"size:64;not null;default:''" json:"impl_key_label"`
+	Description     string    `gorm:"type:text" json:"description"`
+	CreatedBy       uint      `gorm:"not null;default:0" json:"created_by"`
+	UpdatedBy       uint      `gorm:"not null;default:0" json:"updated_by"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
+}
+
+func (ServiceContract) TableName() string { return config.TablePrefix + "service_contracts" }
 
 // 6. ModuleService 模块级对外供给服务契约表 (traefik_module_services)
 type DownstreamConsumer struct {
@@ -115,8 +143,11 @@ type ModuleService struct {
 	ID                  uint64               `gorm:"primaryKey;autoIncrement" json:"id"`
 	ModuleID            uint64               `gorm:"not null;index:idx_traefik_mod_svc_mod" json:"module_id"`
 	Module              *Module              `gorm:"foreignKey:ModuleID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"module,omitempty"`
-	ServiceName         string               `gorm:"size:128;not null;uniqueIndex:uk_traefik_mod_svc_name" json:"service_name"` // 格式 {package}.{serviceName}，全系统唯一提供 (A-05)
-	DiffIgnorePaths     datatypes.JSON       `gorm:"type:jsonb;not null;default:'[]'" json:"diff_ignore_paths"`                 // 服务级默认回归 Diff 忽略字段路径 []string (F-14)
+	ContractID          *uint64              `gorm:"index:idx_traefik_mod_svc_contract" json:"contract_id,omitempty"` // 指向多实现服务契约 (ADR-16)，NULL 表示独占服务 (EXCLUSIVE)
+	Contract            *ServiceContract     `gorm:"foreignKey:ContractID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"contract,omitempty"`
+	ServiceName         string               `gorm:"size:128;not null" json:"service_name"`                     // 格式 {package}.{serviceName} (独占保持唯一，多实现冗余契约服务名)
+	ImplKey             string               `gorm:"size:64;not null;default:''" json:"impl_key"`               // 多实现时必填身份标识，独占服务恒为空串
+	DiffIgnorePaths     datatypes.JSON       `gorm:"type:jsonb;not null;default:'[]'" json:"diff_ignore_paths"` // 服务级默认回归 Diff 忽略字段路径 []string (F-14)
 	Description         string               `gorm:"type:text" json:"description"`
 	DownstreamCount     int                  `gorm:"-" json:"downstream_count"`               // 被下游模块依赖数量
 	DownstreamModules   []string             `gorm:"-" json:"downstream_modules,omitempty"`   // 被下游模块名称清单
@@ -130,20 +161,22 @@ func (ModuleService) TableName() string { return config.TablePrefix + "module_se
 
 // 7. ModuleDependency 模块间服务依赖关系表 (traefik_module_dependencies)
 type ModuleDependency struct {
-	ID               uint64         `gorm:"primaryKey;autoIncrement" json:"id"`
-	ConsumerModuleID uint64         `gorm:"not null;uniqueIndex:uk_traefik_dep_tuple,priority:1;index:idx_traefik_dep_consumer" json:"consumer_module_id"`
-	ConsumerModule   *Module        `gorm:"foreignKey:ConsumerModuleID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"consumer_module,omitempty"`
-	IsExternal       bool           `gorm:"not null;default:false;index:idx_traefik_dep_external" json:"is_external"`                              // 是否依赖外部第三方/未登记系统
-	ExternalSystem   string         `gorm:"size:128;not null;default:''" json:"external_system"`                                                   // 外部系统名称 (如 "WeChatPay")
-	ExternalService  string         `gorm:"size:128;not null;default:''" json:"external_service"`                                                  // 外部服务名称 (如 "UnifiedOrderService")
-	ServiceID        *uint64        `gorm:"uniqueIndex:uk_traefik_dep_tuple,priority:2;index:idx_traefik_dep_service" json:"service_id,omitempty"` // 内部依赖外键指向 ModuleService
-	Service          *ModuleService `gorm:"foreignKey:ServiceID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"service,omitempty"`
-	ProviderModuleID *uint64        `gorm:"index:idx_traefik_dep_provider" json:"provider_module_id,omitempty"` // 内部依赖冗余提供方 FM
-	ProviderModule   *Module        `gorm:"foreignKey:ProviderModuleID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"provider_module,omitempty"`
-	Description      string         `gorm:"type:text" json:"description"` // 调用与依赖业务场景说明
-	CreatedBy        uint           `gorm:"not null;default:0" json:"created_by"`
-	CreatedAt        time.Time      `json:"created_at"`
-	UpdatedAt        time.Time      `json:"updated_at"`
+	ID               uint64           `gorm:"primaryKey;autoIncrement" json:"id"`
+	ConsumerModuleID uint64           `gorm:"not null;uniqueIndex:uk_traefik_dep_tuple,priority:1;index:idx_traefik_dep_consumer" json:"consumer_module_id"`
+	ConsumerModule   *Module          `gorm:"foreignKey:ConsumerModuleID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"consumer_module,omitempty"`
+	IsExternal       bool             `gorm:"not null;default:false;index:idx_traefik_dep_external" json:"is_external"`                              // 是否依赖外部第三方/未登记系统
+	ExternalSystem   string           `gorm:"size:128;not null;default:''" json:"external_system"`                                                   // 外部系统名称 (如 "WeChatPay")
+	ExternalService  string           `gorm:"size:128;not null;default:''" json:"external_service"`                                                  // 外部服务名称 (如 "UnifiedOrderService")
+	ServiceID        *uint64          `gorm:"uniqueIndex:uk_traefik_dep_tuple,priority:2;index:idx_traefik_dep_service" json:"service_id,omitempty"` // 内部具体实现依赖
+	Service          *ModuleService   `gorm:"foreignKey:ServiceID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"service,omitempty"`
+	ContractID       *uint64          `gorm:"index:idx_traefik_dep_contract" json:"contract_id,omitempty"` // 分发依赖契约 ID (DISPATCH, ADR-16)
+	Contract         *ServiceContract `gorm:"foreignKey:ContractID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"contract,omitempty"`
+	ProviderModuleID *uint64          `gorm:"index:idx_traefik_dep_provider" json:"provider_module_id,omitempty"` // 内部依赖冗余提供方 FM
+	ProviderModule   *Module          `gorm:"foreignKey:ProviderModuleID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"provider_module,omitempty"`
+	Description      string           `gorm:"type:text" json:"description"` // 调用与依赖业务场景说明
+	CreatedBy        uint             `gorm:"not null;default:0" json:"created_by"`
+	CreatedAt        time.Time        `json:"created_at"`
+	UpdatedAt        time.Time        `json:"updated_at"`
 }
 
 func (ModuleDependency) TableName() string { return config.TablePrefix + "module_dependencies" }

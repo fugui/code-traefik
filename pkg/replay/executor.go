@@ -105,6 +105,20 @@ func (e *ReplayExecutor) ExecuteWithMatcher(ctx context.Context, req agentproto.
 		}
 	}
 
+	if len(req.ProcessSpec.Downstreams) > 0 {
+		epTags := make(map[string]string)
+		for _, ds := range req.ProcessSpec.Downstreams {
+			if ds.DstTag != "" {
+				addr := net.JoinHostPort(ds.IP, strconv.Itoa(int(ds.Port)))
+				epTags[addr] = ds.DstTag
+				if ds.IP != "127.0.0.1" {
+					epTags[net.JoinHostPort("127.0.0.1", strconv.Itoa(int(ds.Port)))] = ds.DstTag
+				}
+			}
+		}
+		matcher.SetEndpointTags(epTags)
+	}
+
 	// 2. 启动本地 MockServer
 	mockLn, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

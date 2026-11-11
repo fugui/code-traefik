@@ -23,6 +23,7 @@ const (
 	StatusNotMonitored     VerificationStatus = "NOT_MONITORED"
 	StatusNotObservable    VerificationStatus = "NOT_OBSERVABLE"
 	StatusUnattributed     VerificationStatus = "UNATTRIBUTED"
+	StatusImplUnresolved   VerificationStatus = "IMPL_UNRESOLVED"
 )
 
 // ConsistencyEdgeResult 单条边一致性验证结果
@@ -35,6 +36,8 @@ type ConsistencyEdgeResult struct {
 	CandidateModuleIDs []uint64           `json:"candidate_module_ids,omitempty"`
 	DstModuleID        *uint64            `json:"dst_module_id,omitempty"` // nil 表示未登记外部接口
 	TargetModuleName   string             `json:"target_module_name,omitempty"`
+	ContractID         *uint64            `json:"contract_id,omitempty"`
+	ImplKey            string             `json:"impl_key,omitempty"`
 	ServiceName        string             `json:"service_name"`
 	Operation          string             `json:"operation"`
 	ObservedCallCount  int64              `json:"observed_call_count"`
@@ -55,6 +58,7 @@ type ConsistencyReportDTO struct {
 	NotMonitoredCount     int                     `json:"not_monitored_count"`
 	NotObservableCount    int                     `json:"not_observable_count"`
 	UnattributedCount     int                     `json:"unattributed_count"`
+	ImplUnresolvedCount   int                     `json:"impl_unresolved_count"`
 	Stats                 map[string]int          `json:"stats"`
 	Edges                 []ConsistencyEdgeResult `json:"edges"`
 }
@@ -125,18 +129,29 @@ func VerifySessionTopology(ctx context.Context, db *gorm.DB, sessionID uint64, r
 		}
 	}
 
-	// 3. 加载全局唯一 PROVIDE 服务 (Service 级)
+	// 3. 加载全局唯一 PROVIDE 服务 (Service 级) 与多实现契约
 	var provideServices []models.ModuleService
 	if err := db.WithContext(ctx).Find(&provideServices).Error; err != nil {
 		return nil, err
 	}
 	provideMap := make(map[string]uint64, len(provideServices))
+	contractImplsMap := make(map[uint64][]models.ModuleService)
 	for _, svc := range provideServices {
 		key := strings.TrimSpace(svc.ServiceName)
 		provideMap[key] = svc.ModuleID
+		if svc.ContractID != nil && *svc.ContractID > 0 {
+			contractImplsMap[*svc.ContractID] = append(contractImplsMap[*svc.ContractID], svc)
+		}
 	}
 
-	// 4. 加载本次纳管模块声明的所有依赖
+	var allContracts []models.ServiceContract
+	_ = db.WithContext(ctx).Find(&allContracts).Error
+	contractMap := make(map[uint64]models.ServiceContract, len(allContracts))
+	for _, c := range allContracts {
+		contractMap[c.ID] = c
+	}
+
+	// 4. 加载本次纳管模块声明的所有依赖 (并展开 DISPATCH 契约依赖)
 	var declaredDependencies []models.ModuleDependency
 	var monitoredModIDList []uint64
 	for mid := range monitoredModuleIDs {
@@ -144,10 +159,64 @@ func VerifySessionTopology(ctx context.Context, db *gorm.DB, sessionID uint64, r
 	}
 
 	if len(monitoredModIDList) > 0 {
-		if err := db.WithContext(ctx).Preload("Service").
+		if err := db.WithContext(ctx).Preload("Service").Preload("Contract").
 			Where("consumer_module_id IN ?", monitoredModIDList).
 			Find(&declaredDependencies).Error; err != nil {
 			return nil, err
+		}
+	}
+
+	type expandedDep struct {
+		ConsumerModuleID uint64
+		ProviderModuleID *uint64
+		ContractID       *uint64
+		ImplKey          string
+		ServiceName      string
+		IsExternal       bool
+	}
+	var expandedDeps []expandedDep
+	for _, dep := range declaredDependencies {
+		if dep.ContractID != nil {
+			// DISPATCH 依赖：对该契约下的每一个实现模块分别生成期望依赖
+			impls := contractImplsMap[*dep.ContractID]
+			c := contractMap[*dep.ContractID]
+			for _, impl := range impls {
+				mID := impl.ModuleID
+				cID := *dep.ContractID
+				expandedDeps = append(expandedDeps, expandedDep{
+					ConsumerModuleID: dep.ConsumerModuleID,
+					ProviderModuleID: &mID,
+					ContractID:       &cID,
+					ImplKey:          impl.ImplKey,
+					ServiceName:      c.ServiceName,
+					IsExternal:       false,
+				})
+			}
+		} else if dep.Service != nil {
+			mID := dep.Service.ModuleID
+			var cID *uint64
+			var implKey string
+			if dep.Service.ContractID != nil {
+				cID = dep.Service.ContractID
+				implKey = dep.Service.ImplKey
+			}
+			expandedDeps = append(expandedDeps, expandedDep{
+				ConsumerModuleID: dep.ConsumerModuleID,
+				ProviderModuleID: &mID,
+				ContractID:       cID,
+				ImplKey:          implKey,
+				ServiceName:      dep.Service.ServiceName,
+				IsExternal:       false,
+			})
+		} else if dep.IsExternal {
+			expandedDeps = append(expandedDeps, expandedDep{
+				ConsumerModuleID: dep.ConsumerModuleID,
+				ProviderModuleID: nil,
+				ContractID:       nil,
+				ImplKey:          "",
+				ServiceName:      dep.ExternalService,
+				IsExternal:       true,
+			})
 		}
 	}
 
@@ -174,8 +243,19 @@ func VerifySessionTopology(ctx context.Context, db *gorm.DB, sessionID uint64, r
 		candIDs  []uint64
 	}
 	observedMap := make(map[callGroupKey]*callGroupVal)
-	// 供快速检查某个 (srcModID, svc, op) 是否被观测到
-	srcCallCount := make(map[string]int64) // "srcModID:svc:op" -> count
+
+	// IMPL_UNRESOLVED 聚合: 实测命中多实现契约但未解析出具体实现模块
+	type implUnresolvedGroupKey struct {
+		SrcModID   uint64
+		ContractID uint64
+		Svc        string
+		Op         string
+		ProcID     uint64
+	}
+	unresolvedCalls := make(map[implUnresolvedGroupKey]*callGroupVal)
+
+	// 供快速检查某个 (srcModID:dstModID:svc:op) 是否被观测到
+	srcCallCount := make(map[string]int64)
 	srcCallSample := make(map[string]uint64)
 
 	for _, rec := range egressRecords {
@@ -190,6 +270,27 @@ func VerifySessionTopology(ctx context.Context, db *gorm.DB, sessionID uint64, r
 		mode := rec.SrcAttributionMode
 		if mode == "" {
 			mode = AttributionProcessLevel
+		}
+
+		// 检出 IMPL_UNRESOLVED
+		if rec.DstContractID != nil && *rec.DstContractID > 0 && dstID == 0 {
+			uKey := implUnresolvedGroupKey{
+				SrcModID:   srcID,
+				ContractID: *rec.DstContractID,
+				Svc:        strings.TrimSpace(rec.ServiceName),
+				Op:         strings.TrimSpace(rec.Operation),
+				ProcID:     rec.ProcessID,
+			}
+			uVal := unresolvedCalls[uKey]
+			if uVal == nil {
+				uVal = &callGroupVal{
+					count:    0,
+					sampleID: rec.ID,
+				}
+				unresolvedCalls[uKey] = uVal
+			}
+			uVal.count++
+			continue
 		}
 
 		key := callGroupKey{
@@ -217,7 +318,7 @@ func VerifySessionTopology(ctx context.Context, db *gorm.DB, sessionID uint64, r
 		val.count++
 
 		if srcID > 0 {
-			ck := fmt.Sprintf("%d:%s:%s", srcID, key.Svc, key.Op)
+			ck := fmt.Sprintf("%d:%d:%s:%s", srcID, dstID, key.Svc, key.Op)
 			srcCallCount[ck] += 1
 			if srcCallSample[ck] == 0 {
 				srcCallSample[ck] = rec.ID
@@ -227,27 +328,20 @@ func VerifySessionTopology(ctx context.Context, db *gorm.DB, sessionID uint64, r
 
 	// 6. 对纳管模块的静态依赖逐边进行评估
 	edges := make([]ConsistencyEdgeResult, 0)
-	matchedDeclaredCalls := make(map[string]bool) // "srcModID:svc:op" -> true
+	matchedDeclaredCalls := make(map[string]bool)
 
-	for _, dep := range declaredDependencies {
+	for _, dep := range expandedDeps {
 		srcModID := dep.ConsumerModuleID
 		srcProcID := monitoredModuleIDs[srcModID]
-		var svc string
-		if dep.Service != nil {
-			svc = strings.TrimSpace(dep.Service.ServiceName)
-		} else if dep.IsExternal {
-			svc = strings.TrimSpace(dep.ExternalService)
+		svc := strings.TrimSpace(dep.ServiceName)
+		dstModID := dep.ProviderModuleID
+
+		var dstModIDVal uint64
+		if dstModID != nil {
+			dstModIDVal = *dstModID
 		}
 
-		var dstModID *uint64
-		if dep.ProviderModuleID != nil && *dep.ProviderModuleID > 0 {
-			dstModID = dep.ProviderModuleID
-		} else if dep.Service != nil && dep.Service.ModuleID > 0 {
-			mid := dep.Service.ModuleID
-			dstModID = &mid
-		}
-
-		ckPrefix := fmt.Sprintf("%d:%s:", srcModID, svc)
+		ckPrefix := fmt.Sprintf("%d:%d:%s:", srcModID, dstModIDVal, svc)
 		var obsCount int64
 		var sampleID *uint64
 		for ck, cnt := range srcCallCount {
@@ -272,6 +366,8 @@ func VerifySessionTopology(ctx context.Context, db *gorm.DB, sessionID uint64, r
 				SrcModuleID:        &srcModID,
 				SrcProcessID:       &srcProcID,
 				DstModuleID:        nil,
+				ContractID:         dep.ContractID,
+				ImplKey:            dep.ImplKey,
 				ServiceName:        svc,
 				Operation:          "",
 				ObservedCallCount:  obsCount,
@@ -290,6 +386,8 @@ func VerifySessionTopology(ctx context.Context, db *gorm.DB, sessionID uint64, r
 				SrcModuleID:        &srcModID,
 				SrcProcessID:       &srcProcID,
 				DstModuleID:        dstModID,
+				ContractID:         dep.ContractID,
+				ImplKey:            dep.ImplKey,
 				ServiceName:        svc,
 				Operation:          "",
 				ObservedCallCount:  obsCount,
@@ -308,6 +406,8 @@ func VerifySessionTopology(ctx context.Context, db *gorm.DB, sessionID uint64, r
 					SrcModuleID:        &srcModID,
 					SrcProcessID:       &srcProcID,
 					DstModuleID:        dstModID,
+					ContractID:         dep.ContractID,
+					ImplKey:            dep.ImplKey,
 					ServiceName:        svc,
 					Operation:          "",
 					ObservedCallCount:  obsCount,
@@ -322,6 +422,8 @@ func VerifySessionTopology(ctx context.Context, db *gorm.DB, sessionID uint64, r
 					SrcModuleID:        &srcModID,
 					SrcProcessID:       &srcProcID,
 					DstModuleID:        dstModID,
+					ContractID:         dep.ContractID,
+					ImplKey:            dep.ImplKey,
 					ServiceName:        svc,
 					Operation:          "",
 					ObservedCallCount:  0,
@@ -340,6 +442,8 @@ func VerifySessionTopology(ctx context.Context, db *gorm.DB, sessionID uint64, r
 				SrcModuleID:        &srcModID,
 				SrcProcessID:       &srcProcID,
 				DstModuleID:        dstModID,
+				ContractID:         dep.ContractID,
+				ImplKey:            dep.ImplKey,
 				ServiceName:        svc,
 				Operation:          "",
 				ObservedCallCount:  obsCount,
@@ -354,6 +458,8 @@ func VerifySessionTopology(ctx context.Context, db *gorm.DB, sessionID uint64, r
 				SrcModuleID:        &srcModID,
 				SrcProcessID:       &srcProcID,
 				DstModuleID:        dstModID,
+				ContractID:         dep.ContractID,
+				ImplKey:            dep.ImplKey,
 				ServiceName:        svc,
 				Operation:          "",
 				ObservedCallCount:  0,
@@ -396,7 +502,7 @@ func VerifySessionTopology(ctx context.Context, db *gorm.DB, sessionID uint64, r
 		}
 
 		// 已确切归属到 SrcModuleID，检查是否属于已知已匹配的声明调用
-		ck := fmt.Sprintf("%d:%s:%s", groupKey.SrcModID, groupKey.Svc, groupKey.Op)
+		ck := fmt.Sprintf("%d:%d:%s:%s", groupKey.SrcModID, groupKey.DstModID, groupKey.Svc, groupKey.Op)
 		if matchedDeclaredCalls[ck] {
 			// 已在第 6 步生成 VERIFIED / OUTBOUND_VERIFIED 边，更新实际 AttributionMode 即可
 			for i := range edges {
@@ -436,6 +542,44 @@ func VerifySessionTopology(ctx context.Context, db *gorm.DB, sessionID uint64, r
 		edges = append(edges, edge)
 	}
 
+	// 7.5 处理 IMPL_UNRESOLVED (实测命中多实现服务契约，但三级降级后仍无法裁决真实提供服务的模块)
+	for uKey, uVal := range unresolvedCalls {
+		contract, hasContract := contractMap[uKey.ContractID]
+		var definerModID *uint64
+		if hasContract && contract.DefinerModuleID > 0 {
+			dID := contract.DefinerModuleID
+			definerModID = &dID
+		}
+		srcModID := uKey.SrcModID
+		var srcModPtr *uint64
+		if srcModID > 0 {
+			srcModPtr = &srcModID
+		}
+		procID := uKey.ProcID
+		sampleID := uVal.sampleID
+		var sampleIDPtr *uint64
+		if sampleID > 0 {
+			sampleIDPtr = &sampleID
+		}
+		cID := uKey.ContractID
+
+		edge := ConsistencyEdgeResult{
+			Status:             StatusImplUnresolved,
+			Category:           StatusImplUnresolved,
+			SrcModuleID:        srcModPtr,
+			SrcProcessID:       &procID,
+			DstModuleID:        definerModID,
+			ContractID:         &cID,
+			ServiceName:        uKey.Svc,
+			Operation:          uKey.Op,
+			ObservedCallCount:  uVal.count,
+			CallCount:          uVal.count,
+			SampleTrafficRecID: sampleIDPtr,
+			Detail:             "实测流量命中多实现服务契约，但三级降级后仍无法裁决真实提供服务的模块；建议将下游实现进程纳入录制批次或配置静态端点",
+		}
+		edges = append(edges, edge)
+	}
+
 	// 8. 丰富边信息并汇总各状态计数
 	for i := range edges {
 		edges[i].Category = edges[i].Status
@@ -470,6 +614,8 @@ func VerifySessionTopology(ctx context.Context, db *gorm.DB, sessionID uint64, r
 				edges[i].Detail = "同进程内部调用或缺乏必要探针插桩"
 			case StatusUnattributed:
 				edges[i].Detail = "无法将源地址推导归属至具体单一业务模块"
+			case StatusImplUnresolved:
+				edges[i].Detail = "实测流量命中多实现服务契约，但三级降级后仍无法裁决真实提供服务的模块；建议将下游实现进程纳入录制批次或配置静态端点"
 			}
 		}
 	}
@@ -496,6 +642,8 @@ func VerifySessionTopology(ctx context.Context, db *gorm.DB, sessionID uint64, r
 			report.NotObservableCount++
 		case StatusUnattributed:
 			report.UnattributedCount++
+		case StatusImplUnresolved:
+			report.ImplUnresolvedCount++
 		}
 	}
 
@@ -507,6 +655,7 @@ func VerifySessionTopology(ctx context.Context, db *gorm.DB, sessionID uint64, r
 		string(StatusNotMonitored):     report.NotMonitoredCount,
 		string(StatusNotObservable):    report.NotObservableCount,
 		string(StatusUnattributed):     report.UnattributedCount,
+		string(StatusImplUnresolved):   report.ImplUnresolvedCount,
 	}
 
 	// 9. 更新 session 表的 TopologyVerifySummary 缓存

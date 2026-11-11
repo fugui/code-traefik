@@ -69,6 +69,10 @@ export interface ArchCanvasToolbarProps {
   onToggleHideIsolated?: (enabled: boolean) => void;
   foldHubEdges?: boolean;
   onToggleFoldHubEdges?: (enabled: boolean) => void;
+  showRealization?: boolean;
+  onToggleShowRealization?: (show: boolean) => void;
+  contractMode?: 'AGG' | 'EXPAND';
+  onContractModeChange?: (mode: 'AGG' | 'EXPAND') => void;
   hasUnsavedDraft?: boolean;
   bookmarkQuotaText?: string;
   onOpenBookmarkDrawer?: () => void;
@@ -108,6 +112,10 @@ export const ArchCanvasToolbar: React.FC<ArchCanvasToolbarProps> = ({
   onToggleHideIsolated,
   foldHubEdges = true,
   onToggleFoldHubEdges,
+  showRealization = true,
+  onToggleShowRealization,
+  contractMode = 'AGG',
+  onContractModeChange,
   hasUnsavedDraft = false,
   bookmarkQuotaText,
   onOpenBookmarkDrawer,
@@ -309,6 +317,41 @@ export const ArchCanvasToolbar: React.FC<ArchCanvasToolbarProps> = ({
               />
               <span>折叠Hub边</span>
             </label>
+          )}
+
+          {/* M20: 实现关系开关 (仅逻辑视图) */}
+          {view === 'LOGICAL' && onToggleShowRealization && (
+            <label className="code-arch-toolbar__checkbox-label" title="显示/隐藏接口实现关系边 (REALIZATION)">
+              <input
+                type="checkbox"
+                checked={showRealization}
+                onChange={(e) => onToggleShowRealization(e.target.checked)}
+                data-testid="toggle-realization"
+              />
+              <span>◁⋯ 实现关系</span>
+            </label>
+          )}
+
+          {/* M20: 契约调用聚合/展开模式 (仅逻辑视图) */}
+          {view === 'LOGICAL' && onContractModeChange && (
+            <div className="code-segmented code-segmented--xs" data-testid="contract-mode-toggle" title="契约调用聚合/展开模式">
+              <button
+                type="button"
+                className={`code-segmented-item ${contractMode === 'AGG' ? 'code-segmented-item--active' : ''}`}
+                onClick={() => onContractModeChange('AGG')}
+                data-testid="contract-mode-agg"
+              >
+                聚合到接口
+              </button>
+              <button
+                type="button"
+                className={`code-segmented-item ${contractMode === 'EXPAND' ? 'code-segmented-item--active' : ''}`}
+                onClick={() => onContractModeChange('EXPAND')}
+                data-testid="contract-mode-expand"
+              >
+                展开到实现
+              </button>
+            </div>
           )}
         </div>
 

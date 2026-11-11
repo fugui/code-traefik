@@ -47,10 +47,34 @@ export interface DownstreamConsumer {
   subsystem_name?: string;
 }
 
+export type ModuleKind = 'BUSINESS' | 'CONTRACT_LIB';
+export type ContractProvideMode = 'EXCLUSIVE' | 'MULTI_IMPL';
+
+export interface ServiceContract {
+  id: string | number;
+  definer_module_id: string | number;
+  service_name: string;
+  provide_mode: ContractProvideMode;
+  impl_key_label?: string;
+  description?: string;
+  definer_module?: Module;
+  implementation_count?: number;
+  implementations?: ModuleService[];
+  dispatch_dependency_count?: number;
+  dispatch_dependencies?: ModuleDependency[];
+  consumer_dependencies?: ModuleDependency[];
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface ModuleService {
   id: string;
   module_id: string;
+  module?: Module;
   service_name: string;
+  contract_id?: string | number | null;
+  impl_key?: string | null;
+  contract?: ServiceContract;
   diff_ignore_paths?: string[];
   description?: string;
   downstream_count?: number;
@@ -63,11 +87,15 @@ export interface ModuleService {
 export interface ModuleDependency {
   id: string;
   consumer_module_id: string;
+  consumer_module?: Module;
+  module?: Module;
   is_external: boolean;
   external_system?: string;
   external_service?: string;
   service_id?: string | null;
   service?: ModuleService;
+  contract_id?: string | number | null;
+  contract?: ServiceContract;
   provider_module_id?: string | null;
   provider_module?: {
     id: string;
@@ -97,6 +125,10 @@ export interface AvailableServiceItem {
   module_name: string;
   subsystem_id: string;
   subsystem_name: string;
+  contract_id?: string | number | null;
+  is_multi_impl?: boolean;
+  impl_key?: string | null;
+  impl_key_label?: string;
   description?: string;
 }
 
@@ -106,6 +138,7 @@ export interface Module {
   group_id: string;
   code: string;
   name: string;
+  module_kind?: ModuleKind;
   owner_id?: string;
   owner_name?: string;
   process_id?: string | null;
@@ -114,6 +147,9 @@ export interface Module {
   description?: string;
   subsystem?: Subsystem;
   group?: FunctionalGroup;
+  contract_count?: number;
+  impl_count?: number;
+  service_contracts?: ServiceContract[];
   process?: {
     id: string;
     name: string;

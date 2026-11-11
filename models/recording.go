@@ -7,6 +7,19 @@ import (
 	"gorm.io/datatypes"
 )
 
+// EndpointSnapshotItem 录制时刻「网络端点 ➔ 标准架构进程」字典项 (ADR-16 §3.6)
+type EndpointSnapshotItem struct {
+	Endpoint      string   `json:"endpoint"` // "IP:Port"，含同机 127.0.0.1 别名
+	IP            string   `json:"ip,omitempty"`
+	Port          int      `json:"port,omitempty"`
+	ArchProcessID uint64   `json:"arch_process_id"`
+	ProcessID     uint64   `json:"process_id,omitempty"`
+	ModuleIDs     []uint64 `json:"module_ids,omitempty"`
+	ServiceNames  []string `json:"service_names,omitempty"`
+	ContractIDs   []uint64 `json:"contract_ids,omitempty"`
+	Source        string   `json:"source,omitempty"` // LOCAL | FALLBACK | SHARED_UNIQUE
+}
+
 // ProcessSnapshotItem 录制时刻挂载进程的架构蓝图与模块快照，解耦后续卸载挂载实例
 type ProcessSnapshotItem struct {
 	ProcessID     uint64   `json:"process_id"`
@@ -28,7 +41,8 @@ type RecordingSession struct {
 	Status                string         `gorm:"size:32;not null;default:'PENDING';index:idx_traefik_rec_status" json:"status"`
 	LeasedAgentIDs        datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"leased_agent_ids"`
 	TargetProcessIDs      datatypes.JSON `gorm:"type:jsonb;not null" json:"target_process_ids"`
-	ProcessSnapshots      datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"process_snapshots"` // []ProcessSnapshotItem 录制时刻快照，解耦后续卸载挂载实例
+	ProcessSnapshots      datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"process_snapshots"`  // []ProcessSnapshotItem 录制时刻快照，解耦后续卸载挂载实例
+	EndpointSnapshots     datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"endpoint_snapshots"` // []EndpointSnapshotItem 录制时刻端点快照字典 (ADR-16 §3.6)
 	ProcessDiagnostics    datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"process_diagnostics"`
 	MaxDurationSec        int            `gorm:"not null;default:1800" json:"max_duration_sec"`
 	MaxFrames             int            `gorm:"not null;default:100000" json:"max_frames"`
@@ -81,6 +95,7 @@ type TrafficRecord struct {
 	SrcAttributionMode    string         `gorm:"column:src_attribution_mode;size:32;not null;default:''" json:"src_attribution_mode"`
 	SrcCandidateModuleIDs datatypes.JSON `gorm:"column:src_candidate_module_ids;type:jsonb" json:"src_candidate_module_ids,omitempty"`
 	DstModuleID           *uint64        `gorm:"column:dst_module_id;index:idx_traefik_tr_dst_mod" json:"dst_module_id,omitempty"`
+	DstContractID         *uint64        `gorm:"column:dst_contract_id;index:idx_traefik_tr_dst_contract" json:"dst_contract_id,omitempty"` // 指向多实现服务契约 (ADR-16 §4)
 	HeadersJSON           datatypes.JSON `gorm:"column:headers_json;type:jsonb;not null;default:'{}'" json:"headers_json"`
 	SchemaID              *uint64        `gorm:"column:schema_id;index:idx_traefik_tr_schema" json:"schema_id,omitempty"`
 	SchemaVersion         *int           `gorm:"column:schema_version" json:"schema_version,omitempty"`

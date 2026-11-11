@@ -48,10 +48,18 @@ export function resolveEdgeVisualStyle(data?: Partial<RollupEdgeModel>): {
       case 'NOT_OBSERVABLE':
         strokeColor = 'var(--color-info)';
         break;
+      case 'IMPL_UNRESOLVED':
+        strokeColor = 'var(--color-warning)';
+        strokeDasharray = '8 4';
+        break;
     }
   } else if (data?.isCycle) {
     statusClass = 'code-arch-edge--cycle';
     strokeColor = 'var(--color-danger)';
+  } else if (data?.kind === 'REALIZATION') {
+    statusClass = 'code-arch-edge--realization';
+    strokeColor = 'var(--color-text-muted)';
+    strokeDasharray = '4 4';
   } else if (data?.isHubSummary) {
     statusClass = 'code-arch-edge--hub-summary';
     strokeColor = 'var(--color-text-secondary)';

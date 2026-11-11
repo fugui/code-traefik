@@ -35,7 +35,7 @@ func SetupWithDB(db *gorm.DB) error {
 		return fmt.Errorf("检测并清理旧版表结构失败: %w", err)
 	}
 
-	// 1. 自动迁移标准实体表（18 张核心 traefik_* 表 + 平台公共审计/用户表，ADR-14, ADR-15）
+	// 1. 自动迁移标准实体表（19 张核心 traefik_* 表 + 平台公共审计/用户表，ADR-14, ADR-15, ADR-16）
 	if err := DB.AutoMigrate(
 		&Department{},
 		&User{},
@@ -46,6 +46,7 @@ func SetupWithDB(db *gorm.DB) error {
 		&ArchProcessGroup{},
 		&ArchProcess{},
 		&Module{},
+		&ServiceContract{},
 		&ModuleService{},
 		&ModuleDependency{},
 		&Agent{},
@@ -157,6 +158,45 @@ END $$;`
 		return fmt.Errorf("更新描述集检查约束失败: %w", err)
 	}
 
+	contractConstraintSQL := `
+DO $$
+BEGIN
+    -- 1. traefik_modules 类型与进程绑定检查约束 (ADR-16 §3.1)
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_traefik_modules_kind') THEN
+        ALTER TABLE traefik_modules DROP CONSTRAINT chk_traefik_modules_kind;
+    END IF;
+    ALTER TABLE traefik_modules ADD CONSTRAINT chk_traefik_modules_kind CHECK (module_kind IN ('BUSINESS', 'CONTRACT_LIB'));
+
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_traefik_modules_lib_no_proc') THEN
+        ALTER TABLE traefik_modules DROP CONSTRAINT chk_traefik_modules_lib_no_proc;
+    END IF;
+    ALTER TABLE traefik_modules ADD CONSTRAINT chk_traefik_modules_lib_no_proc CHECK (module_kind = 'BUSINESS' OR arch_process_id IS NULL);
+
+    -- 2. traefik_service_contracts 提供模式检查约束 (ADR-16 §3.2)
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_traefik_svc_contract_mode') THEN
+        ALTER TABLE traefik_service_contracts DROP CONSTRAINT chk_traefik_svc_contract_mode;
+    END IF;
+    ALTER TABLE traefik_service_contracts ADD CONSTRAINT chk_traefik_svc_contract_mode CHECK (provide_mode IN ('MULTI_IMPL'));
+
+    -- 3. traefik_module_services 契约实现约束 (ADR-16 §3.3)
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_traefik_mod_svc_contract_impl') THEN
+        ALTER TABLE traefik_module_services DROP CONSTRAINT chk_traefik_mod_svc_contract_impl;
+    END IF;
+    ALTER TABLE traefik_module_services ADD CONSTRAINT chk_traefik_mod_svc_contract_impl CHECK ((contract_id IS NULL AND impl_key = '') OR (contract_id IS NOT NULL AND impl_key <> ''));
+
+    -- 4. traefik_module_dependencies 内部实现/分发契约/外部三选一检查约束 (ADR-16 §3.5)
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_traefik_dep_target_xor') THEN
+        ALTER TABLE traefik_module_dependencies DROP CONSTRAINT chk_traefik_dep_target_xor;
+    END IF;
+    ALTER TABLE traefik_module_dependencies ADD CONSTRAINT chk_traefik_dep_target_xor CHECK (num_nonnulls(service_id, contract_id) + (CASE WHEN is_external THEN 1 ELSE 0 END) = 1);
+
+    -- 5. 移除原独占无条件唯一索引 uk_traefik_mod_svc_name（由部分唯一索引替代）
+    DROP INDEX IF EXISTS uk_traefik_mod_svc_name;
+END $$;`
+	if err := DB.Exec(contractConstraintSQL).Error; err != nil {
+		return fmt.Errorf("更新多实现服务契约检查约束失败: %w", err)
+	}
+
 	partialIndexes := []string{
 		`CREATE UNIQUE INDEX IF NOT EXISTS uk_traefik_proto_active_name ON traefik_proto_schemas (name) WHERE is_active = true;`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS uk_traefik_active_proto_op ON traefik_proto_operations (service_name, operation) WHERE is_active = true;`,
@@ -169,6 +209,10 @@ END $$;`
 		`CREATE UNIQUE INDEX IF NOT EXISTS uk_traefik_topo_layout_shared ON traefik_topology_layouts (view) WHERE scope = 'SHARED';`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS uk_traefik_topo_layout_private_name ON traefik_topology_layouts (owner_id, view, name) WHERE scope = 'PRIVATE';`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS uk_traefik_topo_layout_private_default ON traefik_topology_layouts (owner_id, view, focus_scope) WHERE scope = 'PRIVATE' AND is_default;`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uk_traefik_mod_svc_name_excl ON traefik_module_services (service_name) WHERE contract_id IS NULL;`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uk_traefik_mod_svc_contract_impl ON traefik_module_services (contract_id, impl_key) WHERE contract_id IS NOT NULL;`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uk_traefik_mod_svc_contract_mod ON traefik_module_services (contract_id, module_id) WHERE contract_id IS NOT NULL;`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uk_traefik_dep_consumer_contract ON traefik_module_dependencies (consumer_module_id, contract_id) WHERE contract_id IS NOT NULL;`,
 	}
 	for _, idxSQL := range partialIndexes {
 		if err := DB.Exec(idxSQL).Error; err != nil {

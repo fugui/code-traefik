@@ -167,6 +167,9 @@ func (o *Orchestrator) StartSession(
 	}
 	snapshotBytes, _ := json.Marshal(snapshots)
 
+	epSnapshots, _ := topology.CompileProcessEndpointSnapshots(ctx, o.db, agentIDs, req.TargetProcessIDs)
+	epSnapshotBytes, _ := json.Marshal(epSnapshots)
+
 	now := time.Now()
 	leasedBytes, _ := json.Marshal(agentIDs)
 	targetProcBytes, _ := json.Marshal(req.TargetProcessIDs)
@@ -181,6 +184,7 @@ func (o *Orchestrator) StartSession(
 		LeasedAgentIDs:     datatypes.JSON(leasedBytes),
 		TargetProcessIDs:   datatypes.JSON(targetProcBytes),
 		ProcessSnapshots:   datatypes.JSON(snapshotBytes),
+		EndpointSnapshots:  datatypes.JSON(epSnapshotBytes),
 		ProcessDiagnostics: datatypes.JSON([]byte("[]")),
 		MaxDurationSec:     maxDur,
 		MaxFrames:          maxFrames,

@@ -1,6 +1,7 @@
 package topology
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -75,6 +76,8 @@ func (e *ProvideConflictError) Unwrap() error {
 type ModuleServiceInput struct {
 	ModuleID        uint64
 	ServiceName     string
+	ContractID      *uint64
+	ImplKey         string
 	DiffIgnorePaths []string
 	Description     string
 	OperatorID      uint
@@ -87,6 +90,7 @@ type ModuleDependencyInput struct {
 	ExternalSystem   string
 	ExternalService  string
 	ServiceID        *uint64
+	ContractID       *uint64
 	Description      string
 	OperatorID       uint
 }
@@ -158,13 +162,8 @@ type StaticTopologyDTO struct {
 	Edges []StaticTopologyEdge `json:"edges"`
 }
 
-// CreateModuleService 创建对外供给服务契约并执行全局唯一 PROVIDE 校验 (A-05)
+// CreateModuleService 创建对外供给服务契约并执行唯一性校验 (独占 A-05 或多实现 A-09, ADR-16)
 func CreateModuleService(db *gorm.DB, in ModuleServiceInput) (*models.ModuleService, error) {
-	serviceName := strings.TrimSpace(in.ServiceName)
-	if len(serviceName) == 0 || len(serviceName) > 63 || !serviceNameRegex.MatchString(serviceName) {
-		return nil, ErrInvalidServiceNameFormat
-	}
-
 	var mod models.Module
 	if err := db.First(&mod, in.ModuleID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -173,20 +172,8 @@ func CreateModuleService(db *gorm.DB, in ModuleServiceInput) (*models.ModuleServ
 		return nil, err
 	}
 
-	// 全局 PROVIDE 唯一性检查
-	var existing models.ModuleService
-	err := db.Where("service_name = ?", serviceName).First(&existing).Error
-	if err == nil {
-		var holder models.Module
-		_ = db.First(&holder, existing.ModuleID).Error
-		return nil, &ProvideConflictError{
-			ServiceName:      serviceName,
-			HolderModuleID:   holder.ID,
-			HolderModuleCode: holder.Code,
-			HolderModuleName: holder.Name,
-		}
-	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, err
+	if mod.ModuleKind == models.ModuleKindContractLib {
+		return nil, ErrContractLibNoProvide
 	}
 
 	diffPathsJSON, _ := json.Marshal(in.DiffIgnorePaths)
@@ -194,22 +181,135 @@ func CreateModuleService(db *gorm.DB, in ModuleServiceInput) (*models.ModuleServ
 		diffPathsJSON = []byte("[]")
 	}
 
-	svc := &models.ModuleService{
-		ModuleID:        in.ModuleID,
-		ServiceName:     serviceName,
-		DiffIgnorePaths: datatypes.JSON(diffPathsJSON),
-		Description:     in.Description,
-		CreatedBy:       in.OperatorID,
+	// 1. 多实现契约实现分支 (in.ContractID != nil)
+	if in.ContractID != nil && *in.ContractID > 0 {
+		implKey := strings.TrimSpace(in.ImplKey)
+		if !implKeyRegex.MatchString(implKey) {
+			return nil, ErrInvalidImplKey
+		}
+
+		var created *models.ModuleService
+		err := db.Transaction(func(tx *gorm.DB) error {
+			var contract models.ServiceContract
+			if err := tx.First(&contract, *in.ContractID).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return ErrServiceContractNotFound
+				}
+				return err
+			}
+
+			// 校验同一契约下 impl_key 唯一
+			var implCount int64
+			if err := tx.Model(&models.ModuleService{}).
+				Where("contract_id = ? AND impl_key = ?", *in.ContractID, implKey).
+				Count(&implCount).Error; err != nil {
+				return err
+			}
+			if implCount > 0 {
+				return ErrDuplicateImplKey
+			}
+
+			// 校验同一模块对同一契约至多一条实现
+			var modImplCount int64
+			if err := tx.Model(&models.ModuleService{}).
+				Where("contract_id = ? AND module_id = ?", *in.ContractID, in.ModuleID).
+				Count(&modImplCount).Error; err != nil {
+				return err
+			}
+			if modImplCount > 0 {
+				return ErrModuleAlreadyImplementsContract
+			}
+
+			// 校验 A-09 同契约跨实现进程不相交
+			if err := AssertContractImplProcessDisjoint(tx, in.ModuleID, in.ContractID, mod.ArchProcessID); err != nil {
+				return err
+			}
+
+			svc := &models.ModuleService{
+				ModuleID:        in.ModuleID,
+				ContractID:      in.ContractID,
+				ServiceName:     contract.ServiceName,
+				ImplKey:         implKey,
+				DiffIgnorePaths: datatypes.JSON(diffPathsJSON),
+				Description:     in.Description,
+				CreatedBy:       in.OperatorID,
+			}
+			if err := tx.Create(svc).Error; err != nil {
+				if strings.Contains(err.Error(), "duplicate") || strings.Contains(err.Error(), "23505") {
+					return ErrDuplicateModuleService
+				}
+				return err
+			}
+			created = svc
+			return nil
+		})
+
+		if err != nil {
+			return nil, err
+		}
+		return created, nil
 	}
 
-	if err := db.Create(svc).Error; err != nil {
-		if strings.Contains(err.Error(), "duplicate") || strings.Contains(err.Error(), "23505") {
-			return nil, ErrDuplicateModuleService
+	// 2. 独占服务供给分支 (EXCLUSIVE, in.ContractID == nil)
+	serviceName := strings.TrimSpace(in.ServiceName)
+	if len(serviceName) == 0 || len(serviceName) > 63 || !serviceNameRegex.MatchString(serviceName) {
+		return nil, ErrInvalidServiceNameFormat
+	}
+
+	var created *models.ModuleService
+	err := db.Transaction(func(tx *gorm.DB) error {
+		// 咨询锁防并发竞态 (SEC-M20-03)
+		if err := tx.Exec("SELECT pg_advisory_xact_lock(hashtext(?))", serviceName).Error; err != nil {
+			return err
 		}
+
+		// 检查是否已被多实现契约占用
+		var contractCount int64
+		if err := tx.Model(&models.ServiceContract{}).Where("service_name = ?", serviceName).Count(&contractCount).Error; err != nil {
+			return err
+		}
+		if contractCount > 0 {
+			return ErrServiceNameOccupiedByContract
+		}
+
+		// 全局独占 PROVIDE 唯一性检查
+		var existing models.ModuleService
+		err := tx.Where("service_name = ? AND contract_id IS NULL", serviceName).First(&existing).Error
+		if err == nil {
+			var holder models.Module
+			_ = tx.First(&holder, existing.ModuleID).Error
+			return &ProvideConflictError{
+				ServiceName:      serviceName,
+				HolderModuleID:   holder.ID,
+				HolderModuleCode: holder.Code,
+				HolderModuleName: holder.Name,
+			}
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+
+		svc := &models.ModuleService{
+			ModuleID:        in.ModuleID,
+			ServiceName:     serviceName,
+			DiffIgnorePaths: datatypes.JSON(diffPathsJSON),
+			Description:     in.Description,
+			CreatedBy:       in.OperatorID,
+		}
+
+		if err := tx.Create(svc).Error; err != nil {
+			if strings.Contains(err.Error(), "duplicate") || strings.Contains(err.Error(), "23505") {
+				return ErrDuplicateModuleService
+			}
+			return err
+		}
+		created = svc
+		return nil
+	})
+
+	if err != nil {
 		return nil, err
 	}
-
-	return svc, nil
+	return created, nil
 }
 
 // UpdateModuleService 更新供给服务忽略路径与描述
@@ -303,7 +403,7 @@ func ListModuleServices(db *gorm.DB, moduleID uint64) ([]models.ModuleService, e
 	return services, nil
 }
 
-// CreateModuleDependency 创建模块对下游服务的依赖 (支持内部 FM 服务或外部三方系统)
+// CreateModuleDependency 创建模块对下游服务的依赖 (支持内部具体服务、多实现契约分发或外部三方系统)
 func CreateModuleDependency(db *gorm.DB, in ModuleDependencyInput) (*models.ModuleDependency, error) {
 	var consumer models.Module
 	if err := db.First(&consumer, in.ConsumerModuleID).Error; err != nil {
@@ -311,6 +411,10 @@ func CreateModuleDependency(db *gorm.DB, in ModuleDependencyInput) (*models.Modu
 			return nil, ErrModuleNotFound
 		}
 		return nil, err
+	}
+
+	if consumer.ModuleKind == models.ModuleKindContractLib {
+		return nil, ErrContractLibNoDepend
 	}
 
 	dep := &models.ModuleDependency{
@@ -328,9 +432,32 @@ func CreateModuleDependency(db *gorm.DB, in ModuleDependencyInput) (*models.Modu
 		}
 		dep.ExternalSystem = extSys
 		dep.ExternalService = extSvc
+	} else if in.ContractID != nil && *in.ContractID > 0 {
+		// 分发依赖 (DISPATCH, ADR-16 §3.5)
+		var contract models.ServiceContract
+		if err := db.First(&contract, *in.ContractID).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil, ErrServiceContractNotFound
+			}
+			return nil, err
+		}
+
+		// 检查是否已存在对该契约的具体实现依赖（语义重复拦截）
+		var conflictCount int64
+		if err := db.Table("traefik_module_dependencies d").
+			Joins("JOIN traefik_module_services s ON s.id = d.service_id").
+			Where("d.consumer_module_id = ? AND s.contract_id = ?", in.ConsumerModuleID, *in.ContractID).
+			Count(&conflictCount).Error; err != nil {
+			return nil, err
+		}
+		if conflictCount > 0 {
+			return nil, ErrDuplicateContractDependency
+		}
+
+		dep.ContractID = in.ContractID
 	} else {
 		if in.ServiceID == nil || *in.ServiceID == 0 {
-			return nil, errors.New("内部服务依赖必须指定目标 service_id")
+			return nil, errors.New("内部服务依赖必须指定目标 service_id 或 contract_id")
 		}
 		var targetSvc models.ModuleService
 		if err := db.First(&targetSvc, *in.ServiceID).Error; err != nil {
@@ -342,6 +469,19 @@ func CreateModuleDependency(db *gorm.DB, in ModuleDependencyInput) (*models.Modu
 
 		if targetSvc.ModuleID == in.ConsumerModuleID {
 			return nil, ErrSelfDependency
+		}
+
+		// 若目标服务属于多实现契约，检查消费方是否已声明了该契约的分发依赖（语义重复拦截）
+		if targetSvc.ContractID != nil {
+			var dispatchCount int64
+			if err := db.Model(&models.ModuleDependency{}).
+				Where("consumer_module_id = ? AND contract_id = ?", in.ConsumerModuleID, *targetSvc.ContractID).
+				Count(&dispatchCount).Error; err != nil {
+				return nil, err
+			}
+			if dispatchCount > 0 {
+				return nil, ErrDuplicateContractDependency
+			}
 		}
 
 		dep.ServiceID = in.ServiceID
@@ -1037,34 +1177,16 @@ func CompileProcessDownstreams(db *gorm.DB, procID uint64, batchProcessIDs []uin
 
 	if len(moduleIDs) > 0 {
 		var deps []models.ModuleDependency
-		_ = db.Preload("ProviderModule").Where("consumer_module_id IN ? AND is_external = false", moduleIDs).Find(&deps).Error
+		_ = db.Preload("ProviderModule.ArchProcess").Where("consumer_module_id IN ? AND is_external = false", moduleIDs).Find(&deps).Error
 
 		// 检查系统中 SHARED Agent 数量
 		var sharedAgents []models.Agent
 		_ = db.Where("scope = ?", models.ScopeShared).Find(&sharedAgents).Error
 
-		for _, dep := range deps {
-			var targetArchPID uint64
-			if dep.ProviderModule != nil && dep.ProviderModule.ArchProcessID != nil {
-				targetArchPID = *dep.ProviderModule.ArchProcessID
-			} else if dep.ProviderModuleID != nil {
-				var pm models.Module
-				if err := db.First(&pm, *dep.ProviderModuleID).Error; err == nil && pm.ArchProcessID != nil {
-					targetArchPID = *pm.ArchProcessID
-				}
-			} else if dep.ServiceID != nil {
-				var svc models.ModuleService
-				if err := db.First(&svc, *dep.ServiceID).Error; err == nil {
-					var pm models.Module
-					if err := db.First(&pm, svc.ModuleID).Error; err == nil && pm.ArchProcessID != nil {
-						targetArchPID = *pm.ArchProcessID
-					}
-				}
-			}
+		addEndpointsForTargetArchPID := func(targetArchPID uint64, archCode string) {
 			if targetArchPID == 0 {
-				continue
+				return
 			}
-
 			// 优先检查同机挂载 (同一 AgentID)
 			var tgtProc models.Process
 			err := db.Preload("Agent").Where("agent_id = ? AND arch_process_id = ?", proc.AgentID, targetArchPID).First(&tgtProc).Error
@@ -1075,15 +1197,17 @@ func CompileProcessDownstreams(db *gorm.DB, procID uint64, batchProcessIDs []uin
 				}
 				if tgtIP != "" {
 					declaredEndpoints = append(declaredEndpoints, agentproto.DownstreamEndpoint{
-						IP:   tgtIP,
-						Port: uint16(tgtProc.EffectiveListenPort),
+						IP:     tgtIP,
+						Port:   uint16(tgtProc.EffectiveListenPort),
+						DstTag: archCode,
 					})
 				}
 				declaredEndpoints = append(declaredEndpoints, agentproto.DownstreamEndpoint{
-					IP:   "127.0.0.1",
-					Port: uint16(tgtProc.EffectiveListenPort),
+					IP:     "127.0.0.1",
+					Port:   uint16(tgtProc.EffectiveListenPort),
+					DstTag: archCode,
 				})
-				continue
+				return
 			}
 
 			// 同机未挂载：检查 FallbackAgentID 兜底环境
@@ -1106,56 +1230,116 @@ func CompileProcessDownstreams(db *gorm.DB, procID uint64, batchProcessIDs []uin
 					}
 					if tgtIP != "" {
 						declaredEndpoints = append(declaredEndpoints, agentproto.DownstreamEndpoint{
-							IP:   tgtIP,
-							Port: uint16(fbProc.EffectiveListenPort),
+							IP:     tgtIP,
+							Port:   uint16(fbProc.EffectiveListenPort),
+							DstTag: archCode,
 						})
 					}
 				}
 			}
+		}
+
+		for _, dep := range deps {
+			if dep.ContractID != nil {
+				// DISPATCH 契约依赖：查找实现该契约的所有实现模块及所属 ArchProcess
+				var implSvcs []models.ModuleService
+				_ = db.Preload("Module.ArchProcess").Where("contract_id = ?", *dep.ContractID).Find(&implSvcs).Error
+				for _, isvc := range implSvcs {
+					if isvc.Module != nil && isvc.Module.ArchProcessID != nil && *isvc.Module.ArchProcessID > 0 {
+						code := ""
+						if isvc.Module.ArchProcess != nil {
+							code = isvc.Module.ArchProcess.Code
+						}
+						addEndpointsForTargetArchPID(*isvc.Module.ArchProcessID, code)
+					}
+				}
+				continue
+			}
+
+			var targetArchPID uint64
+			var archCode string
+			if dep.ProviderModule != nil && dep.ProviderModule.ArchProcessID != nil {
+				targetArchPID = *dep.ProviderModule.ArchProcessID
+				if dep.ProviderModule.ArchProcess != nil {
+					archCode = dep.ProviderModule.ArchProcess.Code
+				}
+			} else if dep.ProviderModuleID != nil {
+				var pm models.Module
+				if err := db.Preload("ArchProcess").First(&pm, *dep.ProviderModuleID).Error; err == nil && pm.ArchProcessID != nil {
+					targetArchPID = *pm.ArchProcessID
+					if pm.ArchProcess != nil {
+						archCode = pm.ArchProcess.Code
+					}
+				}
+			} else if dep.ServiceID != nil {
+				var svc models.ModuleService
+				if err := db.First(&svc, *dep.ServiceID).Error; err == nil {
+					var pm models.Module
+					if err := db.Preload("ArchProcess").First(&pm, svc.ModuleID).Error; err == nil && pm.ArchProcessID != nil {
+						targetArchPID = *pm.ArchProcessID
+						if pm.ArchProcess != nil {
+							archCode = pm.ArchProcess.Code
+						}
+					}
+				}
+			}
+			addEndpointsForTargetArchPID(targetArchPID, archCode)
 		}
 	}
 
 	// 2. 同机全部已挂载非零端口 (满足 ArmedDownstreams ⊇ SingleAgentCapturingDownstreams 超集不变量)
 	var peerEndpoints []agentproto.DownstreamEndpoint
 	var peerProcs []models.Process
-	_ = db.Preload("Agent").Where("agent_id = ? AND id != ? AND effective_listen_port > 0", proc.AgentID, proc.ID).Find(&peerProcs).Error
+	_ = db.Preload("Agent").Preload("ArchProcess").Where("agent_id = ? AND id != ? AND effective_listen_port > 0", proc.AgentID, proc.ID).Find(&peerProcs).Error
 	for _, pp := range peerProcs {
 		pIP := extractHostFromEndpoint(proc.Agent.Endpoint)
 		if pp.AdvertiseIP != "" {
 			pIP = pp.AdvertiseIP
 		}
+		pCode := ""
+		if pp.ArchProcess != nil {
+			pCode = pp.ArchProcess.Code
+		}
 		if pIP != "" {
 			peerEndpoints = append(peerEndpoints, agentproto.DownstreamEndpoint{
-				IP:   pIP,
-				Port: uint16(pp.EffectiveListenPort),
+				IP:     pIP,
+				Port:   uint16(pp.EffectiveListenPort),
+				DstTag: pCode,
 			})
 		}
 		peerEndpoints = append(peerEndpoints, agentproto.DownstreamEndpoint{
-			IP:   "127.0.0.1",
-			Port: uint16(pp.EffectiveListenPort),
+			IP:     "127.0.0.1",
+			Port:   uint16(pp.EffectiveListenPort),
+			DstTag: pCode,
 		})
 	}
 
 	// 补充批次协同进程端点 (如果提供)
 	if len(batchProcessIDs) > 0 {
 		var batchProcs []models.Process
-		_ = db.Preload("Agent").Where("id IN ? AND id != ?", batchProcessIDs, proc.ID).Find(&batchProcs).Error
+		_ = db.Preload("Agent").Preload("ArchProcess").Where("id IN ? AND id != ?", batchProcessIDs, proc.ID).Find(&batchProcs).Error
 		for _, bp := range batchProcs {
 			if bp.EffectiveListenPort > 0 && bp.Agent != nil {
 				bIP := extractHostFromEndpoint(bp.Agent.Endpoint)
 				if bp.AdvertiseIP != "" {
 					bIP = bp.AdvertiseIP
 				}
+				bCode := ""
+				if bp.ArchProcess != nil {
+					bCode = bp.ArchProcess.Code
+				}
 				if bIP != "" {
 					peerEndpoints = append(peerEndpoints, agentproto.DownstreamEndpoint{
-						IP:   bIP,
-						Port: uint16(bp.EffectiveListenPort),
+						IP:     bIP,
+						Port:   uint16(bp.EffectiveListenPort),
+						DstTag: bCode,
 					})
 				}
 				if bp.AgentID == proc.AgentID {
 					peerEndpoints = append(peerEndpoints, agentproto.DownstreamEndpoint{
-						IP:   "127.0.0.1",
-						Port: uint16(bp.EffectiveListenPort),
+						IP:     "127.0.0.1",
+						Port:   uint16(bp.EffectiveListenPort),
+						DstTag: bCode,
 					})
 				}
 			}
@@ -1189,34 +1373,157 @@ func CompileProcessDownstreams(db *gorm.DB, procID uint64, batchProcessIDs []uin
 	addExtras(proc.ExtraDownstreams)
 
 	// 4. 合并去重并剔除自身监听端口
-	merged := make([]agentproto.DownstreamEndpoint, 0)
-	seen := make(map[string]bool)
+	selfPort := uint16(proc.EffectiveListenPort)
 
 	all := append(declaredEndpoints, peerEndpoints...)
 	all = append(all, extraEndpoints...)
 	all = append(all, replayEgress...)
 
-	selfPort := uint16(proc.EffectiveListenPort)
-
+	mergedMap := make(map[string]agentproto.DownstreamEndpoint)
 	for _, ep := range all {
 		if selfPort > 0 && ep.Port == selfPort {
 			continue
 		}
-		key := fmt.Sprintf("%s:%d", ep.IP, ep.Port)
-		if !seen[key] {
-			seen[key] = true
-			merged = append(merged, ep)
+		addrKey := fmt.Sprintf("%s:%d", ep.IP, ep.Port)
+		if existing, ok := mergedMap[addrKey]; !ok {
+			mergedMap[addrKey] = ep
+		} else if existing.DstTag == "" && ep.DstTag != "" {
+			mergedMap[addrKey] = ep
 		}
+	}
+	merged := make([]agentproto.DownstreamEndpoint, 0, len(mergedMap))
+	for _, ep := range mergedMap {
+		merged = append(merged, ep)
 	}
 
 	sort.Slice(merged, func(i, j int) bool {
 		if merged[i].IP == merged[j].IP {
+			if merged[i].Port == merged[j].Port {
+				return merged[i].DstTag < merged[j].DstTag
+			}
 			return merged[i].Port < merged[j].Port
 		}
 		return merged[i].IP < merged[j].IP
 	})
 
 	return merged, nil
+}
+
+// CompileProcessEndpointSnapshots 编译会话涉及的全部物理进程端点快照 (3.2)
+func CompileProcessEndpointSnapshots(
+	ctx context.Context,
+	db *gorm.DB,
+	agentIDs []uint64,
+	targetProcessIDs []uint64,
+) ([]models.EndpointSnapshotItem, error) {
+	if len(agentIDs) == 0 && len(targetProcessIDs) == 0 {
+		return []models.EndpointSnapshotItem{}, nil
+	}
+
+	query := db.WithContext(ctx).Preload("Agent").Preload("ArchProcess.Modules")
+	if len(agentIDs) > 0 && len(targetProcessIDs) > 0 {
+		query = query.Where("agent_id IN ? OR id IN ?", agentIDs, targetProcessIDs)
+	} else if len(agentIDs) > 0 {
+		query = query.Where("agent_id IN ?", agentIDs)
+	} else {
+		query = query.Where("id IN ?", targetProcessIDs)
+	}
+
+	var procs []models.Process
+	if err := query.Order("id ASC").Find(&procs).Error; err != nil {
+		return nil, err
+	}
+
+	var snapshots []models.EndpointSnapshotItem
+	seen := make(map[string]bool)
+
+	for i := range procs {
+		p := &procs[i]
+		p.FillFromArchProcess()
+		if p.EffectiveListenPort <= 0 {
+			continue
+		}
+
+		var modIDs []uint64
+		if p.ArchProcess != nil {
+			for _, m := range p.ArchProcess.Modules {
+				modIDs = append(modIDs, m.ID)
+			}
+		}
+
+		var svcNames []string
+		var contractIDs []uint64
+		if len(modIDs) > 0 {
+			var svcs []models.ModuleService
+			if err := db.WithContext(ctx).Where("module_id IN ?", modIDs).Find(&svcs).Error; err == nil {
+				svcNameSet := make(map[string]bool)
+				contractSet := make(map[uint64]bool)
+				for _, s := range svcs {
+					sName := strings.TrimSpace(s.ServiceName)
+					if sName != "" && !svcNameSet[sName] {
+						svcNameSet[sName] = true
+						svcNames = append(svcNames, sName)
+					}
+					if s.ContractID != nil && *s.ContractID > 0 && !contractSet[*s.ContractID] {
+						contractSet[*s.ContractID] = true
+						contractIDs = append(contractIDs, *s.ContractID)
+					}
+				}
+			}
+		}
+
+		ips := make([]string, 0)
+		if p.AdvertiseIP != "" {
+			ips = append(ips, p.AdvertiseIP)
+		} else if p.Agent != nil && p.Agent.Endpoint != "" {
+			h := extractHostFromEndpoint(p.Agent.Endpoint)
+			if h != "" {
+				ips = append(ips, h)
+			}
+		}
+
+		hasLocal := false
+		for _, ip := range ips {
+			if ip == "127.0.0.1" {
+				hasLocal = true
+				break
+			}
+		}
+		if !hasLocal {
+			ips = append(ips, "127.0.0.1")
+		}
+
+		for _, ip := range ips {
+			key := fmt.Sprintf("%s:%d:%d", ip, p.EffectiveListenPort, p.ID)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+
+			snapshots = append(snapshots, models.EndpointSnapshotItem{
+				Endpoint:      fmt.Sprintf("%s:%d", ip, p.EffectiveListenPort),
+				IP:            ip,
+				Port:          p.EffectiveListenPort,
+				ArchProcessID: p.ArchProcessID,
+				ProcessID:     p.ID,
+				ModuleIDs:     modIDs,
+				ServiceNames:  svcNames,
+				ContractIDs:   contractIDs,
+			})
+		}
+	}
+
+	sort.Slice(snapshots, func(i, j int) bool {
+		if snapshots[i].IP == snapshots[j].IP {
+			if snapshots[i].Port == snapshots[j].Port {
+				return snapshots[i].ProcessID < snapshots[j].ProcessID
+			}
+			return snapshots[i].Port < snapshots[j].Port
+		}
+		return snapshots[i].IP < snapshots[j].IP
+	})
+
+	return snapshots, nil
 }
 
 func parseHostFromEndpoint(ep string) string {

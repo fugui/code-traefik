@@ -666,7 +666,7 @@ func ExtractOwnFilesFromSchema(schema *models.ProtoSchema) ([]*descriptorpb.File
 	return own, nil
 }
 
-// FindAffectedDependents 联合查询 traefik_module_services 与 traefik_module_dependencies 提取下游受影响模块血缘
+// FindAffectedDependents 联合查询 traefik_module_services, traefik_service_contracts 与 traefik_module_dependencies 提取下游受影响模块血缘
 func FindAffectedDependents(db *gorm.DB, violations []BreakingRuleViolation) []AffectedDependent {
 	if db == nil || len(violations) == 0 {
 		return []AffectedDependent{}
@@ -687,27 +687,10 @@ func FindAffectedDependents(db *gorm.DB, violations []BreakingRuleViolation) []A
 		services = append(services, s)
 	}
 
-	var modSvcs []models.ModuleService
-	if err := db.Where("service_name IN ?", services).Find(&modSvcs).Error; err != nil || len(modSvcs) == 0 {
-		return []AffectedDependent{}
-	}
-
-	svcIDs := make([]uint64, 0, len(modSvcs))
-	for _, ms := range modSvcs {
-		svcIDs = append(svcIDs, ms.ID)
-	}
-
-	var deps []models.ModuleDependency
-	if err := db.Preload("ConsumerModule.ArchProcess").Preload("ConsumerModule.Owner").
-		Where("service_id IN ?", svcIDs).Find(&deps).Error; err != nil {
-		return []AffectedDependent{}
-	}
-
 	dedup := make(map[uint64]AffectedDependent)
-	for _, dep := range deps {
-		cm := dep.ConsumerModule
+	addModuleToDedup := func(cm *models.Module) {
 		if cm == nil {
-			continue
+			return
 		}
 		archCode := ""
 		if cm.ArchProcess != nil {
@@ -728,6 +711,82 @@ func FindAffectedDependents(db *gorm.DB, violations []BreakingRuleViolation) []A
 			ModuleName:      cm.Name,
 			ArchProcessCode: archCode,
 			OwnerName:       ownerName,
+		}
+	}
+
+	// 1. 查找服务列表对应的 ModuleService 与 ServiceContract
+	var modSvcs []models.ModuleService
+	_ = db.Where("service_name IN ?", services).Find(&modSvcs).Error
+
+	var contracts []models.ServiceContract
+	_ = db.Where("service_name IN ?", services).Find(&contracts).Error
+
+	contractIDSet := make(map[uint64]struct{})
+	for _, c := range contracts {
+		contractIDSet[c.ID] = struct{}{}
+	}
+	for _, ms := range modSvcs {
+		if ms.ContractID != nil && *ms.ContractID > 0 {
+			contractIDSet[*ms.ContractID] = struct{}{}
+		}
+	}
+
+	// 2. 如果关联到 ServiceContract (多实现契约 / CONTRACT_LIB)
+	if len(contractIDSet) > 0 {
+		cIDs := make([]uint64, 0, len(contractIDSet))
+		for cid := range contractIDSet {
+			cIDs = append(cIDs, cid)
+		}
+
+		var fullContracts []models.ServiceContract
+		_ = db.Preload("DefinerModule.ArchProcess").Preload("DefinerModule.Owner").
+			Where("id IN ?", cIDs).Find(&fullContracts).Error
+
+		// (a) 定义模块 (Definer Module, 即 FM A 本身)
+		for _, fc := range fullContracts {
+			if fc.DefinerModule != nil {
+				addModuleToDedup(fc.DefinerModule)
+			}
+		}
+
+		// (b) 全部实现模块 (Implementation Modules, FM B/C/D)
+		var implSvcs []models.ModuleService
+		_ = db.Preload("Module.ArchProcess").Preload("Module.Owner").
+			Where("contract_id IN ?", cIDs).Find(&implSvcs).Error
+		for _, is := range implSvcs {
+			if is.Module != nil {
+				addModuleToDedup(is.Module)
+			}
+			// 也把实现服务的 ID 归入待查依赖
+			modSvcs = append(modSvcs, is)
+		}
+
+		// (c) 声明了 DISPATCH 契约依赖的消费模块 (FM X)
+		var dispatchDeps []models.ModuleDependency
+		_ = db.Preload("ConsumerModule.ArchProcess").Preload("ConsumerModule.Owner").
+			Where("contract_id IN ?", cIDs).Find(&dispatchDeps).Error
+		for _, dep := range dispatchDeps {
+			if dep.ConsumerModule != nil {
+				addModuleToDedup(dep.ConsumerModule)
+			}
+		}
+	}
+
+	// 3. 消费具体服务 ID 的下游模块
+	if len(modSvcs) > 0 {
+		svcIDs := make([]uint64, 0, len(modSvcs))
+		for _, ms := range modSvcs {
+			svcIDs = append(svcIDs, ms.ID)
+		}
+
+		var deps []models.ModuleDependency
+		if err := db.Preload("ConsumerModule.ArchProcess").Preload("ConsumerModule.Owner").
+			Where("service_id IN ?", svcIDs).Find(&deps).Error; err == nil {
+			for _, dep := range deps {
+				if dep.ConsumerModule != nil {
+					addModuleToDedup(dep.ConsumerModule)
+				}
+			}
 		}
 	}
 

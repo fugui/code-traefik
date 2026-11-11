@@ -205,6 +205,14 @@ func RegisterRoutesForTest(r *gin.Engine) {
 		protected.GET("/arch/services/available", handlers.ListAvailableServices)
 		protected.GET("/arch/proto-services/claimable", handlers.ListClaimableProtoServices)
 
+		// 4.0 多实现服务契约域 (ADR-16, M20)
+		protected.GET("/arch/service-contracts", handlers.ListServiceContracts)
+		protected.GET("/arch/service-contracts/:id", handlers.GetServiceContract)
+		protected.POST("/arch/service-contracts", requireAdmin, handlers.CreateServiceContract)
+		protected.PUT("/arch/service-contracts/:id", requireAdmin, handlers.UpdateServiceContract)
+		protected.DELETE("/arch/service-contracts/:id", requireAdmin, handlers.DeleteServiceContract)
+		protected.POST("/arch/service-contracts/convert", requireAdmin, handlers.ConvertExclusiveToMultiImplContract)
+
 		// 4.1 物理进程蓝图域 (ADR-09, M10)
 		protected.GET("/arch/process-groups", handlers.ListArchProcessGroups)
 		protected.POST("/arch/process-groups", requireAdmin, handlers.CreateArchProcessGroup)

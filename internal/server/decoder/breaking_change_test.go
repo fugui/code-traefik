@@ -3,6 +3,7 @@ package decoder
 import (
 	"testing"
 
+	"code-traefik/models"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/descriptorpb"
 )
@@ -661,5 +662,115 @@ func TestDetectBreakingChanges_RemovedField_RequiresNumericReservedRange(t *test
 	v4 := DetectBreakingChanges([]*descriptorpb.FileDescriptorProto{oldFile}, []*descriptorpb.FileDescriptorProto{newEnumReserved})
 	if len(v4) != 0 {
 		t.Fatalf("合法保留枚举数值 reserved 后应 PASS，但检出了违规: %+v", v4)
+	}
+}
+
+func TestFindAffectedDependents_MultiImplContract(t *testing.T) {
+	db := setupIsolatedDecoderDB(t)
+
+	// 1. 架构元素搭建
+	sub := models.Subsystem{Code: "SUB_BREAKING", Name: "破坏性影响面子系统", CreatedBy: 1}
+	db.Create(&sub)
+	grp := models.FunctionalGroup{SubsystemID: sub.ID, Code: "GRP_BREAKING", Name: "功能组", Level: 1, CreatedBy: 1}
+	db.Create(&grp)
+
+	// FM A: CONTRACT_LIB 定义库
+	modA := models.Module{SubsystemID: sub.ID, GroupID: grp.ID, Code: "MOD_LIB_A", Name: "契约定义库A", ModuleKind: models.ModuleKindContractLib, CreatedBy: 1}
+	// FM B & C: 实现模块
+	modB := models.Module{SubsystemID: sub.ID, GroupID: grp.ID, Code: "MOD_IMPL_B", Name: "实现模块B", ModuleKind: models.ModuleKindBusiness, CreatedBy: 1}
+	modC := models.Module{SubsystemID: sub.ID, GroupID: grp.ID, Code: "MOD_IMPL_C", Name: "实现模块C", ModuleKind: models.ModuleKindBusiness, CreatedBy: 1}
+	// FM X: DISPATCH 消费模块
+	modX := models.Module{SubsystemID: sub.ID, GroupID: grp.ID, Code: "MOD_CONS_X", Name: "分发调用方X", ModuleKind: models.ModuleKindBusiness, CreatedBy: 1}
+	// FM Y: 具体实现 B 消费模块
+	modY := models.Module{SubsystemID: sub.ID, GroupID: grp.ID, Code: "MOD_CONS_Y", Name: "直调调用方Y", ModuleKind: models.ModuleKindBusiness, CreatedBy: 1}
+	// FM Z: 无关模块
+	modZ := models.Module{SubsystemID: sub.ID, GroupID: grp.ID, Code: "MOD_UNREL_Z", Name: "无关模块Z", ModuleKind: models.ModuleKindBusiness, CreatedBy: 1}
+
+	db.Create(&modA)
+	db.Create(&modB)
+	db.Create(&modC)
+	db.Create(&modX)
+	db.Create(&modY)
+	db.Create(&modZ)
+
+	// 2. 契约登记
+	contract := models.ServiceContract{
+		ServiceName:     "cros.pay.PaymentGateway",
+		DefinerModuleID: modA.ID,
+		ProvideMode:     models.ContractProvideModeMultiImpl,
+		CreatedBy:       1,
+	}
+	db.Create(&contract)
+
+	// 实现服务
+	msB := models.ModuleService{
+		ModuleID:    modB.ID,
+		ContractID:  &contract.ID,
+		ServiceName: "cros.pay.PaymentGateway",
+		ImplKey:     "alipay",
+		CreatedBy:   1,
+	}
+	msC := models.ModuleService{
+		ModuleID:    modC.ID,
+		ContractID:  &contract.ID,
+		ServiceName: "cros.pay.PaymentGateway",
+		ImplKey:     "wechat",
+		CreatedBy:   1,
+	}
+	db.Create(&msB)
+	db.Create(&msC)
+
+	// 依赖定义
+	// X -> contract (DISPATCH)
+	depX := models.ModuleDependency{
+		ConsumerModuleID: modX.ID,
+		ContractID:       &contract.ID,
+		CreatedBy:        1,
+	}
+	// Y -> msB (具体实现)
+	depY := models.ModuleDependency{
+		ConsumerModuleID: modY.ID,
+		ServiceID:        &msB.ID,
+		CreatedBy:        1,
+	}
+	db.Create(&depX)
+	db.Create(&depY)
+
+	// 3. 执行影响面反查
+	violations := []BreakingRuleViolation{
+		{
+			Rule:        RuleServiceOrMethodRemoved,
+			ServiceName: "cros.pay.PaymentGateway",
+		},
+	}
+	affected := FindAffectedDependents(db, violations)
+
+	// 4. 验证: 必须包含 A (定义库), B (实现), C (实现), X (DISPATCH依赖), Y (具体实现依赖)
+	// 且绝不能包含 Z (无关模块)
+	affectedMap := make(map[uint64]string)
+	for _, a := range affected {
+		affectedMap[a.ModuleID] = a.ModuleCode
+	}
+
+	if _, ok := affectedMap[modA.ID]; !ok {
+		t.Errorf("受影响模块应包含定义库 FM A (%s)", modA.Code)
+	}
+	if _, ok := affectedMap[modB.ID]; !ok {
+		t.Errorf("受影响模块应包含实现模块 FM B (%s)", modB.Code)
+	}
+	if _, ok := affectedMap[modC.ID]; !ok {
+		t.Errorf("受影响模块应包含实现模块 FM C (%s)", modC.Code)
+	}
+	if _, ok := affectedMap[modX.ID]; !ok {
+		t.Errorf("受影响模块应包含 DISPATCH 消费方 FM X (%s)", modX.Code)
+	}
+	if _, ok := affectedMap[modY.ID]; !ok {
+		t.Errorf("受影响模块应包含具体实现消费方 FM Y (%s)", modY.Code)
+	}
+	if _, ok := affectedMap[modZ.ID]; ok {
+		t.Errorf("受影响模块不应包含无关模块 FM Z (%s)", modZ.Code)
+	}
+	if len(affected) != 5 {
+		t.Fatalf("预期恰好 5 个受影响模块，实际得到 %d: %+v", len(affected), affected)
 	}
 }

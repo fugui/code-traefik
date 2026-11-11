@@ -216,6 +216,11 @@ func collectDescendantEgress(node *TransactionTreeNodeDTO, out *[]uint64) {
 
 // BuildScopedMockRules 组装用于 Agent 下发的 MockRuleDownstream
 func BuildScopedMockRules(egressRecords []models.TrafficRecord) []agentproto.MockRuleDownstream {
+	return BuildScopedMockRulesWithDstTags(egressRecords, nil)
+}
+
+// BuildScopedMockRulesWithDstTags 组装用于 Agent 下发的 MockRuleDownstream 并注入 DstTag 隔离标识
+func BuildScopedMockRulesWithDstTags(egressRecords []models.TrafficRecord, modArchCodes map[uint64]string) []agentproto.MockRuleDownstream {
 	var rules []agentproto.MockRuleDownstream
 	for _, eg := range egressRecords {
 		if len(eg.RawReqPacket) == 0 {
@@ -225,7 +230,12 @@ func BuildScopedMockRules(egressRecords []models.TrafficRecord) []agentproto.Moc
 		if len(eg.RawRspPacket) > 0 {
 			rspPackets = append(rspPackets, eg.RawRspPacket)
 		}
+		dstTag := ""
+		if eg.DstModuleID != nil && modArchCodes != nil {
+			dstTag = modArchCodes[*eg.DstModuleID]
+		}
 		rules = append(rules, agentproto.MockRuleDownstream{
+			DstTag:     dstTag,
 			ReqPacket:  eg.RawReqPacket,
 			RspPackets: rspPackets,
 		})

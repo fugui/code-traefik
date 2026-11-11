@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS traefik_traffic_records (
     src_attribution_mode VARCHAR(32) NOT NULL DEFAULT '',
     src_candidate_module_ids JSONB,
     dst_module_id BIGINT,
+    dst_contract_id BIGINT,
     headers_json JSONB NOT NULL DEFAULT '{}',
     schema_id BIGINT,
     schema_version INTEGER,
@@ -68,6 +69,8 @@ CREATE INDEX IF NOT EXISTS idx_traefik_tr_session_seq ON traefik_traffic_records
 CREATE INDEX IF NOT EXISTS idx_traefik_tr_session_svc ON traefik_traffic_records (session_id, service_name, operation);
 CREATE INDEX IF NOT EXISTS idx_traefik_tr_conn_sno ON traefik_traffic_records (conn_key, sno);
 CREATE INDEX IF NOT EXISTS idx_traefik_tr_session_req_ns ON traefik_traffic_records (session_id, req_captured_at_ns, id);
+ALTER TABLE traefik_traffic_records ADD COLUMN IF NOT EXISTS dst_contract_id BIGINT;
+CREATE INDEX IF NOT EXISTS idx_traefik_tr_dst_contract ON traefik_traffic_records (dst_contract_id) WHERE dst_contract_id IS NOT NULL;
 `
 	return db.Exec(ddl).Error
 }

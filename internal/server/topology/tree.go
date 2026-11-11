@@ -101,6 +101,7 @@ type ModuleInput struct {
 	HasArchProcessID bool
 	ProcessID        *uint64 // 向后兼容
 	HasProcessID     bool    // 向后兼容
+	ModuleKind       string  // BUSINESS | CONTRACT_LIB (ADR-16)
 	Description      string
 	OperatorID       uint
 }
@@ -617,12 +618,25 @@ func CreateModule(db *gorm.DB, in ModuleInput) (*models.Module, error) {
 		return nil, ErrDuplicateCode
 	}
 
+	kind := strings.TrimSpace(in.ModuleKind)
+	if kind == "" {
+		kind = models.ModuleKindBusiness
+	}
+	if kind != models.ModuleKindBusiness && kind != models.ModuleKindContractLib {
+		return nil, errors.New("非法的模块类型，仅支持 BUSINESS 或 CONTRACT_LIB")
+	}
+
 	var archProcessID *uint64
 	if in.ArchProcessID != nil {
 		archProcessID = in.ArchProcessID
 	} else if in.ProcessID != nil {
 		archProcessID = in.ProcessID
 	}
+
+	if kind == models.ModuleKindContractLib && archProcessID != nil && *archProcessID > 0 {
+		return nil, ErrContractLibNoProcess
+	}
+
 	if archProcessID != nil && *archProcessID > 0 {
 		var ap models.ArchProcess
 		if err := db.First(&ap, *archProcessID).Error; err != nil {
@@ -640,6 +654,7 @@ func CreateModule(db *gorm.DB, in ModuleInput) (*models.Module, error) {
 		Name:          strings.TrimSpace(in.Name),
 		OwnerID:       in.OwnerID,
 		ArchProcessID: archProcessID,
+		ModuleKind:    kind,
 		Description:   in.Description,
 		CreatedBy:     in.OperatorID,
 		UpdatedBy:     in.OperatorID,
@@ -702,6 +717,35 @@ func UpdateModule(db *gorm.DB, id uint64, in ModuleInput) (*models.Module, *mode
 		}
 	}
 
+	effectiveKind := before.ModuleKind
+	if in.ModuleKind != "" && in.ModuleKind != before.ModuleKind {
+		if in.ModuleKind != models.ModuleKindBusiness && in.ModuleKind != models.ModuleKindContractLib {
+			return nil, nil, errors.New("非法的模块类型，仅支持 BUSINESS 或 CONTRACT_LIB")
+		}
+		if before.ModuleKind == models.ModuleKindContractLib && in.ModuleKind == models.ModuleKindBusiness {
+			var contractCount int64
+			if err := db.Model(&models.ServiceContract{}).Where("definer_module_id = ?", id).Count(&contractCount).Error; err != nil {
+				return nil, nil, err
+			}
+			if contractCount > 0 {
+				return nil, nil, ErrContractLibCannotSwitchToBusiness
+			}
+		}
+		if before.ModuleKind == models.ModuleKindBusiness && in.ModuleKind == models.ModuleKindContractLib {
+			var svcCount int64
+			_ = db.Model(&models.ModuleService{}).Where("module_id = ?", id).Count(&svcCount)
+			if svcCount > 0 {
+				return nil, nil, errors.New("已声明提供服务的模块无法变更为接口契约库模块")
+			}
+			var depCount int64
+			_ = db.Model(&models.ModuleDependency{}).Where("consumer_module_id = ?", id).Count(&depCount)
+			if depCount > 0 {
+				return nil, nil, errors.New("已声明消费依赖的模块无法变更为接口契约库模块")
+			}
+		}
+		effectiveKind = in.ModuleKind
+	}
+
 	actualName := before.Name
 	if in.Name != "" {
 		if err := validateName(in.Name); err != nil {
@@ -735,6 +779,17 @@ func UpdateModule(db *gorm.DB, id uint64, in ModuleInput) (*models.Module, *mode
 		archProcessID = in.ProcessID
 	}
 
+	if effectiveKind == models.ModuleKindContractLib && archProcessID != nil && *archProcessID > 0 {
+		return nil, nil, ErrContractLibNoProcess
+	}
+
+	// A-09: 若发生进程改绑，校验多实现契约进程不相交
+	if archProcessID != nil && *archProcessID > 0 && (before.ArchProcessID == nil || *before.ArchProcessID != *archProcessID) {
+		if err := AssertContractImplProcessDisjoint(db, id, nil, archProcessID); err != nil {
+			return nil, nil, err
+		}
+	}
+
 	after := before
 	after.GroupID = groupID
 	after.SubsystemID = subsystemID
@@ -742,6 +797,7 @@ func UpdateModule(db *gorm.DB, id uint64, in ModuleInput) (*models.Module, *mode
 	after.Name = actualName
 	after.OwnerID = in.OwnerID
 	after.ArchProcessID = archProcessID
+	after.ModuleKind = effectiveKind
 	after.Description = in.Description
 	after.UpdatedBy = in.OperatorID
 
@@ -753,6 +809,7 @@ func UpdateModule(db *gorm.DB, id uint64, in ModuleInput) (*models.Module, *mode
 			"name":            actualName,
 			"owner_id":        in.OwnerID,
 			"arch_process_id": archProcessID,
+			"module_kind":     effectiveKind,
 			"description":     in.Description,
 			"updated_by":      in.OperatorID,
 		}).Error; err != nil {
@@ -786,6 +843,16 @@ func DeleteModule(db *gorm.DB, id uint64) (*models.Module, error) {
 	}
 	if svcCount > 0 {
 		return nil, ErrModuleNotEmpty
+	}
+
+	if mod.ModuleKind == models.ModuleKindContractLib {
+		var contractCount int64
+		if err := db.Model(&models.ServiceContract{}).Where("definer_module_id = ?", id).Count(&contractCount).Error; err != nil {
+			return nil, err
+		}
+		if contractCount > 0 {
+			return nil, ErrContractLibHasContractsCannotDelete
+		}
 	}
 
 	var depCount int64

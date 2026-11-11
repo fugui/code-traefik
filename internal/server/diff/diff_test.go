@@ -663,3 +663,88 @@ func TestTripleLayerDiffIgnoreInheritance(t *testing.T) {
 		t.Fatalf("预期缺少 Task 级忽略时得到 2 处差异，实际得到 %d: %+v", len(diffsWithoutExtra), diffsWithoutExtra)
 	}
 }
+
+func TestValidateReplayProcessCompatibility_MultiImplIngress(t *testing.T) {
+	db := setupIsolatedDiffDB(t)
+
+	// 架构蓝图
+	pgrp := models.ArchProcessGroup{Code: "PGRP_MULTI", Name: "多实现重放组"}
+	db.Create(&pgrp)
+	archB := models.ArchProcess{GroupID: pgrp.ID, Code: "ARCH_B", Name: "实现进程B", DefaultListenPort: 18011}
+	archC := models.ArchProcess{GroupID: pgrp.ID, Code: "ARCH_C", Name: "实现进程C", DefaultListenPort: 18012}
+	db.Create(&archB)
+	db.Create(&archC)
+
+	sub := models.Subsystem{Code: "SUB_MULTI", Name: "多实现子系统", CreatedBy: 1}
+	db.Create(&sub)
+	grp := models.FunctionalGroup{SubsystemID: sub.ID, Code: "GRP_MULTI", Name: "功能组", Level: 1, CreatedBy: 1}
+	db.Create(&grp)
+
+	modB := models.Module{SubsystemID: sub.ID, GroupID: grp.ID, ArchProcessID: &archB.ID, Code: "MOD_IMPL_B", Name: "模块B", CreatedBy: 1}
+	modC := models.Module{SubsystemID: sub.ID, GroupID: grp.ID, ArchProcessID: &archC.ID, Code: "MOD_IMPL_C", Name: "模块C", CreatedBy: 1}
+	db.Create(&modB)
+	db.Create(&modC)
+
+	archProcModules := map[uint64][]uint64{
+		archB.ID: {modB.ID},
+		archC.ID: {modC.ID},
+	}
+
+	agt := models.Agent{Name: "agt-test", Endpoint: "http://127.0.0.1:18090", Scope: models.ScopeShared, Status: models.AgentStatusOnline, CreatedBy: 1}
+	db.Create(&agt)
+
+	procB := models.Process{AgentID: agt.ID, Agent: &agt, ArchProcessID: archB.ID, EffectiveListenPort: 18011, CreatedBy: 1}
+	procC := models.Process{AgentID: agt.ID, Agent: &agt, ArchProcessID: archC.ID, EffectiveListenPort: 18012, CreatedBy: 1}
+	db.Create(&procB)
+	db.Create(&procC)
+
+	// 源会话：在进程 B 上录制
+	sourceSnap := &models.ProcessSnapshotItem{
+		ProcessID:     procB.ID,
+		ArchProcessID: archB.ID,
+		Code:          "ARCH_B",
+		Name:          "实现进程B",
+		ModuleIDs:     []uint64{modB.ID},
+		ListenPort:    18011,
+	}
+	snapsBytes, _ := json.Marshal([]models.ProcessSnapshotItem{*sourceSnap})
+	session := models.RecordingSession{
+		SessionNo:          "REC_MULTI_B",
+		Name:               "进程B多实现会话",
+		Scope:              models.ScopeShared,
+		OwnerID:            1,
+		Status:             models.SessionStatusCompleted,
+		TargetProcessIDs:   datatypes.JSON([]byte("[]")),
+		LeasedAgentIDs:     datatypes.JSON([]byte("[]")),
+		ProcessSnapshots:   datatypes.JSON(snapsBytes),
+		EndpointSnapshots:  datatypes.JSON([]byte("[]")),
+		ProcessDiagnostics: datatypes.JSON([]byte("[]")),
+		CreatedBy:          1,
+	}
+	db.Create(&session)
+
+	// 选定报文：多实现契约，已结算 DstModuleID = modB.ID
+	selectedRecords := []models.TrafficRecord{
+		{
+			ServiceName: "cros.trade.PayService",
+			Operation:   "Pay",
+			DstModuleID: &modB.ID,
+		},
+	}
+
+	// 场景 1: 重放到同样承载模块 B 的进程 (原地或同构进程 procB) -> 兼容 (PASS)
+	err := ValidateReplayProcessCompatibility(1, false, &session, selectedRecords, sourceSnap, &procB, &agt, archProcModules, nil)
+	if err != nil {
+		t.Fatalf("重放到自身同构进程应成功, got: %v", err)
+	}
+
+	// 场景 2: 重放到承载了不同实现模块 (modC) 的进程 procC -> 必须报错阻止 (400 Incompatible)
+	// 且不能误认为 "同样实现了 PayService" 就放行！
+	err = ValidateReplayProcessCompatibility(1, false, &session, selectedRecords, sourceSnap, &procC, &agt, archProcModules, nil)
+	if err == nil {
+		t.Fatalf("重放到不同实现进程 procC 必须失败，但返回了 nil")
+	}
+	if !errors.Is(err, ErrIncompatibleReplayTargetModule) {
+		t.Fatalf("期望错误为 ErrIncompatibleReplayTargetModule, got: %v", err)
+	}
+}

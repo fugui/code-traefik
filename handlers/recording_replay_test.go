@@ -21,9 +21,11 @@ import (
 	"code-traefik/internal/server/callgraph"
 	"code-traefik/internal/server/diff"
 	"code-traefik/internal/server/recorder"
+	"code-traefik/internal/server/topology"
 	"code-traefik/models"
 	"code-traefik/pkg/agentproto"
 	"code-traefik/pkg/crosrpc"
+	"code-traefik/pkg/replay"
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/descriptorpb"
@@ -1147,4 +1149,344 @@ func TestSingleProcessZeroTopology_BidirectionalCapture_StopRelease_AndZeroLeakR
 	if !foundHistoryEP {
 		t.Errorf("重放 ProcessSpec.Downstreams 未自动纳入历史 EGRESS 端口 9002: %+v", mockDownstreams)
 	}
+}
+
+func TestSC12_MultiImplContractDispatchVerifyAndIsolatedMockReplay(t *testing.T) {
+	r, db := setupRouterAndDB(t)
+
+	admin := createTestUserInDB(t, db, "admin_sc12", "traefik_admin")
+	adminToken := generateTestJWT(t, admin)
+
+	// 1. 搭建三级架构：子系统 + 功能组
+	subsys := models.Subsystem{Code: "PAY_SYS", Name: "支付子系统"}
+	if err := db.Create(&subsys).Error; err != nil {
+		t.Fatalf("创建子系统失败: %v", err)
+	}
+	grp := models.FunctionalGroup{SubsystemID: subsys.ID, Code: "PAY_CORE", Name: "支付中枢", SortOrder: 1}
+	if err := db.Create(&grp).Error; err != nil {
+		t.Fatalf("创建功能组失败: %v", err)
+	}
+
+	// 2. 接口契约库模块 A (CONTRACT_LIB)
+	modA := models.Module{
+		SubsystemID: subsys.ID,
+		GroupID:     grp.ID,
+		Code:        "LIB_ORDER_CONTRACT",
+		Name:        "订单接口契约库",
+		ModuleKind:  models.ModuleKindContractLib,
+	}
+	if err := db.Create(&modA).Error; err != nil {
+		t.Fatalf("创建模块 A 失败: %v", err)
+	}
+
+	// 登记多实现服务契约 OrderProcessor (MULTI_IMPL)
+	contract := models.ServiceContract{
+		ServiceName:     "dophi.order.v1.OrderProcessor",
+		DefinerModuleID: modA.ID,
+		ProvideMode:     models.ContractProvideModeMultiImpl,
+		ImplKeyLabel:    "order_type",
+		Description:     "多实现订单处理器通用契约",
+	}
+	if err := db.Create(&contract).Error; err != nil {
+		t.Fatalf("创建服务契约失败: %v", err)
+	}
+
+	// 3. 创建标准架构物理进程与物理进程：ProcB, ProcC, ProcD, ProcX
+	agent := models.Agent{
+		Name:      "test-agent-sc12",
+		Endpoint:  "127.0.0.1:9091",
+		Scope:     models.ScopeShared,
+		Status:    models.AgentStatusOnline,
+		LeaseType: "",
+	}
+	if err := db.Create(&agent).Error; err != nil {
+		t.Fatalf("创建 Agent 失败: %v", err)
+	}
+
+	archGroup := models.ArchProcessGroup{Code: "CORE_PROC_GRP", Name: "核心服务进程组"}
+	if err := db.Create(&archGroup).Error; err != nil {
+		t.Fatalf("创建进程组失败: %v", err)
+	}
+
+	archProcB := models.ArchProcess{GroupID: archGroup.ID, Code: "PROC_B", Name: "proc_b", DefaultListenPort: 9002}
+	archProcC := models.ArchProcess{GroupID: archGroup.ID, Code: "PROC_C", Name: "proc_c", DefaultListenPort: 9003}
+	archProcD := models.ArchProcess{GroupID: archGroup.ID, Code: "PROC_D", Name: "proc_d", DefaultListenPort: 9004}
+	archProcX := models.ArchProcess{GroupID: archGroup.ID, Code: "PROC_X", Name: "proc_x", DefaultListenPort: 9001}
+	db.Create(&archProcB)
+	db.Create(&archProcC)
+	db.Create(&archProcD)
+	db.Create(&archProcX)
+
+	procB := models.Process{AgentID: agent.ID, ArchProcessID: archProcB.ID, EffectiveListenPort: 9002}
+	procC := models.Process{AgentID: agent.ID, ArchProcessID: archProcC.ID, EffectiveListenPort: 9003}
+	procD := models.Process{AgentID: agent.ID, ArchProcessID: archProcD.ID, EffectiveListenPort: 9004}
+	procX := models.Process{AgentID: agent.ID, ArchProcessID: archProcX.ID, EffectiveListenPort: 9001}
+	db.Create(&procB)
+	db.Create(&procC)
+	db.Create(&procD)
+	db.Create(&procX)
+
+	// 4. 实现模块 B, C, D 与调度模块 X
+	modB := models.Module{SubsystemID: subsys.ID, GroupID: grp.ID, Code: "MOD_B", Name: "模块B", ArchProcessID: &archProcB.ID, ModuleKind: models.ModuleKindBusiness}
+	modC := models.Module{SubsystemID: subsys.ID, GroupID: grp.ID, Code: "MOD_C", Name: "模块C", ArchProcessID: &archProcC.ID, ModuleKind: models.ModuleKindBusiness}
+	modD := models.Module{SubsystemID: subsys.ID, GroupID: grp.ID, Code: "MOD_D", Name: "模块D", ArchProcessID: &archProcD.ID, ModuleKind: models.ModuleKindBusiness}
+	modX := models.Module{SubsystemID: subsys.ID, GroupID: grp.ID, Code: "MOD_X", Name: "调度模块X", ArchProcessID: &archProcX.ID, ModuleKind: models.ModuleKindBusiness}
+	db.Create(&modB)
+	db.Create(&modC)
+	db.Create(&modD)
+	db.Create(&modX)
+
+	// B, C, D 声明 PROVIDE 实现同一契约，分支各不相同
+	svcB := models.ModuleService{ModuleID: modB.ID, ServiceName: contract.ServiceName, ContractID: &contract.ID, ImplKey: "b"}
+	svcC := models.ModuleService{ModuleID: modC.ID, ServiceName: contract.ServiceName, ContractID: &contract.ID, ImplKey: "c"}
+	svcD := models.ModuleService{ModuleID: modD.ID, ServiceName: contract.ServiceName, ContractID: &contract.ID, ImplKey: "d"}
+	db.Create(&svcB)
+	db.Create(&svcC)
+	db.Create(&svcD)
+
+	// X 声明对 contract 的 DISPATCH 依赖
+	depX := models.ModuleDependency{
+		ConsumerModuleID: modX.ID,
+		ContractID:       &contract.ID,
+		IsExternal:       false,
+		Description:      "动态分发订单处理",
+	}
+	db.Create(&depX)
+
+	// 5. 验证静态拓扑展开与 Downstreams
+	downstreams, err := topology.CompileProcessDownstreams(db, procX.ID, []uint64{procX.ID}, nil)
+	if err != nil {
+		t.Fatalf("CompileProcessDownstreams 失败: %v", err)
+	}
+	// 应包含 B, C, D 3 个下游端点
+	if len(downstreams) != 3 {
+		t.Fatalf("CompileProcessDownstreams 展开数量期望 3，实际: %d (%+v)", len(downstreams), downstreams)
+	}
+	for _, ds := range downstreams {
+		if ds.DstTag == "" {
+			t.Errorf("下游端点未填充 DstTag: %+v", ds)
+		}
+	}
+
+	// 6. 构造录制会话与流量（含 endpoint_snapshots 快照）
+	endpointSnapshots := map[string]interface{}{
+		"10.0.0.2:9002": map[string]interface{}{
+			"module_id":         modB.ID,
+			"arch_process_id":   archProcB.ID,
+			"arch_process_code": "PROC_B",
+			"service_name":      contract.ServiceName,
+		},
+		"10.0.0.3:9003": map[string]interface{}{
+			"module_id":         modC.ID,
+			"arch_process_id":   archProcC.ID,
+			"arch_process_code": "PROC_C",
+			"service_name":      contract.ServiceName,
+		},
+	}
+	snapBytes, _ := json.Marshal(endpointSnapshots)
+
+	targetPIDs, _ := json.Marshal([]uint64{procX.ID, procB.ID, procC.ID, procD.ID})
+	session := models.RecordingSession{
+		SessionNo:         "SESS_SC12",
+		Name:              "SC12_MultiImplRecording",
+		OwnerID:           admin.ID,
+		LeasedAgentIDs:    datatypes.JSON(fmt.Sprintf("[%d]", agent.ID)),
+		TargetProcessIDs:  datatypes.JSON(targetPIDs),
+		Status:            models.SessionStatusCompleted,
+		EndpointSnapshots: datatypes.JSON(snapBytes),
+	}
+	if err := db.Create(&session).Error; err != nil {
+		t.Fatalf("创建录制会话失败: %v", err)
+	}
+
+	// 注入 3 条流量：
+	// ① X -> B (10.0.0.2:9002): EGRESS，返回 from_B
+	reqPayload1 := []byte(`{"order_id":"ORD_001","type":"b"}`)
+	rspPayloadB := []byte(`{"code":0,"msg":"success_from_B"}`)
+	rawReq1 := buildTestCrosReqFrame(1001, crosrpc.ReqTypeSync, contract.ServiceName, "Process", reqPayload1)
+	rawRspB := buildTestCrosRspFrame(1001, crosrpc.MsgTypeRsp, 1, 0, contract.ServiceName, "Process", rspPayloadB)
+	rec1 := models.TrafficRecord{
+		SessionID:       session.ID,
+		AgentID:         agent.ID,
+		ProcessID:       procX.ID,
+		Direction:       "EGRESS",
+		SrcAddr:         "10.0.0.1:45000",
+		DstAddr:         "10.0.0.2:9002",
+		ConnKey:         "10.0.0.1:45000-10.0.0.2:9002",
+		ReqCapturedAtNs: time.Now().UnixNano(),
+		SrcModuleID:     &modX.ID,
+		DstModuleID:     &modB.ID,
+		DstContractID:   &contract.ID,
+		ServiceName:     contract.ServiceName,
+		Operation:       "Process",
+		RawReqPacket:    rawReq1,
+		RawRspPacket:    rawRspB,
+		PayloadJSON:     datatypes.JSON(`{"req":{"order_id":"ORD_001"},"rsp":{"code":0}}`),
+		ExchangeType:    "UNARY",
+		SNO:             models.U64Numeric(1001),
+	}
+	db.Create(&rec1)
+
+	// ② X -> C (10.0.0.3:9003): EGRESS，返回 from_C
+	reqPayload2 := []byte(`{"order_id":"ORD_002","type":"c"}`)
+	rspPayloadC := []byte(`{"code":0,"msg":"success_from_C"}`)
+	rawReq2 := buildTestCrosReqFrame(1002, crosrpc.ReqTypeSync, contract.ServiceName, "Process", reqPayload2)
+	rawRspC := buildTestCrosRspFrame(1002, crosrpc.MsgTypeRsp, 1, 0, contract.ServiceName, "Process", rspPayloadC)
+	rec2 := models.TrafficRecord{
+		SessionID:       session.ID,
+		AgentID:         agent.ID,
+		ProcessID:       procX.ID,
+		Direction:       "EGRESS",
+		SrcAddr:         "10.0.0.1:45001",
+		DstAddr:         "10.0.0.3:9003",
+		ConnKey:         "10.0.0.1:45001-10.0.0.3:9003",
+		ReqCapturedAtNs: time.Now().UnixNano(),
+		SrcModuleID:     &modX.ID,
+		DstModuleID:     &modC.ID,
+		DstContractID:   &contract.ID,
+		ServiceName:     contract.ServiceName,
+		Operation:       "Process",
+		RawReqPacket:    rawReq2,
+		RawRspPacket:    rawRspC,
+		PayloadJSON:     datatypes.JSON(`{"req":{"order_id":"ORD_002"},"rsp":{"code":0}}`),
+		ExchangeType:    "UNARY",
+		SNO:             models.U64Numeric(1002),
+	}
+	db.Create(&rec2)
+
+	// ③ X -> 未知下游 (10.0.0.99:9099): EGRESS，未解析到具体模块
+	reqPayload3 := []byte(`{"order_id":"ORD_999","type":"unknown"}`)
+	rspPayloadUnknown := []byte(`{"code":500,"msg":"unresolved"}`)
+	rawReq3 := buildTestCrosReqFrame(1003, crosrpc.ReqTypeSync, contract.ServiceName, "Process", reqPayload3)
+	rawRspUnknown := buildTestCrosRspFrame(1003, crosrpc.MsgTypeRsp, 1, 0, contract.ServiceName, "Process", rspPayloadUnknown)
+	rec3 := models.TrafficRecord{
+		SessionID:       session.ID,
+		AgentID:         agent.ID,
+		ProcessID:       procX.ID,
+		Direction:       "EGRESS",
+		SrcAddr:         "10.0.0.1:45002",
+		DstAddr:         "10.0.0.99:9099",
+		ConnKey:         "10.0.0.1:45002-10.0.0.99:9099",
+		ReqCapturedAtNs: time.Now().UnixNano(),
+		SrcModuleID:     &modX.ID,
+		DstContractID:   &contract.ID,
+		ServiceName:     contract.ServiceName,
+		Operation:       "Process",
+		RawReqPacket:    rawReq3,
+		RawRspPacket:    rawRspUnknown,
+		PayloadJSON:     datatypes.JSON(`{"req":{"order_id":"ORD_999"},"rsp":{"code":500}}`),
+		ExchangeType:    "UNARY",
+		SNO:             models.U64Numeric(1003),
+	}
+	db.Create(&rec3)
+
+	// 7. 验证一致性比对 API (GET /api/recording-sessions/:id/consistency-report)
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/recording-sessions/%d/consistency-report?refresh=true", session.ID), nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("consistency-report 期望 200，实际: %d %s", w.Code, w.Body.String())
+	}
+
+	var reportResp struct {
+		Edges []struct {
+			SrcModuleID *uint64                     `json:"src_module_id"`
+			DstModuleID *uint64                     `json:"dst_module_id"`
+			Status      topology.VerificationStatus `json:"status"`
+			ServiceName string                      `json:"service_name"`
+			Category    topology.VerificationStatus `json:"category"`
+		} `json:"edges"`
+		Stats map[string]int `json:"stats"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &reportResp); err != nil {
+		t.Fatalf("反序列化一致性报告失败: %v", err)
+	}
+
+	// 断言 X -> B: VERIFIED; X -> C: VERIFIED; X -> D: UNCOVERED; 未知: IMPL_UNRESOLVED
+	var verifiedB, verifiedC, uncoveredD, implUnres bool
+	for _, edge := range reportResp.Edges {
+		st := edge.Status
+		if st == "" {
+			st = edge.Category
+		}
+		if edge.DstModuleID != nil && *edge.DstModuleID == modB.ID && st == topology.StatusVerified {
+			verifiedB = true
+		}
+		if edge.DstModuleID != nil && *edge.DstModuleID == modC.ID && st == topology.StatusVerified {
+			verifiedC = true
+		}
+		if edge.DstModuleID != nil && *edge.DstModuleID == modD.ID && st == topology.StatusUncovered {
+			uncoveredD = true
+		}
+		if st == topology.StatusImplUnresolved {
+			implUnres = true
+		}
+	}
+
+	if !verifiedB {
+		t.Errorf("未找到 X -> B (VERIFIED) 边")
+	}
+	if !verifiedC {
+		t.Errorf("未找到 X -> C (VERIFIED) 边")
+	}
+	if !uncoveredD {
+		t.Errorf("未找到 X -> D (UNCOVERED) 边")
+	}
+	if !implUnres {
+		t.Errorf("未找到未知对端 IMPL_UNRESOLVED 边")
+	}
+
+	// 8. Agent ScopedMockMatcher DstTag 隔离重放验证
+	matcher := replay.NewScopedMockMatcher()
+	matcher.SetEndpointTags(map[string]string{
+		"10.0.0.2:9002": "PROC_B",
+		"10.0.0.3:9003": "PROC_C",
+	})
+	_ = matcher.RegisterScopedDownstreamRule(rec1.ID, agentproto.MockRuleDownstream{
+		ReqPacket:  rawReq1,
+		RspPackets: [][]byte{rawRspB},
+		DstTag:     "PROC_B",
+	})
+	_ = matcher.RegisterScopedDownstreamRule(rec1.ID, agentproto.MockRuleDownstream{
+		ReqPacket:  rawReq2,
+		RspPackets: [][]byte{rawRspC},
+		DstTag:     "PROC_C",
+	})
+	matcher.SetActiveRecordID(rec1.ID)
+
+	// 测试请求发送给 10.0.0.2:9002 (B's endpoint)
+	resB, err := matcher.MatchAndHealWithDst(rawReq1, "10.0.0.2:9002")
+	if err != nil {
+		t.Fatalf("10.0.0.2:9002 MatchAndHealWithDst 失败: %v", err)
+	}
+	if resB.Result != replay.MatchHitScoped {
+		t.Fatalf("10.0.0.2:9002 期望匹配成功 (MatchHitScoped)，实际: %v", resB.Result)
+	}
+	if len(resB.ResponseFrames) == 0 || !bytes.Contains(resB.ResponseFrames[0], []byte("success_from_B")) {
+		t.Fatalf("10.0.0.2:9002 匹配响应期望包含 success_from_B，实际不匹配")
+	}
+
+	// 测试请求发送给 10.0.0.3:9003 (C's endpoint)
+	resC, err := matcher.MatchAndHealWithDst(rawReq2, "10.0.0.3:9003")
+	if err != nil {
+		t.Fatalf("10.0.0.3:9003 MatchAndHealWithDst 失败: %v", err)
+	}
+	if resC.Result != replay.MatchHitScoped {
+		t.Fatalf("10.0.0.3:9003 期望匹配成功 (MatchHitScoped)，实际: %v", resC.Result)
+	}
+	if len(resC.ResponseFrames) == 0 || !bytes.Contains(resC.ResponseFrames[0], []byte("success_from_C")) {
+		t.Fatalf("10.0.0.3:9003 匹配响应期望包含 success_from_C，实际不匹配")
+	}
+
+	// 测试未知下游 10.0.0.99:9099 必须 MISS (重放零外泄红线)
+	resUnknown, err := matcher.MatchAndHealWithDst(rawReq3, "10.0.0.99:9099")
+	if err != nil {
+		t.Fatalf("10.0.0.99:9099 匹配异常: %v", err)
+	}
+	if resUnknown.Result != replay.MatchMiss {
+		t.Fatalf("10.0.0.99:9099 未知端点期望 MatchMiss，实际为 %v (违反重放隔离红线)", resUnknown.Result)
+	}
+
+	t.Logf("SC-12 多实现服务契约端到端全链路闭环验证通过！")
 }

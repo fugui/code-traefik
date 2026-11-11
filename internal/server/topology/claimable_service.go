@@ -27,6 +27,9 @@ type ClaimableProtoServiceDTO struct {
 	Operations      []string          `json:"operations"`
 	IsClaimed       bool              `json:"is_claimed"`
 	ClaimedByModule *ClaimedModuleDTO `json:"claimed_by_module"`
+	IsMultiImpl     bool              `json:"is_multi_impl"`
+	ContractID      *uint64           `json:"contract_id,omitempty"`
+	ImplKeyLabel    string            `json:"impl_key_label,omitempty"`
 }
 
 // ListClaimableProtoServices 从已激活的 ProtoOperation 中聚合服务并关联已认领的 FM 信息
@@ -75,6 +78,14 @@ func ListClaimableProtoServices(db *gorm.DB) ([]ClaimableProtoServiceDTO, error)
 	claimedMap := make(map[string]*models.Module)
 	for _, ms := range modSvcs {
 		claimedMap[ms.ServiceName] = ms.Module
+	}
+
+	// 3.1 查询当前已登记的多实现契约表 (ADR-16, M20)
+	var contracts []models.ServiceContract
+	_ = db.Find(&contracts).Error
+	contractMap := make(map[string]*models.ServiceContract)
+	for i := range contracts {
+		contractMap[contracts[i].ServiceName] = &contracts[i]
 	}
 
 	// 4. 按 service_name 聚合与去重
@@ -128,6 +139,17 @@ func ListClaimableProtoServices(db *gorm.DB) ([]ClaimableProtoServiceDTO, error)
 			agg.dto.IsClaimed = false
 			agg.dto.ClaimedByModule = nil
 		}
+
+		if c, ok := contractMap[svcName]; ok && c != nil {
+			agg.dto.IsMultiImpl = true
+			agg.dto.ContractID = &c.ID
+			agg.dto.ImplKeyLabel = c.ImplKeyLabel
+		} else {
+			agg.dto.IsMultiImpl = false
+			agg.dto.ContractID = nil
+			agg.dto.ImplKeyLabel = ""
+		}
+
 		items = append(items, agg.dto)
 	}
 

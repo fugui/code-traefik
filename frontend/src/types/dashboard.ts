@@ -36,6 +36,8 @@ export interface ContractAssetsDTO {
   claimed_services: number;
   orphan_services: number;
   claimed_ratio: number;
+  multi_impl_contract_count?: number;
+  multi_impl_service_count?: number;
   top_orphan_services: OrphanServiceSummary[];
 }
 

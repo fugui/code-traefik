@@ -117,10 +117,11 @@ export function aggregateRollup(
     } else {
       const sIdx = nodeIdxMap.get(sRep)!;
       const tIdx = nodeIdxMap.get(tRep)!;
-      const rollupKeyNum = sIdx * 65536 + tIdx;
-      const status = edgeStatusMap?.get(edge.id);
-      const calls = edgeCallCountMap?.get(edge.id) || 0;
-      const sampleId = edgeSampleRecordMap?.get(edge.id);
+      const isRealization = edge.kind === 'REALIZATION';
+      const rollupKeyNum = isRealization ? -(sIdx * 65536 + tIdx) : sIdx * 65536 + tIdx;
+      const status = isRealization ? undefined : edgeStatusMap?.get(edge.id);
+      const calls = isRealization ? 0 : edgeCallCountMap?.get(edge.id) || 0;
+      const sampleId = isRealization ? undefined : edgeSampleRecordMap?.get(edge.id);
 
       const existing = rollupEdgeMap.get(rollupKeyNum);
       if (!existing) {
@@ -130,7 +131,7 @@ export function aggregateRollup(
         }
         rollupServiceSetMap.set(rollupKeyNum, svcSet);
         rollupEdgeMap.set(rollupKeyNum, {
-          id: `rollup_${sRep}_${tRep}`,
+          id: `rollup_${isRealization ? 'realization_' : ''}${sRep}_${tRep}`,
           source: sRep,
           target: tRep,
           kind: edge.kind,
@@ -142,10 +143,12 @@ export function aggregateRollup(
         });
       } else {
         existing.rawEdges.push(edge);
-        existing.status = mergeStatus(existing.status, status);
-        existing.totalCalls = (existing.totalCalls || 0) + calls;
-        if (!existing.sampleTrafficRecordId && sampleId) {
-          existing.sampleTrafficRecordId = sampleId;
+        if (!isRealization) {
+          existing.status = mergeStatus(existing.status, status);
+          existing.totalCalls = (existing.totalCalls || 0) + calls;
+          if (!existing.sampleTrafficRecordId && sampleId) {
+            existing.sampleTrafficRecordId = sampleId;
+          }
         }
 
         const svcSet = rollupServiceSetMap.get(rollupKeyNum)!;

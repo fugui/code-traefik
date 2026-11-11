@@ -16,6 +16,8 @@ import type {
   ArchProcess,
   ArchProcessDetailDTO,
   AutoPinnedOverride,
+  ServiceContract,
+  ModuleKind,
 } from '../types';
 import type {
   TopologyGraphDTO,
@@ -138,6 +140,7 @@ export async function createModule(data: {
   group_id: string;
   code: string;
   name: string;
+  module_kind?: ModuleKind;
   owner_id?: string;
   process_id?: string | null;
   description?: string;
@@ -157,6 +160,7 @@ export async function updateModule(id: string, data: {
   group_id: string;
   code?: string;
   name: string;
+  module_kind?: ModuleKind;
   owner_id?: string;
   process_id?: string | null;
   description?: string;
@@ -192,12 +196,17 @@ export async function listModuleServices(moduleId: string) {
 
 export async function createModuleService(moduleId: string, data: {
   service_name: string;
+  contract_id?: string | number | null;
+  impl_key?: string | null;
   diff_ignore_paths?: string[];
   description?: string;
 }) {
   return apiRequest<ModuleService>(`/arch/modules/${moduleId}/services`, {
     method: 'POST',
-    body: JSON.stringify(data),
+    body: JSON.stringify({
+      ...data,
+      contract_id: data.contract_id ? Number(data.contract_id) : undefined,
+    }),
   });
 }
 
@@ -227,6 +236,7 @@ export async function createModuleDependency(moduleId: string, data: {
   external_system?: string;
   external_service?: string;
   service_id?: string;
+  contract_id?: string | number;
   description?: string;
 }) {
   return apiRequest<ModuleDependency>(`/arch/modules/${moduleId}/dependencies`, {
@@ -234,6 +244,7 @@ export async function createModuleDependency(moduleId: string, data: {
     body: JSON.stringify({
       ...data,
       service_id: data.service_id ? Number(data.service_id) : undefined,
+      contract_id: data.contract_id ? Number(data.contract_id) : undefined,
     }),
   });
 }
@@ -242,6 +253,78 @@ export async function deleteModuleDependency(depId: string) {
   return apiRequest<{ message: string }>(`/arch/module-dependencies/${depId}`, {
     method: 'DELETE',
   });
+}
+
+// --- Service Contracts (CONTRACT_LIB) ---
+export async function listServiceContracts(params?: {
+  definer_module_id?: string | number;
+  search?: string;
+  page?: number;
+  page_size?: number;
+}) {
+  const query = new URLSearchParams();
+  if (params?.definer_module_id) query.set('definer_module_id', String(params.definer_module_id));
+  if (params?.search) query.set('search', params.search);
+  if (params?.page) query.set('page', String(params.page));
+  if (params?.page_size) query.set('page_size', String(params.page_size));
+  const qs = query.toString();
+  return apiRequest<PaginatedResponse<ServiceContract>>(`/arch/service-contracts${qs ? `?${qs}` : ''}`);
+}
+
+export async function getServiceContract(id: string | number) {
+  return apiRequest<ServiceContract>(`/arch/service-contracts/${id}`);
+}
+
+export async function createServiceContract(data: {
+  definer_module_id: string | number;
+  service_name: string;
+  impl_key_label?: string;
+  description?: string;
+}) {
+  return apiRequest<ServiceContract>('/arch/service-contracts', {
+    method: 'POST',
+    body: JSON.stringify({
+      ...data,
+      definer_module_id: Number(data.definer_module_id),
+    }),
+  });
+}
+
+export async function updateServiceContract(id: string | number, data: {
+  impl_key_label?: string;
+  description?: string;
+}) {
+  return apiRequest<ServiceContract>(`/arch/service-contracts/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteServiceContract(id: string | number) {
+  return apiRequest<{ message: string }>(`/arch/service-contracts/${id}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function convertExclusiveToMultiImplContract(data: {
+  service_id: string | number;
+  target_definer_module_id: string | number;
+  impl_key: string;
+  impl_key_label?: string;
+  description?: string;
+  switch_dependencies_to_dispatch?: boolean;
+}) {
+  return apiRequest<{ contract: ServiceContract; updated_dependencies_count: number }>(
+    '/arch/service-contracts/convert',
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        ...data,
+        service_id: Number(data.service_id),
+        target_definer_module_id: Number(data.target_definer_module_id),
+      }),
+    }
+  );
 }
 
 export async function listAvailableServices(excludeModuleId?: string) {

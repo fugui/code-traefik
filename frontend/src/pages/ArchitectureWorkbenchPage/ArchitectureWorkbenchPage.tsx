@@ -85,12 +85,20 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
 
   const [moduleDrawerOpen, setModuleDrawerOpen] = useState(false);
   const [editingMod, setEditingMod] = useState<Module | null>(null);
-  const [moduleForm, setModuleForm] = useState({
+  const [moduleForm, setModuleForm] = useState<{
+    code: string;
+    name: string;
+    description: string;
+    process_id: string;
+    group_id: string;
+    module_kind: 'BUSINESS' | 'CONTRACT_LIB';
+  }>({
     code: '',
     name: '',
     description: '',
     process_id: '',
     group_id: '',
+    module_kind: 'BUSINESS',
   });
   // 视图模式: 逻辑架构 vs 物理进程 (URL 参数 ?tree=logical|physical)
   const initialTree = searchParams.get('tree') === 'physical' ? 'physical' : 'logical';
@@ -705,12 +713,13 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
       return;
     }
     try {
-      const procId = moduleForm.process_id ? moduleForm.process_id : null;
+      const procId = moduleForm.module_kind === 'CONTRACT_LIB' ? null : moduleForm.process_id ? moduleForm.process_id : null;
       if (editingMod) {
         await archApi.updateModule(editingMod.id, {
           group_id: targetGroupId,
           code: moduleForm.code,
           name: moduleForm.name,
+          module_kind: moduleForm.module_kind,
           description: moduleForm.description,
           process_id: procId,
         });
@@ -720,6 +729,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
           group_id: targetGroupId,
           code: moduleForm.code,
           name: moduleForm.name,
+          module_kind: moduleForm.module_kind,
           description: moduleForm.description,
           process_id: procId,
         });
@@ -764,6 +774,8 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
   // Service 供给与依赖处理函数
   const handleCreateService = async (data: {
     service_name: string;
+    contract_id?: string | number | null;
+    impl_key?: string | null;
     diff_ignore_paths?: string[];
     description?: string;
   }) => {
@@ -807,6 +819,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
     external_system?: string;
     external_service?: string;
     service_id?: string;
+    contract_id?: string | number;
     description?: string;
   }) => {
     if (!selectedModuleId) return;
@@ -1057,7 +1070,14 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
               onSelectModuleLeaf={handleSelectModuleLeaf}
               onCreateModule={(groupId) => {
                 setEditingMod(null);
-                setModuleForm({ code: '', name: '', description: '', process_id: '', group_id: groupId });
+                setModuleForm({
+                  code: '',
+                  name: '',
+                  description: '',
+                  process_id: '',
+                  group_id: groupId,
+                  module_kind: 'BUSINESS',
+                });
                 setModuleDrawerOpen(true);
               }}
               onEditModule={(mod) => {
@@ -1068,6 +1088,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
                   description: mod.description || '',
                   process_id: mod.process_id || (mod.process?.id ?? ''),
                   group_id: mod.group_id,
+                  module_kind: mod.module_kind || 'BUSINESS',
                 });
                 setModuleDrawerOpen(true);
               }}
@@ -1158,6 +1179,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
                     description: '',
                     process_id: '',
                     group_id: selectedGroupId,
+                    module_kind: 'BUSINESS',
                   });
                   setModuleDrawerOpen(true);
                 }}
@@ -1169,6 +1191,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
                     description: mod.description || '',
                     process_id: mod.process_id || (mod.process?.id ?? ''),
                     group_id: mod.group_id,
+                    module_kind: mod.module_kind || 'BUSINESS',
                   });
                   setModuleDrawerOpen(true);
                 }}
@@ -1417,6 +1440,32 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
       >
         <div className="code-form">
           <div className="code-form-item">
+            <label className="code-form-label">模块类型 (Module Kind):</label>
+            <div className="code-segmented" data-testid="module-kind-segmented">
+              <button
+                type="button"
+                className={`code-segmented-item ${moduleForm.module_kind !== 'CONTRACT_LIB' ? 'code-segmented-item--active' : ''}`}
+                onClick={() => setModuleForm({ ...moduleForm, module_kind: 'BUSINESS' })}
+                data-testid="module-kind-business"
+              >
+                业务功能模块 (BUSINESS)
+              </button>
+              <button
+                type="button"
+                className={`code-segmented-item ${moduleForm.module_kind === 'CONTRACT_LIB' ? 'code-segmented-item--active' : ''}`}
+                onClick={() => setModuleForm({ ...moduleForm, module_kind: 'CONTRACT_LIB', process_id: '' })}
+                data-testid="module-kind-contract-lib"
+              >
+                接口契约库 (CONTRACT_LIB)
+              </button>
+            </div>
+            {moduleForm.module_kind === 'CONTRACT_LIB' && (
+              <span className="code-form-tip" style={{ color: 'var(--color-info)', marginTop: 4, display: 'block' }}>
+                接口契约库仅用于定义可供多模块实现的共享 .pb 契约，不绑定物理宿主进程。
+              </span>
+            )}
+          </div>
+          <div className="code-form-item">
             <label className="code-form-label">模块全局唯一编码 (code):</label>
             <input
               type="text"
@@ -1437,25 +1486,27 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
               placeholder="如 账户余额服务模块"
             />
           </div>
-          <div className="code-form-item">
-            <label className="code-form-label">宿主业务进程 (Process):</label>
-            <select
-              className="code-select"
-              value={moduleForm.process_id}
-              onChange={(e) => setModuleForm({ ...moduleForm, process_id: e.target.value })}
-            >
-              <option value="">-- 暂不绑定宿主进程 (稍后在 Agent 中心绑定) --</option>
-              {Object.entries(processGroupsMap).map(([groupName, procs]) => (
-                <optgroup key={groupName} label={`【${groupName}】`}>
-                  {procs.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name} {p.listen_port > 0 ? `(Port: ${p.listen_port})` : '(纯客户端)'}
-                    </option>
-                  ))}
-                </optgroup>
-              ))}
-            </select>
-          </div>
+          {moduleForm.module_kind !== 'CONTRACT_LIB' && (
+            <div className="code-form-item">
+              <label className="code-form-label">宿主业务进程 (Process):</label>
+              <select
+                className="code-select"
+                value={moduleForm.process_id}
+                onChange={(e) => setModuleForm({ ...moduleForm, process_id: e.target.value })}
+              >
+                <option value="">-- 暂不绑定宿主进程 (稍后在 Agent 中心绑定) --</option>
+                {Object.entries(processGroupsMap).map(([groupName, procs]) => (
+                  <optgroup key={groupName} label={`【${groupName}】`}>
+                    {procs.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name} {p.listen_port > 0 ? `(Port: ${p.listen_port})` : '(纯客户端)'}
+                      </option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
+            </div>
+          )}
           <div className="code-form-item">
             <label className="code-form-label">描述说明:</label>
             <textarea

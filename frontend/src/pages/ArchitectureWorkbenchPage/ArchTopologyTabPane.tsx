@@ -152,6 +152,8 @@ export interface ParsedTopoUrlState {
   consistencyOnly: boolean;
   hideIsolated: boolean;
   layoutId: number | null;
+  showRealization: boolean;
+  contractMode: 'AGG' | 'EXPAND';
 }
 
 export function parseTopoUrlParams(searchParams: URLSearchParams): ParsedTopoUrlState {
@@ -167,6 +169,10 @@ export function parseTopoUrlParams(searchParams: URLSearchParams): ParsedTopoUrl
   const hideIsolated = searchParams.get('topo_hide_isolated') === 'true';
   const rawLayout = searchParams.get('topo_layout_id');
   const layoutId = rawLayout && !Number.isNaN(Number(rawLayout)) ? Number(rawLayout) : null;
+  const rawRealization = searchParams.get('topo_realization');
+  const showRealization = rawRealization !== '0';
+  const rawContractMode = searchParams.get('topo_contract_mode');
+  const contractMode: 'AGG' | 'EXPAND' = rawContractMode === 'EXPAND' ? 'EXPAND' : 'AGG';
 
   return {
     focusScope,
@@ -176,6 +182,8 @@ export function parseTopoUrlParams(searchParams: URLSearchParams): ParsedTopoUrl
     consistencyOnly,
     hideIsolated,
     layoutId,
+    showRealization,
+    contractMode,
   };
 }
 
@@ -203,6 +211,12 @@ export function buildTopoUrlParams(
   }
   if (state.layoutId !== undefined) {
     out.topo_layout_id = state.layoutId != null ? String(state.layoutId) : null;
+  }
+  if (state.showRealization !== undefined) {
+    out.topo_realization = state.showRealization ? null : '0';
+  }
+  if (state.contractMode !== undefined) {
+    out.topo_contract_mode = state.contractMode === 'EXPAND' ? 'EXPAND' : null;
   }
   return out;
 }
@@ -254,6 +268,8 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
   const [consistencyOnly, setConsistencyOnly] = useState<boolean>(initialUrlState.consistencyOnly);
   const [hideIsolated, setHideIsolated] = useState<boolean>(initialUrlState.hideIsolated);
   const [foldHubEdges, setFoldHubEdges] = useState<boolean>(true);
+  const [showRealization, setShowRealization] = useState<boolean>(initialUrlState.showRealization);
+  const [contractMode, setContractMode] = useState<'AGG' | 'EXPAND'>(initialUrlState.contractMode);
   const [expandedHubNodeIds, setExpandedHubNodeIds] = useState<Set<string>>(new Set());
 
   // M19 混合布局位置记忆与双层持久化状态
@@ -346,6 +362,8 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
     setConsistencyOnly((curr) => (curr !== parsed.consistencyOnly ? parsed.consistencyOnly : curr));
     setHideIsolated((curr) => (curr !== parsed.hideIsolated ? parsed.hideIsolated : curr));
     setActiveLayoutId((curr) => (curr !== parsed.layoutId ? parsed.layoutId : curr));
+    setShowRealization((curr) => (curr !== parsed.showRealization ? parsed.showRealization : curr));
+    setContractMode((curr) => (curr !== parsed.contractMode ? parsed.contractMode : curr));
   }, [searchParams, initialView, initialSessionId]);
 
   // 统一可见规模守卫唯一入口 applyVisibilityChange()
@@ -1251,6 +1269,16 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
         }}
         foldHubEdges={foldHubEdges}
         onToggleFoldHubEdges={setFoldHubEdges}
+        showRealization={showRealization}
+        onToggleShowRealization={(show) => {
+          setShowRealization(show);
+          updateUrlParams(buildTopoUrlParams({ showRealization: show }));
+        }}
+        contractMode={contractMode}
+        onContractModeChange={(mode) => {
+          setContractMode(mode);
+          updateUrlParams(buildTopoUrlParams({ contractMode: mode }));
+        }}
         hasUnsavedDraft={hasUnsavedDraft}
         bookmarkQuotaText={
           layoutList?.quota ? `${layoutList.quota.used}/${layoutList.quota.limit}` : undefined
@@ -1357,6 +1385,8 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
           ownerId={ownerId}
           consistencyOnly={consistencyOnly}
           hideIsolated={hideIsolated}
+          showRealization={showRealization}
+          contractMode={contractMode}
           foldHubEdgesEnabled={foldHubEdges}
           expandedHubNodeIds={expandedHubNodeIds}
           onExpandHub={handleExpandHub}

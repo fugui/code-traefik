@@ -27,6 +27,8 @@ const (
 	NodeTypeUndeployedContainer   GraphNodeType = "UNDEPLOYED_CONTAINER"
 	NodeTypeExternalEndpoint      GraphNodeType = "EXTERNAL_ENDPOINT"
 	NodeTypeUnregisteredInterface GraphNodeType = "UNREGISTERED_INTERFACE" // 前端一致性叠加态按需动态注入
+
+	EdgeKindRealization = "REALIZATION"
 )
 
 // GraphNode 复合图节点传输对象
@@ -46,6 +48,8 @@ type GraphNode struct {
 // EdgeServiceItem 底层服务契约明细
 type EdgeServiceItem struct {
 	ServiceID    *uint64 `json:"service_id,omitempty"`
+	ContractID   *uint64 `json:"contract_id,omitempty"`
+	ImplKey      string  `json:"impl_key,omitempty"`
 	ServiceName  string  `json:"service_name"`
 	DependencyID uint64  `json:"dependency_id,omitempty"`
 	Description  string  `json:"description,omitempty"`
@@ -53,16 +57,19 @@ type EdgeServiceItem struct {
 
 // GraphEdge 原子叶子依赖边传输对象
 type GraphEdge struct {
-	ID             string            `json:"id"`                      // 如 "edge_mod_101_mod_102" 或 "edge_mod_101_ext_sys_WeChatPay"
-	Kind           string            `json:"kind"`                    // CROSS_PROCESS | INTRA_PROCESS | EXTERNAL_UNREGISTERED | UNDEPLOYED
-	SourceNodeID   string            `json:"source_node_id"`          // 源叶子节点 ID ("mod_101" 或 "proc_7")
-	TargetNodeID   string            `json:"target_node_id"`          // 目标叶子节点 ID ("mod_102" / "ext_sys_WeChatPay" / "ext_ep_10.0.0.8:3306")
-	SrcModuleID    uint64            `json:"src_module_id,omitempty"` // 关联源功能模块 ID
-	DstModuleID    *uint64           `json:"dst_module_id,omitempty"` // 关联目标功能模块 ID (外部为 nil)
-	SrcProcessID   *uint64           `json:"src_process_id,omitempty"`
-	DstProcessID   *uint64           `json:"dst_process_id,omitempty"`
-	Services       []EdgeServiceItem `json:"services"` // 聚合的底层服务调用清单
-	ExternalSystem string            `json:"external_system,omitempty"`
+	ID              string            `json:"id"`                      // 如 "edge_mod_101_mod_102" 或 "edge_mod_101_ext_sys_WeChatPay"
+	Kind            string            `json:"kind"`                    // CROSS_PROCESS | INTRA_PROCESS | EXTERNAL_UNREGISTERED | UNDEPLOYED | REALIZATION
+	SourceNodeID    string            `json:"source_node_id"`          // 源叶子节点 ID ("mod_101" 或 "proc_7")
+	TargetNodeID    string            `json:"target_node_id"`          // 目标叶子节点 ID ("mod_102" / "ext_sys_WeChatPay" / "ext_ep_10.0.0.8:3306")
+	SrcModuleID     uint64            `json:"src_module_id,omitempty"` // 关联源功能模块 ID
+	DstModuleID     *uint64           `json:"dst_module_id,omitempty"` // 关联目标功能模块 ID (外部为 nil)
+	SrcProcessID    *uint64           `json:"src_process_id,omitempty"`
+	DstProcessID    *uint64           `json:"dst_process_id,omitempty"`
+	ContractID      *uint64           `json:"contract_id,omitempty"`
+	ImplKey         string            `json:"impl_key,omitempty"`
+	DefinerModuleID *uint64           `json:"definer_module_id,omitempty"`
+	Services        []EdgeServiceItem `json:"services"` // 聚合的底层服务调用清单
+	ExternalSystem  string            `json:"external_system,omitempty"`
 }
 
 // TopologyGraphDTO 全量架构拓扑图响应载荷
@@ -199,6 +206,17 @@ func buildLogicalTopologyGraph(db *gorm.DB, dto *TopologyGraphDTO) error {
 	if err := db.Find(&services).Error; err != nil {
 		return err
 	}
+
+	var contracts []models.ServiceContract
+	_ = db.Find(&contracts).Error
+	contractMap := make(map[uint64]models.ServiceContract, len(contracts))
+	contractCountMap := make(map[uint64]int)
+	implCountMap := make(map[uint64]int)
+	for _, c := range contracts {
+		contractMap[c.ID] = c
+		contractCountMap[c.DefinerModuleID]++
+	}
+
 	svcProvideMap := make(map[uint64]uint64) // serviceID -> moduleID
 	svcNameMap := make(map[uint64]string)    // serviceID -> serviceName
 	provideCountMap := make(map[uint64]int)  // moduleID -> count
@@ -206,10 +224,15 @@ func buildLogicalTopologyGraph(db *gorm.DB, dto *TopologyGraphDTO) error {
 		svcProvideMap[svc.ID] = svc.ModuleID
 		svcNameMap[svc.ID] = svc.ServiceName
 		provideCountMap[svc.ModuleID]++
+		if svc.ContractID != nil && *svc.ContractID > 0 {
+			if c, ok := contractMap[*svc.ContractID]; ok {
+				implCountMap[c.DefinerModuleID]++
+			}
+		}
 	}
 
 	var dependencies []models.ModuleDependency
-	if err := db.Preload("Service").Find(&dependencies).Error; err != nil {
+	if err := db.Preload("Service").Preload("Contract").Find(&dependencies).Error; err != nil {
 		return err
 	}
 
@@ -309,10 +332,15 @@ func buildLogicalTopologyGraph(db *gorm.DB, dto *TopologyGraphDTO) error {
 		isDeployed := m.ArchProcessID != nil && *m.ArchProcessID > 0
 		meta := map[string]any{
 			"is_deployed":   isDeployed,
+			"module_kind":   m.ModuleKind,
 			"provide_count": provideCountMap[m.ID],
 			"description":   m.Description,
 			"subsystem_id":  m.SubsystemID,
 			"group_id":      m.GroupID,
+		}
+		if m.ModuleKind == models.ModuleKindContractLib {
+			meta["contract_count"] = contractCountMap[m.ID]
+			meta["impl_count"] = implCountMap[m.ID]
 		}
 		if isDeployed {
 			meta["arch_process_id"] = *m.ArchProcessID
@@ -373,12 +401,49 @@ func buildLogicalTopologyGraph(db *gorm.DB, dto *TopologyGraphDTO) error {
 		}
 	}
 
-	// 5. 聚合逻辑叶子依赖边
+	// 5. 聚合逻辑叶子依赖边与实现边 (REALIZATION)
 	type edgeKey struct {
-		src string
-		dst string
+		src  string
+		dst  string
+		kind string
 	}
 	edgeMap := make(map[edgeKey]*GraphEdge)
+
+	// 5.1 生成实现边 REALIZATION (实现模块 -> 契约定义库)
+	for _, svc := range services {
+		if svc.ContractID != nil && *svc.ContractID > 0 {
+			if c, ok := contractMap[*svc.ContractID]; ok {
+				srcNodeID := fmt.Sprintf("mod_%d", svc.ModuleID)
+				dstNodeID := fmt.Sprintf("mod_%d", c.DefinerModuleID)
+				key := edgeKey{src: srcNodeID, dst: dstNodeID, kind: EdgeKindRealization}
+				edge, exists := edgeMap[key]
+				cID := c.ID
+				definerID := c.DefinerModuleID
+				if !exists {
+					edge = &GraphEdge{
+						ID:              fmt.Sprintf("edge_realization_%d_%d", svc.ModuleID, c.DefinerModuleID),
+						Kind:            EdgeKindRealization,
+						SourceNodeID:    srcNodeID,
+						TargetNodeID:    dstNodeID,
+						SrcModuleID:     svc.ModuleID,
+						DstModuleID:     &definerID,
+						ContractID:      &cID,
+						DefinerModuleID: &definerID,
+						Services:        make([]EdgeServiceItem, 0),
+					}
+					edgeMap[key] = edge
+				}
+				sID := svc.ID
+				edge.Services = append(edge.Services, EdgeServiceItem{
+					ServiceID:   &sID,
+					ContractID:  &cID,
+					ImplKey:     svc.ImplKey,
+					ServiceName: c.ServiceName,
+					Description: fmt.Sprintf("实现契约 %s (impl_key: %s)", c.ServiceName, svc.ImplKey),
+				})
+			}
+		}
+	}
 
 	for _, dep := range dependencies {
 		srcNodeID := fmt.Sprintf("mod_%d", dep.ConsumerModuleID)
@@ -387,6 +452,9 @@ func buildLogicalTopologyGraph(db *gorm.DB, dto *TopologyGraphDTO) error {
 		var dstModID *uint64
 		var extSys string
 		var srcProcID, dstProcID *uint64
+		var depContractID *uint64
+		var depImplKey string
+		var definerModID *uint64
 
 		srcMod, ok := modMap[dep.ConsumerModuleID]
 		if !ok {
@@ -404,6 +472,18 @@ func buildLogicalTopologyGraph(db *gorm.DB, dto *TopologyGraphDTO) error {
 			dstNodeID = fmt.Sprintf("ext_sys_%s", sysName)
 			kind = EdgeKindExternalUnregistered
 			extSys = sysName
+		} else if dep.ContractID != nil {
+			// DISPATCH 契约依赖 -> 目标为定义库模块
+			c, ok := contractMap[*dep.ContractID]
+			if !ok {
+				continue
+			}
+			dstNodeID = fmt.Sprintf("mod_%d", c.DefinerModuleID)
+			dID := c.DefinerModuleID
+			dstModID = &dID
+			definerModID = &dID
+			depContractID = dep.ContractID
+			kind = EdgeKindCrossProcess
 		} else {
 			if dep.ServiceID == nil {
 				continue
@@ -424,6 +504,15 @@ func buildLogicalTopologyGraph(db *gorm.DB, dto *TopologyGraphDTO) error {
 				dstProcID = dstMod.ArchProcessID
 			}
 
+			if dep.Service != nil && dep.Service.ContractID != nil {
+				depContractID = dep.Service.ContractID
+				depImplKey = dep.Service.ImplKey
+				if c, ok := contractMap[*dep.Service.ContractID]; ok {
+					dID := c.DefinerModuleID
+					definerModID = &dID
+				}
+			}
+
 			if srcProcID != nil && dstProcID != nil && *srcProcID == *dstProcID {
 				kind = EdgeKindIntraProcess
 			} else {
@@ -432,7 +521,11 @@ func buildLogicalTopologyGraph(db *gorm.DB, dto *TopologyGraphDTO) error {
 		}
 
 		svcName := ""
-		if dep.Service != nil && dep.Service.ServiceName != "" {
+		if dep.ContractID != nil {
+			if c, ok := contractMap[*dep.ContractID]; ok {
+				svcName = c.ServiceName
+			}
+		} else if dep.Service != nil && dep.Service.ServiceName != "" {
 			svcName = dep.Service.ServiceName
 		} else if dep.ServiceID != nil {
 			svcName = svcNameMap[*dep.ServiceID]
@@ -444,26 +537,31 @@ func buildLogicalTopologyGraph(db *gorm.DB, dto *TopologyGraphDTO) error {
 			}
 		}
 
-		key := edgeKey{src: srcNodeID, dst: dstNodeID}
+		key := edgeKey{src: srcNodeID, dst: dstNodeID, kind: kind}
 		edge, exists := edgeMap[key]
 		if !exists {
 			edge = &GraphEdge{
-				ID:             fmt.Sprintf("edge_%s_%s", srcNodeID, dstNodeID),
-				Kind:           kind,
-				SourceNodeID:   srcNodeID,
-				TargetNodeID:   dstNodeID,
-				SrcModuleID:    dep.ConsumerModuleID,
-				DstModuleID:    dstModID,
-				SrcProcessID:   srcProcID,
-				DstProcessID:   dstProcID,
-				Services:       make([]EdgeServiceItem, 0),
-				ExternalSystem: extSys,
+				ID:              fmt.Sprintf("edge_%s_%s", srcNodeID, dstNodeID),
+				Kind:            kind,
+				SourceNodeID:    srcNodeID,
+				TargetNodeID:    dstNodeID,
+				SrcModuleID:     dep.ConsumerModuleID,
+				DstModuleID:     dstModID,
+				SrcProcessID:    srcProcID,
+				DstProcessID:    dstProcID,
+				ContractID:      depContractID,
+				ImplKey:         depImplKey,
+				DefinerModuleID: definerModID,
+				Services:        make([]EdgeServiceItem, 0),
+				ExternalSystem:  extSys,
 			}
 			edgeMap[key] = edge
 		}
 
 		edge.Services = append(edge.Services, EdgeServiceItem{
 			ServiceID:    dep.ServiceID,
+			ContractID:   depContractID,
+			ImplKey:      depImplKey,
 			ServiceName:  svcName,
 			DependencyID: dep.ID,
 			Description:  dep.Description,
@@ -740,6 +838,9 @@ func buildPhysicalTopologyGraph(db *gorm.DB, dto *TopologyGraphDTO, envAgentID u
 	// 8. 收集未在任何架构进程中装载的孤立模块 -> UNDEPLOYED_CONTAINER
 	var undeployedMods []models.Module
 	for _, m := range allModules {
+		if m.ModuleKind == models.ModuleKindContractLib {
+			continue // 纯接口库模块不参与物理部署，严禁进入 undeployed_container！
+		}
 		if !deployedModuleIDs[m.ID] {
 			undeployedMods = append(undeployedMods, m)
 		}

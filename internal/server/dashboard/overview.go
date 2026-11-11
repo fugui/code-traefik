@@ -52,11 +52,13 @@ type DriftRadarDTO struct {
 
 // ContractAssetsDTO 契约资产认领看板
 type ContractAssetsDTO struct {
-	TotalActiveServices int                    `json:"total_active_services"`
-	ClaimedServices     int                    `json:"claimed_services"`
-	OrphanServices      int                    `json:"orphan_services"`
-	ClaimedRatio        float64                `json:"claimed_ratio"`
-	TopOrphanServices   []OrphanServiceSummary `json:"top_orphan_services"`
+	TotalActiveServices    int                    `json:"total_active_services"`
+	ClaimedServices        int                    `json:"claimed_services"`
+	OrphanServices         int                    `json:"orphan_services"`
+	ClaimedRatio           float64                `json:"claimed_ratio"`
+	TopOrphanServices      []OrphanServiceSummary `json:"top_orphan_services"`
+	MultiImplContractCount int                    `json:"multi_impl_contract_count"`
+	MultiImplServiceCount  int                    `json:"multi_impl_service_count"`
 }
 
 // RegressionDefenseDTO 防劣化回归防线
@@ -428,6 +430,14 @@ func GetOverview(ctx context.Context, db *gorm.DB, subsystemID *uint64) (*Dashbo
 		}
 		overview.ContractAssets.TopOrphanServices = orphanList
 	}
+
+	// 统计多实现服务契约数量与实现数量 (M20)
+	var contractCount int64
+	_ = db.WithContext(ctx).Model(&models.ServiceContract{}).Count(&contractCount).Error
+	var multiImplCount int64
+	_ = db.WithContext(ctx).Model(&models.ModuleService{}).Where("contract_id IS NOT NULL").Count(&multiImplCount).Error
+	overview.ContractAssets.MultiImplContractCount = int(contractCount)
+	overview.ContractAssets.MultiImplServiceCount = int(multiImplCount)
 
 	// 4. 防劣化回归子分 S_reg 与回归防线计算
 	// 仅统计权威套件与 CI 门禁任务 (trigger_source IN ('GOLDEN_SUITE', 'CI_GATE'))

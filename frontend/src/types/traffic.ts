@@ -289,6 +289,16 @@ export interface RecordingSession {
   updated_at?: string;
 }
 
+export type ConsistencyStatus =
+  | 'VERIFIED'
+  | 'OUTBOUND_VERIFIED'
+  | 'VIOLATION'
+  | 'UNCOVERED'
+  | 'NOT_MONITORED'
+  | 'NOT_OBSERVABLE'
+  | 'UNATTRIBUTED'
+  | 'IMPL_UNRESOLVED';
+
 export interface ConsistencyEdge {
   source_module_id?: string | number;
   src_module_id?: string | number;
@@ -302,8 +312,10 @@ export interface ConsistencyEdge {
   dst_module_name?: string;
   service_name: string;
   operation: string;
-  category: 'VERIFIED' | 'OUTBOUND_VERIFIED' | 'VIOLATION' | 'UNCOVERED' | 'NOT_MONITORED' | 'NOT_OBSERVABLE' | 'UNATTRIBUTED';
-  status?: 'VERIFIED' | 'OUTBOUND_VERIFIED' | 'VIOLATION' | 'UNCOVERED' | 'NOT_MONITORED' | 'NOT_OBSERVABLE' | 'UNATTRIBUTED';
+  contract_id?: string | number;
+  impl_key?: string;
+  category: ConsistencyStatus;
+  status?: ConsistencyStatus;
   call_count: number;
   observed_call_count?: number;
   sample_traffic_record_id?: string | number;
@@ -313,7 +325,7 @@ export interface ConsistencyEdge {
 
 export interface ConsistencyReportDTO {
   session_id: string;
-  stats?: Record<'VERIFIED' | 'OUTBOUND_VERIFIED' | 'VIOLATION' | 'UNCOVERED' | 'NOT_MONITORED' | 'NOT_OBSERVABLE' | 'UNATTRIBUTED', number>;
+  stats?: Record<ConsistencyStatus, number>;
   edges: ConsistencyEdge[];
   verified_count?: number;
   outbound_verified_count?: number;
@@ -322,4 +334,5 @@ export interface ConsistencyReportDTO {
   not_monitored_count?: number;
   not_observable_count?: number;
   unattributed_count?: number;
+  impl_unresolved_count?: number;
 }

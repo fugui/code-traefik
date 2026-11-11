@@ -52,6 +52,8 @@ export interface UseElkLayoutOptions {
   onPositionsComputed?: (positions: Record<string, SavedNodePosition>) => void;
   containerSearchMatchCounts?: Record<string, number>;
   lodMode?: LodMode;
+  showRealization?: boolean;
+  contractMode?: 'AGG' | 'EXPAND';
 }
 
 export interface UseElkLayoutReturn {
@@ -190,6 +192,8 @@ export function useElkLayout({
   onPositionsComputed,
   containerSearchMatchCounts,
   lodMode = 'STANDARD',
+  showRealization = true,
+  contractMode = 'AGG',
 }: UseElkLayoutOptions): UseElkLayoutReturn {
   const [flowNodes, setFlowNodes] = useState<ArchCanvasNode[]>([]);
   const [flowEdges, setFlowEdges] = useState<ArchCanvasEdge[]>([]);
@@ -279,8 +283,39 @@ export function useElkLayout({
 
     setIsLayouting(true);
 
+    // M20: 过滤实现关系边与多实现契约调用边模式
+    let currentEdges = edges;
+    if (showRealization === false) {
+      currentEdges = currentEdges.filter((e) => e.kind !== 'REALIZATION');
+    }
+    if (view === 'LOGICAL') {
+      if (contractMode === 'EXPAND') {
+        const unresolvedContractIds = new Set<string | number>();
+        if (consistencyReport?.edges) {
+          for (const ce of consistencyReport.edges) {
+            if ((ce.status === 'IMPL_UNRESOLVED' || ce.category === 'IMPL_UNRESOLVED') && ce.contract_id) {
+              unresolvedContractIds.add(ce.contract_id);
+            }
+          }
+        }
+        currentEdges = currentEdges.filter((e) => {
+          if (e.contract_id && e.definer_module_id && e.dst_module_id === e.definer_module_id) {
+            return unresolvedContractIds.has(e.contract_id);
+          }
+          return true;
+        });
+      } else {
+        currentEdges = currentEdges.filter((e) => {
+          if (e.contract_id && e.impl_key && e.definer_module_id && e.dst_module_id !== e.definer_module_id) {
+            return false;
+          }
+          return true;
+        });
+      }
+    }
+
     // Stage 1: 一致性报告叠加与动态边合成 (索引加速)
-    const overlay = synthesizeOverlay(nodes, edges, consistencyReport, view);
+    const overlay = synthesizeOverlay(nodes, currentEdges, consistencyReport, view);
     setUnattributedPendingList(overlay.unattributedPendingList);
 
     // Stage 2: 聚焦范围裁剪、外部上下文摘要卡合成与多维降噪过滤
@@ -498,6 +533,8 @@ export function useElkLayout({
     onExpandHub,
     containerSearchMatchCounts,
     lodMode,
+    showRealization,
+    contractMode,
   ]);
 
   useEffect(() => {

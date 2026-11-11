@@ -54,6 +54,8 @@ export interface GraphNode {
 export interface EdgeServiceItem {
   service_id?: number;
   service_name: string;
+  contract_id?: number;
+  impl_key?: string;
   dependency_id?: number;
   description?: string;
 }
@@ -62,7 +64,8 @@ export type EdgeKind =
   | 'CROSS_PROCESS'
   | 'INTRA_PROCESS'
   | 'EXTERNAL_UNREGISTERED'
-  | 'UNDEPLOYED';
+  | 'UNDEPLOYED'
+  | 'REALIZATION';
 
 export interface GraphEdge {
   id: string;
@@ -73,6 +76,9 @@ export interface GraphEdge {
   dst_module_id?: number;
   src_process_id?: number;
   dst_process_id?: number;
+  contract_id?: number;
+  impl_key?: string;
+  definer_module_id?: number;
   services: EdgeServiceItem[];
   external_system?: string;
 }
@@ -92,7 +98,8 @@ export type ConsistencyEdgeStatus =
   | 'UNATTRIBUTED'
   | 'UNCOVERED'
   | 'NOT_MONITORED'
-  | 'NOT_OBSERVABLE';
+  | 'NOT_OBSERVABLE'
+  | 'IMPL_UNRESOLVED';
 
 export interface BendPoint {
   x: number;

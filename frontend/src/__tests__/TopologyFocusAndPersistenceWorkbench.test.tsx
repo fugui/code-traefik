@@ -339,6 +339,8 @@ describe('M19-P5 & M19-P6: TopologyFocusAndPersistenceWorkbench Suite', () => {
       consistencyOnly: true,
       hideIsolated: true,
       layoutId: 5,
+      showRealization: true,
+      contractMode: 'AGG',
     });
   });
 

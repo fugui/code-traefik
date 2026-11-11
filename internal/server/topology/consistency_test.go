@@ -400,3 +400,258 @@ func TestSC06_ArchitectureConsistencyVerification(t *testing.T) {
 		t.Errorf("预期 UnattributedCount=1，实际: %d", report.UnattributedCount)
 	}
 }
+
+func TestVerifySessionTopology_DispatchAndImplUnresolved(t *testing.T) {
+	db := setupIsolatedConsistencyDB(t)
+	ctx := context.Background()
+
+	sub := models.Subsystem{Code: "SUB_DISP", Name: "分发一致性子系统", CreatedBy: 1}
+	db.Create(&sub)
+	grp := models.FunctionalGroup{SubsystemID: sub.ID, Code: "GRP_DISP", Name: "功能组", Level: 1, CreatedBy: 1}
+	db.Create(&grp)
+
+	libA := models.Module{SubsystemID: sub.ID, GroupID: grp.ID, Code: "MOD_LIB_A", Name: "定义库A", ModuleKind: models.ModuleKindContractLib, CreatedBy: 1}
+	modB := models.Module{SubsystemID: sub.ID, GroupID: grp.ID, Code: "MOD_IMPL_B", Name: "实现模块B", ModuleKind: models.ModuleKindBusiness, CreatedBy: 1}
+	modC := models.Module{SubsystemID: sub.ID, GroupID: grp.ID, Code: "MOD_IMPL_C", Name: "实现模块C", ModuleKind: models.ModuleKindBusiness, CreatedBy: 1}
+	modX := models.Module{SubsystemID: sub.ID, GroupID: grp.ID, Code: "MOD_DISP_X", Name: "分发网关X", ModuleKind: models.ModuleKindBusiness, CreatedBy: 1}
+	db.Create(&libA)
+	db.Create(&modB)
+	db.Create(&modC)
+	db.Create(&modX)
+
+	pgrp := models.ArchProcessGroup{Code: "PGRP_DISP", Name: "进程组"}
+	db.Create(&pgrp)
+	apX := models.ArchProcess{GroupID: pgrp.ID, Code: "ARCH_X", Name: "网关进程X", DefaultListenPort: 18020}
+	apB := models.ArchProcess{GroupID: pgrp.ID, Code: "ARCH_B", Name: "实现进程B", DefaultListenPort: 18021}
+	apC := models.ArchProcess{GroupID: pgrp.ID, Code: "ARCH_C", Name: "实现进程C", DefaultListenPort: 18022}
+	db.Create(&apX)
+	db.Create(&apB)
+	db.Create(&apC)
+
+	db.Model(&modX).Update("arch_process_id", apX.ID)
+	db.Model(&modB).Update("arch_process_id", apB.ID)
+	db.Model(&modC).Update("arch_process_id", apC.ID)
+
+	agt := models.Agent{Name: "agt-disp", Endpoint: "http://127.0.0.1:18029", Scope: models.ScopeShared, Status: models.AgentStatusOnline, CreatedBy: 1}
+	db.Create(&agt)
+	procX := models.Process{AgentID: agt.ID, Agent: &agt, ArchProcessID: apX.ID, EffectiveListenPort: 18020, CreatedBy: 1}
+	procB := models.Process{AgentID: agt.ID, Agent: &agt, ArchProcessID: apB.ID, EffectiveListenPort: 18021, CreatedBy: 1}
+	procC := models.Process{AgentID: agt.ID, Agent: &agt, ArchProcessID: apC.ID, EffectiveListenPort: 18022, CreatedBy: 1}
+	db.Create(&procX)
+	db.Create(&procB)
+	db.Create(&procC)
+
+	// 注册契约与实现
+	contract := models.ServiceContract{
+		ServiceName:     "cros.dispatch.PayService",
+		DefinerModuleID: libA.ID,
+		ProvideMode:     models.ContractProvideModeMultiImpl,
+		CreatedBy:       1,
+	}
+	db.Create(&contract)
+
+	msB := models.ModuleService{ModuleID: modB.ID, ContractID: &contract.ID, ServiceName: contract.ServiceName, ImplKey: "alipay", CreatedBy: 1}
+	msC := models.ModuleService{ModuleID: modC.ID, ContractID: &contract.ID, ServiceName: contract.ServiceName, ImplKey: "wechat", CreatedBy: 1}
+	db.Create(&msB)
+	db.Create(&msC)
+
+	// X 声明对契约的 DISPATCH 依赖
+	depX := models.ModuleDependency{ConsumerModuleID: modX.ID, ContractID: &contract.ID, CreatedBy: 1}
+	db.Create(&depX)
+
+	// 会话：监控 procX 和 procB (procC 未纳管)
+	targetPIDs, _ := json.Marshal([]uint64{procX.ID, procB.ID})
+	session := models.RecordingSession{
+		SessionNo:          "REC_DISP_01",
+		Name:               "分发一致性会话",
+		Scope:              models.ScopeShared,
+		Status:             models.SessionStatusCompleted,
+		TargetProcessIDs:   datatypes.JSON(targetPIDs),
+		LeasedAgentIDs:     datatypes.JSON([]byte("[]")),
+		ProcessSnapshots:   datatypes.JSON([]byte("[]")),
+		EndpointSnapshots:  datatypes.JSON([]byte("[]")),
+		ProcessDiagnostics: datatypes.JSON([]byte("[]")),
+		CreatedBy:          1,
+	}
+	db.Create(&session)
+
+	now := time.Now()
+	// 记录 1: X -> B (双端纳管 -> VERIFIED)
+	rec1 := models.TrafficRecord{
+		SessionID:          session.ID,
+		CreatedAt:          now,
+		AgentID:            agt.ID,
+		ProcessID:          procX.ID,
+		Direction:          models.TrafficDirEgress,
+		ServiceName:        contract.ServiceName,
+		Operation:          "Pay",
+		SrcModuleID:        &modX.ID,
+		DstModuleID:        &modB.ID,
+		DstContractID:      &contract.ID,
+		SrcAttributionMode: AttributionUniqueDepend,
+	}
+	// 记录 2: X -> 未知实现 (IMPL_UNRESOLVED)
+	rec2 := models.TrafficRecord{
+		SessionID:          session.ID,
+		CreatedAt:          now,
+		AgentID:            agt.ID,
+		ProcessID:          procX.ID,
+		Direction:          models.TrafficDirEgress,
+		ServiceName:        contract.ServiceName,
+		Operation:          "Pay",
+		SrcModuleID:        &modX.ID,
+		DstModuleID:        nil,
+		DstContractID:      &contract.ID,
+		SrcAttributionMode: AttributionUniqueDepend,
+	}
+	db.Create(&rec1)
+	db.Create(&rec2)
+
+	report, err := VerifySessionTopology(ctx, db, session.ID, true)
+	if err != nil {
+		t.Fatalf("VerifySessionTopology 失败: %v", err)
+	}
+
+	// 检查 IMPL_UNRESOLVED 边
+	foundUnresolved := false
+	foundVerified := false
+	for _, edge := range report.Edges {
+		if edge.Status == StatusImplUnresolved {
+			foundUnresolved = true
+			if edge.DstModuleID == nil || *edge.DstModuleID != libA.ID {
+				t.Errorf("IMPL_UNRESOLVED 边的目标模块应为定义库 FM A (%d), got %v", libA.ID, edge.DstModuleID)
+			}
+			if edge.ContractID == nil || *edge.ContractID != contract.ID {
+				t.Errorf("IMPL_UNRESOLVED 边应携带 ContractID=%d, got %v", contract.ID, edge.ContractID)
+			}
+		}
+		if edge.Status == StatusVerified && edge.DstModuleID != nil && *edge.DstModuleID == modB.ID {
+			foundVerified = true
+		}
+	}
+
+	if !foundUnresolved {
+		t.Errorf("预期生成 IMPL_UNRESOLVED 边，实际未检出")
+	}
+	if !foundVerified {
+		t.Errorf("预期 X -> B 为 VERIFIED 边，实际未检出")
+	}
+	if report.ImplUnresolvedCount != 1 {
+		t.Errorf("预期 ImplUnresolvedCount=1，实际: %d", report.ImplUnresolvedCount)
+	}
+}
+
+func TestVerifySessionTopology_SpecificImplCrossCallViolation(t *testing.T) {
+	db := setupIsolatedConsistencyDB(t)
+	ctx := context.Background()
+
+	sub := models.Subsystem{Code: "SUB_CROSS", Name: "越权调用子系统", CreatedBy: 1}
+	db.Create(&sub)
+	grp := models.FunctionalGroup{SubsystemID: sub.ID, Code: "GRP_CROSS", Name: "功能组", Level: 1, CreatedBy: 1}
+	db.Create(&grp)
+
+	libA := models.Module{SubsystemID: sub.ID, GroupID: grp.ID, Code: "MOD_LIB_AC", Name: "定义库AC", ModuleKind: models.ModuleKindContractLib, CreatedBy: 1}
+	modB := models.Module{SubsystemID: sub.ID, GroupID: grp.ID, Code: "MOD_B_ONLY", Name: "模块B", ModuleKind: models.ModuleKindBusiness, CreatedBy: 1}
+	modC := models.Module{SubsystemID: sub.ID, GroupID: grp.ID, Code: "MOD_C_OTHER", Name: "模块C", ModuleKind: models.ModuleKindBusiness, CreatedBy: 1}
+	modX := models.Module{SubsystemID: sub.ID, GroupID: grp.ID, Code: "MOD_X_CALLER", Name: "调用方X", ModuleKind: models.ModuleKindBusiness, CreatedBy: 1}
+	db.Create(&libA)
+	db.Create(&modB)
+	db.Create(&modC)
+	db.Create(&modX)
+
+	pgrp := models.ArchProcessGroup{Code: "PGRP_CROSS", Name: "进程组"}
+	db.Create(&pgrp)
+	apX := models.ArchProcess{GroupID: pgrp.ID, Code: "ARCH_X2", Name: "网关进程X2", DefaultListenPort: 18030}
+	apB := models.ArchProcess{GroupID: pgrp.ID, Code: "ARCH_B2", Name: "实现进程B2", DefaultListenPort: 18031}
+	apC := models.ArchProcess{GroupID: pgrp.ID, Code: "ARCH_C2", Name: "实现进程C2", DefaultListenPort: 18032}
+	db.Create(&apX)
+	db.Create(&apB)
+	db.Create(&apC)
+
+	db.Model(&modX).Update("arch_process_id", apX.ID)
+	db.Model(&modB).Update("arch_process_id", apB.ID)
+	db.Model(&modC).Update("arch_process_id", apC.ID)
+
+	agt := models.Agent{Name: "agt-cross", Endpoint: "http://127.0.0.1:18039", Scope: models.ScopeShared, Status: models.AgentStatusOnline, CreatedBy: 1}
+	db.Create(&agt)
+	procX := models.Process{AgentID: agt.ID, Agent: &agt, ArchProcessID: apX.ID, EffectiveListenPort: 18030, CreatedBy: 1}
+	procB := models.Process{AgentID: agt.ID, Agent: &agt, ArchProcessID: apB.ID, EffectiveListenPort: 18031, CreatedBy: 1}
+	procC := models.Process{AgentID: agt.ID, Agent: &agt, ArchProcessID: apC.ID, EffectiveListenPort: 18032, CreatedBy: 1}
+	db.Create(&procX)
+	db.Create(&procB)
+	db.Create(&procC)
+
+	contract := models.ServiceContract{
+		ServiceName:     "cros.cross.PayService",
+		DefinerModuleID: libA.ID,
+		ProvideMode:     models.ContractProvideModeMultiImpl,
+		CreatedBy:       1,
+	}
+	db.Create(&contract)
+
+	msB := models.ModuleService{ModuleID: modB.ID, ContractID: &contract.ID, ServiceName: contract.ServiceName, ImplKey: "alipay", CreatedBy: 1}
+	msC := models.ModuleService{ModuleID: modC.ID, ContractID: &contract.ID, ServiceName: contract.ServiceName, ImplKey: "wechat", CreatedBy: 1}
+	db.Create(&msB)
+	db.Create(&msC)
+
+	// X 明确仅声明对具体实现 B 的依赖 (未声明 C)
+	depXtoB := models.ModuleDependency{ConsumerModuleID: modX.ID, ServiceID: &msB.ID, ProviderModuleID: &modB.ID, CreatedBy: 1}
+	db.Create(&depXtoB)
+
+	// 会话：监控 procX, procB, procC
+	targetPIDs, _ := json.Marshal([]uint64{procX.ID, procB.ID, procC.ID})
+	session := models.RecordingSession{
+		SessionNo:          "REC_CROSS_01",
+		Name:               "越权调用测试会话",
+		Scope:              models.ScopeShared,
+		Status:             models.SessionStatusCompleted,
+		TargetProcessIDs:   datatypes.JSON(targetPIDs),
+		LeasedAgentIDs:     datatypes.JSON([]byte("[]")),
+		ProcessSnapshots:   datatypes.JSON([]byte("[]")),
+		EndpointSnapshots:  datatypes.JSON([]byte("[]")),
+		ProcessDiagnostics: datatypes.JSON([]byte("[]")),
+		CreatedBy:          1,
+	}
+	db.Create(&session)
+
+	// 实测中 X 却调用了 C (越权调用)
+	now := time.Now()
+	recCallC := models.TrafficRecord{
+		SessionID:          session.ID,
+		CreatedAt:          now,
+		AgentID:            agt.ID,
+		ProcessID:          procX.ID,
+		Direction:          models.TrafficDirEgress,
+		ServiceName:        contract.ServiceName,
+		Operation:          "Pay",
+		SrcModuleID:        &modX.ID,
+		DstModuleID:        &modC.ID,
+		DstContractID:      &contract.ID,
+		SrcAttributionMode: AttributionUniqueDepend,
+	}
+	db.Create(&recCallC)
+
+	report, err := VerifySessionTopology(ctx, db, session.ID, true)
+	if err != nil {
+		t.Fatalf("VerifySessionTopology 失败: %v", err)
+	}
+
+	// 验证: X -> C 必须判定为 VIOLATION; 声明的 X -> B 未调用应判定为 UNCOVERED
+	foundViolationC := false
+	foundUncoveredB := false
+	for _, edge := range report.Edges {
+		if edge.Status == StatusViolation && edge.DstModuleID != nil && *edge.DstModuleID == modC.ID {
+			foundViolationC = true
+		}
+		if edge.Status == StatusUncovered && edge.DstModuleID != nil && *edge.DstModuleID == modB.ID {
+			foundUncoveredB = true
+		}
+	}
+
+	if !foundViolationC {
+		t.Errorf("针对未声明的实现 C 调用必须判定为 VIOLATION，实际未检出")
+	}
+	if !foundUncoveredB {
+		t.Errorf("已声明但未调用的实现 B 必须判定为 UNCOVERED，实际未检出")
+	}
+}
