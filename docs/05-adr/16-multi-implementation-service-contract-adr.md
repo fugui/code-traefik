@@ -1,9 +1,9 @@
 # ADR-16: 多实现服务契约（接口库定义 + 多进程实现 + 调度中心分发）建模与表达设计
 
 - **文档编号**：`16-multi-implementation-service-contract-adr.md`
-- **文档版本**：v0.1.0（草案）
+- **文档版本**：v1.0.0
 - **日期**：2026-11-11
-- **状态**：提议 (Proposed)，待评审
+- **状态**：已采纳 (Accepted)，待 M20 实施
 - **关联特性**：`F-01`（三级架构元素建模）、`F-02`（物理进程蓝图与模块服务契约）、`F-04`（分层复合架构拓扑）、`F-05`（实测调用拓扑还原与一致性验证）、`F-12`（重放与 Mock）
 - **关联设计**：[`docs/02-design/03-architecture-elements-and-topology.md`](../02-design/03-architecture-elements-and-topology.md) §1–§5、[`docs/02-design/05-database-schema.md`](../02-design/05-database-schema.md)
 - **演进关系**：**修订 A-05（全局唯一 PROVIDE）**，将其收窄为「独占契约 (`EXCLUSIVE`) 全局唯一供给」，并新增多实现契约 (`MULTI_IMPL`) 及配套不变量 `A-09`；保持 A-03、A-04 对业务模块的约束不变。
@@ -13,6 +13,7 @@
 | 版本 | 日期 | 修订说明 |
 | :--- | :--- | :--- |
 | v0.1.0 | 2026-11-11 | 初稿：接口库模块类型、多实现契约登记、分发依赖、按目的进程的实现定位、拓扑表达与重放 Mock 隔离 |
+| v1.0.0 | 2026-11-11 | 评审采纳：1. 逻辑视图默认「按接口聚合」；2. `IMPL_UNRESOLVED` 正式作为第八类一致性状态；3. `impl_key` 仅为架构 SSOT 登记的实现身份，首期不与调度中心注册表对账（Non-Goal 5） |
 
 ---
 
@@ -87,7 +88,7 @@ flowchart LR
 | 列 | 类型 | 约束 | 说明 |
 | :--- | :--- | :--- | :--- |
 | `id` | `bigserial` | PK | |
-| `service_name` | `varchar(128)` | `NOT NULL`，`uk_traefik_svc_contract_name` | `{package}.{serviceName}`，校验同 A-07 (`^[A-Za-z0-9._]{1,63}$`) |
+| `service_name` | `varchar(128)` | `NOT NULL`，`uk_traefik_svc_contract_name` | `{package}.{serviceName}`，校验同 A-07 (`^[A-Za-z0-9._-]{1,63}$`) |
 | `definer_module_id` | `bigint` | `NOT NULL`，FK `traefik_modules(id)` `ON DELETE RESTRICT` | 定义方，必须为 `CONTRACT_LIB` |
 | `provide_mode` | `varchar(16)` | `NOT NULL DEFAULT 'MULTI_IMPL'`，`CHECK (provide_mode IN ('MULTI_IMPL'))` | 预留扩展位，首期仅 `MULTI_IMPL` |
 | `impl_key_label` | `varchar(64)` | `NOT NULL DEFAULT ''` | 实现身份的业务含义说明，如「业务类型」 |
@@ -242,12 +243,15 @@ flowchart TD
 1. 同一多实现契约的多个实现部署在同一进程（违反 A-09，首期不支持；如出现需借助 `uiDst2ndAddrId` 或 payload 字段鉴别，另立 ADR）；
 2. 各实现使用不同的消息类型（如 `Any` / `bytes` 内嵌实现私有消息）的差异化解码；
 3. 解析 X 的注册报文以自动发现实现清单（实现清单以架构 SSOT 登记为准）；
-4. 单环境内同一实现的多副本负载均衡（仍受 A-03 约束）。
+4. 单环境内同一实现的多副本负载均衡（仍受 A-03 约束）；
+5. `impl_key` 与调度中心（X）运行期注册表的对账：`impl_key` 仅作为架构 SSOT 中登记的实现身份标识（展示、筛选、Mock 标签辅助），首期不校验其与 X 注册报文中业务身份字符串的一致性。
 
 ---
 
-## 10. 待评审决策点
+## 10. 评审结论 (2026-11-11)
 
-1. 逻辑视图默认「按接口聚合」是否符合团队读图习惯？
-2. 新增第八类一致性状态 `IMPL_UNRESOLVED`，还是并入 `UNATTRIBUTED` 并以 `attribution_mode` 区分？（本草案倾向新增，因为它描述的是目的端歧义，而 `UNATTRIBUTED` 描述来源端歧义）
-3. `impl_key` 是否需要与 X 注册时上报的业务身份**字符串完全一致**？（一致的话，未来可用于和 X 的注册表对账）
+| # | 议题 | 结论 |
+| :--- | :--- | :--- |
+| 1 | 逻辑视图默认契约展示模式 | **采纳「按接口聚合」为默认**（`topo_contract_mode` 缺省 `AGG`），可一键切换「按实现展开」；物理视图恒为按实现展开 |
+| 2 | 目的实现无法定位的状态归类 | **新增第八类一致性状态 `IMPL_UNRESOLVED`（实现待定）**，与描述来源端歧义的 `UNATTRIBUTED` 并列，不计入 `UNCOVERED` 分母 |
+| 3 | `impl_key` 与调度中心注册表对账 | **首期不做**，列为 Non-Goal 5；`impl_key` 仅为架构 SSOT 登记值 |

@@ -1,11 +1,18 @@
 # 架构与活体契约治理 (`code-traefik`) 系统总体架构与主从协同设计
 
 - **文档编号**：`01-system-architecture.md`
-- **文档版本**：v1.5.0
-- **更新日期**：2026-11-05
+- **文档版本**：v1.6.0
+- **更新日期**：2026-11-11
 - **归属阶段**：阶段二：系统架构与数据模型设计 (`02-design`)
-- **状态**：已批准待实施 (Approved for M13)
-- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.11.0)、[`01-cros-rpc-protocol-spec.md`](../07-references/01-cros-rpc-protocol-spec.md) (v1.0.0)、[`02-ebpf-hook-and-dual-subsystem-adr.md`](../05-adr/02-ebpf-hook-and-dual-subsystem-adr.md)、[`03-control-plane-state-recovery-and-lease-reconciliation.md`](../05-adr/03-control-plane-state-recovery-and-lease-reconciliation.md)、[`09-arch-process-ssot-and-ebpf-premount-standby-adr.md`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md) (ADR-09 v1.1.0)、[`11-single-process-bidirectional-capture-and-recording-ux-adr.md`](../05-adr/11-single-process-bidirectional-capture-and-recording-ux-adr.md) (ADR-11 v1.0.0)、[`12-packet-causality-call-tree-and-sequence-ux-adr.md`](../05-adr/12-packet-causality-call-tree-and-sequence-ux-adr.md) (ADR-12 v1.0.0)
+- **状态**：已批准待实施 (Approved for M20)
+- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.15.0)、[`01-cros-rpc-protocol-spec.md`](../07-references/01-cros-rpc-protocol-spec.md) (v1.0.0)、[`02-ebpf-hook-and-dual-subsystem-adr.md`](../05-adr/02-ebpf-hook-and-dual-subsystem-adr.md)、[`03-control-plane-state-recovery-and-lease-reconciliation.md`](../05-adr/03-control-plane-state-recovery-and-lease-reconciliation.md)、[`09-arch-process-ssot-and-ebpf-premount-standby-adr.md`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md) (ADR-09 v1.1.0)、[`11-single-process-bidirectional-capture-and-recording-ux-adr.md`](../05-adr/11-single-process-bidirectional-capture-and-recording-ux-adr.md) (ADR-11 v1.0.0)、[`12-packet-causality-call-tree-and-sequence-ux-adr.md`](../05-adr/12-packet-causality-call-tree-and-sequence-ux-adr.md) (ADR-12 v1.0.0)、[`16-multi-implementation-service-contract-adr.md`](../05-adr/16-multi-implementation-service-contract-adr.md) (ADR-16 v1.0.0)
+
+### 修订记录
+
+| 版本 | 日期 | 修订说明 |
+| :--- | :--- | :--- |
+| v1.5.0 | 2026-11-05 | 对齐 ADR-11 / ADR-12 双录、调用树与 `ScopedEgressMocks` 事务闭包重放设计 |
+| v1.6.0 | 2026-11-11 | 依据 ADR-16 (v1.0.0 / M20) 同步核心 `traefik_*` 业务表总数（扩展至 19 张，新增 `traefik_service_contracts`）、录制 `endpoint_snapshots` 固化及 `DownstreamEndpoint.DstTag` 多实现重放 Mock 隔离标签契约 |
 
 ---
 
@@ -71,7 +78,7 @@ flowchart LR
 | :--- | :--- | :--- |
 | **部署拓扑与规模** | 集中式无特权部署（对接 CodeBench 网关与共享 PostgreSQL） | 每台受控业务宿主机部署 1 个守护进程（`1 Agent : N 目标进程`） |
 | **操作系统特权** | 普通非特权用户运行，**零内核钩子、零业务宿主机 `/proc` 访问** | 需具备 `CAP_BPF` + `CAP_NET_ADMIN`（挂载 eBPF 与读取本机 `/proc`） |
-| **持久化与状态** | 有状态：唯一连接 PostgreSQL（读写 15 张核心 `traefik_*` 业务表、`traefik_settings` 及共享表） | **完全无数据库**：不连任何 DB、不持有数据库凭据，仅维护运行期内存态 |
+| **持久化与状态** | 有状态：唯一连接 PostgreSQL（读写 19 张核心 `traefik_*` 业务表、`traefik_settings` 及共享表） | **完全无数据库**：不连任何 DB、不持有数据库凭据，仅维护运行期内存态 |
 | **Protobuf 依赖** | 引入 `google.golang.org/protobuf/types/dynamicpb` 动态反序列化与语义 Diff | **零 `.pb` 依赖**：编译依赖图严禁出现 `dynamicpb` / `protoregistry` / `gorm` |
 | **协议解析深度** | 调用 `pkg/crosrpc` 解析头 + 调用 `internal/server/decoder` 解码 Payload | 仅调用 `pkg/crosrpc` 解析 `24 + usHeadLen` 之前的协议头，Payload 视为不透明字节切片 |
 | **录制与重放职责** | 批次协同编排、落盘归档、模块穿透定位、架构一致性验证、双层回归 Diff 报告 | 入站旁路复制、出站透明代理、重放连接注入、二进制 Mock 匹配与头部偏移自愈 |
@@ -97,7 +104,7 @@ code-traefik/
 │       ├── topology/                # 三级架构树治理、静态拓扑推导、报文穿透定位与架构一致性验证引擎
 │       └── diff/                    # 协议头级 + Protobuf 语义字段级双层回归 Diff 断言与重放调度器
 ├── config/                          # Server 与 Agent 各自的配置结构体与安全默认值加载
-├── models/                          # 15 张核心 traefik_* GORM 实体模型、索引迁移与级联校验辅助函数
+├── models/                          # 19 张核心 traefik_* GORM 实体模型、索引迁移与级联校验辅助函数
 ├── handlers/                        # Server HTTP/SSE 控制器、参数白名单校验、RBAC 守卫与 commonAudit 接入
 └── frontend/                        # React 18 + TypeScript + Vite 5 微前端控制台工程
 ```
@@ -115,7 +122,7 @@ code-traefik/
 
 | 资源类别 | 公共级 (`SHARED`) | 个人级 (`PRIVATE`) | 跨环境关联与安全边界 |
 | :--- | :--- | :--- | :--- |
-| **三级逻辑架构、物理进程蓝图 (`ArchProcess`) 与 `.pb`** | **全局唯一公共 SSOT**（`traefik_admin` 维护，全体只读） | *不设私有架构元素与野生进程* | `1 台 Agent = 1 套独立运行环境`：支持多套团队 `SHARED` 公共测试环境（如 SIT/UAT）与个人 `PRIVATE` 联调环境各自从 `ArchProcess` 树中 `1:1` 勾选挂载进程，继承 `FM` 模块组装并支持本地覆盖端口/启动特征及 `FallbackAgentID` 基线环境兜底 |
+| **三级逻辑架构、多实现服务契约 (`ServiceContract`)、物理进程蓝图 (`ArchProcess`) 与 `.pb`** | **全局唯一公共 SSOT**（`traefik_admin` 维护，全体只读） | *不设私有架构元素与野生进程* | `1 台 Agent = 1 套独立运行环境`：支持多套团队 `SHARED` 公共测试环境（如 SIT/UAT）与个人 `PRIVATE` 联调环境各自从 `ArchProcess` 树中 `1:1` 勾选挂载进程，继承 `FM` 模块组装并支持本地覆盖端口/启动特征及 `FallbackAgentID` 基线环境兜底 |
 | **数据面实例 (`Agent`) 与挂载实例 (`Process`)** | `traefik_admin` 登记管理；全团队可见，空闲时（包括已处于 `ARMED` 预挂待命态）任意认证用户可申请排他租约进行录制或重放 | **普通用户可自建、编辑、删除本人的私有 Agent 及挂载配置**；**创建人本人及 `traefik_admin` 可见**；普通用户之间严格防横向越权 | 他人普通用户尝试查看、修改、探针开关或租用某用户的 `PRIVATE` Agent 拦截返回 `403 Forbidden`；管理员 (`traefik_admin`) 具备全团队可见、审计与故障解锁特权 |
 | **录制流量素材 (`RecordingSession`)** | 全团队可见并可作为重放输入资产（支持将合格个人素材发布为 `SHARED`） | **仅录制发起人本人及 `traefik_admin` 可见**、管理与用于重放；普通用户之间严格隔离 | 只要用户对某录制素材有访问权（公共素材或本人素材），即可将其投递到任何有权限且**挂载同构架构进程/模块**的进程（含本人 `PRIVATE` Agent 进程，以及当前空闲的团队 `SHARED` 进程）上执行隔离重放 |
 
@@ -212,8 +219,9 @@ type HandshakeResp struct {
 
 // DownstreamEndpoint 描述目标进程允许访问并需被透明拦截的下游 CROS RPC 地址
 type DownstreamEndpoint struct {
-	IP   string `json:"ip"`   // IPv4 点分十进制地址，如 "192.168.56.19" 或 "127.0.0.1"
-	Port uint16 `json:"port"` // 下游监听端口，1..65535
+	IP     string `json:"ip"`                // IPv4 点分十进制地址，如 "192.168.56.19" 或 "127.0.0.1"
+	Port   uint16 `json:"port"`              // 下游监听端口，1..65535
+	DstTag string `json:"dst_tag,omitempty"` // 目的标准架构进程编码 (ArchProcess.code)，供多实现契约重放按 service:operation@dst_tag 隔离 Mock (ADR-16)
 }
 
 // ProcessMonitorSpec 单进程监控元信息（零 .pb Schema 依赖）
@@ -407,7 +415,7 @@ sequenceDiagram
     Note over Agent,ProcB: 前置待命态 (ARMED, session_id=0)：探针已预挂；若曾提示 NEED_RECONNECT，用户在空闲期已重连一次，长连接常驻 EgressProxy 纯透传 (🟢 READY)
 
     User->>UI: 在 RecordingStartDrawer 看到 ProcA/ProcB 均为 🟢 探针已就绪，点击「立即启动录制」
-    UI->>Server: POST /api/recording-sessions (scope=SHARED/PRIVATE, target_process_ids=[A, B], 固化 process_snapshots)
+    UI->>Server: POST /api/recording-sessions (scope=SHARED/PRIVATE, target_process_ids=[A, B], 固化 process_snapshots 与 endpoint_snapshots)
     Server->>Server: 按 agent_id 升序 SELECT FOR UPDATE 原子锁定 RECORDING 排他租约 (冲突立即返 409)
     Server->>Agent: WS Connect /agent/v1/stream (建立二进制事件流)
     Server->>Agent: PUT /agent/v1/monitors/sync (SessionID=S, [Spec_A, Spec_B])
@@ -461,7 +469,7 @@ sequenceDiagram
         PrivAgent->>LocalProcA: 建立 TCP 连接至 ListenPort，(若有 MNG 帧先原样发送)，写入原始请求帧
         LocalProcA->>LocalProcA: 执行待测新代码，生成全新随机 ullSNO'、新 TraceBuff' 与新 SendTimeStamp'
         LocalProcA->>PrivAgent: 经既有代理连接或新建重定向连接发送下游 EGRESS REQ'
-        PrivAgent->>PrivAgent: EgressProxy REPLAY_MOCK 拦截帧，提取 (ascServiceName, ascOperation) + Payload SHA256
+        PrivAgent->>PrivAgent: EgressProxy REPLAY_MOCK 拦截帧，提取 (ascServiceName, ascOperation[, @dst_tag]) + Payload SHA256
         alt 命中 ScopedMocks 精确哈希/顺序 或 GlobalFallbackMocks
             PrivAgent->>PrivAgent: 切分 raw_rsp_packet(含多段 RSP_SEG)并表驱动原地覆写 ullSNO' / TraceBuff' / SendTimeStamp'
             PrivAgent-->>LocalProcA: 写回自愈后的二进制 Mock 应答帧 (0字节接触真实下游)

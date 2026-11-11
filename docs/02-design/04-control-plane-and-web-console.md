@@ -1,11 +1,17 @@
 # 架构与活体契约治理 (`code-traefik`) 管理面服务、微前端控制台与回归断言设计
 
 - **文档编号**：`04-control-plane-and-web-console.md`
-- **文档版本**：v1.7.0
-- **更新日期**：2026-11-04
+- **文档版本**：v1.8.0
+- **更新日期**：2026-11-11
 - **归属阶段**：阶段二：系统架构与数据模型设计 (`02-design`)
-- **状态**：已批准待实施 (Approved for M13)
-- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.10.0)、[`01-system-architecture.md`](./01-system-architecture.md)、[`02-data-plane-and-cros-rpc-engine.md`](./02-data-plane-and-cros-rpc-engine.md)、[`03-architecture-elements-and-topology.md`](./03-architecture-elements-and-topology.md)、[`07-console-ia-restructuring-and-workflow-workbench-adr.md`](../05-adr/07-console-ia-restructuring-and-workflow-workbench-adr.md) (ADR-07)、[`08-recording-drawer-and-process-tree-selection-adr.md`](../05-adr/08-recording-drawer-and-process-tree-selection-adr.md) (ADR-08)、[`09-arch-process-ssot-and-ebpf-premount-standby-adr.md`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md) (ADR-09 v1.1.0)、[`10-enhanced-proto-schema-file-management-adr.md`](../05-adr/10-enhanced-proto-schema-file-management-adr.md) (ADR-10 v1.1.0)、[`11-single-process-bidirectional-capture-and-recording-ux-adr.md`](../05-adr/11-single-process-bidirectional-capture-and-recording-ux-adr.md) (ADR-11 v1.0.0)、[`12-packet-causality-call-tree-and-sequence-ux-adr.md`](../05-adr/12-packet-causality-call-tree-and-sequence-ux-adr.md) (ADR-12 v1.0.0)
+- **状态**：已批准待实施 (Approved for M20)
+- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.15.0)、[`01-system-architecture.md`](./01-system-architecture.md)、[`02-data-plane-and-cros-rpc-engine.md`](./02-data-plane-and-cros-rpc-engine.md)、[`03-architecture-elements-and-topology.md`](./03-architecture-elements-and-topology.md)、[`07-console-ia-restructuring-and-workflow-workbench-adr.md`](../05-adr/07-console-ia-restructuring-and-workflow-workbench-adr.md) (ADR-07)、[`08-recording-drawer-and-process-tree-selection-adr.md`](../05-adr/08-recording-drawer-and-process-tree-selection-adr.md) (ADR-08)、[`09-arch-process-ssot-and-ebpf-premount-standby-adr.md`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md) (ADR-09 v1.1.0)、[`10-enhanced-proto-schema-file-management-adr.md`](../05-adr/10-enhanced-proto-schema-file-management-adr.md) (ADR-10 v1.1.0)、[`11-single-process-bidirectional-capture-and-recording-ux-adr.md`](../05-adr/11-single-process-bidirectional-capture-and-recording-ux-adr.md) (ADR-11 v1.0.0)、[`12-packet-causality-call-tree-and-sequence-ux-adr.md`](../05-adr/12-packet-causality-call-tree-and-sequence-ux-adr.md) (ADR-12 v1.0.0)、[`16-multi-implementation-service-contract-adr.md`](../05-adr/16-multi-implementation-service-contract-adr.md) (ADR-16 v1.0.0)
+
+### 修订记录
+
+| 版本 | 日期 | 作者 | 变更说明 |
+| :--- | :--- | :--- | :--- |
+| `v1.8.0` | `2026-11-11` | Architecture Team | 同步 ADR-16 (`v1.0.0`)：补充录制期 `endpoint_snapshots` 固化、多实现契约重放兼容性与 `dst_tag` 隔离；新增 §4.8 详细定义 `/architecture` 模块类型与「定义的接口」页签、`PROVIDE` 自动切换实现契约与 `impl_key`、`DEPEND` 分发/具体实现区分、`/topology` `«interface»` 库卡、`REALIZATION` 图层开关、`topo_contract_mode=AGG\|EXPAND`、第八类一致性状态 `IMPL_UNRESOLVED`（复用 `--color-warning`）与「实现待定」虚拟节点及 `/dashboard` 契约实现覆盖率 |
 
 ---
 
@@ -94,7 +100,7 @@ flowchart LR
 ### 1.2 预挂就绪零重启录制编排与无损+结构化双模落盘流水线 (`recorder.Orchestrator`)
 
 1. **多进程排他租约获取、有序采集闸门与停录不断连**：
-   - 校验发起人对所选 `target_process_ids` 所属环境 Agent 的访问权（普通用户可组合本人 `PRIVATE` Agent 与当前空闲的任意 `SHARED` 环境 Agent），固化 `process_snapshots` 进程蓝图快照（解耦日后卸载挂载实例），按 `agent_id` 升序调用 `AcquireAgentLeases` 原子加锁（冲突立即返回 `409 Conflict` 及持锁人信息）；
+   - 校验发起人对所选 `target_process_ids` 所属环境 Agent 的访问权（普通用户可组合本人 `PRIVATE` Agent 与当前空闲的任意 `SHARED` 环境 Agent），固化 `process_snapshots` 进程蓝图快照（解耦日后卸载挂载实例）与 `endpoint_snapshots` 下游端点映射快照（`[{endpoint, arch_process_id, source}]`，供多实现服务契约 `EGRESS` 流量历史幂等定位目的实现模块，[`ADR-16`](../05-adr/16-multi-implementation-service-contract-adr.md)），按 `agent_id` 升序调用 `AcquireAgentLeases` 原子加锁（冲突立即返回 `409 Conflict` 及持锁人信息）；
    - 并发调用各 Agent `PUT /agent/v1/monitors/sync` 下发 `[]ProcessMonitorSpec`：Agent 实时复检 `/proc/<pid>/fd` 后按序先注入 `activeSessionID` 并开启 `EgressProxy` `CAPTURING` 分帧（目标 PID 默认全出站透明代理，即使仅挂载单个进程且 `Downstreams` 为空亦可自动录齐 `INGRESS + EGRESS`，[`ADR-11`](../05-adr/11-single-process-bidirectional-capture-and-recording-ux-adr.md)）、再预热存量已建立入站 FD 至 `ing_conn_map` 并动态挂载入站读写钩子（已 `ARMED` 进程 **0ms 零重启开录**，`DISARMED` 进程兜底临时挂载），将最新诊断写入 `traefik_recording_sessions.process_diagnostics`；WebSocket 读取协程将真实采集 `agt.ID` 透传至 `ExchangeAssembler.Feed(agt.ID, env, payload)`（禁止硬编码 `agent_id = 1`）；
    - 录制正常结束或触发上限时，严格调用 **`POST /agent/v1/monitors/{sessionId}/stop`**（携带路径参数 `sessionId`）：Agent 先卸载入站读写钩子 -> `200ms` 在途应答排空 -> 将 `EgressProxy` 拨回 `PASSTHROUGH` 并清零 `activeSessionID`（**不断开业务 TCP 长连接**） -> 发送 `EVENT_SESSION_DRAINED` 并释放本地 `RECORDING` 租约，主控在统一收尾函数中原子释放全部 DB 租约。
 2. **双阈值自动停录守卫**：
@@ -117,12 +123,12 @@ flowchart LR
 
 1. **权限、快照解耦同构兼容性、就绪硬门禁与排他租约四重前置校验**：
    - 校验选定的 `INGRESS` 往返记录均属于同一 `session_id` 与同一源进程 `source_process_id`，且 `is_replayable == true`（`raw_req_packet` 非空且未被 4MB 截断）；
-   - 调用基于 `session.ProcessSnapshots` 解耦的 `topology.ValidateReplayProcessCompatibility`（即使源环境 Agent 日后已卸载原挂载实例亦不受阻碍），校验发起人对录制素材与目标进程 `target_process_id` 所属环境 Agent 的权限及模块同构性；
-   - **重放零外泄前置硬门禁与历史 `EGRESS` 端点自动并集（[`ADR-11`](../05-adr/11-single-process-bidirectional-capture-and-recording-ux-adr.md)）**：主控自动取「`CompileProcessDownstreams(target)` 静态推导下游端点 $\cup$ 源录制批次中该源进程实测捕获的全部 `EGRESS` 记录 `DstAddr (IP:Port)`」合并写入 `ExecuteReplayReq.ProcessSpec.Downstreams`（使单进程零拓扑录制的素材同样 100% 闭环 Mock）；实时核验目标进程就绪态，若处于 `WAITING_PROC`（未启动）或持有指向该合并 Mock 端点集的未代理存量直连（`NEED_RECONNECT`, `established_conns > 0`），**直接拒绝启动重放并返回 `409 Conflict`**；
+   - 调用基于 `session.ProcessSnapshots` 与统一 `ContractResolver` 解耦的 `topology.ValidateReplayProcessCompatibility`（即使源环境 Agent 日后已卸载原挂载实例亦不受阻碍；针对多实现服务契约的 `INGRESS` 流量，按录制时源进程快照 `sourceSnap` 中承载的具体实现模块 `M_impl` 核验目标进程同构性，不会要求目标进程包含其他进程的实现模块，[`ADR-16`](../05-adr/16-multi-implementation-service-contract-adr.md)），校验发起人对录制素材与目标进程 `target_process_id` 所属环境 Agent 的权限及模块同构性；
+   - **重放零外泄前置硬门禁与历史 `EGRESS` 端点自动并集（[`ADR-11`](../05-adr/11-single-process-bidirectional-capture-and-recording-ux-adr.md) & [`ADR-16`](../05-adr/16-multi-implementation-service-contract-adr.md)）**：主控自动取「`CompileProcessDownstreams(target)` 静态推导下游端点（含展开 `DISPATCH` 多实现契约的全部实现进程端点并标记 `dst_tag = ArchProcess.Code`）$\cup$ 源录制批次中该源进程实测捕获的全部 `EGRESS` 记录 `DstAddr (IP:Port)`」合并写入 `ExecuteReplayReq.ProcessSpec.Downstreams`（使单进程零拓扑录制的素材同样 100% 闭环 Mock）；实时核验目标进程就绪态，若处于 `WAITING_PROC`（未启动）或持有指向该合并 Mock 端点集的未代理存量直连（`NEED_RECONNECT`, `established_conns > 0`），**直接拒绝启动重放并返回 `409 Conflict`**；
    - 对目标进程所属 Agent 获取 `REPLAY` 排他租约（冲突立即返回 `409 Conflict`）。
 2. **重放生命周期状态机与既有代理连接零外泄 Mock 接管**：
    - **状态机流转**：`PENDING`（初始创建） -> `RUNNING`（目标进程已 `🟢 READY`，无需手动重启；Agent 将 `EgressProxy` 中该进程的既有长连接原子切入 `REPLAY_MOCK` 物理阻断真实下游写通道并按序注入请求切片） -> `COMPLETED / CANCELLED / FAILED`；
-   - **按 `RecordID` 因果子树组装 `ScopedEgressMocks`（[`ADR-12`](../05-adr/12-packet-causality-call-tree-and-sequence-ux-adr.md)）**：从 `traefik_traffic_records` 按 `req_captured_at_ns ASC, seq_no ASC, id ASC` 提取选定 `INGRESS` 记录组装 `IngressItems: []ReplayIngressItem{RecordID, RawReq}`，并调用 `callgraph.BuildReplayClosure`：优先按同进程同 `trace_id` 的 DOTR `FatherSpanID` 子孙闭包（无 `trace_id` 时回退 `[req_ns - 500μs, rsp_ns + 500μs]` 包含时间窗）为每条 `INGRESS` 切分专属 `ScopedEgressMocks[recordID]`，将未归属合格 `EGRESS` 放入 `GlobalFallbackMocks`（严格剔除 `is_truncated == true`、`REQ_ONLY` 与空应答帧），纯二进制下发 Agent；
+   - **按 `RecordID` 因果子树组装 `ScopedEgressMocks` 与 `dst_tag` 多实现隔离（[`ADR-12`](../05-adr/12-packet-causality-call-tree-and-sequence-ux-adr.md) & [`ADR-16`](../05-adr/16-multi-implementation-service-contract-adr.md)）**：从 `traefik_traffic_records` 按 `req_captured_at_ns ASC, seq_no ASC, id ASC` 提取选定 `INGRESS` 记录组装 `IngressItems: []ReplayIngressItem{RecordID, RawReq}`，并调用 `callgraph.BuildReplayClosure`：优先按同进程同 `trace_id` 的 DOTR `FatherSpanID` 子孙闭包（无 `trace_id` 时回退 `[req_ns - 500μs, rsp_ns + 500μs]` 包含时间窗）为每条 `INGRESS` 切分专属 `ScopedEgressMocks[recordID]`，将未归属合格 `EGRESS` 放入 `GlobalFallbackMocks`（严格剔除 `is_truncated == true`、`REQ_ONLY` 与空应答帧），并根据每条 `EGRESS` 记录归因的 `dst_module_id` 填充目标实现进程编码 `DstTag`（Agent 侧 `ScopedMockMatcher` 按 `service:operation@dst_tag` 优先匹配，无标签回退 `service:operation`，严守零 DB 零 `.pb` 红线），纯二进制下发 Agent；
    - **双轨可靠回收与独立明细持久化**：
      - 重放执行进度与结果通过 WebSocket `EVENT_REPLAY_ITEM_DONE` 实时推送，同时支持通过 `GET /agent/v1/replays/:taskId/result` 幂等拉取；
      - 每条请求重放回收的实际原始应答帧（`actual_rsp_packet` bytea）及双层比对结果独立持久化至 **`traefik_replay_items`** 表，支持前端标准服务端分页查询与历史多次比对！
@@ -278,7 +284,7 @@ type FieldDiff struct {
 | **流量作业** *(置顶高频)* | **流量录制** *(默认首页)* | `/record` | `RecordingWorkbenchPage` | 全体登录用户 | `scope` (`SHARED` \| `PRIVATE`), `status`, `search`, `auto_start` (`1`), `agent_id`, `page`, `page_size` |
 | **流量作业** | **流量调试** | `/debug` | `TrafficDebugWorkbenchPage` | 全体登录用户 | `session_id`, `view` (`tree` \| `flat`, 默认 `tree`), `live` (`1`), `direction`, `exchange_type`, `service_name`, `operation`, `sno`, `trace_id`, `entity_key`, `has_error` (`true`), `is_replayable`, `keyword`, `seq_root_id`, `page`, `page_size` |
 | **流量作业** | **流量重放** | `/replay` | `ReplayWorkbenchPage` | 全体登录用户 | `session_id`, `auto_create` (`1`), `target_process_id`, `status`, `page`, `page_size` |
-| **架构与契约** *(静态基线)* | **架构拓扑** | `/topology` | `TopologyWorkbenchPage` | 全体登录用户 | `view` (`LOGICAL` \| `PHYSICAL`), `env_agent_id`, `depth`, `session_id`, `focus` |
+| **架构与契约** *(静态基线)* | **架构拓扑** | `/topology` | `TopologyWorkbenchPage` | 全体登录用户 | `view` (`LOGICAL` \| `PHYSICAL`), `env_agent_id`, `depth`, `session_id`, `focus`, `topo_contract_mode` (`AGG` \| `EXPAND`), `topo_realization` (`1` \| `0`) |
 | **架构与契约** | **架构元素** | `/architecture` | `ArchitectureWorkbenchPage` | 全体登录用户 | `tree` (`logical` \| `physical`), `subsystem_id`, `group_id`, `module_id`, `proc_group_id`, `arch_process_id` |
 | **架构与契约** | **Proto 契约** | `/schemas` | `ProtoSchemaWorkbenchPage` | 全体登录用户 | `tab` (`assets` \| `catalog`), `schema_id`, `category` (`BASE_LIB` \| `BUSINESS` \| `GATEWAY`), `latest_only` (`true` \| `false`), `active_only`, `claimed_status` (`ALL` \| `CLAIMED` \| `UNCLAIMED`), `service_name`, `search`, `sort_by`, `sort_dir`, `page`, `page_size` |
 | **环境与治理** *(沉底低频)* | **Agent 与进程** | `/agents` | `AgentManagementPage` | 全体登录用户 | `scope` (`SHARED` \| `PRIVATE`), `agent_id`, `process_id`, `open_mount` (`1`), `lease_state`, `status`, `page`, `page_size` |
@@ -307,24 +313,24 @@ src/
 │   │   │   └── layoutPersistence.ts        # [M19] 加载优先级、团队基准/书签差量/草稿坐标叠加与聚焦态持久化切片
 │   │   ├── model/
 │   │   │   ├── hierarchy.ts                # 树索引、祖先物化路径与 LCA (最近公共祖先) 纯函数
-│   │   │   ├── overlay.ts                  # [M19] 一致性叠加合成: 动态 VIOLATION/UNATTRIBUTED 边/虚拟节点与静态边状态映射 (按模块对索引)
-│   │   │   ├── rollup.ts                   # 纯前端边汇总 (rep) 与最差状态收敛 (rollupEdges 保留为兼容门面)
+│   │   │   ├── overlay.ts                  # [M19/M20] 一致性叠加合成: 动态 VIOLATION/UNATTRIBUTED/IMPL_UNRESOLVED 边/虚拟节点与静态边状态映射
+│   │   │   ├── rollup.ts                   # 纯前端边汇总 (rep)、多实现契约 AGG/EXPAND 投影与最差状态收敛 (REALIZATION 边豁免)
 │   │   │   ├── subgraph.ts                 # [M19] 聚焦/透明祖先/LCA 外部邻居、有向邻域、多维切片过滤、孤立裁剪与可见规模预估
 │   │   │   ├── noiseReduction.ts           # [M19] Hub 插头折叠 (违规边豁免) 与 1-Hop 聚光灯集合
-│   │   │   └── metrics.ts                  # Tarjan SCC 循环依赖分析与扇入扇出统计
+│   │   │   └── metrics.ts                  # Tarjan SCC 循环依赖分析与扇入扇出统计 (排除 REALIZATION 实现关系边)
 │   │   ├── nodes/
 │   │   │   ├── ContainerNode.tsx           # 矩形嵌套容器 (双击展开/折叠、[🎯 聚焦] 按钮、📌 图钉、Hub 插头徽章)
-│   │   │   ├── ModuleNode.tsx              # 功能模块叶子卡片 (未装载虚线告警、📌 图钉、✨ 新增徽标)
+│   │   │   ├── ModuleNode.tsx              # 功能模块与 «interface» 接口契约库卡片 (CONTRACT_LIB 虚线框、📌 图钉、✨ 新增徽标)
 │   │   │   ├── ExternalContextNode.tsx     # [M19] 聚焦视图外部上下游邻居卡 (方向修饰 + 切换聚焦)
-│   │   │   └── ExternalNode.tsx            # 外部系统/外部端点/未登记接口卡片
+│   │   │   └── ExternalNode.tsx            # 外部系统/外部端点/未登记接口/「实现待定」虚拟节点卡片
 │   │   ├── edges/
-│   │   │   └── RollupEdge.tsx              # 正交折线汇总边 (对数线宽、六分类着色、脉冲告警与拖拽自适应)
+│   │   │   └── RollupEdge.tsx              # 正交折线汇总边 (对数线宽、八分类着色、REALIZATION UML 空心三角虚线、IMPL_UNRESOLVED 琥珀色虚线)
 │   │   └── panels/
-│   │       ├── ArchCanvasToolbar.tsx       # 工具栏: 逻辑/物理切换、层级滑杆、面包屑、搜索候选飞跃、多维过滤、书签/基准发布与重新自动排版
+│   │       ├── ArchCanvasToolbar.tsx       # 工具栏: 逻辑/物理切换、层级滑杆、REALIZATION 图层开关、契约调用 AGG/EXPAND 切换、搜索、过滤与书签/基准发布
 │   │       ├── TopologyBookmarkDrawer.tsx  # [M19] 个人视图书签管理抽屉 (基于 @code/common Drawer)
 │   │       ├── VisibilityGuardDialog.tsx   # [M19] 可见节点守卫引导弹窗 (先聚焦 / 先过滤 / 仍要展开)
-│   │       ├── ArchSummaryBar.tsx          # 一致性比对六分类摘要栏与待定归属待办入口
-│   │       ├── NodeInspectDrawer.tsx       # 选中节点属性画像与 PROVIDE/DEPEND 快速跳转抽屉
+│   │       ├── ArchSummaryBar.tsx          # 一致性比对八分类摘要栏 (含第八类 IMPL_UNRESOLVED「实现待定」) 与待定归属待办入口
+│   │       ├── NodeInspectDrawer.tsx       # 选中节点属性画像与 PROVIDE/DEPEND/多实现契约快速跳转抽屉
 │   │       └── EdgeDetailDrawer.tsx        # 汇总边底层契约明细与一致性抽样报文联动抽屉
 │   └── PacketAnatomyDrawer/                # 面向业务视角的报文调用透视与底层解剖抽屉 (供流量调试台与拓扑一致性边复用)
 │       ├── PacketAnatomyDrawer.tsx         # 抽屉外壳与无模态嵌入容器 (支持 [💼 业务视图 | 🔬 协议专家] 双模切换)
@@ -358,8 +364,8 @@ src/
 │   ├── TopologyWorkbenchPage/              # 4. [架构与契约] 架构拓扑工作台 (/topology - 全屏独立画布)
 │   │   └── TopologyWorkbenchPage.tsx       # 零外层胶囊 Tab，全视口高度承载逻辑/物理复合拓扑画布与录制批次一致性比对叠加层
 │   ├── ArchitectureWorkbenchPage/          # 5. [架构与契约] 架构元素工作台 (/architecture - 左树顶部 [逻辑架构 | 物理进程] 双视图 SSOT)
-│   │   ├── SubsystemGroupTreePanel.tsx     # [逻辑架构 ?tree=logical]: 子系统 ➔ 8级功能组 ➔ 功能模块叶子定位与跨层搜索
-│   │   ├── ModuleContractDetailPane.tsx    # 模块元数据、归属标准架构进程(跳 ?tree=physical)、挂载血缘(跳 /agents)与 PROVIDE/DEPEND 双表(跳 /schemas)
+│   │   ├── SubsystemGroupTreePanel.tsx     # [逻辑架构 ?tree=logical]: 子系统 ➔ 8级功能组 ➔ 功能模块/«interface»契约库模块定位与跨层搜索
+│   │   ├── ModuleContractDetailPane.tsx    # 业务模块 PROVIDE(自动切实现契约+impl_key)/DEPEND(分发/具体实现)双表 & CONTRACT_LIB「定义的接口」页签(契约登记/实现矩阵/分发调用方)
 │   │   ├── ArchProcessTreePanel.tsx        # [物理进程 ?tree=physical]: 标准进程组 (ArchProcessGroup) ➔ 标准业务进程 (ArchProcess) 树与搜索/CRUD
 │   │   └── ArchProcessDetailPane.tsx       # 标准架构进程详情: 默认端口(含0纯客户端)/启动特征、组装承载的 FM 模块、汇总服务契约与宿主机挂载就绪血缘
 │   ├── ProtoSchemaWorkbenchPage/           # 6. [架构与契约] Proto 契约双模工作台 (/schemas - ADR-06 & ADR-10)
@@ -908,6 +914,131 @@ export interface BusinessSummaryProps {
 }
 ```
 
+### 4.8 多实现服务契约管理、拓扑双模表达与第八类一致性状态交互设计 (`F-02.1`, `F-04.4`, `F-05.1` / [`ADR-16`](../05-adr/16-multi-implementation-service-contract-adr.md))
+
+#### 4.8.1 架构元素工作台 (`/architecture`) 多实现契约建模交互 (`F-02.1`)
+
+为支撑 CROS 架构中「头文件库模块 `A` 仅定义 `.pb` 接口且不编译进单一进程，多个业务功能模块 `B/C/D` 在不同进程中各自实现同一 `ascServiceName`，调度模块 `X` 按运行时条件向各实现分发调用」的模式，同时对 `95%+` 单一实现（`EXCLUSIVE`）服务保持零额外配置负担，`/architecture` 工作台提供以下渐进式交互：
+
+1. **模块表单「模块类型 (`module_kind`)」选择**：
+   - 在新建/编辑功能模块弹窗中提供分段单选控件：
+     - `业务功能模块 (BUSINESS)`（默认）：常规业务模块，可绑定所属标准架构进程（`arch_process_id`），可声明提供服务（`PROVIDE`）与消费依赖（`DEPEND`）；
+     - `接口契约库 (CONTRACT_LIB，仅定义 .pb 契约，不绑定特定进程)`：选中后自动隐藏并置空「所属标准架构进程」选择器（后端约束 `chk_traefik_modules_lib_no_proc` 强制 `arch_process_id IS NULL`）；左侧架构树中该模块渲染专属 `«interface»` 徽标。
+2. **库模块详情「定义的接口」页签 (`ModuleContractDetailPane.tsx`)**：
+   - 当左侧架构树选中 `module_kind === 'CONTRACT_LIB'` 的模块时，右侧详情面板不展示常规的「提供服务 / 消费依赖」双表，而是呈现专属的 **「定义的接口 (Service Contracts)」** 页签：
+     - **契约登记与存量独占升级**：点击 `[+ 登记多实现服务契约]`，从全局生效 `.pb` 服务池中选择 `service_name`，填写实现标识语义说明 `impl_key_label`（如 `"业务类型 biz_type"`、`"渠道编码 channel"`）与备注；若某服务此前已按独占模式（`EXCLUSIVE`）登记在某业务模块名下，提供 `[⚡ 从独占服务升级为多实现契约]` 向导（调用 `POST /api/arch/service-contracts/convert`，单事务内创建契约、将原独占行原地转为首个实现并保留历史 `service_id` 关联，可选将既有消费依赖切换为 `DISPATCH`）；
+     - **实现矩阵 (Implementation Matrix)**：在契约展开行或详情抽屉中以表格展示全部已登记实现：`[实现标识 impl_key | 实现模块 (跳模块详情) | 所属标准进程 (跳物理进程树) | 负责人 | 最近验证状态]`；
+     - **分发调用方列表 (Dispatch Consumers)**：列出所有声明了 `contract_id`（`DISPATCH` 分发依赖）的上游消费模块及一键跳转链接。
+3. **`PROVIDE` 表单自动切换「实现契约」并要求必填 `impl_key`**：
+   - 在普通 `BUSINESS` 模块点击 `[+ 登记提供服务]` 时：
+     - 若所选 `service_name` 未在任何 `CONTRACT_LIB` 登记为多实现契约 $\rightarrow$ 维持原有「独占服务 (`EXCLUSIVE`)」极简表单（无需填写 `impl_key`）；
+     - 若所选 `service_name` 已在某 `CONTRACT_LIB` 模块 `A` 登记为多实现契约 $\rightarrow$ 表单顶部自动切换为提示横幅 **`「实现多实现契约（定义于：<库模块 A 名称>）」`**，并动态展开必填输入框 **`实现分支标识 (impl_key)`**（Placeholder 显示该契约的 `impl_key_label`，校验正则 `^[A-Za-z0-9._-]{1,64}$`）；若检测到目标模块所属 `arch_process_id` 已被同契约的另一实现模块占用（违反假设 `A-09`），立即内联阻断并提示冲突进程与模块。
+4. **依赖（`DEPEND`）表单区分「依赖接口（分发）/ 依赖具体实现」**：
+   - 在 `BUSINESS` 模块点击 `[+ 登记消费依赖]` 选择内部多实现契约服务时，提供单选模式切换：
+     - **`⚡ 依赖接口（运行时分发到全部实现 DISPATCH）`**（默认推荐）：提交 `contract_id`（`service_id = null`），表示该调用方作为调度/分发中心，在静态拓扑与一致性验证中自动展开到该契约名下的全部实现模块；
+     - **`🎯 依赖具体实现`**：展开二级下拉框选择具体某一个实现分支 `[impl_key] 实现模块名 (所属标准进程)`，提交对应的 `service_id`（`contract_id = null`）；若实测流量调用了该契约的其他未声明实现分支，一致性引擎将精准判定为 `VIOLATION`。
+
+#### 4.8.2 架构拓扑画布 (`/topology`) 多实现契约表达与第八类一致性状态交互 (`F-04.4`, `F-05.1`)
+
+1. **拓扑画布 `«interface»` 库卡与物理视图去库化 (`ModuleNode.tsx`)**：
+   - **逻辑视图 (`LOGICAL`)**：`CONTRACT_LIB` 模块渲染为虚线边框卡片（`border: 1.5px dashed var(--color-border-strong)`），标题栏冠以 `«interface»` 徽标，副标题显示 `N 契约 · M 实现`；
+   - **物理视图 (`PHYSICAL`)**：由于物理视图以标准架构进程（`ArchProcess`）为一级容器，且 `CONTRACT_LIB` 不对应任何运行期进程，后端与画布在物理视图下**完全隐藏 `CONTRACT_LIB` 节点**（绝不归入 `undeployed_container` 未绑定容器，消除“接口库永远显示为未部署异常”的视觉噪音）；各业务实现模块卡片的 `implements` 徽标直接展示其所实现的契约与 `[impl_key]`。
+2. **`REALIZATION` 图层开关与算法豁免 (`ArchCanvasToolbar.tsx`、`RollupEdge.tsx`、`metrics.ts`)**：
+   - **视觉样式**：每个实现模块 `B` 指向接口契约库模块 `A` 的关系边标记为 `Kind = 'REALIZATION'`，采用 UML 标准浅灰虚线 + 空心三角箭头（`B ⇢ A`）；
+   - **独立图层开关**：逻辑视图工具栏新增 **`[◁⋯ 实现关系]`** 显隐开关（同步 URL 参数 `topo_realization=1|0`，默认开启；物理视图自动隐藏该开关）；
+   - **图算法严格豁免**：`REALIZATION` 边仅表达静态编译期实现关系，**不参与** Tarjan 强连通分量（SCC）循环依赖检测（`metrics.ts`）、**不参与**调用边聚合（`rollup.ts`）、**不叠加**运行时流量一致性状态染色。
+3. **契约调用显示模式 `topo_contract_mode=AGG|EXPAND`**：
+   - **逻辑视图默认聚合 (`topo_contract_mode=AGG`)**：工具栏提供分段切换 **`契约调用: [聚合到接口 (AGG) | 展开到实现 (EXPAND)]`**（URL 参数 `topo_contract_mode`，逻辑视图默认 `AGG`）：
+     - 在 `AGG` 模式下，分发调用方 `X` 对多实现契约 `A` 旗下各实现的调用收敛为一条指向接口库的汇总边 `X ➔ A`，边胶囊显示 `pkg.IfaceSvc ×3 实现`，边颜色取各实现分支的最差验证状态（点击边抽屉可查看 `B/C/D` 各分支独立状态明细）；
+     - 在 `EXPAND` 模式下，直接绘制 `X ➔ B`、`X ➔ C`、`X ➔ D` 三条具体模块调用边，边标签携带实现标识 `pkg.IfaceSvc [b]`；此时 `X ➔ A` 边自动隐藏（**唯一例外**：当存在未能解析具体实现的 `IMPL_UNRESOLVED` 流量时，保留一条琥珀色虚线 `X ➔ A` 承载该告警，避免告警丢失）。
+   - **物理视图恒展开 (`PHYSICAL`)**：物理视图下恒按 `EXPAND` 展开为真实的进程间调用边 `ProcX ➔ ProcB`、`ProcX ➔ ProcC`、`ProcX ➔ ProcD`。
+4. **一致性图例第八类 `IMPL_UNRESOLVED`（琥珀色虚线，复用 `--color-warning`）及「实现待定」虚拟节点**：
+   - **状态定义与优先级**：当实测 `EGRESS` 流量的 `service_name` 命中已登记的多实现契约（`dst_contract_id != null`），但对端 `dst_addr (IP:Port)` 无法匹配任何已登记实现模块所属进程（`dst_module_id == null`）时，归入第八类状态 **`IMPL_UNRESOLVED`（多实现契约已匹配但目的实现进程未定位）**，彻底避免误判为 `EXTERNAL_UNDECLARED` 或污染具体实现边的 `UNCOVERED` 分母；
+   - **最差状态收敛全序（8 级）**：
+     $$\text{VIOLATION} \succ \text{EXTERNAL\_UNDECLARED} \succ \text{IMPL\_UNRESOLVED} \succ \text{UNATTRIBUTED} \succ \text{UNDEPLOYED} \succ \text{UNCOVERED} \succ \text{EXTERNAL\_VERIFIED} \succ \text{VERIFIED}$$
+   - **视觉编码与「实现待定」虚拟节点**：
+     - 边样式采用**琥珀色长虚线**，直接复用现有语义颜色 Token **`var(--color-warning)`**（`strokeDasharray: '8 4'`，严禁新增自定义颜色 Token）；顶部 `ArchSummaryBar` 图例新增第 8 项 **`🟡 实现待定 (IMPL_UNRESOLVED)`**，并纳入「仅看异常 (`ABNORMAL`)」过滤集；
+     - 在**逻辑视图**下，该状态直接渲染在 `X ➔ A (接口库)` 契约边上；
+     - 在**物理视图**下（因接口库 `A` 不存在），`overlay.ts` 自动按 `(src_process_id, dst_contract_id)` 动态合成虚拟终点节点 **`[实现待定: <service_name>]`**（节点 ID 形如 `virtual_impl_unresolved_<contract_id>`，复用 `ExternalNode.tsx` 琥珀色虚线告警样式），并将琥珀色虚线边挂载于 `ProcX ➔ [实现待定: <service_name>]`；点击该边或虚拟节点，右侧抽屉直接列出未匹配的对端 `dst_addr` 样本与修复指引（`“请为该环境的对端进程配置 advertise_ip 或挂载对应标准架构进程”`）。
+
+#### 4.8.3 治理大盘 (`/dashboard`) 契约实现覆盖率指标 (`F-24` / [`ADR-16`](../05-adr/16-multi-implementation-service-contract-adr.md))
+
+在 `/dashboard` 治理全景大盘（`DashboardWorkbenchPage.tsx`）的契约认领与架构覆盖卡片中，新增**多实现契约实现覆盖率 (`contract_impl_coverage`)** 统计维度：
+- **契约认领判定**：已在 `traefik_service_contracts` 登记为多实现契约的 `service_name` 视为已被架构认领（不再计入孤儿 Proto 服务）；
+- **实现覆盖率展示**：展示 `已落地进程绑定的多实现契约数 / 多实现契约总数` 以及累计注册的 `实现分支总数 (impl_count)`；若存在已登记契约但尚无任何绑定进程的实现模块（`deployed_impl_count == 0`），提供一键深链跳转 `/architecture?tree=logical&module_id=<definer_module_id>` 引导架构师补齐实现模块登记。
+
+#### 4.8.4 多实现服务契约与拓扑扩展 TypeScript DTO 契约（零 `any`）
+
+```typescript
+// frontend/src/types/arch.ts & frontend/src/types/topology_graph.ts
+
+export type ModuleKind = 'BUSINESS' | 'CONTRACT_LIB';
+export type ContractProvideMode = 'MULTI_IMPL';
+export type DependencyTargetMode = 'EXCLUSIVE_OR_SPECIFIC_IMPL' | 'CONTRACT_DISPATCH' | 'EXTERNAL';
+export type TopoContractMode = 'AGG' | 'EXPAND';
+
+export type VerificationStatus =
+  | 'VERIFIED'
+  | 'EXTERNAL_VERIFIED'
+  | 'UNCOVERED'
+  | 'UNDEPLOYED'
+  | 'UNATTRIBUTED'
+  | 'IMPL_UNRESOLVED'      // [M20 新增第八类] 契约已匹配但目的实现进程未定位 (琥珀色虚线 var(--color-warning))
+  | 'EXTERNAL_UNDECLARED'
+  | 'VIOLATION';
+
+export type GraphEdgeKind =
+  | 'INTRA_PROCESS'
+  | 'CROSS_PROCESS'
+  | 'UNDEPLOYED'
+  | 'EXTERNAL'
+  | 'REALIZATION'          // [M20 新增] 实现模块 ⇢ 接口契约库模块 (UML 空心三角虚线，不参与环路检测与调用聚合)
+  | 'VIOLATION'
+  | 'UNATTRIBUTED'
+  | 'IMPL_UNRESOLVED';
+
+export interface ServiceContractImplementationItemDTO {
+  service_id: string;
+  contract_id: string;
+  impl_key: string;                 // 如 "b", "channel_wechat"
+  module_id: string;
+  module_code: string;
+  module_name: string;
+  arch_process_id?: string | null;
+  arch_process_code?: string;
+  arch_process_name?: string;
+  owner?: string;
+  latest_verify_status?: VerificationStatus;
+}
+
+export interface ServiceContractDispatchConsumerDTO {
+  dependency_id: string;
+  consumer_module_id: string;
+  consumer_module_code: string;
+  consumer_module_name: string;
+  arch_process_id?: string | null;
+  arch_process_name?: string;
+}
+
+export interface ServiceContractDTO {
+  id: string;
+  service_name: string;             // "{package}.{serviceName}"
+  definer_module_id: string;        // 指向 module_kind === 'CONTRACT_LIB' 的模块
+  definer_module_code?: string;
+  definer_module_name?: string;
+  provide_mode: ContractProvideMode;
+  impl_key_label: string;           // 如 "业务类型 biz_type"
+  description: string;
+  impl_count: number;
+  deployed_impl_count: number;
+  dispatch_consumer_count: number;
+  implementations?: ServiceContractImplementationItemDTO[];
+  dispatch_consumers?: ServiceContractDispatchConsumerDTO[];
+  created_at: string;
+  updated_at: string;
+}
+```
+
 ---
 
 ## 5. RBAC 权限矩阵与操作审计接入规范 (RBAC & Audit Governance)
@@ -919,8 +1050,8 @@ export interface BusinessSummaryProps {
 | 业务资源与操作动作 | 免密访客 | 普通认证用户 (JWT) | 模块管理员 (`traefik_admin` / `super_admin`) |
 | :--- | :---: | :---: | :---: |
 | 健康检查 (`/api/health`) 与认证配置 (`/api/auth/*`) | 允许 | 允许 | 允许 |
-| 查看公共三级逻辑架构、**物理进程蓝图 (`ArchProcessGroup / ArchProcess`)**、模块契约、静态拓扑与 `.pb` 映射 | `401` | **允许** | **允许** |
-| 新增 / 修改 / 移动 / 删除公共逻辑架构元素、**物理进程组与标准架构进程蓝图**、`.pb` 描述集管理 | `401` | `403` | **允许** |
+| 查看公共三级逻辑架构、**物理进程蓝图 (`ArchProcessGroup / ArchProcess`)**、**多实现服务契约 (`ServiceContract`)**、模块契约、静态拓扑与 `.pb` 映射 | `401` | **允许** | **允许** |
+| 新增 / 修改 / 移动 / 删除公共逻辑架构元素、**接口契约库与多实现服务契约登记/独占升级**、**物理进程组与标准架构进程蓝图**、`.pb` 描述集管理 | `401` | `403` | **允许** |
 | 查看公共 `SHARED` Agent、挂载进程就绪灯态并刷新就绪诊断；创建并全权管理**本人 `PRIVATE` Agent**（`1:1` 勾选挂载架构进程、本地覆盖、预挂/暂停探针） | `401` | **允许**（访问或开关他人 `PRIVATE` Agent 探针返 `403`；修改 `SHARED` Agent 挂载配置返 `403`） | **允许**（全团队 `SHARED` 与各用户 `PRIVATE` Agent 均可见；负责管理 `SHARED` Agent 挂载/探针及强制释放异常租约） |
 | 租用空闲的 `SHARED` Agent 或本人的 `PRIVATE` Agent **启动/停止录制** | `401` | **允许**（若目标 Agent 已被占用返 `409 Conflict`） | **允许**（同样遵守动态排他租约 `409` 互斥） |
 | 查看 `SHARED` 录制素材及**本人的 `PRIVATE` 录制素材**；将本人 `PRIVATE` 素材发布为 `SHARED` 或删除本人 `PRIVATE` 素材 | `401` | **允许**（访问或删除他人 `PRIVATE` 素材返 `403`；删除公共 `SHARED` 素材返 `403`） | **允许**（全团队 `SHARED` 与所有用户的 `PRIVATE` 录制素材均可见与审计；可治理并删除无引用的素材） |
@@ -933,7 +1064,7 @@ export interface BusinessSummaryProps {
 
 | 审计子模块 (`module`) | 动作标识 (`action`) | 风险等级 | `before` / `after` 快照策略与必含上下文 |
 | :--- | :--- | :---: | :--- |
-| `traefik_arch` | `create` / `update` / `move` / `delete` | `P1` (删除) / `P2` | 传入变更前后的 `Subsystem` / `FunctionalGroup` / `Module` / `ModuleService` / `ModuleDependency` / `ArchProcessGroup` / `ArchProcess` 结构体快照 |
+| `traefik_arch` | `create` / `update` / `move` / `delete` / `convert_contract` | `P1` (删除/转换) / `P2` | 传入变更前后的 `Subsystem` / `FunctionalGroup` / `Module` / `ServiceContract` / `ModuleService` / `ModuleDependency` / `ArchProcessGroup` / `ArchProcess` 结构体快照 |
 | `traefik_agent` | `create` / `update` / `delete` / `sync_mounts` / `toggle_probe` / `force_unlock_lease` | `P1` | 传入 `Agent`（含 `scope`、`owner_id`、`endpoint`）或 `Process` 挂载实例（含 `arch_process_id`、`override_listen_port`、`override_cmd_pattern`、`probe_desired_state`）快照；管理员强制解锁记录原持锁人及原因 |
 | `traefik_schema` | `upload` / `activate` / `delete` / `update_op_ignores` | `P1` | 记录描述集 `name`、`version`、`file_sha256`、`is_active` 切换前后版本对比及方法级 `diff_ignore_paths` 变更（剔除大体积 `descriptor_bytes` 二进制字段） |
 | `traefik_record` | `start_session` / `stop_session` / `publish_session` / `delete_session` | `P1` | 操作事件审计：记录操作人、`session_no`、`scope`（`SHARED`/`PRIVATE`）、加锁的 `agent_id` 与 `process_id` 列表、停止原因 |

@@ -17,18 +17,18 @@ docs/
 │   ├── 04-tdd-implementation-prompt.md            # 阶段四：TDD 红-绿-重构编码实施与全链路交付验证提示词
 │   └── 05-e2e-browser-test-and-ux-review-goal-prompt.md # 阶段四/验收：微前端全链路端到端黑盒测试与产品交互体验走查 Goal 提示词
 ├── 01-features/     # 特性与需求边界：特性清单矩阵 (Feature Matrix)、P0~P2 优先级与 Non-Goals
-│   └── 01-feature-matrix.md                       # 阶段一：需求范围、核心特性矩阵 (F-01~F-27 含子特性) 与验收场景 (SC-01~SC-10)
+│   └── 01-feature-matrix.md                       # 阶段一：需求范围、核心特性矩阵 (F-01~F-27 含子特性) 与验收场景 (SC-01~SC-12)
 ├── 02-design/       # 系统技术架构 (SDD)：双子系统边界、数据面引擎、业务拓扑与数据模型
 │   ├── 01-system-architecture.md                  # 【总览篇】系统总体架构、双模拓扑、主从信道与全链路时序
 │   ├── 02-data-plane-and-cros-rpc-engine.md       # 【数据面篇】CROS RPC 协议栈、Agent eBPF 采集与自愈重放引擎
 │   ├── 03-architecture-elements-and-topology.md   # 【业务篇】架构元素建模 (SSOT)、模块接口契约与拓扑验证
 │   ├── 04-control-plane-and-web-console.md        # 【管理面篇】Server 控制面、微前端控制台、Protobuf 编解码与回归 Diff
-│   ├── 05-database-schema.md                      # 【数据模型篇】18 张 traefik_* 物理表 GORM 字典、黄金套件快照、拓扑布局书签、分区表与索引设计
+│   ├── 05-database-schema.md                      # 【数据模型篇】19 张 traefik_* 物理表 GORM 字典、多实现服务契约、黄金套件快照、拓扑布局书签、分区表与索引设计
 │   └── 06-agent-observability-and-self-healing-design.md # 【运维可观测与自愈篇】Agent 探针特权感知、体检诊断与全链路闭环自愈设计
 ├── 03-api/          # 接口与数据契约：RESTful / SSE API 签名、主从信道契约、RBAC 权限与审计规范
 │   └── 01-http-api-contract.md                    # 【API 契约】控制面 REST/SSE 字典、CI 门禁契约、主从 HTTP/WS 契约与 RBAC 守卫
-├── 04-tasks/        # TDD 实施规划与验收：Milestone 1~19 依赖拓扑、任务作战卡与自动化验收标准 (AC)
-│   ├── 01-roadmap.md                              # 【工程路线图】模板清理策略、M1~M19 DAG 拓扑、F/SC 覆盖矩阵与安全质量门禁
+├── 04-tasks/        # TDD 实施规划与验收：Milestone 1~20 依赖拓扑、任务作战卡与自动化验收标准 (AC)
+│   ├── 01-roadmap.md                              # 【工程路线图】模板清理策略、M1~M20 DAG 拓扑、F/SC 覆盖矩阵与安全质量门禁
 │   ├── 02-m1-crosrpc-and-domain-models.md         # 【M1 作战卡】协议栈 (pkg/crosrpc)、信封协议与 13 张表/分区管理器
 │   ├── 03-m2-arch-proto-and-agent-control.md      # 【M2 作战卡】三级架构元素、.pb 动态编解码与公私域 Agent 排他租约管控
 │   ├── 04-m3-agent-dataplane-ebpf-and-replay.md   # 【M3 作战卡】数据面 Agent 信道、cilium/ebpf 采集与零 .pb 二进制自愈重放
@@ -47,7 +47,8 @@ docs/
 │   ├── 17-m16-design-time-breaking-change-radar.md                   # 【M16 作战卡】设计态契约破坏性变更阻断雷达、下游血缘推导与回滚逃生舱
 │   ├── 18-m17-ci-cd-quality-gate-and-automated-enforcement.md        # 【M17 作战卡】CI/CD 自动化强阻断质量门禁、实测边回传与排他锁有界排队
 │   ├── 19-m18-business-centric-packet-inspector-redesign.md          # 【M18 作战卡】面向业务视角的 RPC 报文透视与双模解剖抽屉重构
-│   └── 20-m19-scalable-topology-focus-and-layout-persistence.md      # 【M19 作战卡】大规模架构拓扑渐进式下钻聚焦、多维降噪与双层混合布局持久化
+│   ├── 20-m19-scalable-topology-focus-and-layout-persistence.md      # 【M19 作战卡】大规模架构拓扑渐进式下钻聚焦、多维降噪与双层混合布局持久化
+│   └── 21-m20-multi-implementation-service-contract.md               # 【M20 作战卡】多实现服务契约（接口库定义 + 多进程实现 + 调度中心分发）建模、拓扑与验证
 ├── 05-adr/          # 架构决策记录 (ADR)：重大技术选型与权衡记录 (Architecture Decision Records)
 │   ├── 01-microfrontend-and-table-prefix-isolation.md                  # ADR-01：微前端集成、共享库表前缀隔离与 TDD 测试策略
 │   ├── 02-ebpf-hook-and-dual-subsystem-adr.md                          # ADR-02：eBPF 入站旁路钩子、Cookie 原目的还原与无 Schema 数据面解耦
@@ -64,7 +65,7 @@ docs/
 │   ├── 13-traffic-debug-tree-metadata-hydration-and-ux-repair-adr.md   # ADR-13：独立流量调试台因果树元数据水合缺陷与链路展示降级修复决策
 │   ├── 14-governance-dashboard-golden-suite-and-ci-gate-adr.md        # ADR-14：契约治理全景大盘、黄金用例套件与 CI/CD 发布强阻断门禁架构决策
 │   ├── 15-scalable-topology-focus-and-layout-persistence-adr.md       # ADR-15：大规模架构拓扑渐进式下钻聚焦、多维降噪与双层混合布局持久化架构决策
-│   └── 16-multi-implementation-service-contract-adr.md               # ADR-16：多实现服务契约（接口库定义 + 多进程实现 + 调度中心分发）建模与表达架构决策（提议）
+│   └── 16-multi-implementation-service-contract-adr.md               # ADR-16：多实现服务契约（接口库定义 + 多进程实现 + 调度中心分发）建模与表达架构决策
 ├── 06-ops/          # 交付与验证：双模联调、物理隔离数据库测试与生产环境单二进制部署手册
 │   └── 01-verification-and-deployment-guide.md    # 联调验证、自动化回归测试与生产部署操作指南
 └── 07-references/   # 外部参考与上位契约基准：协议包规范、字节字典与领域标准文档
