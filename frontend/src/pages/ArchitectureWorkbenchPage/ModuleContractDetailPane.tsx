@@ -13,12 +13,12 @@ import {
   CheckCircle2,
   AlertTriangle,
   FileCode,
-  Edit3,
 } from 'lucide-react';
 import { Drawer, Modal } from '@code/common';
 import { useToast } from '../../utils/toast';
 import { useModulePath } from '../../hooks/useModulePath';
 import * as archApi from '../../api/arch';
+import { ProtoServiceSelectorField, type ProtoServiceInputMode } from './ProtoServiceSelectorField';
 import type {
   Module,
   ModuleService,
@@ -113,7 +113,7 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
   // 1. 声明供给服务 Drawer
   const [isProvideDrawerOpen, setIsProvideDrawerOpen] = useState(false);
   const [provideSubmitting, setProvideSubmitting] = useState(false);
-  const [provideMode, setProvideMode] = useState<'CLAIM' | 'MANUAL'>('CLAIM');
+  const [provideMode, setProvideMode] = useState<ProtoServiceInputMode>('CLAIM');
   const [claimableServices, setClaimableServices] = useState<ClaimableProtoServiceItem[]>([]);
   const [loadingClaimable, setLoadingClaimable] = useState(false);
   const [provideForm, setProvideForm] = useState({
@@ -132,6 +132,7 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
   const [selectedContractDetail, setSelectedContractDetail] = useState<ServiceContract | null>(null);
   const [isContractDrawerOpen, setIsContractDrawerOpen] = useState(false);
   const [contractSubmitting, setContractSubmitting] = useState(false);
+  const [contractMode, setContractMode] = useState<ProtoServiceInputMode>('CLAIM');
   const [contractForm, setContractForm] = useState({
     service_name: '',
     impl_key_label: '',
@@ -187,9 +188,9 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
     void loadAllContracts();
   }, [loadAllContracts]);
 
-  // 打开声明供给服务抽屉时自动加载已激活的 Proto 服务
+  // 打开声明供给服务或登记多实现契约抽屉时自动加载已激活的 Proto 服务
   useEffect(() => {
-    if (isProvideDrawerOpen) {
+    if (isProvideDrawerOpen || isContractDrawerOpen) {
       setLoadingClaimable(true);
       void archApi
         .listClaimableProtoServices()
@@ -204,11 +205,22 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
         });
       void loadAllContracts();
     }
-  }, [isProvideDrawerOpen, loadAllContracts]);
+  }, [isProvideDrawerOpen, isContractDrawerOpen, loadAllContracts]);
 
   const selectedClaimableItem = claimableServices.find(
     (s) => s.service_name === provideForm.service_name
   );
+  const selectedContractClaimableItem = claimableServices.find(
+    (s) => s.service_name === contractForm.service_name
+  );
+  const isContractClaimConflict =
+    contractMode === 'CLAIM' &&
+    Boolean(
+      selectedContractClaimableItem?.is_claimed ||
+        selectedContractClaimableItem?.is_multi_impl ||
+        (contractForm.service_name &&
+          allContracts.some((c) => c.service_name === contractForm.service_name))
+    );
   const matchedContract = allContracts.find(
     (c) => c.service_name === provideForm.service_name
   );
@@ -394,6 +406,7 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
       toast.error('请输入或选择服务契约名称');
       return;
     }
+    if (isContractClaimConflict) return;
     setContractSubmitting(true);
     try {
       await archApi.createServiceContract({
@@ -405,6 +418,7 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
       toast.success(`多实现契约 [${contractForm.service_name}] 登记成功`);
       setIsContractDrawerOpen(false);
       setContractForm({ service_name: '', impl_key_label: '', description: '' });
+      setContractMode('CLAIM');
       await loadContracts(selectedModule.id);
       await loadAllContracts();
     } catch (err) {
@@ -828,6 +842,7 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
                     data-testid="add-contract-btn"
                     onClick={() => {
                       setContractForm({ service_name: '', impl_key_label: '', description: '' });
+                      setContractMode('CLAIM');
                       setIsContractDrawerOpen(true);
                     }}
                   >
@@ -1641,143 +1656,19 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
         }
       >
         <div className="code-form">
-          {/* 声明模式切换 Tab */}
-          <div className="code-form-item">
-            <label className="code-form-label">服务声明方式 *:</label>
-            <div className="code-type-selector-tabs">
-              <button
-                type="button"
-                className={`code-type-selector-tab ${provideMode === 'CLAIM' ? 'code-type-selector-tab--active' : ''}`}
-                onClick={() => setProvideMode('CLAIM')}
-              >
-                <FileCode size={14} style={{ marginRight: '0.35rem' }} />
-                从已激活 Proto Service 认领
-              </button>
-              <button
-                type="button"
-                className={`code-type-selector-tab ${provideMode === 'MANUAL' ? 'code-type-selector-tab--active' : ''}`}
-                onClick={() => setProvideMode('MANUAL')}
-              >
-                <Edit3 size={14} style={{ marginRight: '0.35rem' }} />
-                手动预先输入声明
-              </button>
-            </div>
-          </div>
-
-          {provideMode === 'CLAIM' ? (
-            <div className="code-form-item">
-              <label className="code-form-label">选择待认领的 Proto Service *:</label>
-              {loadingClaimable ? (
-                <div className="code-color-muted code-text-sm">正在加载全系统已激活 Proto 服务...</div>
-              ) : (
-                <select
-                  className="code-select"
-                  value={provideForm.service_name}
-                  onChange={(e) =>
-                    setProvideForm({ ...provideForm, service_name: e.target.value, published_service_name: '' })
-                  }
-                >
-                  <option value="">-- 请选择全系统已上传并激活的 Proto Service --</option>
-                  {claimableServices.map((item) => {
-                    const isKnownContract = allContracts.some((c) => c.service_name === item.service_name);
-                    return (
-                      <option
-                        key={item.service_name}
-                        value={item.service_name}
-                        disabled={item.is_claimed && !isKnownContract}
-                      >
-                        {item.service_name} ({item.operation_count} 个方法 | Schema: {item.schema_name})
-                        {isKnownContract
-                          ? ' [多实现 LIB 契约 · 可添加实现]'
-                          : item.is_claimed
-                          ? ` [已被 ${item.claimed_by_module?.name || '其他模块'} 占用]`
-                          : ' [可认领]'}
-                      </option>
-                    );
-                  })}
-                </select>
-              )}
-              {claimableServices.length === 0 && !loadingClaimable && (
-                <span className="code-form-help code-color-warning">
-                  当前平台暂无已上传或激活的 .pb IDL 描述集。您可以切换至「手动预先输入声明」，或先前往【Proto 描述集】工作台上传激活。
-                </span>
-              )}
-
-              {/* 选中 Service 的详情画像预览 */}
-              {selectedClaimableItem && (
-                <div
-                  style={{
-                    marginTop: '0.75rem',
-                    padding: '0.75rem',
-                    borderRadius: 'var(--radius-md, 6px)',
-                    background: 'var(--color-bg-muted, rgba(0,0,0,0.02))',
-                    border: '1px solid var(--color-border-primary, rgba(0,0,0,0.08))',
-                  }}
-                >
-                  <div
-                    style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                      marginBottom: '0.5rem',
-                    }}
-                  >
-                    <span style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>
-                      {selectedClaimableItem.service_name}
-                    </span>
-                    <span
-                      className={`code-badge ${
-                        selectedClaimableItem.is_claimed ? 'code-badge--warning' : 'code-badge--success'
-                      }`}
-                    >
-                      {selectedClaimableItem.is_claimed
-                        ? `已由 ${selectedClaimableItem.claimed_by_module?.name} [${selectedClaimableItem.claimed_by_module?.code}] 占用`
-                        : '可自由认领'}
-                    </span>
-                  </div>
-                  <div style={{ fontSize: '0.8125rem', color: 'var(--color-text-secondary)', marginBottom: '0.5rem' }}>
-                    所属 Schema: <strong>{selectedClaimableItem.schema_name}</strong> | 包名:{' '}
-                    <code>{selectedClaimableItem.proto_package || '(无)'}</code> | 包含方法数:{' '}
-                    <strong>{selectedClaimableItem.operation_count}</strong>
-                  </div>
-                  {selectedClaimableItem.operations.length > 0 && (
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', marginTop: '0.25rem' }}>
-                      {selectedClaimableItem.operations.map((op) => (
-                        <span
-                          key={op}
-                          style={{
-                            fontSize: '0.75rem',
-                            padding: '0.15rem 0.4rem',
-                            borderRadius: '4px',
-                            background: 'var(--color-bg-surface, #fff)',
-                            border: '1px solid var(--color-border-primary, #e2e8f0)',
-                            color: 'var(--color-text-primary)',
-                            fontFamily: 'monospace',
-                          }}
-                        >
-                          {op}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="code-form-item">
-              <label className="code-form-label">服务名称 (service_name) *:</label>
-              <input
-                type="text"
-                className="code-input"
-                value={provideForm.service_name}
-                onChange={(e) =>
-                  setProvideForm({ ...provideForm, service_name: e.target.value, published_service_name: '' })
-                }
-                placeholder="建议格式: {package}.{serviceName}，如 dophi.order.v1.TradeService"
-              />
-              <span className="code-form-help">全平台全局唯一的服务契约名称，遵循点分命名规范，其他 FM 或网关将基于此服务名发起调用</span>
-            </div>
-          )}
+          <ProtoServiceSelectorField
+            intent="PROVIDE"
+            mode={provideMode}
+            onModeChange={setProvideMode}
+            serviceName={provideForm.service_name}
+            onServiceNameChange={(name) =>
+              setProvideForm({ ...provideForm, service_name: name, published_service_name: '' })
+            }
+            claimableServices={claimableServices}
+            loadingClaimable={loadingClaimable}
+            allContracts={allContracts}
+            testIdPrefix="provide"
+          />
 
           {matchedContract && (
             <div
@@ -2163,7 +2054,7 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
               className="code-btn code-btn--primary"
               data-testid="submit-contract-btn"
               onClick={() => void handleSubmitContract()}
-              disabled={contractSubmitting || !contractForm.service_name.trim()}
+              disabled={contractSubmitting || !contractForm.service_name.trim() || isContractClaimConflict}
             >
               {contractSubmitting ? '保存中...' : '确认登记'}
             </button>
@@ -2171,18 +2062,17 @@ export const ModuleContractDetailPane: React.FC<ModuleContractDetailPaneProps> =
         }
       >
         <div className="code-form">
-          <div className="code-form-item">
-            <label className="code-form-label">服务契约名称 (service_name) *:</label>
-            <input
-              type="text"
-              className="code-input"
-              data-testid="contract-service-name-input"
-              value={contractForm.service_name}
-              onChange={(e) => setContractForm({ ...contractForm, service_name: e.target.value })}
-              placeholder="建议格式: {package}.{serviceName}，如 dophi.payment.v1.PayService"
-            />
-            <span className="code-form-help">全平台唯一的服务契约 IDL 标识，对应 .pb 中的点分服务规范</span>
-          </div>
+          <ProtoServiceSelectorField
+            intent="CONTRACT"
+            mode={contractMode}
+            onModeChange={setContractMode}
+            serviceName={contractForm.service_name}
+            onServiceNameChange={(name) => setContractForm({ ...contractForm, service_name: name })}
+            claimableServices={claimableServices}
+            loadingClaimable={loadingClaimable}
+            allContracts={allContracts}
+            testIdPrefix="contract"
+          />
           <div className="code-form-item">
             <label className="code-form-label">分支标识说明 (impl_key_label):</label>
             <input

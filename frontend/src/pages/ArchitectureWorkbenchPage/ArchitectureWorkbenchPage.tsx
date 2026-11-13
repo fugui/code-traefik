@@ -1042,6 +1042,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
                 setSelectedSubsystemId(subId);
                 setSelectedGroupId('');
                 setSelectedModuleId('');
+                setSelectedModule(null);
                 updateParams({ subsystem_id: subId, group_id: null, module_id: null });
               }}
               groupTree={groupTree}
@@ -1054,6 +1055,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
                 setSelectedSubsystemId(subId);
                 setSelectedGroupId(grpId);
                 setSelectedModuleId('');
+                setSelectedModule(null);
                 updateParams({ subsystem_id: subId, group_id: grpId, module_id: null });
               }}
               modules={subsystemModules}
@@ -1142,6 +1144,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
 
             {selectedModule ? (
               <ModuleContractDetailPane
+                key={selectedModule.id}
                 modules={modules}
                 selectedModuleId={selectedModuleId}
                 onSelectModule={(id) => {

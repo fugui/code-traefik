@@ -1,8 +1,18 @@
 import { describe, it, expect } from 'vitest';
 import { renderToString } from 'react-dom/server';
 import { MemoryRouter } from 'react-router-dom';
-import type { Module, ModuleService, ModuleDependency, Subsystem, FunctionalGroupTreeNode, Process } from '../../../types';
+import type {
+  Module,
+  ModuleService,
+  ModuleDependency,
+  Subsystem,
+  FunctionalGroupTreeNode,
+  Process,
+  ClaimableProtoServiceItem,
+  ServiceContract,
+} from '../../../types';
 import { ModuleContractDetailPane } from '../ModuleContractDetailPane';
+import { ProtoServiceSelectorField } from '../ProtoServiceSelectorField';
 import * as archApi from '../../../api/arch';
 
 describe('AC-M20-04 ModuleContractDetailPane Multi-Implementation Tests', () => {
@@ -280,5 +290,115 @@ describe('AC-M20-04 ModuleContractDetailPane Multi-Implementation Tests', () => 
     expect(normalizedHtml).toContain('data-testid="badge-dispatch-dep-dep-dispatch-1"');
     expect(normalizedHtml).toContain('DISPATCH');
     expect(normalizedHtml).toContain('支付统一接口契约库');
+  });
+
+  it('renders ProtoServiceSelectorField in CONTRACT CLAIM mode with status badges, disabled conflicts, and preview card', () => {
+    const claimable: ClaimableProtoServiceItem[] = [
+      {
+        service_name: 'com.fugui.TaskService',
+        proto_package: 'com.fugui',
+        proto_service: 'TaskService',
+        schema_id: 10,
+        schema_name: 'task_v1.pb',
+        operation_count: 2,
+        operations: ['CreateTask', 'QueryTask'],
+        is_claimed: false,
+      },
+      {
+        service_name: 'dophi.pay.v1.PayService',
+        proto_package: 'dophi.pay.v1',
+        proto_service: 'PayService',
+        schema_id: 11,
+        schema_name: 'pay_v1.pb',
+        operation_count: 1,
+        operations: ['Pay'],
+        is_claimed: false,
+        is_multi_impl: true,
+        contract_id: 99,
+      },
+      {
+        service_name: 'dophi.order.v1.OrderService',
+        proto_package: 'dophi.order.v1',
+        proto_service: 'OrderService',
+        schema_id: 12,
+        schema_name: 'order_v1.pb',
+        operation_count: 1,
+        operations: ['CreateOrder'],
+        is_claimed: true,
+        claimed_by_module: { id: '20', code: 'MOD_ORDER', name: '订单中心' },
+      },
+    ];
+
+    const knownContracts: ServiceContract[] = [
+      {
+        id: '99',
+        definer_module_id: 'mod-lib-1',
+        service_name: 'dophi.pay.v1.PayService',
+        provide_mode: 'MULTI_IMPL',
+      },
+    ];
+
+    const html = renderToString(
+      <ProtoServiceSelectorField
+        intent="CONTRACT"
+        mode="CLAIM"
+        onModeChange={noop}
+        serviceName="com.fugui.TaskService"
+        onServiceNameChange={noop}
+        claimableServices={claimable}
+        loadingClaimable={false}
+        allContracts={knownContracts}
+        testIdPrefix="contract"
+      />
+    ).replace(/<!-- -->/g, '');
+
+    expect(html).toContain('data-testid="contract-mode-tabs"');
+    expect(html).toContain('从已激活 Proto Service 选择');
+    expect(html).toContain('手动预先输入声明');
+    expect(html).toContain('data-testid="contract-proto-select"');
+    expect(html).toContain('com.fugui.TaskService (2 个方法 | Schema: task_v1.pb) [可登记]');
+    expect(html).toContain('dophi.pay.v1.PayService (1 个方法 | Schema: pay_v1.pb) [已登记为多实现契约]');
+    expect(html).toContain('dophi.order.v1.OrderService (1 个方法 | Schema: order_v1.pb) [已被 订单中心 独占]');
+    expect(html).toContain('data-testid="contract-proto-preview"');
+    expect(html).toContain('可登记为多实现契约');
+    expect(html).toContain('CreateTask');
+    expect(html).toContain('QueryTask');
+  });
+
+  it('renders ProtoServiceSelectorField in CONTRACT MANUAL mode and empty CLAIM hint', () => {
+    const emptyClaimHtml = renderToString(
+      <ProtoServiceSelectorField
+        intent="CONTRACT"
+        mode="CLAIM"
+        onModeChange={noop}
+        serviceName=""
+        onServiceNameChange={noop}
+        claimableServices={[]}
+        loadingClaimable={false}
+        allContracts={[]}
+        testIdPrefix="contract"
+      />
+    ).replace(/<!-- -->/g, '');
+
+    expect(emptyClaimHtml).toContain('data-testid="contract-proto-empty-hint"');
+    expect(emptyClaimHtml).toContain('手动预先输入声明');
+
+    const manualHtml = renderToString(
+      <ProtoServiceSelectorField
+        intent="CONTRACT"
+        mode="MANUAL"
+        onModeChange={noop}
+        serviceName="com.fugui.FutureService"
+        onServiceNameChange={noop}
+        claimableServices={[]}
+        loadingClaimable={false}
+        allContracts={[]}
+        testIdPrefix="contract"
+      />
+    ).replace(/<!-- -->/g, '');
+
+    expect(manualHtml).toContain('data-testid="contract-service-name-input"');
+    expect(manualHtml).toContain('com.fugui.FutureService');
+    expect(manualHtml).toContain('支持未上传 .pb 前预先登记');
   });
 });

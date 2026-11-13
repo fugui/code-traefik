@@ -301,6 +301,9 @@ export interface ClaimableProtoServiceItem {
   operations: string[];
   is_claimed: boolean;
   claimed_by_module?: ClaimedByModuleInfo | null;
+  is_multi_impl?: boolean;
+  contract_id?: string | number | null;
+  impl_key_label?: string;
 }
 
 export type {
