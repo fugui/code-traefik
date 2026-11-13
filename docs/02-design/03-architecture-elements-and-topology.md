@@ -151,37 +151,36 @@ $$\text{ascServiceName} = \begin{cases} \text{package} + \text{"."} + \text{serv
 * **强校验规则**：
   1. `package` 与 `serviceName` **统一遵循点分连接规范**（`.`，与 `internal/server/decoder/registry.go` 动态解码注册表完全一致；若未声明 `package` 则直接采用 `serviceName`）；
   2. 受限于 CROS RPC 协议头 `CHAR[64]`（含末尾 `\0` 终止符），`service_name` 与 `operation` 字节长度均强制校验为 **`1..63` 位可见 ASCII 字符**（正则：`^[A-Za-z0-9._]{1,63}$` 与 `^[A-Za-z0-9_]{1,63}$`）。
-  3. **唯一性红线（由 [`ADR-16`](../05-adr/16-multi-implementation-service-contract-adr.md) 修订 A-05）**：
-     - **独占契约全局唯一供给（`EXCLUSIVE`，`contract_id IS NULL`）**：对于未登记多实现契约的常规服务，同一 `service_name` 在全库 `traefik_module_services` 中至多只能被 **1 个**业务模块声明为 `PROVIDE`（部分唯一索引 `uk_traefik_mod_svc_name_excl ON (service_name) WHERE contract_id IS NULL`）；第二个模块尝试声明相同独占 `service_name` 时立即拦截返回 `409 Conflict` 并附带已占用模块编码与名称；
-     - **多实现契约按 `(contract_id, impl_key)` 与 `(contract_id, module_id)` 唯一（`MULTI_IMPL`，`contract_id IS NOT NULL`）**：契约本身在 `traefik_service_contracts` 中按 `service_name` 全局唯一（`uk_traefik_svc_contract_name`）；其下各实现行通过部分唯一索引 `uk_traefik_mod_svc_contract_impl ON (contract_id, impl_key) WHERE contract_id IS NOT NULL` 与 `uk_traefik_mod_svc_contract_mod ON (contract_id, module_id) WHERE contract_id IS NOT NULL` 保证同一契约下每个 `impl_key` 唯一且同一模块对同一契约至多实现一次；同一 `service_name` 严禁同时存在独占供给行与多实现契约（详见 §2.2）；
+  3. **唯一性红线（由 [`ADR-16`](../05-adr/16-multi-implementation-service-contract-adr.md) v2.0 修订 A-05）**：
+     - **独占契约与自定义发布名实现全局唯一供给（`contract_id IS NULL OR is_custom_service_name = true`）**：对于独占服务，以及实现多实现契约但自定义了不同于契约原名的运行期发布服务名（如 `DH_SyncService`）的服务，其 `service_name` 在全库部分唯一索引 `uk_traefik_mod_svc_name_excl ON (service_name) WHERE contract_id IS NULL OR is_custom_service_name = true` 保护下保持全局唯一，且自定义发布名不得与任意 `ServiceContract.service_name` 冲突；
+     - **多实现契约按 `(contract_id, impl_key)` 与 `(contract_id, module_id)` 唯一（`MULTI_IMPL`，`contract_id IS NOT NULL`）**：契约本身在 `traefik_service_contracts` 中按 `.pb` 原始 `service_name` 全局唯一（`uk_traefik_svc_contract_name`）；其下各实现行通过部分唯一索引 `uk_traefik_mod_svc_contract_impl` 与 `uk_traefik_mod_svc_contract_mod` 保证同一契约下每个 `impl_key` 唯一且同一模块对同一契约至多实现一次；
      - **消费依赖唯一性**：同一消费模块对同一内部具体服务实现唯一（`UNIQUE(consumer_module_id, service_id)`），对同一多实现分发契约唯一（`uk_traefik_dep_consumer_contract ON (consumer_module_id, contract_id) WHERE contract_id IS NOT NULL`），且同一消费方对同一契约不得同时声明分发依赖与具体实现依赖（`409 Conflict`）。
 
-### 2.2 多实现服务契约、接口库建模与分发依赖 (`F-02.1`, [`ADR-16`](../05-adr/16-multi-implementation-service-contract-adr.md))
+### 2.2 多实现服务契约、接口库建模与分发依赖 (`F-02.1`, [`ADR-16`](../05-adr/16-multi-implementation-service-contract-adr.md) v2.0)
 
-面向「接口库模块 `FM A` 定义 Protobuf 服务 `pkg.IfaceSvc` ➔ 多个不同进程中的业务模块 `FM B / C / D` 各自链接 `A` 并以业务身份 `b / c / d` 实现该服务 ➔ 独立调度中心模块 `X` 按注册表获知各实现的 `IP:Port` 并按内部逻辑分发调用」的典型生产形态，系统建立三层解耦契约模型：
+面向「接口库模块 `FM A` 定义 Protobuf 服务 `pkg.IfaceSvc` ➔ 多个业务模块 `FM B / C / D` 各自实现该服务（可**沿用契约原名**在不同进程中运行，也可**自行定义唯一运行期发布名**如 `DH_SyncService`） ➔ 独立调度中心模块 `X` 分发调用」的生产形态，系统建立三层解耦契约模型：
 
 1. **三方角色与表结构建模**：
    - **接口库模块 (`traefik_modules.module_kind = 'CONTRACT_LIB'`)**：作为设计期契约的定义属主，自身不是运行期部署单元。数据库层施加 `CHECK (module_kind = 'BUSINESS' OR arch_process_id IS NULL)`；调用 `BindModuleProcess` 或为其新增 `PROVIDE`/`DEPEND` 均返回 `400 Bad Request`；
    - **多实现服务契约表 (`traefik_service_contracts`，第 19 张核心业务表)**：
-     - `service_name varchar(128) NOT NULL`（`uk_traefik_svc_contract_name`，格式校验同 A-07）；
+     - `service_name varchar(128) NOT NULL`（`uk_traefik_svc_contract_name`，对应 `.pb` 契约原名，格式校验同 A-07）；
      - `definer_module_id bigint NOT NULL`（FK `traefik_modules(id) ON DELETE RESTRICT`，应用层强制校验目标模块 `module_kind == 'CONTRACT_LIB'`，否则返回 `400`）；
      - `provide_mode varchar(16) NOT NULL DEFAULT 'MULTI_IMPL'`（`CHECK (provide_mode IN ('MULTI_IMPL'))`）；
      - `impl_key_label varchar(64) NOT NULL DEFAULT ''`（实现身份的业务标签说明，如「业务类型」、「渠道编码」）。
    - **服务实现表增量 (`traefik_module_services`)**：
-     - 新增 `contract_id bigint NULL`（FK `traefik_service_contracts(id) ON DELETE RESTRICT`，`NULL` 表示独占契约 `EXCLUSIVE`）与 `impl_key varchar(64) NOT NULL DEFAULT ''`（多实现必填，格式 `^[A-Za-z0-9._-]{1,64}$`）；
-     - 施加 `CHECK ((contract_id IS NULL AND impl_key = '') OR (contract_id IS NOT NULL AND impl_key <> ''))`。
-2. **跨表串行化不变量与存量平滑迁移**：
+     - 新增 `contract_id bigint NULL`（FK `traefik_service_contracts(id) ON DELETE RESTRICT`，`NULL` 表示独占契约 `EXCLUSIVE`）、`impl_key varchar(64) NOT NULL DEFAULT ''`（多实现必填，格式 `^[A-Za-z0-9._-]{1,64}$`）与 `is_custom_service_name boolean NOT NULL DEFAULT false`（标记是否自定义了不同于 `contract.service_name` 的运行期发布名）；
+     - `service_name` 表示运行期线上实际发布的 `ascServiceName`（默认等于 `contract.service_name`，用户可自由修改为 `DH_SyncService` 等任意合法唯一名）；
+     - 施加 `CHECK ((contract_id IS NULL AND impl_key = '') OR (contract_id IS NOT NULL AND impl_key <> ''))` 与 `CHECK (contract_id IS NOT NULL OR is_custom_service_name = false)`。
+2. **跨表串行化不变量、解码别名与存量平滑迁移**：
    - 所有涉及 `service_name` 的契约创建与 `PROVIDE` 声明写事务，首行统一获取 `SELECT pg_advisory_xact_lock(hashtext(service_name))`：
-     - ① 创建多实现契约时，若 `traefik_module_services` 中已存在同名独占行（`contract_id IS NULL`），拒绝并返回 `409 Conflict`（提示先通过转换接口将现有供给方迁移为实现）；
-     - ② 创建 `PROVIDE` 时，若该 `service_name` 已在 `traefik_service_contracts` 登记，则**必须**以实现方式声明（自动关联 `contract_id`；若未提供合法 `impl_key` 则返回 `400 Bad Request`）；
-     - ③ 实现行的 `service_name` 冗余等于 `contract.service_name`，确保既有按服务名的查询索引与解码路径完全兼容；
-     - ④ **存量独占转多实现**：管理员可触发「转换为多实现契约」原子操作，在单事务内创建 `traefik_service_contracts` 行（指定 `CONTRACT_LIB` 库模块）、将既有独占供给行更新为实现行（填入 `impl_key`），并支持将指向该行的既有 `ModuleDependency` 保留为「具体实现依赖」或批量转为「分发依赖 (`contract_id`)」。
+     - ① 创建多实现契约时，若 `traefik_module_services` 中已存在同名独占行或同名自定义发布名实现，拒绝并返回 `409 Conflict`；
+     - ② 创建实现时（传入 `contract_id`）：若未指定自定义 `service_name` 则默认等于 `contract.service_name`（`is_custom_service_name = false`）；若传入不同于 `contract.service_name` 的自定义发布名（`is_custom_service_name = true`），则校验其全系统全局唯一且不与任何 `ServiceContract.service_name` 冲突；
+     - ③ **单份 `.pb` 解码别名映射 (`decoder.Registry`)**：内存编译池维护 `ServiceAliases`（自定义发布名 ➔ `.pb` 契约名）与独立 `ServiceIgnores`，实现单份 LIB `.pb` 透明解码所有自定义运行期发布名；
+     - ④ **存量独占转多实现 / 挂接到既有契约**：提供「转换为多实现契约」（`POST /api/arch/service-contracts/convert`）与「将存量独占服务挂接到既有契约」（`POST /api/arch/service-contracts/:id/attach`，保留其原 `service_name` 如 `DH_SyncService` 与 `service_id`）。
 3. **`A-09` 实现进程互斥守卫 (`AssertContractImplProcessDisjoint`)**：
-   - 依据确认的业务物理事实，**同一多实现契约的各个实现模块必须两两分属不同的标准架构进程 (`ArchProcess`)**（从而使运行期「目的进程 ➔ 唯一实现模块」成为确定性映射，无需依赖报文头或 Payload 字段鉴别）；
-   - 在以下**两个写入口**统一在事务内（持有相关契约咨询锁）执行 `AssertContractImplProcessDisjoint`：
-     - **入口 ① 新增契约实现**（`POST /api/arch/modules/:id/services`）：若当前模块已绑定 `arch_process_id != nil`，检查同 `contract_id` 下其他已绑定进程的实现模块，其 `arch_process_id` 不得与当前模块相同；
-     - **入口 ② 绑定模块到标准进程**（`POST /api/arch/modules/:id/process-binding`）：若当前模块实现了任意多实现契约（存在 `contract_id IS NOT NULL` 的服务行），检查目标 `ArchProcess` 当前承载的模块集合中不得已有同契约的其他实现模块；
-   - 违反时立即回滚并返回 `409 Conflict`（附带冲突的契约 `service_name`、`impl_key` 与占用模块 `code`）；尚未绑定进程的实现模块允许存在（物理视图落入「未部署」容器）。
+   - 仅针对**同一契约下沿用契约原名（`is_custom_service_name = false`）**的同名共享实现模块，强制要求两两分属不同的 `ArchProcess`（从而使运行期「目的进程 ➔ 唯一实现模块」成为确定性映射）；
+   - **自定义唯一发布名实现（`is_custom_service_name = true`）豁免 A-09**，允许部署在同一标准架构进程内；
+   - 在**新增/编辑实现**与**绑定模块到标准进程**两个写入口执行 `AssertContractImplProcessDisjoint`，违反返回 `409 Conflict`。
 4. **分发依赖 (`DISPATCH`) 建模 (`traefik_module_dependencies`)**：
    - 新增可空外键 `contract_id bigint NULL`（FK `traefik_service_contracts(id) ON DELETE RESTRICT`），语义为「调度方运行期可调用该多实现契约下的任意已登记实现」，新增或下线实现模块时无需修改调度方 `X` 的依赖声明；
    - 施加三选一排他约束：`CHECK (num_nonnulls(service_id, contract_id) + (is_external::int) = 1)`（内部具体实现 `service_id`、多实现契约分发 `contract_id`、外部系统 `is_external` 严格三选一）；

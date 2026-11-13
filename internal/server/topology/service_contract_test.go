@@ -374,3 +374,156 @@ func TestServiceContract_ConvertFromExclusive(t *testing.T) {
 		t.Fatalf("期望 contract_id 为 %d，实际: %v", contract.ID, reloadedDep.ContractID)
 	}
 }
+
+func TestServiceContract_CustomPublishedNames_A09ExemptionAndAttach(t *testing.T) {
+	db := setupIsolatedTopologyDB(t)
+
+	sub, _ := CreateSubsystem(db, SubsystemInput{Code: "SUB_V2", Name: "ADR16-V2子系统"})
+	grp, _ := CreateFunctionalGroup(db, FunctionalGroupInput{SubsystemID: sub.ID, Code: "GRP_V2", Name: "ADR16-V2功能组"})
+
+	libMod, err := CreateModule(db, ModuleInput{
+		GroupID:    grp.ID,
+		Code:       "LIB_SYNC",
+		Name:       "SyncService 接口库",
+		ModuleKind: models.ModuleKindContractLib,
+	})
+	if err != nil {
+		t.Fatalf("创建接口库失败: %v", err)
+	}
+
+	contract, err := CreateServiceContract(db, ServiceContractInput{
+		ServiceName:     "SyncService",
+		DefinerModuleID: libMod.ID,
+		ImplKeyLabel:    "业务线",
+	})
+	if err != nil {
+		t.Fatalf("CreateServiceContract 失败: %v", err)
+	}
+
+	pgrp := models.ArchProcessGroup{Code: "APG_V2", Name: "V2进程组"}
+	db.Create(&pgrp)
+	sharedProc := models.ArchProcess{GroupID: pgrp.ID, Code: "PROC_SHARED_SYNC", Name: "共享宿主进程", DefaultListenPort: 19001}
+	db.Create(&sharedProc)
+
+	modDH, _ := CreateModule(db, ModuleInput{GroupID: grp.ID, Code: "MOD_DH", Name: "DH实现", ArchProcessID: &sharedProc.ID})
+	modKH, _ := CreateModule(db, ModuleInput{GroupID: grp.ID, Code: "MOD_KH", Name: "KH实现", ArchProcessID: &sharedProc.ID})
+	modLegacy, _ := CreateModule(db, ModuleInput{GroupID: grp.ID, Code: "MOD_LEGACY", Name: "存量实现", ArchProcessID: &sharedProc.ID})
+	modConsumer, _ := CreateModule(db, ModuleInput{GroupID: grp.ID, Code: "MOD_CONS", Name: "调用方"})
+
+	// 1. 同一 ArchProcess 下允许同一契约的两个自定义唯一服务名实现共存（豁免 A-09）
+	svcDH, err := CreateModuleService(db, ModuleServiceInput{
+		ModuleID:    modDH.ID,
+		ContractID:  &contract.ID,
+		ImplKey:     "DH",
+		ServiceName: "DH_SyncService",
+	})
+	if err != nil {
+		t.Fatalf("创建自定义服务名实现 DH_SyncService 失败: %v", err)
+	}
+	if !svcDH.IsCustomServiceName || svcDH.ServiceName != "DH_SyncService" {
+		t.Fatalf("期望 IsCustomServiceName=true 且 ServiceName=DH_SyncService，实际: %+v", svcDH)
+	}
+
+	svcKH, err := CreateModuleService(db, ModuleServiceInput{
+		ModuleID:    modKH.ID,
+		ContractID:  &contract.ID,
+		ImplKey:     "KH",
+		ServiceName: "KH_SyncService",
+	})
+	if err != nil {
+		t.Fatalf("同一进程添加另一自定义名 KH_SyncService 应豁免 A-09 并成功，实际: %v", err)
+	}
+	if !svcKH.IsCustomServiceName {
+		t.Fatalf("期望 KH_SyncService IsCustomServiceName=true")
+	}
+
+	// 2. 自定义服务名全局互斥：禁止其他模块以独占或自定义名重复声明 DH_SyncService
+	_, err = CreateModuleService(db, ModuleServiceInput{
+		ModuleID:    modConsumer.ID,
+		ServiceName: "DH_SyncService",
+	})
+	var conflictErr *ProvideConflictError
+	if !errors.As(err, &conflictErr) {
+		t.Fatalf("重复声明已被占用的自定义运行期服务名期望 ProvideConflictError，实际: %v", err)
+	}
+
+	// 3. 共享契约名实现仍严格遵循 A-09
+	modShared1, _ := CreateModule(db, ModuleInput{GroupID: grp.ID, Code: "MOD_SH1", Name: "共享实现1", ArchProcessID: &sharedProc.ID})
+	modShared2, _ := CreateModule(db, ModuleInput{GroupID: grp.ID, Code: "MOD_SH2", Name: "共享实现2", ArchProcessID: &sharedProc.ID})
+	if _, err := CreateModuleService(db, ModuleServiceInput{
+		ModuleID:   modShared1.ID,
+		ContractID: &contract.ID,
+		ImplKey:    "SH1",
+	}); err != nil {
+		t.Fatalf("首个共享名实现期望成功，实际: %v", err)
+	}
+	if _, err := CreateModuleService(db, ModuleServiceInput{
+		ModuleID:   modShared2.ID,
+		ContractID: &contract.ID,
+		ImplKey:    "SH2",
+	}); !errors.Is(err, ErrContractImplProcessConflict) {
+		t.Fatalf("同进程第二个共享契约名实现期望被 A-09 拦截 (ErrContractImplProcessConflict)，实际: %v", err)
+	}
+
+	// 试图通过 UpdateModuleService 将自定义名 KH_SyncService 改回共享契约名 SyncService，也应触发 A-09
+	sharedName := "SyncService"
+	if _, _, err := UpdateModuleServiceWithOptions(db, UpdateModuleServiceInput{
+		ServiceID:   svcKH.ID,
+		ServiceName: &sharedName,
+	}); !errors.Is(err, ErrContractImplProcessConflict) {
+		t.Fatalf("同进程将自定义名改回共享契约名期望触发 A-09，实际: %v", err)
+	}
+
+	// 4. GetServiceContract 详情应包含每个实现的 ServiceName 与 IsCustomServiceName
+	detail, err := GetServiceContract(db, contract.ID)
+	if err != nil {
+		t.Fatalf("GetServiceContract 失败: %v", err)
+	}
+	foundDH := false
+	for _, impl := range detail.Implementations {
+		if impl.ServiceID == svcDH.ID {
+			foundDH = true
+			if impl.ServiceName != "DH_SyncService" || !impl.IsCustomServiceName {
+				t.Fatalf("实现矩阵行缺少自定义服务名属性: %+v", impl)
+			}
+		}
+	}
+	if !foundDH {
+		t.Fatalf("GetServiceContract 实现矩阵中未找到 DH_SyncService")
+	}
+
+	// 5. AttachExclusiveToMultiImplContract：将存量独占服务 LEGACY_SyncService 无损归入 SyncService 契约
+	legacyExcl, err := CreateModuleService(db, ModuleServiceInput{
+		ModuleID:    modLegacy.ID,
+		ServiceName: "LEGACY_SyncService",
+	})
+	if err != nil {
+		t.Fatalf("创建存量独占服务失败: %v", err)
+	}
+	dep, _ := CreateModuleDependency(db, ModuleDependencyInput{
+		ConsumerModuleID: modConsumer.ID,
+		ServiceID:        &legacyExcl.ID,
+	})
+
+	_, attachedSvc, converted, err := AttachExclusiveToMultiImplContract(db, AttachExclusiveToContractInput{
+		ContractID:                  contract.ID,
+		ServiceID:                   legacyExcl.ID,
+		ImplKey:                     "LEGACY",
+		ConvertDependentsToDispatch: true,
+	})
+	if err != nil {
+		t.Fatalf("AttachExclusiveToMultiImplContract 失败: %v", err)
+	}
+	if attachedSvc.ID != legacyExcl.ID || attachedSvc.ContractID == nil || *attachedSvc.ContractID != contract.ID ||
+		!attachedSvc.IsCustomServiceName || attachedSvc.ServiceName != "LEGACY_SyncService" || attachedSvc.ImplKey != "LEGACY" {
+		t.Fatalf("归入后实现记录属性不符: %+v", attachedSvc)
+	}
+	if converted != 1 {
+		t.Fatalf("期望转换 1 条依赖为 DISPATCH，实际: %d", converted)
+	}
+	var reloadedDep models.ModuleDependency
+	db.First(&reloadedDep, dep.ID)
+	if reloadedDep.ServiceID != nil || reloadedDep.ContractID == nil || *reloadedDep.ContractID != contract.ID {
+		t.Fatalf("原直连依赖未转为 DISPATCH: %+v", reloadedDep)
+	}
+}

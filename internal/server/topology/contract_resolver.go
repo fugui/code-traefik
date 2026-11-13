@@ -20,10 +20,13 @@ type ExclusiveServiceInfo struct {
 
 // ContractImplInfo 多实现契约的单模块实现元信息
 type ContractImplInfo struct {
-	ServiceID     uint64  `json:"service_id"`
-	ModuleID      uint64  `json:"module_id"`
-	ArchProcessID *uint64 `json:"arch_process_id"`
-	ImplKey       string  `json:"impl_key"`
+	ServiceID           uint64  `json:"service_id"`
+	ContractID          uint64  `json:"contract_id"`
+	ModuleID            uint64  `json:"module_id"`
+	ArchProcessID       *uint64 `json:"arch_process_id"`
+	ImplKey             string  `json:"impl_key"`
+	ServiceName         string  `json:"service_name"`
+	IsCustomServiceName bool    `json:"is_custom_service_name"`
 }
 
 // MultiImplContractInfo 多实现契约元信息
@@ -36,17 +39,19 @@ type MultiImplContractInfo struct {
 
 // ContractResolver 契约与目标模块多级解析器
 type ContractResolver struct {
-	exclusiveMap  map[string]ExclusiveServiceInfo  // serviceName -> ExclusiveServiceInfo
-	contracts     map[string]MultiImplContractInfo // serviceName -> MultiImplContractInfo
-	contractsByID map[uint64]MultiImplContractInfo // contractID -> MultiImplContractInfo
+	exclusiveMap   map[string]ExclusiveServiceInfo  // serviceName -> ExclusiveServiceInfo
+	aliasedImplMap map[string]ContractImplInfo      // publishedCustomServiceName -> ContractImplInfo (ADR-16 v2.0 Tier 1b)
+	contracts      map[string]MultiImplContractInfo // contractServiceName -> MultiImplContractInfo
+	contractsByID  map[uint64]MultiImplContractInfo // contractID -> MultiImplContractInfo
 }
 
 // LoadContractResolver 从数据库加载全部独占服务与多实现契约映射
 func LoadContractResolver(ctx context.Context, db *gorm.DB) (*ContractResolver, error) {
 	resolver := &ContractResolver{
-		exclusiveMap:  make(map[string]ExclusiveServiceInfo),
-		contracts:     make(map[string]MultiImplContractInfo),
-		contractsByID: make(map[uint64]MultiImplContractInfo),
+		exclusiveMap:   make(map[string]ExclusiveServiceInfo),
+		aliasedImplMap: make(map[string]ContractImplInfo),
+		contracts:      make(map[string]MultiImplContractInfo),
+		contractsByID:  make(map[uint64]MultiImplContractInfo),
 	}
 
 	// 1. 加载所有契约
@@ -91,16 +96,24 @@ func LoadContractResolver(ctx context.Context, db *gorm.DB) (*ContractResolver, 
 		} else {
 			// 多实现契约下的服务实现
 			cID := *svc.ContractID
+			cInfo, ok := resolver.contractsByID[cID]
+			isCustom := svc.IsCustomServiceName || (ok && svcName != "" && svcName != cInfo.ServiceName)
 			impl := ContractImplInfo{
-				ServiceID:     svc.ID,
-				ModuleID:      svc.ModuleID,
-				ArchProcessID: archProcID,
-				ImplKey:       svc.ImplKey,
+				ServiceID:           svc.ID,
+				ContractID:          cID,
+				ModuleID:            svc.ModuleID,
+				ArchProcessID:       archProcID,
+				ImplKey:             svc.ImplKey,
+				ServiceName:         svcName,
+				IsCustomServiceName: isCustom,
 			}
-			if cInfo, ok := resolver.contractsByID[cID]; ok {
+			if ok {
 				cInfo.Implementations = append(cInfo.Implementations, impl)
 				resolver.contractsByID[cID] = cInfo
 				resolver.contracts[cInfo.ServiceName] = cInfo
+			}
+			if isCustom && svcName != "" {
+				resolver.aliasedImplMap[svcName] = impl
 			}
 		}
 	}
@@ -110,9 +123,10 @@ func LoadContractResolver(ctx context.Context, db *gorm.DB) (*ContractResolver, 
 
 // ResolveDestinationFull 综合解析目标模块与契约 (三级分流降级)
 // Tier 1: 独占服务 (PROVIDE) -> 确定性 dstModuleID, dstContractID = nil
-// Tier 2: 多实现契约 (MULTI_IMPL) -> dstContractID = contract.ID
+// Tier 1b: 多实现契约自定义唯一运行期服务名 (如 DH_SyncService) -> 确定性 dstModuleID + dstContractID
+// Tier 2: 多实现契约共享名 (MULTI_IMPL, is_custom_service_name=false) -> dstContractID = contract.ID
 //
-//	Fallback 2a: INGRESS 流量若 targetArchProcID 属于某实现模块 -> dstModuleID = impl.ModuleID
+//	Fallback 2a: INGRESS 流量若 targetArchProcID 属于某共享名实现模块 -> dstModuleID = impl.ModuleID
 //	Fallback 2b: dstAddr 匹配会话 endpoint_snapshots -> 穿透对应 ArchProcessID -> dstModuleID
 //	Fallback 2c: dstAddr 匹配宿主机环境进程表 envProcesses (IP:Port -> ArchProcessID) -> dstModuleID
 //	Fallback 2d: 对端进程映射 sessionPeerProc 匹配实现所属 ArchProcessID -> dstModuleID
@@ -139,7 +153,14 @@ func (r *ContractResolver) ResolveDestinationFull(
 		return &mID, nil
 	}
 
-	// 2. Tier 2: 多实现契约
+	// 1b. Tier 1b: 多实现契约的自定义唯一运行期服务名 (如 DH_SyncService)
+	if aliased, ok := r.aliasedImplMap[key]; ok {
+		mID := aliased.ModuleID
+		cID := aliased.ContractID
+		return &mID, &cID
+	}
+
+	// 2. Tier 2: 多实现契约共享服务名（仅匹配未重命名共享契约名的实现 impl）
 	contract, ok := r.contracts[key]
 	if !ok {
 		return nil, nil
@@ -148,9 +169,16 @@ func (r *ContractResolver) ResolveDestinationFull(
 	cID := contract.ContractID
 	dstContractID = &cID
 
+	sharedImpls := make([]ContractImplInfo, 0, len(contract.Implementations))
+	for _, impl := range contract.Implementations {
+		if !impl.IsCustomServiceName {
+			sharedImpls = append(sharedImpls, impl)
+		}
+	}
+
 	// 2a. INGRESS 流量且已知接收进程 ArchProcessID
 	if direction == models.TrafficDirIngress && targetArchProcID > 0 {
-		for _, impl := range contract.Implementations {
+		for _, impl := range sharedImpls {
 			if impl.ArchProcessID != nil && *impl.ArchProcessID == targetArchProcID {
 				mID := impl.ModuleID
 				return &mID, dstContractID
@@ -166,7 +194,7 @@ func (r *ContractResolver) ResolveDestinationFull(
 		for _, snap := range snapshots {
 			if matchSnapshot(snap, cleanDst, dstHost, dstPort) {
 				if snap.ArchProcessID > 0 {
-					for _, impl := range contract.Implementations {
+					for _, impl := range sharedImpls {
 						if impl.ArchProcessID != nil && *impl.ArchProcessID == snap.ArchProcessID {
 							mID := impl.ModuleID
 							return &mID, dstContractID
@@ -174,7 +202,7 @@ func (r *ContractResolver) ResolveDestinationFull(
 					}
 				}
 				for _, snapModID := range snap.ModuleIDs {
-					for _, impl := range contract.Implementations {
+					for _, impl := range sharedImpls {
 						if impl.ModuleID == snapModID {
 							mID := impl.ModuleID
 							return &mID, dstContractID
@@ -188,7 +216,7 @@ func (r *ContractResolver) ResolveDestinationFull(
 	// 2c. 匹配宿主机环境进程表 envProcesses (IP:Port -> ArchProcessID)
 	if len(envProcesses) > 0 && cleanDst != "" {
 		if archPID, ok := envProcesses[cleanDst]; ok && archPID > 0 {
-			for _, impl := range contract.Implementations {
+			for _, impl := range sharedImpls {
 				if impl.ArchProcessID != nil && *impl.ArchProcessID == archPID {
 					mID := impl.ModuleID
 					return &mID, dstContractID
@@ -200,7 +228,7 @@ func (r *ContractResolver) ResolveDestinationFull(
 			for ep, archPID := range envProcesses {
 				_, epPort := parseHostAndPort(ep)
 				if epPort == dstPort && archPID > 0 {
-					for _, impl := range contract.Implementations {
+					for _, impl := range sharedImpls {
 						if impl.ArchProcessID != nil && *impl.ArchProcessID == archPID {
 							mID := impl.ModuleID
 							return &mID, dstContractID
@@ -215,7 +243,7 @@ func (r *ContractResolver) ResolveDestinationFull(
 	if len(sessionPeerProc) > 0 {
 		for _, archPID := range sessionPeerProc {
 			if archPID > 0 {
-				for _, impl := range contract.Implementations {
+				for _, impl := range sharedImpls {
 					if impl.ArchProcessID != nil && *impl.ArchProcessID == archPID {
 						mID := impl.ModuleID
 						return &mID, dstContractID

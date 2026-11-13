@@ -1110,3 +1110,115 @@ func TestCompileTrialPool_BatchActivate_DeactivateReverseDep_AndUnifiedRuntimeDe
 		t.Fatalf("字典树 ReqMessage 为空")
 	}
 }
+
+func TestCompiledRegistry_CustomServiceNameAliasAndPerImplIgnores(t *testing.T) {
+	db := setupIsolatedDecoderDB(t)
+	reg, err := NewRegistry(db)
+	if err != nil {
+		t.Fatalf("NewRegistry 失败: %v", err)
+	}
+
+	tradeBaseBytes := buildTestTradeBaseDescriptorBytes(t, true)
+	tradeBaseV1, _, _, err := reg.UploadSchema(UploadSchemaInput{
+		Name:         "trade-base-alias",
+		Category:     models.ProtoCategoryBaseLib,
+		RawBytes:     tradeBaseBytes,
+		AutoActivate: false,
+	})
+	if err != nil {
+		t.Fatalf("上传 trade-base-alias 失败: %v", err)
+	}
+
+	tradeBizBytes := buildTestTradeBizDescriptorBytes(t)
+	tradeBizV1, _, _, err := reg.UploadSchema(UploadSchemaInput{
+		Name:         "trade-biz-alias",
+		Category:     models.ProtoCategoryBusiness,
+		RawBytes:     tradeBizBytes,
+		AutoActivate: false,
+	})
+	if err != nil {
+		t.Fatalf("上传 trade-biz-alias 失败: %v", err)
+	}
+
+	if _, _, err := reg.BatchActivate([]uint64{tradeBaseV1.ID, tradeBizV1.ID}); err != nil {
+		t.Fatalf("激活测试描述集失败: %v", err)
+	}
+
+	// 搭建 CONTRACT_LIB 契约 trade.biz.TradePayService 以及自定义运行期服务名 DH_TradePayService
+	sub := models.Subsystem{Code: "SUB_DEC_ALIAS", Name: "解码别名子系统"}
+	db.Create(&sub)
+	grp := models.FunctionalGroup{SubsystemID: sub.ID, Code: "GRP_DEC_ALIAS", Name: "解码别名组", Path: "/1/", Level: 1}
+	db.Create(&grp)
+	libMod := models.Module{SubsystemID: sub.ID, GroupID: grp.ID, Code: "LIB_DEC", Name: "接口库", ModuleKind: models.ModuleKindContractLib}
+	bizModDH := models.Module{SubsystemID: sub.ID, GroupID: grp.ID, Code: "BIZ_DH", Name: "DH实现", ModuleKind: models.ModuleKindBusiness}
+	bizModKH := models.Module{SubsystemID: sub.ID, GroupID: grp.ID, Code: "BIZ_KH", Name: "KH实现", ModuleKind: models.ModuleKindBusiness}
+	db.Create(&libMod)
+	db.Create(&bizModDH)
+	db.Create(&bizModKH)
+
+	contract := models.ServiceContract{
+		ServiceName:     "trade.biz.TradePayService",
+		DefinerModuleID: libMod.ID,
+		ProvideMode:     models.ContractProvideModeMultiImpl,
+	}
+	db.Create(&contract)
+
+	dhIgnores, _ := json.Marshal([]string{"trace_id"})
+	db.Create(&models.ModuleService{
+		ModuleID:            bizModDH.ID,
+		ContractID:          &contract.ID,
+		ServiceName:         "DH_TradePayService",
+		ImplKey:             "DH",
+		IsCustomServiceName: true,
+		DiffIgnorePaths:     dhIgnores,
+	})
+	db.Create(&models.ModuleService{
+		ModuleID:            bizModKH.ID,
+		ContractID:          &contract.ID,
+		ServiceName:         "KH_TradePayService",
+		ImplKey:             "KH",
+		IsCustomServiceName: true,
+		DiffIgnorePaths:     []byte("[]"),
+	})
+
+	if err := reg.Reload(); err != nil {
+		t.Fatalf("Reload 失败: %v", err)
+	}
+
+	compiled := reg.compiled.Load()
+	payReqDesc, err := compiled.Files.FindDescriptorByName("trade.biz.TradePayReq")
+	if err != nil {
+		t.Fatalf("未找到 TradePayReq 描述符: %v", err)
+	}
+	payMsgDesc := payReqDesc.(protoreflect.MessageDescriptor)
+	payMsg := dynamicpb.NewMessage(payMsgDesc)
+	moneyFd := payMsgDesc.Fields().ByName("money")
+	moneyMsg := dynamicpb.NewMessage(moneyFd.Message())
+	moneyMsg.Set(moneyFd.Message().Fields().ByName("amount"), protoreflect.ValueOfInt64(4200))
+	payMsg.Set(moneyFd, protoreflect.ValueOfMessage(moneyMsg))
+	payPayload, _ := proto.Marshal(payMsg)
+
+	// 1. 使用自定义运行期服务名 DH_TradePayService 解码同一 LIB .pb
+	resDH := reg.DecodePayloadToJSON("DH_TradePayService", "Pay", crosrpc.MsgTypeReq, payPayload)
+	if resDH.DecodeStatus != DecodeStatusDecodedJSON {
+		t.Fatalf("期望 DH_TradePayService 解码成功 DECODED_JSON, got %s", resDH.DecodeStatus)
+	}
+	var jsonMap map[string]any
+	_ = json.Unmarshal(resDH.JSONBytes, &jsonMap)
+	if jsonMap["money"] == nil {
+		t.Fatalf("DH_TradePayService 解码结果缺少 money 字段: %s", string(resDH.JSONBytes))
+	}
+
+	// 2. 验证每个实现拥有隔离的 DiffIgnorePaths
+	opDH := reg.LookupOperation("DH_TradePayService", "Pay")
+	opKH := reg.LookupOperation("KH_TradePayService", "Pay")
+	if opDH == nil || opKH == nil {
+		t.Fatalf("LookupOperation 别名查询失败")
+	}
+	if opDH.ServiceName != "DH_TradePayService" || len(opDH.ServiceIgnorePaths) != 1 || opDH.ServiceIgnorePaths[0] != "trace_id" {
+		t.Fatalf("DH ServiceIgnorePaths 绑定不准确: %+v", opDH)
+	}
+	if opKH.ServiceName != "KH_TradePayService" || len(opKH.ServiceIgnorePaths) != 0 {
+		t.Fatalf("KH 不应串用 DH 的 ServiceIgnorePaths: %+v", opKH)
+	}
+}

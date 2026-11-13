@@ -60,8 +60,10 @@ type ModuleServiceReq struct {
 	Description     string      `json:"description"`
 }
 
-// UpdateModuleServiceReq 更新供给服务请求体
+// UpdateModuleServiceReq 更新供给服务请求体 (ADR-16 v2.0 支持调整运行期服务名与 impl_key)
 type UpdateModuleServiceReq struct {
+	ServiceName     *string  `json:"service_name"`
+	ImplKey         *string  `json:"impl_key"`
 	DiffIgnorePaths []string `json:"diff_ignore_paths"`
 	Description     string   `json:"description"`
 }
@@ -95,10 +97,27 @@ type UpdateServiceContractReq struct {
 type ConvertExclusiveContractReq struct {
 	ServiceID                   FlexUint64 `json:"service_id"`
 	DefinerModuleID             FlexUint64 `json:"definer_module_id"`
+	TargetDefinerModuleID       FlexUint64 `json:"target_definer_module_id"`
 	ImplKeyLabel                string     `json:"impl_key_label"`
 	InitialImplKey              string     `json:"initial_impl_key"`
+	ImplKeyAlias                string     `json:"impl_key"`
 	ConvertDependentsToDispatch bool       `json:"convert_dependents_to_dispatch"`
+	SwitchDependentsAlias       bool       `json:"switch_dependencies_to_dispatch"`
 	Description                 string     `json:"description"`
+}
+
+// AttachExclusiveContractReq 将存量独占服务归入既有多实现契约请求体 (ADR-16 v2.0)
+type AttachExclusiveContractReq struct {
+	ServiceID                   FlexUint64 `json:"service_id"`
+	ImplKey                     string     `json:"impl_key"`
+	ConvertDependentsToDispatch bool       `json:"convert_dependents_to_dispatch"`
+}
+
+func reloadDecoderRegistryQuietly() {
+	if GlobalDecoderRegistry == nil {
+		return
+	}
+	_ = GlobalDecoderRegistry.Reload()
 }
 
 // ProcessBindingReq 模块进程装载/绑定请求体
@@ -794,6 +813,12 @@ func CreateModuleService(c *gin.Context) {
 	if req.ContractID != nil && req.ContractID.Uint64() > 0 {
 		cid := req.ContractID.Uint64()
 		contractID = &cid
+	} else if strings.TrimSpace(req.ImplKey) != "" && strings.TrimSpace(req.ServiceName) != "" {
+		var matchedContract models.ServiceContract
+		if findErr := models.DB.Where("service_name = ?", strings.TrimSpace(req.ServiceName)).First(&matchedContract).Error; findErr == nil {
+			cid := matchedContract.ID
+			contractID = &cid
+		}
 	}
 
 	item, err := topology.CreateModuleService(models.DB, topology.ModuleServiceInput{
@@ -835,6 +860,7 @@ func CreateModuleService(c *gin.Context) {
 		return
 	}
 
+	reloadDecoderRegistryQuietly()
 	recordAudit(c, "create", commonModels.AuditLevelP2, fmt.Sprintf("创建供给服务契约 [%s]", item.ServiceName), "module_service", item.ID, item.ServiceName, nil, item)
 	c.JSON(http.StatusCreated, item)
 }
@@ -853,16 +879,42 @@ func UpdateModuleService(c *gin.Context) {
 		return
 	}
 
-	before, after, err := topology.UpdateModuleService(models.DB, serviceID, req.DiffIgnorePaths, req.Description)
+	before, after, err := topology.UpdateModuleServiceWithOptions(models.DB, topology.UpdateModuleServiceInput{
+		ServiceID:       serviceID,
+		ServiceName:     req.ServiceName,
+		ImplKey:         req.ImplKey,
+		DiffIgnorePaths: req.DiffIgnorePaths,
+		Description:     req.Description,
+	})
 	if err != nil {
-		if errors.Is(err, topology.ErrModuleServiceNotFound) {
+		var conflictErr *topology.ProvideConflictError
+		if errors.As(err, &conflictErr) {
+			c.JSON(http.StatusConflict, gin.H{
+				"error":              conflictErr.Error(),
+				"conflict_module_id": conflictErr.HolderModuleID,
+				"holder_module_code": conflictErr.HolderModuleCode,
+				"holder_module_name": conflictErr.HolderModuleName,
+			})
+			return
+		}
+		if errors.Is(err, topology.ErrModuleServiceNotFound) || errors.Is(err, topology.ErrServiceContractNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			return
+		}
+		if errors.Is(err, topology.ErrDuplicateImplKey) || errors.Is(err, topology.ErrServiceNameOccupiedByContract) ||
+			errors.Is(err, topology.ErrContractImplProcessConflict) || errors.Is(err, topology.ErrDuplicateModuleService) {
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+			return
+		}
+		if errors.Is(err, topology.ErrInvalidServiceNameFormat) || errors.Is(err, topology.ErrInvalidImplKey) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
+	reloadDecoderRegistryQuietly()
 	recordAudit(c, "update", commonModels.AuditLevelP2, fmt.Sprintf("更新供给服务契约 [%s]", after.ServiceName), "module_service", after.ID, after.ServiceName, before, after)
 	c.JSON(http.StatusOK, after)
 }
@@ -889,6 +941,7 @@ func DeleteModuleService(c *gin.Context) {
 		return
 	}
 
+	reloadDecoderRegistryQuietly()
 	recordAudit(c, "delete", commonModels.AuditLevelP1, fmt.Sprintf("删除供给服务契约 [%s]", deleted.ServiceName), "module_service", deleted.ID, deleted.ServiceName, deleted, nil)
 	c.JSON(http.StatusOK, gin.H{"message": "供给服务契约已删除"})
 }
@@ -1084,6 +1137,7 @@ func CreateServiceContract(c *gin.Context) {
 		return
 	}
 
+	reloadDecoderRegistryQuietly()
 	recordAudit(c, "create", commonModels.AuditLevelP2, fmt.Sprintf("创建多实现服务契约 [%s]", contract.ServiceName), "service_contract", contract.ID, contract.ServiceName, nil, contract)
 	c.JSON(http.StatusCreated, contract)
 }
@@ -1117,6 +1171,7 @@ func UpdateServiceContract(c *gin.Context) {
 		return
 	}
 
+	reloadDecoderRegistryQuietly()
 	recordAudit(c, "update", commonModels.AuditLevelP2, fmt.Sprintf("更新多实现服务契约 [%s]", after.ServiceName), "service_contract", after.ID, after.ServiceName, before, after)
 	c.JSON(http.StatusOK, after)
 }
@@ -1143,6 +1198,7 @@ func DeleteServiceContract(c *gin.Context) {
 		return
 	}
 
+	reloadDecoderRegistryQuietly()
 	recordAudit(c, "delete", commonModels.AuditLevelP1, fmt.Sprintf("删除多实现服务契约 [%s]", deleted.ServiceName), "service_contract", deleted.ID, deleted.ServiceName, deleted, nil)
 	c.JSON(http.StatusOK, gin.H{"message": "服务契约已删除"})
 }
@@ -1156,12 +1212,24 @@ func ConvertExclusiveToMultiImplContract(c *gin.Context) {
 		return
 	}
 
+	var definerID uint64
+	if req.DefinerModuleID.Uint64() > 0 {
+		definerID = req.DefinerModuleID.Uint64()
+	} else if req.TargetDefinerModuleID.Uint64() > 0 {
+		definerID = req.TargetDefinerModuleID.Uint64()
+	}
+	initialImplKey := req.InitialImplKey
+	if strings.TrimSpace(initialImplKey) == "" {
+		initialImplKey = req.ImplKeyAlias
+	}
+	convertDeps := req.ConvertDependentsToDispatch || req.SwitchDependentsAlias
+
 	contract, svc, err := topology.ConvertExclusiveToMultiImplContract(models.DB, topology.ConvertExclusiveContractInput{
 		ServiceID:                   req.ServiceID.Uint64(),
-		DefinerModuleID:             req.DefinerModuleID.Uint64(),
+		DefinerModuleID:             definerID,
 		ImplKeyLabel:                req.ImplKeyLabel,
-		InitialImplKey:              req.InitialImplKey,
-		ConvertDependentsToDispatch: req.ConvertDependentsToDispatch,
+		InitialImplKey:              initialImplKey,
+		ConvertDependentsToDispatch: convertDeps,
 		Description:                 req.Description,
 		OperatorID:                  uc.UserID,
 	})
@@ -1183,10 +1251,60 @@ func ConvertExclusiveToMultiImplContract(c *gin.Context) {
 		return
 	}
 
+	reloadDecoderRegistryQuietly()
 	recordAudit(c, "create", commonModels.AuditLevelP1, fmt.Sprintf("独占服务升级为多实现契约 [%s]", contract.ServiceName), "service_contract", contract.ID, contract.ServiceName, nil, contract)
 	c.JSON(http.StatusOK, gin.H{
 		"contract": contract,
 		"service":  svc,
+	})
+}
+
+// AttachExclusiveToMultiImplContract POST /api/arch/service-contracts/:id/attach (AdminOnly, ADR-16 v2.0)
+func AttachExclusiveToMultiImplContract(c *gin.Context) {
+	uc := commonAuth.GetUserContext(c)
+	contractID, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil || contractID == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "非法的契约 ID"})
+		return
+	}
+
+	var req AttachExclusiveContractReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数不合法: " + err.Error()})
+		return
+	}
+
+	contract, svc, convertedDeps, err := topology.AttachExclusiveToMultiImplContract(models.DB, topology.AttachExclusiveToContractInput{
+		ContractID:                  contractID,
+		ServiceID:                   req.ServiceID.Uint64(),
+		ImplKey:                     req.ImplKey,
+		ConvertDependentsToDispatch: req.ConvertDependentsToDispatch,
+		OperatorID:                  uc.UserID,
+	})
+	if err != nil {
+		if errors.Is(err, topology.ErrServiceContractNotFound) || errors.Is(err, topology.ErrModuleServiceNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			return
+		}
+		if errors.Is(err, topology.ErrInvalidImplKey) || errors.Is(err, topology.ErrNotExclusiveService) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		if errors.Is(err, topology.ErrDuplicateImplKey) || errors.Is(err, topology.ErrModuleAlreadyImplementsContract) ||
+			errors.Is(err, topology.ErrContractImplProcessConflict) {
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	reloadDecoderRegistryQuietly()
+	recordAudit(c, "update", commonModels.AuditLevelP1, fmt.Sprintf("独占服务 [%s] 归入多实现契约 [%s]", svc.ServiceName, contract.ServiceName), "service_contract", contract.ID, contract.ServiceName, nil, svc)
+	c.JSON(http.StatusOK, gin.H{
+		"contract":               contract,
+		"implementation":         svc,
+		"converted_dependencies": convertedDeps,
 	})
 }
 

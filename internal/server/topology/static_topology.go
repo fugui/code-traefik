@@ -97,14 +97,28 @@ type ModuleDependencyInput struct {
 
 // AvailableServiceDTO 可用服务下拉候选项
 type AvailableServiceDTO struct {
-	ServiceID     uint64 `json:"service_id"`
-	ServiceName   string `json:"service_name"`
-	ModuleID      uint64 `json:"module_id"`
-	ModuleCode    string `json:"module_code"`
-	ModuleName    string `json:"module_name"`
-	SubsystemID   uint64 `json:"subsystem_id"`
-	SubsystemName string `json:"subsystem_name"`
-	Description   string `json:"description"`
+	ServiceID           uint64  `json:"service_id"`
+	ServiceName         string  `json:"service_name"`
+	ContractID          *uint64 `json:"contract_id,omitempty"`
+	ContractServiceName string  `json:"contract_service_name,omitempty"`
+	ImplKey             string  `json:"impl_key,omitempty"`
+	IsCustomServiceName bool    `json:"is_custom_service_name,omitempty"`
+	IsMultiImpl         bool    `json:"is_multi_impl,omitempty"`
+	ModuleID            uint64  `json:"module_id"`
+	ModuleCode          string  `json:"module_code"`
+	ModuleName          string  `json:"module_name"`
+	SubsystemID         uint64  `json:"subsystem_id"`
+	SubsystemName       string  `json:"subsystem_name"`
+	Description         string  `json:"description"`
+}
+
+// UpdateModuleServiceInput 更新供给服务入参 (ADR-16 v2.0)
+type UpdateModuleServiceInput struct {
+	ServiceID       uint64
+	ServiceName     *string
+	ImplKey         *string
+	DiffIgnorePaths []string
+	Description     string
 }
 
 // ProcessInput 进程部署与模块承载映射新增/修改入参
@@ -198,6 +212,46 @@ func CreateModuleService(db *gorm.DB, in ModuleServiceInput) (*models.ModuleServ
 				return err
 			}
 
+			// 运行期实际发布的 CROS 服务名：留空则沿用契约名；允许用户自定义唯一名（如 DH_SyncService）
+			publishedName := strings.TrimSpace(in.ServiceName)
+			if publishedName == "" {
+				publishedName = contract.ServiceName
+			}
+			if len(publishedName) == 0 || len(publishedName) > 63 || !serviceNameRegex.MatchString(publishedName) {
+				return ErrInvalidServiceNameFormat
+			}
+			isCustom := publishedName != contract.ServiceName
+
+			if err := lockServiceNamesSorted(tx, contract.ServiceName, publishedName); err != nil {
+				return err
+			}
+
+			if isCustom {
+				// 自定义运行期服务名不得与已有服务契约同名，且不得与独占/其他自定义服务名冲突
+				var contractCount int64
+				if err := tx.Model(&models.ServiceContract{}).Where("service_name = ?", publishedName).Count(&contractCount).Error; err != nil {
+					return err
+				}
+				if contractCount > 0 {
+					return ErrServiceNameOccupiedByContract
+				}
+
+				var existing models.ModuleService
+				findErr := tx.Where("service_name = ? AND (contract_id IS NULL OR is_custom_service_name = true)", publishedName).First(&existing).Error
+				if findErr == nil {
+					var holder models.Module
+					_ = tx.First(&holder, existing.ModuleID).Error
+					return &ProvideConflictError{
+						ServiceName:      publishedName,
+						HolderModuleID:   holder.ID,
+						HolderModuleCode: holder.Code,
+						HolderModuleName: holder.Name,
+					}
+				} else if !errors.Is(findErr, gorm.ErrRecordNotFound) {
+					return findErr
+				}
+			}
+
 			// 校验同一契约下 impl_key 唯一
 			var implCount int64
 			if err := tx.Model(&models.ModuleService{}).
@@ -220,19 +274,24 @@ func CreateModuleService(db *gorm.DB, in ModuleServiceInput) (*models.ModuleServ
 				return ErrModuleAlreadyImplementsContract
 			}
 
-			// 校验 A-09 同契约跨实现进程不相交
-			if err := AssertContractImplProcessDisjoint(tx, in.ModuleID, in.ContractID, mod.ArchProcessID); err != nil {
-				return err
+			// 校验 A-09：仅当多个实现共享同一契约名 (is_custom_service_name = false) 时限制不能部署在同一进程；
+			// 自定义唯一运行期服务名（如 DH_SyncService）豁免 A-09
+			if !isCustom {
+				if err := AssertContractImplProcessDisjoint(tx, in.ModuleID, in.ContractID, mod.ArchProcessID); err != nil {
+					return err
+				}
 			}
 
 			svc := &models.ModuleService{
-				ModuleID:        in.ModuleID,
-				ContractID:      in.ContractID,
-				ServiceName:     contract.ServiceName,
-				ImplKey:         implKey,
-				DiffIgnorePaths: datatypes.JSON(diffPathsJSON),
-				Description:     in.Description,
-				CreatedBy:       in.OperatorID,
+				ModuleID:            in.ModuleID,
+				ContractID:          in.ContractID,
+				ServiceName:         publishedName,
+				ImplKey:             implKey,
+				IsCustomServiceName: isCustom,
+				ContractServiceName: contract.ServiceName,
+				DiffIgnorePaths:     datatypes.JSON(diffPathsJSON),
+				Description:         in.Description,
+				CreatedBy:           in.OperatorID,
 			}
 			if err := tx.Create(svc).Error; err != nil {
 				if strings.Contains(err.Error(), "duplicate") || strings.Contains(err.Error(), "23505") {
@@ -251,6 +310,9 @@ func CreateModuleService(db *gorm.DB, in ModuleServiceInput) (*models.ModuleServ
 	}
 
 	// 2. 独占服务供给分支 (EXCLUSIVE, in.ContractID == nil)
+	if strings.TrimSpace(in.ImplKey) != "" {
+		return nil, ErrInvalidImplKey
+	}
 	serviceName := strings.TrimSpace(in.ServiceName)
 	if len(serviceName) == 0 || len(serviceName) > 63 || !serviceNameRegex.MatchString(serviceName) {
 		return nil, ErrInvalidServiceNameFormat
@@ -272,9 +334,9 @@ func CreateModuleService(db *gorm.DB, in ModuleServiceInput) (*models.ModuleServ
 			return ErrServiceNameOccupiedByContract
 		}
 
-		// 全局独占 PROVIDE 唯一性检查
+		// 全局独占与自定义运行期服务名 PROVIDE 唯一性检查
 		var existing models.ModuleService
-		err := tx.Where("service_name = ? AND contract_id IS NULL", serviceName).First(&existing).Error
+		err := tx.Where("service_name = ? AND (contract_id IS NULL OR is_custom_service_name = true)", serviceName).First(&existing).Error
 		if err == nil {
 			var holder models.Module
 			_ = tx.First(&holder, existing.ModuleID).Error
@@ -312,29 +374,150 @@ func CreateModuleService(db *gorm.DB, in ModuleServiceInput) (*models.ModuleServ
 	return created, nil
 }
 
-// UpdateModuleService 更新供给服务忽略路径与描述
+// UpdateModuleService 更新供给服务忽略路径与描述（向后兼容旧签名）
 func UpdateModuleService(db *gorm.DB, serviceID uint64, diffIgnorePaths []string, description string) (*models.ModuleService, *models.ModuleService, error) {
+	return UpdateModuleServiceWithOptions(db, UpdateModuleServiceInput{
+		ServiceID:       serviceID,
+		DiffIgnorePaths: diffIgnorePaths,
+		Description:     description,
+	})
+}
+
+// UpdateModuleServiceWithOptions 更新供给服务（支持多实现调整运行期服务名/impl_key、忽略路径与描述）
+func UpdateModuleServiceWithOptions(db *gorm.DB, in UpdateModuleServiceInput) (*models.ModuleService, *models.ModuleService, error) {
 	var before models.ModuleService
-	if err := db.First(&before, serviceID).Error; err != nil {
+	if err := db.First(&before, in.ServiceID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil, ErrModuleServiceNotFound
 		}
 		return nil, nil, err
 	}
 
-	diffPathsJSON, _ := json.Marshal(diffIgnorePaths)
-	if diffIgnorePaths == nil {
+	diffPathsJSON, _ := json.Marshal(in.DiffIgnorePaths)
+	if in.DiffIgnorePaths == nil {
 		diffPathsJSON = []byte("[]")
 	}
 
-	after := before
-	after.DiffIgnorePaths = datatypes.JSON(diffPathsJSON)
-	after.Description = description
+	var after models.ModuleService
+	err := db.Transaction(func(tx *gorm.DB) error {
+		newServiceName := before.ServiceName
+		if in.ServiceName != nil {
+			trimmed := strings.TrimSpace(*in.ServiceName)
+			if before.ContractID != nil && trimmed == "" {
+				// 多实现传空串回退为契约名
+				var contract models.ServiceContract
+				if err := tx.First(&contract, *before.ContractID).Error; err != nil {
+					return err
+				}
+				trimmed = contract.ServiceName
+			}
+			if len(trimmed) == 0 || len(trimmed) > 63 || !serviceNameRegex.MatchString(trimmed) {
+				return ErrInvalidServiceNameFormat
+			}
+			newServiceName = trimmed
+		}
 
-	if err := db.Model(&models.ModuleService{}).Where("id = ?", serviceID).Updates(map[string]interface{}{
-		"diff_ignore_paths": datatypes.JSON(diffPathsJSON),
-		"description":       description,
-	}).Error; err != nil {
+		newImplKey := before.ImplKey
+		if in.ImplKey != nil {
+			newImplKey = strings.TrimSpace(*in.ImplKey)
+		}
+
+		// 独占服务不允许修改服务名或设置 impl_key
+		if before.ContractID == nil {
+			if newServiceName != before.ServiceName {
+				return ErrInvalidServiceNameFormat
+			}
+			if newImplKey != "" {
+				return ErrInvalidImplKey
+			}
+			after = before
+			after.DiffIgnorePaths = datatypes.JSON(diffPathsJSON)
+			after.Description = in.Description
+			return tx.Model(&models.ModuleService{}).Where("id = ?", in.ServiceID).Updates(map[string]interface{}{
+				"diff_ignore_paths": datatypes.JSON(diffPathsJSON),
+				"description":       in.Description,
+			}).Error
+		}
+
+		// 多实现契约服务更新分支
+		if !implKeyRegex.MatchString(newImplKey) {
+			return ErrInvalidImplKey
+		}
+
+		var contract models.ServiceContract
+		if err := tx.First(&contract, *before.ContractID).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrServiceContractNotFound
+			}
+			return err
+		}
+
+		newIsCustom := newServiceName != contract.ServiceName
+		if err := lockServiceNamesSorted(tx, contract.ServiceName, before.ServiceName, newServiceName); err != nil {
+			return err
+		}
+
+		if newImplKey != before.ImplKey {
+			var dupImpl int64
+			if err := tx.Model(&models.ModuleService{}).
+				Where("contract_id = ? AND impl_key = ? AND id != ?", *before.ContractID, newImplKey, before.ID).
+				Count(&dupImpl).Error; err != nil {
+				return err
+			}
+			if dupImpl > 0 {
+				return ErrDuplicateImplKey
+			}
+		}
+
+		if newIsCustom && newServiceName != before.ServiceName {
+			var contractCount int64
+			if err := tx.Model(&models.ServiceContract{}).Where("service_name = ?", newServiceName).Count(&contractCount).Error; err != nil {
+				return err
+			}
+			if contractCount > 0 {
+				return ErrServiceNameOccupiedByContract
+			}
+
+			var existing models.ModuleService
+			findErr := tx.Where("service_name = ? AND (contract_id IS NULL OR is_custom_service_name = true) AND id != ?", newServiceName, before.ID).First(&existing).Error
+			if findErr == nil {
+				var holder models.Module
+				_ = tx.First(&holder, existing.ModuleID).Error
+				return &ProvideConflictError{
+					ServiceName:      newServiceName,
+					HolderModuleID:   holder.ID,
+					HolderModuleCode: holder.Code,
+					HolderModuleName: holder.Name,
+				}
+			} else if !errors.Is(findErr, gorm.ErrRecordNotFound) {
+				return findErr
+			}
+		}
+
+		// 从自定义名切换回共享契约名时，须校验 A-09 进程互斥
+		if !newIsCustom && (before.IsCustomServiceName || newServiceName != before.ServiceName) {
+			if err := AssertContractImplProcessDisjoint(tx, before.ModuleID, before.ContractID, nil); err != nil {
+				return err
+			}
+		}
+
+		after = before
+		after.ServiceName = newServiceName
+		after.ImplKey = newImplKey
+		after.IsCustomServiceName = newIsCustom
+		after.ContractServiceName = contract.ServiceName
+		after.DiffIgnorePaths = datatypes.JSON(diffPathsJSON)
+		after.Description = in.Description
+
+		return tx.Model(&models.ModuleService{}).Where("id = ?", in.ServiceID).Updates(map[string]interface{}{
+			"service_name":           newServiceName,
+			"impl_key":               newImplKey,
+			"is_custom_service_name": newIsCustom,
+			"diff_ignore_paths":      datatypes.JSON(diffPathsJSON),
+			"description":            in.Description,
+		}).Error
+	})
+	if err != nil {
 		return nil, nil, err
 	}
 
@@ -368,11 +551,14 @@ func DeleteModuleService(db *gorm.DB, serviceID uint64) (*models.ModuleService, 
 // ListModuleServices 获取模块提供的服务，并统计被依赖数量
 func ListModuleServices(db *gorm.DB, moduleID uint64) ([]models.ModuleService, error) {
 	var services []models.ModuleService
-	if err := db.Where("module_id = ?", moduleID).Order("id ASC").Find(&services).Error; err != nil {
+	if err := db.Preload("Contract.DefinerModule").Where("module_id = ?", moduleID).Order("id ASC").Find(&services).Error; err != nil {
 		return nil, err
 	}
 
 	for i := range services {
+		if services[i].Contract != nil {
+			services[i].ContractServiceName = services[i].Contract.ServiceName
+		}
 		var deps []models.ModuleDependency
 		_ = db.Preload("ConsumerModule.Subsystem").Where("service_id = ?", services[i].ID).Find(&deps).Error
 		services[i].DownstreamCount = len(deps)
@@ -517,7 +703,8 @@ func DeleteModuleDependency(db *gorm.DB, depID uint64) (*models.ModuleDependency
 // ListModuleDependencies 获取指定模块的所有下游依赖
 func ListModuleDependencies(db *gorm.DB, moduleID uint64) ([]models.ModuleDependency, error) {
 	var deps []models.ModuleDependency
-	if err := db.Preload("Service").
+	if err := db.Preload("Service.Contract").
+		Preload("Contract.DefinerModule").
 		Preload("ProviderModule").
 		Preload("ProviderModule.Subsystem").
 		Preload("ProviderModule.ArchProcess").
@@ -531,7 +718,7 @@ func ListModuleDependencies(db *gorm.DB, moduleID uint64) ([]models.ModuleDepend
 // ListAvailableServices 查询系统中所有可供依赖的内部服务清单 (排除自身)
 func ListAvailableServices(db *gorm.DB, excludeModuleID uint64) ([]AvailableServiceDTO, error) {
 	var services []models.ModuleService
-	query := db.Preload("Module").Preload("Module.Subsystem")
+	query := db.Preload("Contract").Preload("Module").Preload("Module.Subsystem")
 	if excludeModuleID > 0 {
 		query = query.Where("module_id != ?", excludeModuleID)
 	}
@@ -542,10 +729,17 @@ func ListAvailableServices(db *gorm.DB, excludeModuleID uint64) ([]AvailableServ
 	result := make([]AvailableServiceDTO, 0, len(services))
 	for _, s := range services {
 		item := AvailableServiceDTO{
-			ServiceID:   s.ID,
-			ServiceName: s.ServiceName,
-			ModuleID:    s.ModuleID,
-			Description: s.Description,
+			ServiceID:           s.ID,
+			ServiceName:         s.ServiceName,
+			ContractID:          s.ContractID,
+			ImplKey:             s.ImplKey,
+			IsCustomServiceName: s.IsCustomServiceName,
+			IsMultiImpl:         s.ContractID != nil && *s.ContractID > 0,
+			ModuleID:            s.ModuleID,
+			Description:         s.Description,
+		}
+		if s.Contract != nil {
+			item.ContractServiceName = s.Contract.ServiceName
 		}
 		if s.Module != nil {
 			item.ModuleCode = s.Module.Code

@@ -366,8 +366,16 @@ func TestExchangeAssemblerDualModeAndLimitAutoStop(t *testing.T) {
 		}, frame)
 	}
 
-	// 等待自动停录协程处理
-	time.Sleep(150 * time.Millisecond)
+	// 等待自动停录协程完成 HTTP /stop 与数据库终态落库
+	deadline := time.Now().Add(3 * time.Second)
+	var updatedSession2 models.RecordingSession
+	for time.Now().Before(deadline) {
+		db.Where("id = ?", session2.ID).First(&updatedSession2)
+		if limitTriggeredSession.Load() == session2.ID && agentStopCalled.Load() && updatedSession2.Status == models.SessionStatusCompletedByLimit {
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
 
 	if limitTriggeredSession.Load() != session2.ID {
 		t.Errorf("预期触发上限停录会话 ID=%d，实际: %d", session2.ID, limitTriggeredSession.Load())
@@ -377,7 +385,6 @@ func TestExchangeAssemblerDualModeAndLimitAutoStop(t *testing.T) {
 	}
 
 	// 断言会话终态为 COMPLETED_BY_LIMIT 且 Agent 排他租约已释放
-	var updatedSession2 models.RecordingSession
 	db.Where("id = ?", session2.ID).First(&updatedSession2)
 	if updatedSession2.Status != models.SessionStatusCompletedByLimit {
 		t.Errorf("预期终态为 COMPLETED_BY_LIMIT，实际: %s", updatedSession2.Status)

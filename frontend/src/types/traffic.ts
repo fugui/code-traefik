@@ -313,6 +313,7 @@ export interface ConsistencyEdge {
   service_name: string;
   operation: string;
   contract_id?: string | number;
+  contract_service_name?: string;
   impl_key?: string;
   category: ConsistencyStatus;
   status?: ConsistencyStatus;

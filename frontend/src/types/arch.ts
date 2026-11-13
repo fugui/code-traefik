@@ -50,16 +50,50 @@ export interface DownstreamConsumer {
 export type ModuleKind = 'BUSINESS' | 'CONTRACT_LIB';
 export type ContractProvideMode = 'EXCLUSIVE' | 'MULTI_IMPL';
 
+export interface ContractImplementationItem {
+  service_id: string | number;
+  service_name: string;
+  is_custom_service_name?: boolean;
+  impl_key: string;
+  module_id: string | number;
+  module_code: string;
+  module_name: string;
+  subsystem_name?: string;
+  arch_process_id?: string | number | null;
+  arch_process_code?: string;
+  arch_process_name?: string;
+  owner?: string;
+  created_at?: string;
+}
+
+export interface ContractDispatchConsumerItem {
+  dependency_id: string | number;
+  module_id: string | number;
+  module_code: string;
+  module_name: string;
+  subsystem_name?: string;
+  arch_process_id?: string | number | null;
+  arch_process_code?: string;
+  arch_process_name?: string;
+  created_at?: string;
+}
+
 export interface ServiceContract {
   id: string | number;
   definer_module_id: string | number;
+  definer_module_code?: string;
+  definer_module_name?: string;
   service_name: string;
   provide_mode: ContractProvideMode;
   impl_key_label?: string;
   description?: string;
   definer_module?: Module;
+  impl_count?: number;
+  deployed_impl_count?: number;
+  dispatch_consumer_count?: number;
   implementation_count?: number;
-  implementations?: ModuleService[];
+  implementations?: Array<ModuleService | ContractImplementationItem>;
+  dispatch_consumers?: ContractDispatchConsumerItem[];
   dispatch_dependency_count?: number;
   dispatch_dependencies?: ModuleDependency[];
   consumer_dependencies?: ModuleDependency[];
@@ -74,6 +108,8 @@ export interface ModuleService {
   service_name: string;
   contract_id?: string | number | null;
   impl_key?: string | null;
+  is_custom_service_name?: boolean;
+  contract_service_name?: string;
   contract?: ServiceContract;
   diff_ignore_paths?: string[];
   description?: string;
@@ -120,6 +156,8 @@ export interface ModuleDependency {
 export interface AvailableServiceItem {
   service_id: string;
   service_name: string;
+  contract_service_name?: string;
+  is_custom_service_name?: boolean;
   module_id: string;
   module_code: string;
   module_name: string;

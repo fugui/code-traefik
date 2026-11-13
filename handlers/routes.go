@@ -107,6 +107,7 @@ func RegisterAPIRoutes(r *gin.Engine) {
 		protected.PUT("/arch/service-contracts/:id", requireAdmin, UpdateServiceContract)
 		protected.DELETE("/arch/service-contracts/:id", requireAdmin, DeleteServiceContract)
 		protected.POST("/arch/service-contracts/convert", requireAdmin, ConvertExclusiveToMultiImplContract)
+		protected.POST("/arch/service-contracts/:id/attach", requireAdmin, AttachExclusiveToMultiImplContract)
 
 		// 4.1 物理进程蓝图域 (ADR-09, M10)
 		protected.GET("/arch/process-groups", ListArchProcessGroups)

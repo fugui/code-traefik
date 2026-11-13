@@ -117,4 +117,79 @@ func TestServiceContract_API_RBACAndConversion(t *testing.T) {
 	if wConv200.Code != http.StatusOK {
 		t.Fatalf("管理员转换契约期望 200 OK，实际: %d %s", wConv200.Code, wConv200.Body.String())
 	}
+
+	// 6. ADR-16 v2.0: 存量独占服务 (如 DH_SyncService) 通过 POST /api/arch/service-contracts/:id/attach 归入既有契约
+	exclAttachSvc := models.ModuleService{
+		ModuleID:    bizMod.ID,
+		ServiceName: "DH_RBACService",
+		Description: "自定义名称存量独占服务",
+	}
+	db.Create(&exclAttachSvc)
+
+	attachBody, _ := json.Marshal(map[string]any{
+		"service_id":                     exclAttachSvc.ID,
+		"impl_key":                       "DH",
+		"convert_dependents_to_dispatch": true,
+	})
+	reqAttach403, _ := http.NewRequest(http.MethodPost, fmt.Sprintf("/api/arch/service-contracts/%d/attach", created.ID), bytes.NewReader(attachBody))
+	reqAttach403.Header.Set("Authorization", "Bearer "+userToken)
+	reqAttach403.Header.Set("Content-Type", "application/json")
+	wAttach403 := httptest.NewRecorder()
+	router.ServeHTTP(wAttach403, reqAttach403)
+	if wAttach403.Code != http.StatusForbidden {
+		t.Fatalf("普通用户归入独占服务期望 403 Forbidden，实际: %d", wAttach403.Code)
+	}
+
+	reqAttach200, _ := http.NewRequest(http.MethodPost, fmt.Sprintf("/api/arch/service-contracts/%d/attach", created.ID), bytes.NewReader(attachBody))
+	reqAttach200.Header.Set("Authorization", "Bearer "+adminToken)
+	reqAttach200.Header.Set("Content-Type", "application/json")
+	wAttach200 := httptest.NewRecorder()
+	router.ServeHTTP(wAttach200, reqAttach200)
+	if wAttach200.Code != http.StatusOK {
+		t.Fatalf("管理员归入独占服务期望 200 OK，实际: %d %s", wAttach200.Code, wAttach200.Body.String())
+	}
+
+	// 7. 管理员为另一业务模块创建自定义运行期服务名实现 + PUT 重命名
+	bizMod2 := models.Module{SubsystemID: sub.ID, GroupID: grp.ID, Code: "BIZ_API_2", Name: "业务模块API2", ModuleKind: models.ModuleKindBusiness}
+	db.Create(&bizMod2)
+
+	createImplBody, _ := json.Marshal(map[string]any{
+		"contract_id":  created.ID,
+		"impl_key":     "KH",
+		"service_name": "KH_RBACService",
+		"description":  "KH实现",
+	})
+	reqImpl201, _ := http.NewRequest(http.MethodPost, fmt.Sprintf("/api/arch/modules/%d/services", bizMod2.ID), bytes.NewReader(createImplBody))
+	reqImpl201.Header.Set("Authorization", "Bearer "+adminToken)
+	reqImpl201.Header.Set("Content-Type", "application/json")
+	wImpl201 := httptest.NewRecorder()
+	router.ServeHTTP(wImpl201, reqImpl201)
+	if wImpl201.Code != http.StatusCreated {
+		t.Fatalf("创建自定义名实现期望 201 Created，实际: %d %s", wImpl201.Code, wImpl201.Body.String())
+	}
+	var createdImpl models.ModuleService
+	_ = json.Unmarshal(wImpl201.Body.Bytes(), &createdImpl)
+	if !createdImpl.IsCustomServiceName || createdImpl.ServiceName != "KH_RBACService" {
+		t.Fatalf("返回实现属性不符: %+v", createdImpl)
+	}
+
+	updateBody, _ := json.Marshal(map[string]any{
+		"service_name":      "KH_RBACService_V2",
+		"impl_key":          "KH_V2",
+		"diff_ignore_paths": []string{"timestamp"},
+		"description":       "改名后的KH实现",
+	})
+	reqUpd, _ := http.NewRequest(http.MethodPut, fmt.Sprintf("/api/arch/module-services/%d", createdImpl.ID), bytes.NewReader(updateBody))
+	reqUpd.Header.Set("Authorization", "Bearer "+adminToken)
+	reqUpd.Header.Set("Content-Type", "application/json")
+	wUpd := httptest.NewRecorder()
+	router.ServeHTTP(wUpd, reqUpd)
+	if wUpd.Code != http.StatusOK {
+		t.Fatalf("修改实现服务名期望 200 OK，实际: %d %s", wUpd.Code, wUpd.Body.String())
+	}
+	var updatedImpl models.ModuleService
+	_ = json.Unmarshal(wUpd.Body.Bytes(), &updatedImpl)
+	if updatedImpl.ServiceName != "KH_RBACService_V2" || updatedImpl.ImplKey != "KH_V2" {
+		t.Fatalf("修改实现返回属性不符: %+v", updatedImpl)
+	}
 }

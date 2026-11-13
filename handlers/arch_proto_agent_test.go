@@ -212,6 +212,7 @@ func RegisterRoutesForTest(r *gin.Engine) {
 		protected.PUT("/arch/service-contracts/:id", requireAdmin, handlers.UpdateServiceContract)
 		protected.DELETE("/arch/service-contracts/:id", requireAdmin, handlers.DeleteServiceContract)
 		protected.POST("/arch/service-contracts/convert", requireAdmin, handlers.ConvertExclusiveToMultiImplContract)
+		protected.POST("/arch/service-contracts/:id/attach", requireAdmin, handlers.AttachExclusiveToMultiImplContract)
 
 		// 4.1 物理进程蓝图域 (ADR-09, M10)
 		protected.GET("/arch/process-groups", handlers.ListArchProcessGroups)

@@ -178,11 +178,16 @@ BEGIN
     END IF;
     ALTER TABLE traefik_service_contracts ADD CONSTRAINT chk_traefik_svc_contract_mode CHECK (provide_mode IN ('MULTI_IMPL'));
 
-    -- 3. traefik_module_services 契约实现约束 (ADR-16 §3.3)
+    -- 3. traefik_module_services 契约实现与自定义运行期服务名约束 (ADR-16 v2.0)
     IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_traefik_mod_svc_contract_impl') THEN
         ALTER TABLE traefik_module_services DROP CONSTRAINT chk_traefik_mod_svc_contract_impl;
     END IF;
     ALTER TABLE traefik_module_services ADD CONSTRAINT chk_traefik_mod_svc_contract_impl CHECK ((contract_id IS NULL AND impl_key = '') OR (contract_id IS NOT NULL AND impl_key <> ''));
+
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_traefik_mod_svc_custom_name') THEN
+        ALTER TABLE traefik_module_services DROP CONSTRAINT chk_traefik_mod_svc_custom_name;
+    END IF;
+    ALTER TABLE traefik_module_services ADD CONSTRAINT chk_traefik_mod_svc_custom_name CHECK (contract_id IS NOT NULL OR is_custom_service_name = false);
 
     -- 4. traefik_module_dependencies 内部实现/分发契约/外部三选一检查约束 (ADR-16 §3.5)
     IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_traefik_dep_target_xor') THEN
@@ -190,8 +195,16 @@ BEGIN
     END IF;
     ALTER TABLE traefik_module_dependencies ADD CONSTRAINT chk_traefik_dep_target_xor CHECK (num_nonnulls(service_id, contract_id) + (CASE WHEN is_external THEN 1 ELSE 0 END) = 1);
 
-    -- 5. 移除原独占无条件唯一索引 uk_traefik_mod_svc_name（由部分唯一索引替代）
+    -- 5. 重建服务名部分唯一索引（兼容存量库，先删除旧索引再由下方 partialIndexes 幂等重建）
     DROP INDEX IF EXISTS uk_traefik_mod_svc_name;
+    DROP INDEX IF EXISTS uk_traefik_mod_svc_name_excl;
+
+    -- 6. 数据回填：依据与关联契约服务名是否一致修正 is_custom_service_name 标记
+    UPDATE traefik_module_services ms
+    SET is_custom_service_name = (ms.service_name <> sc.service_name)
+    FROM traefik_service_contracts sc
+    WHERE ms.contract_id = sc.id
+      AND ms.is_custom_service_name IS DISTINCT FROM (ms.service_name <> sc.service_name);
 END $$;`
 	if err := DB.Exec(contractConstraintSQL).Error; err != nil {
 		return fmt.Errorf("更新多实现服务契约检查约束失败: %w", err)
@@ -209,7 +222,7 @@ END $$;`
 		`CREATE UNIQUE INDEX IF NOT EXISTS uk_traefik_topo_layout_shared ON traefik_topology_layouts (view) WHERE scope = 'SHARED';`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS uk_traefik_topo_layout_private_name ON traefik_topology_layouts (owner_id, view, name) WHERE scope = 'PRIVATE';`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS uk_traefik_topo_layout_private_default ON traefik_topology_layouts (owner_id, view, focus_scope) WHERE scope = 'PRIVATE' AND is_default;`,
-		`CREATE UNIQUE INDEX IF NOT EXISTS uk_traefik_mod_svc_name_excl ON traefik_module_services (service_name) WHERE contract_id IS NULL;`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uk_traefik_mod_svc_name_excl ON traefik_module_services (service_name) WHERE contract_id IS NULL OR is_custom_service_name = true;`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS uk_traefik_mod_svc_contract_impl ON traefik_module_services (contract_id, impl_key) WHERE contract_id IS NOT NULL;`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS uk_traefik_mod_svc_contract_mod ON traefik_module_services (contract_id, module_id) WHERE contract_id IS NOT NULL;`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS uk_traefik_dep_consumer_contract ON traefik_module_dependencies (consumer_module_id, contract_id) WHERE contract_id IS NOT NULL;`,

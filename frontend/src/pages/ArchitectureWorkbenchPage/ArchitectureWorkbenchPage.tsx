@@ -1207,6 +1207,11 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
                 onCreateDependency={handleCreateDependency}
                 onDeleteDependency={handleDeleteDependency}
                 onBindProcess={handleBindModuleProcess}
+                onRefreshModuleData={async () => {
+                  if (selectedModuleId) {
+                    await refreshCurrentModule(selectedModuleId);
+                  }
+                }}
               />
             ) : (
               <div

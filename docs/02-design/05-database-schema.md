@@ -292,16 +292,24 @@ func (ModuleDependency) TableName() string { return config.TablePrefix + "module
 > ALTER TABLE traefik_modules ADD CONSTRAINT chk_traefik_modules_kind CHECK (module_kind IN ('BUSINESS', 'CONTRACT_LIB'));
 > ALTER TABLE traefik_modules ADD CONSTRAINT chk_traefik_modules_lib_no_proc CHECK (module_kind = 'BUSINESS' OR arch_process_id IS NULL);
 >
-> -- 3. traefik_module_services 独占/多实现部分唯一索引与实现身份约束（平滑替换 uk_traefik_mod_svc_name）
+> -- 3. traefik_module_services 独占/自定义运行期名与多实现部分唯一索引（平滑替换 uk_traefik_mod_svc_name）
 > ALTER TABLE traefik_module_services ADD COLUMN IF NOT EXISTS contract_id BIGINT NULL REFERENCES traefik_service_contracts(id) ON UPDATE CASCADE ON DELETE RESTRICT;
 > ALTER TABLE traefik_module_services ADD COLUMN IF NOT EXISTS impl_key VARCHAR(64) NOT NULL DEFAULT '';
+> ALTER TABLE traefik_module_services ADD COLUMN IF NOT EXISTS is_custom_service_name BOOLEAN NOT NULL DEFAULT false;
 > ALTER TABLE traefik_module_services DROP CONSTRAINT IF EXISTS uk_traefik_mod_svc_name;
 > DROP INDEX IF EXISTS uk_traefik_mod_svc_name;
-> CREATE UNIQUE INDEX IF NOT EXISTS uk_traefik_mod_svc_name_excl ON traefik_module_services (service_name) WHERE contract_id IS NULL;
+> DROP INDEX IF EXISTS uk_traefik_mod_svc_name_excl;
+> CREATE UNIQUE INDEX IF NOT EXISTS uk_traefik_mod_svc_name_excl ON traefik_module_services (service_name) WHERE contract_id IS NULL OR is_custom_service_name = true;
 > CREATE UNIQUE INDEX IF NOT EXISTS uk_traefik_mod_svc_contract_impl ON traefik_module_services (contract_id, impl_key) WHERE contract_id IS NOT NULL;
 > CREATE UNIQUE INDEX IF NOT EXISTS uk_traefik_mod_svc_contract_mod ON traefik_module_services (contract_id, module_id) WHERE contract_id IS NOT NULL;
-> ALTER TABLE traefik_module_services ADD CONSTRAINT chk_traefik_mod_svc_impl_key
+> ALTER TABLE traefik_module_services ADD CONSTRAINT chk_traefik_mod_svc_contract_impl
 >     CHECK ((contract_id IS NULL AND impl_key = '') OR (contract_id IS NOT NULL AND impl_key <> ''));
+> ALTER TABLE traefik_module_services ADD CONSTRAINT chk_traefik_mod_svc_custom_name
+>     CHECK (contract_id IS NOT NULL OR is_custom_service_name = false);
+> UPDATE traefik_module_services ms
+> SET is_custom_service_name = (ms.service_name <> sc.service_name)
+> FROM traefik_service_contracts sc
+> WHERE ms.contract_id = sc.id AND ms.is_custom_service_name IS DISTINCT FROM (ms.service_name <> sc.service_name);
 >
 > -- 4. traefik_module_dependencies 分发依赖列、三选一 CHECK 与部分唯一索引
 > ALTER TABLE traefik_module_dependencies ADD COLUMN IF NOT EXISTS contract_id BIGINT NULL REFERENCES traefik_service_contracts(id) ON UPDATE CASCADE ON DELETE RESTRICT;
@@ -312,8 +320,8 @@ func (ModuleDependency) TableName() string { return config.TablePrefix + "module
 > ALTER TABLE traefik_module_dependencies ADD CONSTRAINT chk_traefik_dep_target_xor
 >     CHECK (num_nonnulls(service_id, contract_id) + (is_external::int) = 1);
 > ```
-> - **跨表事务咨询锁不变量**：在创建契约、转换独占供给或声明 `ModuleService` 时，事务首行统一执行 `SELECT pg_advisory_xact_lock(hashtext(service_name))` 串行化并发请求，保证同一 `service_name` 绝不同时存在独占行（`contract_id IS NULL`）与多实现契约行（`traefik_service_contracts`）；实现行的 `service_name` 始终冗余等于 `contract.service_name`。
-> - **A-09 实现进程互斥校验 (`AssertContractImplProcessDisjoint`)**：在新增实现（`POST /api/arch/modules/:id/services`）与绑定模块至进程（`POST /api/arch/modules/:id/process-binding`、模块保存或进程蓝图组装）两个入口，事务内持有相关契约咨询锁校验同一 `contract_id` 的所有实现模块 `arch_process_id` 两两互不相同（未绑定进程的 `NULL` 实现允许并存），违反返回 `409 Conflict`（携带冲突契约名、`impl_key` 与模块编码）。
+> - **跨表事务咨询锁不变量**：在创建契约、转换独占供给、归入存量独占服务（`/attach`）或创建/编辑 `ModuleService`（含自定义运行期服务名）时，事务首行统一按字典序执行 `SELECT pg_advisory_xact_lock(hashtext(name))` 串行化并发请求，保证同一全局命名空间内绝不同时存在冲突的独占/自定义服务名与契约名；多实现行可与契约名同名共享（`is_custom_service_name = false`），或自由定义全局唯一的运行期服务名（`is_custom_service_name = true`，如 `DH_SyncService`）。
+> - **A-09 同名多实现进程互斥校验 (`AssertContractImplProcessDisjoint`)**：在新增/修改同名共享实现（`POST /api/arch/modules/:id/services`、`PUT /api/arch/module-services/:serviceId`）与绑定模块至进程（`POST /api/arch/modules/:id/process-binding`、模块保存或进程蓝图组装）入口，事务内持有相关契约咨询锁校验同一 `contract_id` 下 **`is_custom_service_name = false`（共享契约名）** 的实现模块 `arch_process_id` 两两互不相同（未绑定进程的 `NULL` 实现允许并存），违反返回 `409 Conflict`（携带冲突契约名、`impl_key` 与模块编码）。自定义唯一运行期服务名（`is_custom_service_name = true`）豁免 `A-09`，允许同一进程共署同一契约的多个派生服务实现。
 
 ### 3.3 架构物理进程蓝图 SSOT、公私域 Agent 纳管与 `1:1` 宿主机进程挂载表（表 7 ~ 表 10）
 
@@ -900,8 +908,8 @@ func (TopologyLayout) TableName() string { return config.TablePrefix + "topology
 | `traefik_modules` | `uk_traefik_modules_code` | `UNIQUE (code)` | F-01：功能模块编码全局唯一 |
 | `traefik_modules` | `chk_traefik_modules_kind` / `chk_traefik_modules_lib_no_proc` | `CHECK (module_kind IN ('BUSINESS','CONTRACT_LIB'))`；`CHECK (module_kind = 'BUSINESS' OR arch_process_id IS NULL)` | **F-02.1 (ADR-16)**：受控模块类型枚举；`CONTRACT_LIB` 接口库模块严禁绑定物理进程蓝图 |
 | `traefik_service_contracts` | `uk_traefik_svc_contract_name` / `chk_traefik_svc_contract_mode` | `UNIQUE (service_name)`；`CHECK (provide_mode IN ('MULTI_IMPL'))` | **F-02.1 (ADR-16)**：多实现服务契约名全局唯一；配合 `pg_advisory_xact_lock(hashtext(service_name))` 保证同一 `service_name` 不同时存在独占供给行 |
-| `traefik_module_services` | `uk_traefik_mod_svc_name_excl` | `UNIQUE (service_name) WHERE contract_id IS NULL` | **修订 A-05 & F-02 / F-02.1 (ADR-16)**：独占契约（`EXCLUSIVE`）下 `service_name` 全局唯一供给 |
-| `traefik_module_services` | `uk_traefik_mod_svc_contract_impl` / `uk_traefik_mod_svc_contract_mod` / `chk_traefik_mod_svc_impl_key` | `UNIQUE (contract_id, impl_key) WHERE contract_id IS NOT NULL`；`UNIQUE (contract_id, module_id) WHERE contract_id IS NOT NULL`；`CHECK ((contract_id IS NULL AND impl_key = '') OR (contract_id IS NOT NULL AND impl_key <> ''))` | **修订 A-05 & F-02.1 (ADR-16)**：多实现契约下同一契约内 `impl_key` 唯一、同一模块至多实现一次，且独占/多实现与 `impl_key` 非空性严格对应 |
+| `traefik_module_services` | `uk_traefik_mod_svc_name_excl` | `UNIQUE (service_name) WHERE contract_id IS NULL OR is_custom_service_name = true` | **修订 A-05 & F-02 / F-02.1 (ADR-16 v2.0)**：独占契约（`EXCLUSIVE`）与自定义派生运行期服务名（`is_custom_service_name = true`）下 `service_name` 全局唯一供给 |
+| `traefik_module_services` | `uk_traefik_mod_svc_contract_impl` / `uk_traefik_mod_svc_contract_mod` / `chk_traefik_mod_svc_contract_impl` / `chk_traefik_mod_svc_custom_name` | `UNIQUE (contract_id, impl_key) WHERE contract_id IS NOT NULL`；`UNIQUE (contract_id, module_id) WHERE contract_id IS NOT NULL`；`CHECK ((contract_id IS NULL AND impl_key = '') OR (contract_id IS NOT NULL AND impl_key <> ''))`；`CHECK (contract_id IS NOT NULL OR is_custom_service_name = false)` | **修订 A-05 & F-02.1 (ADR-16 v2.0)**：多实现契约下同一契约内 `impl_key` 唯一、同一模块至多实现一次，且独占/多实现与 `impl_key`/`is_custom_service_name` 严格对应 |
 | `traefik_module_dependencies` | `uk_traefik_dep_tuple` / `uk_traefik_dep_consumer_contract` / `chk_traefik_dep_target_xor` | `UNIQUE (consumer_module_id, service_id) WHERE service_id IS NOT NULL`；`UNIQUE (consumer_module_id, contract_id) WHERE contract_id IS NOT NULL`；`CHECK (num_nonnulls(service_id, contract_id) + (is_external::int) = 1)` | **F-02 & F-02.1 (ADR-16)**：具体实现依赖、多实现契约分发依赖（`DISPATCH`）、外部系统依赖严格三选一且各自不重复声明 |
 | `traefik_arch_process_groups` | `uk_traefik_arch_pgrp_code` / `uk_traefik_arch_pgrp_name` | `UNIQUE (code)` / `UNIQUE (name)` | **F-02 & ADR-09**：全局架构物理进程组编码与名称唯一 |
 | `traefik_arch_processes` | `uk_traefik_arch_proc_code` | `UNIQUE (code)` | **F-02 & ADR-09**：全局标准业务进程蓝图编码唯一 |
@@ -938,7 +946,7 @@ func (TopologyLayout) TableName() string { return config.TablePrefix + "topology
 | 删除 `FunctionalGroup` | 存在子 `FunctionalGroup`（`parent_id`）或挂载的 `Module` | `409 Conflict` | `ON DELETE RESTRICT` |
 | 删除或修改 `Module`（含 `CONTRACT_LIB` 守卫） | 1. 存在已对外提供且已被其他 FM 依赖的 `ModuleService`，或仍装载于某 `ArchProcess`（`arch_process_id IS NOT NULL`）；<br>2. `CONTRACT_LIB` 库模块下仍存在已登记的 `ServiceContract` 时尝试删除或改回 `BUSINESS`；<br>3. `BUSINESS` 模块已绑定进程或存在 `PROVIDE/DEPEND` 时尝试改为 `CONTRACT_LIB`；<br>4. 尝试为 `CONTRACT_LIB` 绑定进程或创建运行期 `ModuleService` / `ModuleDependency` | `409 Conflict`<br>`400 Bad Request` | `ON DELETE RESTRICT`（`fk_traefik_svc_contract_definer`）+ `chk_traefik_modules_lib_no_proc` 数据库兜底 |
 | 创建 / 删除 `ServiceContract` | 1. `definer_module_id` 非 `CONTRACT_LIB` 模块；<br>2. 创建时同名 `service_name` 已存在契约或独占 `ModuleService` 行；<br>3. 删除时该契约仍存在实现行（`traefik_module_services.contract_id`）或分发依赖（`traefik_module_dependencies.contract_id`） | `400 Bad Request`<br>`409 Conflict` | `pg_advisory_xact_lock(hashtext(service_name))` 串行化 + `uk_traefik_svc_contract_name` + `ON DELETE RESTRICT` |
-| 创建 `ModuleService` 或绑定模块至进程（**A-09 实现进程互斥**） | 1. 独占服务名已被占用，或已登记为多实现契约却未提供合法 `impl_key`，或同契约下 `impl_key` / `module_id` 重复；<br>2. **A-09 (`AssertContractImplProcessDisjoint`)**：新增实现或绑定进程时，同一 `contract_id` 的两个实现模块落在同一非空 `arch_process_id` | `400 Bad Request`<br>`409 Conflict` | 事务内持有契约咨询锁执行 `AssertContractImplProcessDisjoint`（返回冲突契约名、`impl_key` 与模块编码）+ 部分唯一索引兜底 |
+| 创建 / 修改 `ModuleService` 或绑定模块至进程（**A-09 同名多实现进程互斥**） | 1. 独占或自定义运行期服务名已被占用，或指定多实现 `contract_id` 却未提供合法 `impl_key`，或同契约下 `impl_key` / `module_id` 重复；<br>2. **A-09 (`AssertContractImplProcessDisjoint`)**：新增/修改共享契约名实现（`is_custom_service_name = false`）或绑定进程时，同一 `contract_id` 下两个共享契约名的实现模块落在同一非空 `arch_process_id`（自定义唯一服务名实现豁免 A-09） | `400 Bad Request`<br>`409 Conflict` | 事务内持有契约咨询锁执行 `AssertContractImplProcessDisjoint`（返回冲突契约名、`impl_key` 与模块编码）+ 部分唯一索引兜底 |
 | 创建 `ModuleDependency`（含 `DISPATCH` 分发依赖） | 1. `service_id`、`contract_id`、`is_external=true` 未严格三选一；<br>2. 同一消费方对同一多实现契约同时声明 `DISPATCH` 分发依赖与具体实现依赖（语义重复） | `400 Bad Request`<br>`409 Conflict` | `chk_traefik_dep_target_xor` + `uk_traefik_dep_tuple` + `uk_traefik_dep_consumer_contract` |
 | 删除 `ModuleService` | 该 Service 已被其他内部功能模块作为依赖引用 (`ModuleDependency`) | `409 Conflict` | 拦截强校验，需先移除消费方模块的契约绑定 |
 | 删除 `ArchProcessGroup` | 组下仍存在 `ArchProcess` 标准架构进程 | `409 Conflict` | `ON DELETE RESTRICT` |

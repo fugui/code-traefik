@@ -115,6 +115,16 @@ func OfflineBatchAttribution(ctx context.Context, db *gorm.DB, sessionID uint64)
 		} else if dep.Contract != nil {
 			key := strings.TrimSpace(dep.Contract.ServiceName)
 			dependMap[dep.ConsumerModuleID][key] = true
+			// 若各实现模块使用了自定义运行期服务名（如 DH_SyncService），同步展开至源模块归因匹配集合
+			if dep.ContractID != nil {
+				if cInfo, ok := resolver.contractsByID[*dep.ContractID]; ok {
+					for _, impl := range cInfo.Implementations {
+						if impl.ServiceName != "" {
+							dependMap[dep.ConsumerModuleID][impl.ServiceName] = true
+						}
+					}
+				}
+			}
 		} else if dep.IsExternal && dep.ExternalService != "" {
 			dependMap[dep.ConsumerModuleID][strings.TrimSpace(dep.ExternalService)] = true
 		}

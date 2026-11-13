@@ -211,6 +211,8 @@ export async function createModuleService(moduleId: string, data: {
 }
 
 export async function updateModuleService(serviceId: string, data: {
+  service_name?: string;
+  impl_key?: string;
   diff_ignore_paths: string[];
   description?: string;
 }) {
@@ -314,17 +316,45 @@ export async function convertExclusiveToMultiImplContract(data: {
   description?: string;
   switch_dependencies_to_dispatch?: boolean;
 }) {
-  return apiRequest<{ contract: ServiceContract; updated_dependencies_count: number }>(
+  return apiRequest<{ contract: ServiceContract; service?: ModuleService; updated_dependencies_count?: number }>(
     '/arch/service-contracts/convert',
     {
       method: 'POST',
       body: JSON.stringify({
-        ...data,
         service_id: Number(data.service_id),
+        definer_module_id: Number(data.target_definer_module_id),
         target_definer_module_id: Number(data.target_definer_module_id),
+        initial_impl_key: data.impl_key,
+        impl_key: data.impl_key,
+        impl_key_label: data.impl_key_label,
+        description: data.description,
+        convert_dependents_to_dispatch: Boolean(data.switch_dependencies_to_dispatch),
+        switch_dependencies_to_dispatch: Boolean(data.switch_dependencies_to_dispatch),
       }),
     }
   );
+}
+
+export async function attachExclusiveToMultiImplContract(
+  contractId: string | number,
+  data: {
+    service_id: string | number;
+    impl_key: string;
+    convert_dependents_to_dispatch?: boolean;
+  }
+) {
+  return apiRequest<{
+    contract: ServiceContract;
+    implementation: ModuleService;
+    converted_dependencies: number;
+  }>(`/arch/service-contracts/${contractId}/attach`, {
+    method: 'POST',
+    body: JSON.stringify({
+      service_id: Number(data.service_id),
+      impl_key: data.impl_key,
+      convert_dependents_to_dispatch: Boolean(data.convert_dependents_to_dispatch),
+    }),
+  });
 }
 
 export async function listAvailableServices(excludeModuleId?: string) {

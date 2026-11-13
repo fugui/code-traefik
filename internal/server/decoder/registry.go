@@ -130,8 +130,10 @@ type CompiledOperation struct {
 
 // CompiledRegistry 不可变无锁内存注册表快照
 type CompiledRegistry struct {
-	Files      *protoregistry.Files
-	Operations map[string]*CompiledOperation // key: serviceName + ":" + operation
+	Files          *protoregistry.Files
+	Operations     map[string]*CompiledOperation // key: serviceName + ":" + operation
+	ServiceAliases map[string]string             // publishedCustomServiceName -> contractServiceName (ADR-16 v2.0)
+	ServiceIgnores map[string][]string           // 运行期发布服务名 -> DiffIgnorePaths 列表
 }
 
 // UploadSchemaInput 上传 .pb 描述集参数
@@ -409,14 +411,30 @@ func (r *Registry) Reload() error {
 
 	opsMap := make(map[string]*CompiledOperation)
 
+	// 1. 加载多实现服务契约映射，用于构建自定义运行期服务名到 LIB 契约名的别名字典 (ADR-16 v2.0)
+	var serviceContracts []models.ServiceContract
+	contractNameByID := make(map[uint64]string)
+	if err := r.db.Find(&serviceContracts).Error; err == nil {
+		for _, c := range serviceContracts {
+			contractNameByID[c.ID] = strings.TrimSpace(c.ServiceName)
+		}
+	}
+
 	var moduleServices []models.ModuleService
 	svcIgnoresMap := make(map[string][]string)
+	serviceAliases := make(map[string]string)
 	if err := r.db.Find(&moduleServices).Error; err == nil {
 		for _, ms := range moduleServices {
+			msName := strings.TrimSpace(ms.ServiceName)
+			if ms.ContractID != nil && *ms.ContractID > 0 {
+				if contractSvc, ok := contractNameByID[*ms.ContractID]; ok && contractSvc != "" && msName != "" && msName != contractSvc {
+					serviceAliases[msName] = contractSvc
+				}
+			}
 			if len(ms.DiffIgnorePaths) > 0 {
 				var paths []string
 				if err := json.Unmarshal(ms.DiffIgnorePaths, &paths); err == nil && len(paths) > 0 {
-					svcIgnoresMap[ms.ServiceName] = paths
+					svcIgnoresMap[msName] = append(svcIgnoresMap[msName], paths...)
 				}
 			}
 		}
@@ -424,8 +442,10 @@ func (r *Registry) Reload() error {
 
 	if len(activeSchemas) == 0 {
 		r.compiled.Store(&CompiledRegistry{
-			Files:      nil,
-			Operations: opsMap,
+			Files:          nil,
+			Operations:     opsMap,
+			ServiceAliases: serviceAliases,
+			ServiceIgnores: svcIgnoresMap,
 		})
 		return nil
 	}
@@ -540,8 +560,10 @@ func (r *Registry) Reload() error {
 	}
 
 	r.compiled.Store(&CompiledRegistry{
-		Files:      unifiedFiles,
-		Operations: opsMap,
+		Files:          unifiedFiles,
+		Operations:     opsMap,
+		ServiceAliases: serviceAliases,
+		ServiceIgnores: svcIgnoresMap,
 	})
 	return nil
 }
@@ -1096,15 +1118,26 @@ func (r *Registry) BatchActivate(schemaIDs []uint64, opts ...BatchActivateOption
 				sNextMap[ca.Name] = ca
 			}
 		}
+		targetIDSet := make(map[uint64]bool, len(targets))
 		for _, t := range targets {
+			targetIDSet[t.ID] = true
 			t.IsActive = true
 			sNextMap[t.Name] = t
 		}
 
+		// 确定性排序 sNext：已有生效契约在前、待激活候选契约在后，同组按 ID 升序，消除 Go map 随机遍历导致的冲突归属抖动
 		sNext := make([]models.ProtoSchema, 0, len(sNextMap))
 		for _, s := range sNextMap {
 			sNext = append(sNext, s)
 		}
+		sort.Slice(sNext, func(i, j int) bool {
+			iTarget := targetIDSet[sNext[i].ID]
+			jTarget := targetIDSet[sNext[j].ID]
+			if iTarget != jTarget {
+				return !iTarget
+			}
+			return sNext[i].ID < sNext[j].ID
+		})
 
 		sNextOps := make(map[uint64][]models.ProtoOperation)
 		for _, s := range sNext {
@@ -1277,13 +1310,25 @@ func (r *Registry) DetectBreakingChangesAgainstActive(name string, candidateByte
 	return DetectBreakingChanges(activeOwn, candidateOwn), nil
 }
 
-// LookupOperation 检索已编译生效的接口元数据
+// LookupOperation 检索已编译生效的接口元数据（支持自定义运行期服务名通过 LIB 契约别名映射到唯一 .pb 描述符）
 func (r *Registry) LookupOperation(serviceName, operation string) *CompiledOperation {
 	compiled := r.compiled.Load()
 	if compiled == nil {
 		return nil
 	}
-	return compiled.Operations[serviceName+":"+operation]
+	if op, ok := compiled.Operations[serviceName+":"+operation]; ok {
+		return op
+	}
+	if aliasTarget, ok := compiled.ServiceAliases[serviceName]; ok {
+		if op, ok2 := compiled.Operations[aliasTarget+":"+operation]; ok2 {
+			// 返回克隆副本以绑定当前运行期服务名专属的 DiffIgnorePaths，不污染契约模板快照
+			cloned := *op
+			cloned.ServiceName = serviceName
+			cloned.ServiceIgnorePaths = compiled.ServiceIgnores[serviceName]
+			return &cloned
+		}
+	}
+	return nil
 }
 
 // DecodePayloadToJSON 动态反序列化单条载荷并转换为规范 JSON

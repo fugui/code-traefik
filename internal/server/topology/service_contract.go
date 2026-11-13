@@ -65,6 +65,15 @@ type ConvertExclusiveContractInput struct {
 	OperatorID                  uint
 }
 
+// AttachExclusiveToContractInput 将存量独占服务归入既有 LIB 契约的自定义实现入参 (ADR-16 v2.0)
+type AttachExclusiveToContractInput struct {
+	ContractID                  uint64
+	ServiceID                   uint64
+	ImplKey                     string
+	ConvertDependentsToDispatch bool
+	OperatorID                  uint
+}
+
 // ServiceContractFilter 列表查询过滤器
 type ServiceContractFilter struct {
 	DefinerModuleID uint64
@@ -96,17 +105,19 @@ type ServiceContractListItemDTO struct {
 
 // ContractImplementationDTO 实现矩阵行 DTO
 type ContractImplementationDTO struct {
-	ServiceID       uint64    `json:"service_id"`
-	ImplKey         string    `json:"impl_key"`
-	ModuleID        uint64    `json:"module_id"`
-	ModuleCode      string    `json:"module_code"`
-	ModuleName      string    `json:"module_name"`
-	SubsystemName   string    `json:"subsystem_name,omitempty"`
-	ArchProcessID   *uint64   `json:"arch_process_id,omitempty"`
-	ArchProcessCode string    `json:"arch_process_code,omitempty"`
-	ArchProcessName string    `json:"arch_process_name,omitempty"`
-	Owner           string    `json:"owner,omitempty"`
-	CreatedAt       time.Time `json:"created_at"`
+	ServiceID           uint64    `json:"service_id"`
+	ServiceName         string    `json:"service_name"`
+	IsCustomServiceName bool      `json:"is_custom_service_name"`
+	ImplKey             string    `json:"impl_key"`
+	ModuleID            uint64    `json:"module_id"`
+	ModuleCode          string    `json:"module_code"`
+	ModuleName          string    `json:"module_name"`
+	SubsystemName       string    `json:"subsystem_name,omitempty"`
+	ArchProcessID       *uint64   `json:"arch_process_id,omitempty"`
+	ArchProcessCode     string    `json:"arch_process_code,omitempty"`
+	ArchProcessName     string    `json:"arch_process_name,omitempty"`
+	Owner               string    `json:"owner,omitempty"`
+	CreatedAt           time.Time `json:"created_at"`
 }
 
 // ContractDispatchConsumerDTO 分发消费方 DTO
@@ -141,9 +152,9 @@ type ServiceContractDetailDTO struct {
 	DispatchConsumers []ContractDispatchConsumerDTO `json:"dispatch_consumers"`
 }
 
-// AssertContractImplProcessDisjoint A-09 校验：同一契约的多实现模块所属标准架构进程必须两两不相交
+// AssertContractImplProcessDisjoint A-09 校验：同一契约下共享契约名 (is_custom_service_name=false) 的多实现模块所属标准架构进程必须两两不相交
 // moduleID: 待校验的模块 ID
-// contractID: 契约 ID（若非空则针对该契约校验；若为空则自动查询 moduleID 关联的所有多实现契约）
+// contractID: 契约 ID（若非空则针对该契约校验；若为空则自动查询 moduleID 下所有共享契约名的多实现契约）
 // targetArchProcID: 目标绑定的标准进程 ID（若为 nil 则取 moduleID 当前绑定的进程）
 func AssertContractImplProcessDisjoint(db *gorm.DB, moduleID uint64, contractID *uint64, targetArchProcID *uint64) error {
 	var procID uint64
@@ -167,8 +178,9 @@ func AssertContractImplProcessDisjoint(db *gorm.DB, moduleID uint64, contractID 
 	if contractID != nil && *contractID > 0 {
 		contractIDs = []uint64{*contractID}
 	} else {
+		// 仅使用共享契约名（未自定义唯一运行期服务名）的实现参与 A-09 进程互斥
 		if err := db.Model(&models.ModuleService{}).
-			Where("module_id = ? AND contract_id IS NOT NULL", moduleID).
+			Where("module_id = ? AND contract_id IS NOT NULL AND is_custom_service_name = false", moduleID).
 			Pluck("contract_id", &contractIDs).Error; err != nil {
 			return err
 		}
@@ -178,11 +190,11 @@ func AssertContractImplProcessDisjoint(db *gorm.DB, moduleID uint64, contractID 
 		return nil
 	}
 
-	// 检查同一 procID 下是否已有其他模块实现了其中任意一个契约
+	// 检查同一 procID 下是否已有其他模块以共享契约名实现了其中任意一个契约
 	var conflictCount int64
 	err := db.Table("traefik_module_services ms").
 		Joins("JOIN traefik_modules m ON m.id = ms.module_id").
-		Where("ms.contract_id IN ? AND ms.module_id != ? AND m.arch_process_id = ?", contractIDs, moduleID, procID).
+		Where("ms.contract_id IN ? AND ms.module_id != ? AND ms.is_custom_service_name = false AND m.arch_process_id = ?", contractIDs, moduleID, procID).
 		Count(&conflictCount).Error
 	if err != nil {
 		return err
@@ -224,10 +236,10 @@ func CreateServiceContract(db *gorm.DB, in ServiceContractInput) (*models.Servic
 			return err
 		}
 
-		// 2. 检查独占服务表中是否已存在该 service_name
+		// 2. 检查独占服务或自定义唯一运行期服务名是否已占用该 service_name
 		var exclCount int64
 		if err := tx.Model(&models.ModuleService{}).
-			Where("service_name = ? AND contract_id IS NULL", serviceName).
+			Where("service_name = ? AND (contract_id IS NULL OR is_custom_service_name = true)", serviceName).
 			Count(&exclCount).Error; err != nil {
 			return err
 		}
@@ -325,9 +337,11 @@ func GetServiceContract(db *gorm.DB, id uint64) (*ServiceContractDetailDTO, erro
 
 	for _, svc := range implServices {
 		item := ContractImplementationDTO{
-			ServiceID: svc.ID,
-			ImplKey:   svc.ImplKey,
-			CreatedAt: svc.CreatedAt,
+			ServiceID:           svc.ID,
+			ServiceName:         svc.ServiceName,
+			IsCustomServiceName: svc.IsCustomServiceName,
+			ImplKey:             svc.ImplKey,
+			CreatedAt:           svc.CreatedAt,
 		}
 		if svc.Module != nil {
 			item.ModuleID = svc.Module.ID
@@ -619,8 +633,9 @@ func ConvertExclusiveToMultiImplContract(db *gorm.DB, in ConvertExclusiveContrac
 
 		// 4. 更新存量 ModuleService 为首个实现记录（保留其原始 service_id）
 		if err := tx.Model(&models.ModuleService{}).Where("id = ?", targetSvc.ID).Updates(map[string]interface{}{
-			"contract_id": contract.ID,
-			"impl_key":    implKey,
+			"contract_id":            contract.ID,
+			"impl_key":               implKey,
+			"is_custom_service_name": false,
 		}).Error; err != nil {
 			return err
 		}
@@ -639,6 +654,7 @@ func ConvertExclusiveToMultiImplContract(db *gorm.DB, in ConvertExclusiveContrac
 
 		targetSvc.ContractID = &contract.ID
 		targetSvc.ImplKey = implKey
+		targetSvc.IsCustomServiceName = false
 		createdContract = contract
 		updatedSvc = &targetSvc
 		return nil
@@ -648,4 +664,144 @@ func ConvertExclusiveToMultiImplContract(db *gorm.DB, in ConvertExclusiveContrac
 		return nil, nil, err
 	}
 	return createdContract, updatedSvc, nil
+}
+
+// lockServiceNamesSorted 按字典序依次获取一组服务名对应的事务咨询锁，防止多锁死锁
+func lockServiceNamesSorted(tx *gorm.DB, names ...string) error {
+	seen := make(map[string]struct{}, len(names))
+	sorted := make([]string, 0, len(names))
+	for _, n := range names {
+		trimmed := strings.TrimSpace(n)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; !ok {
+			seen[trimmed] = struct{}{}
+			sorted = append(sorted, trimmed)
+		}
+	}
+	// 小切片手写插入排序，避免引入额外包依赖
+	for i := 1; i < len(sorted); i++ {
+		for j := i; j > 0 && sorted[j] < sorted[j-1]; j-- {
+			sorted[j], sorted[j-1] = sorted[j-1], sorted[j]
+		}
+	}
+	for _, n := range sorted {
+		if err := tx.Exec("SELECT pg_advisory_xact_lock(hashtext(?))", n).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// AttachExclusiveToMultiImplContract 将既有独占 ModuleService（例如 DH_SyncService）无损归入既有 LIB 契约的自定义命名实现 (ADR-16 v2.0)
+func AttachExclusiveToMultiImplContract(db *gorm.DB, in AttachExclusiveToContractInput) (*models.ServiceContract, *models.ModuleService, int64, error) {
+	implKey := strings.TrimSpace(in.ImplKey)
+	if !implKeyRegex.MatchString(implKey) {
+		return nil, nil, 0, ErrInvalidImplKey
+	}
+
+	var contract models.ServiceContract
+	if err := db.First(&contract, in.ContractID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil, 0, ErrServiceContractNotFound
+		}
+		return nil, nil, 0, err
+	}
+
+	var targetSvc models.ModuleService
+	if err := db.First(&targetSvc, in.ServiceID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil, 0, ErrModuleServiceNotFound
+		}
+		return nil, nil, 0, err
+	}
+	if targetSvc.ContractID != nil {
+		return nil, nil, 0, ErrNotExclusiveService
+	}
+
+	isCustom := targetSvc.ServiceName != contract.ServiceName
+	var convertedDeps int64
+
+	err := db.Transaction(func(tx *gorm.DB) error {
+		if err := lockServiceNamesSorted(tx, contract.ServiceName, targetSvc.ServiceName); err != nil {
+			return err
+		}
+
+		// 检查同一契约下 impl_key 与 module_id 唯一性
+		var dupImplCount int64
+		if err := tx.Model(&models.ModuleService{}).
+			Where("contract_id = ? AND impl_key = ?", contract.ID, implKey).
+			Count(&dupImplCount).Error; err != nil {
+			return err
+		}
+		if dupImplCount > 0 {
+			return ErrDuplicateImplKey
+		}
+
+		var dupModCount int64
+		if err := tx.Model(&models.ModuleService{}).
+			Where("contract_id = ? AND module_id = ?", contract.ID, targetSvc.ModuleID).
+			Count(&dupModCount).Error; err != nil {
+			return err
+		}
+		if dupModCount > 0 {
+			return ErrModuleAlreadyImplementsContract
+		}
+
+		// 若归入后仍采用共享契约名，则须通过 A-09 进程互斥检查；自定义名（如 DH_SyncService）豁免 A-09
+		if !isCustom {
+			if err := AssertContractImplProcessDisjoint(tx, targetSvc.ModuleID, &contract.ID, nil); err != nil {
+				return err
+			}
+		}
+
+		if err := tx.Model(&models.ModuleService{}).Where("id = ?", targetSvc.ID).Updates(map[string]interface{}{
+			"contract_id":            contract.ID,
+			"impl_key":               implKey,
+			"is_custom_service_name": isCustom,
+		}).Error; err != nil {
+			return err
+		}
+
+		if in.ConvertDependentsToDispatch {
+			var directDeps []models.ModuleDependency
+			if err := tx.Where("service_id = ?", targetSvc.ID).Find(&directDeps).Error; err != nil {
+				return err
+			}
+			for _, dep := range directDeps {
+				var existingDispatchCount int64
+				if err := tx.Model(&models.ModuleDependency{}).
+					Where("consumer_module_id = ? AND contract_id = ?", dep.ConsumerModuleID, contract.ID).
+					Count(&existingDispatchCount).Error; err != nil {
+					return err
+				}
+				if existingDispatchCount > 0 {
+					// 消费方已声明对该契约的 DISPATCH 依赖，删除冗余的直连记录即可
+					if err := tx.Delete(&models.ModuleDependency{}, dep.ID).Error; err != nil {
+						return err
+					}
+					continue
+				}
+				if err := tx.Model(&models.ModuleDependency{}).Where("id = ?", dep.ID).Updates(map[string]interface{}{
+					"service_id":  nil,
+					"contract_id": contract.ID,
+				}).Error; err != nil {
+					return err
+				}
+				convertedDeps++
+			}
+		}
+
+		targetSvc.ContractID = &contract.ID
+		targetSvc.ImplKey = implKey
+		targetSvc.IsCustomServiceName = isCustom
+		targetSvc.ContractServiceName = contract.ServiceName
+		return nil
+	})
+
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	return &contract, &targetSvc, convertedDeps, nil
 }

@@ -195,5 +195,90 @@ describe('AC-M20-04 ModuleContractDetailPane Multi-Implementation Tests', () => 
     expect(typeof archApi.createServiceContract).toBe('function');
     expect(typeof archApi.deleteServiceContract).toBe('function');
     expect(typeof archApi.convertExclusiveToMultiImplContract).toBe('function');
+    expect(typeof archApi.attachExclusiveToMultiImplContract).toBe('function');
+  });
+
+  it('renders custom published service_name, LIB contract schema link, and DISPATCH dependency in BUSINESS mode (ADR-16 v2.0)', () => {
+    const businessModule: Module = {
+      id: 'mod-dh-1',
+      subsystem_id: 'sub-1',
+      group_id: 'grp-1',
+      code: 'MOD_DH_SYNC',
+      name: 'DH 同步服务实现模块',
+      module_kind: 'BUSINESS',
+      process_id: 'proc-1',
+      process: dummyProcesses[0],
+      owner_name: '核心架构组',
+    };
+
+    const customImplService: ModuleService = {
+      id: 'svc-dh-1',
+      module_id: 'mod-dh-1',
+      service_name: 'DH_SyncService',
+      contract_id: 'contract-sync-1',
+      impl_key: 'DH',
+      is_custom_service_name: true,
+      contract_service_name: 'SyncService',
+      description: 'DH 行方独立发布同步服务',
+      downstream_count: 1,
+    };
+
+    const dispatchDependency: ModuleDependency = {
+      id: 'dep-dispatch-1',
+      consumer_module_id: 'mod-dh-1',
+      contract_id: 'contract-pay-1',
+      is_external: false,
+      contract: {
+        id: 'contract-pay-1',
+        definer_module_id: 'mod-lib-1',
+        service_name: 'dophi.pay.v1.PayService',
+        provide_mode: 'MULTI_IMPL',
+        definer_module: {
+          id: 'mod-lib-1',
+          subsystem_id: 'sub-1',
+          group_id: 'grp-1',
+          code: 'LIB_PAY_CONTRACT',
+          name: '支付统一接口契约库',
+          module_kind: 'CONTRACT_LIB',
+        },
+      },
+      description: '泛化依赖支付 LIB 契约',
+    };
+
+    const html = renderToString(
+      <MemoryRouter>
+        <ModuleContractDetailPane
+          modules={[businessModule]}
+          selectedModule={businessModule}
+          onSelectModule={noop}
+          services={[customImplService]}
+          dependencies={[dispatchDependency]}
+          allProcesses={dummyProcesses}
+          isAdmin={true}
+          currentSubsystem={dummySubsystem}
+          currentGroup={dummyGroup}
+          onCreateModule={noop}
+          onEditModule={noop}
+          onDeleteModule={noop}
+          onCreateService={noopAsync}
+          onUpdateServiceIgnorePaths={noopAsync}
+          onDeleteService={noopAsync}
+          onCreateDependency={noopAsync}
+          onDeleteDependency={noopAsync}
+          onBindProcess={noopAsync}
+        />
+      </MemoryRouter>
+    );
+
+    const normalizedHtml = html.replace(/<!-- -->/g, '');
+    expect(normalizedHtml).toContain('DH_SyncService');
+    expect(normalizedHtml).toContain('契约实现: DH');
+    expect(normalizedHtml).toContain('自定义发布名');
+    expect(normalizedHtml).toContain('LIB: SyncService');
+    expect(normalizedHtml).toContain('/schemas?active_only=true&amp;search=SyncService');
+    expect(normalizedHtml).toContain('dophi.pay.v1.PayService');
+    expect(normalizedHtml).toContain('data-testid="badge-dispatch-dep-dep-dispatch-1"');
+    expect(normalizedHtml).toContain('DISPATCH');
+    expect(normalizedHtml).toContain('支付统一接口契约库');
   });
 });

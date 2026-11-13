@@ -283,7 +283,17 @@ flowchart LR
 | :--- | :--- | :--- |
 | **SEC-M20-01** | **越权篡改多实现服务契约或执行独占升级 (CWE-862 / Broken Access Control)** | `/api/arch/service-contracts` 下的所有写接口（`POST`、`PUT`、`DELETE`、`/api/arch/service-contracts/convert`）强制挂载 `commonAuth.RequireAdmin("traefik_admin")` 中间件，普通角色调用必返 `403 Forbidden`。 |
 | **SEC-M20-02** | **恶意注入非法 `service_name` 或 `impl_key` 污染拓扑/Agent 标签 (CWE-20 / Improper Input Validation)** | `service_name` 强制校验 `^[A-Za-z0-9._-]{1,63}$` 且必须存在于激活 `.pb` 描述符集中；`impl_key` 强制校验 `^[A-Za-z0-9._-]{1,64}$`，拒绝包含 `@`、`:`、空白或控制字符的输入，防止污染 Agent `service:operation@dst_tag` 匹配键。 |
-| **SEC-M20-03** | **并发竞态绕过独占服务与多实现契约互斥约束 (CWE-362 / Race Condition)** | 在登记 `ServiceContract` 与创建独占 `ModuleService` 的数据库事务内，统一通过参数化 `SELECT pg_advisory_xact_lock(hashtext(?))` 串行化同一 `service_name` 的跨表唯一性检查。 |
+| **SEC-M20-03** | **并发竞态绕过独占服务与多实现契约互斥约束 (CWE-362 / Race Condition)** | 在登记 `ServiceContract`、创建/编辑 `ModuleService`（含自定义运行期服务名）及 `/convert`、`/attach` 的数据库事务内，统一通过按字典序排列的参数化 `SELECT pg_advisory_xact_lock(hashtext(?))` 串行化相关 `service_name` 唯一性检查。 |
+
+---
+
+## 4. v2.0 演进增量说明（见 `ADR-16 v2.0.0`）
+
+> 在 M20 基础上，`ADR-16 v2.0.0` 进一步支持“同一 `CONTRACT_LIB` 接口契约下各实现业务模块自由定义唯一运行期发布服务名”（如契约名为 `SyncService`，实现模块发布 `DH_SyncService` / `KH_SyncService` 等）：
+> 1. `traefik_module_services` 新增 `is_custom_service_name` 列，唯一索引升级为 `(service_name) WHERE contract_id IS NULL OR is_custom_service_name = true`。
+> 2. `AssertContractImplProcessDisjoint`（`A-09`）收窄至同契约共享名实现（`is_custom_service_name = false`），自定义唯一名实现允许共署同一 `ArchProcess`。
+> 3. 服务端 `decoder.Registry` 构建运行期 `ServiceAliases`（`published -> contract`）与按运行期服务名细化 `ServiceIgnores`，单份 LIB `.pb` 即可解码、Diff 全部派生服务；Agent 侧零 `.pb`/零数据库防腐红线保持不变。
+> 4. 新增 `POST /api/arch/service-contracts/:id/attach`（存量独占服务平滑归入 LIB 契约），完善 `ContractResolver` Tier 1b、`OfflineBatchAttribution`、`consistency.go`、`graph_topology.go` 与前端双端支持。
 
 ---
 

@@ -237,4 +237,69 @@ describe('AC-M20-04 ArchCanvas Multi-Implementation Service Contract Tests', () 
     expect(html).toContain('实现待定');
     expect(html).toContain('3');
   });
+
+  it('stains AGG static edge in LOGICAL view when consistency edge matches by contract_id for custom published service_name (ADR-16 v2.0)', () => {
+    const callerNode: GraphNode = {
+      id: 'mod_1',
+      type: 'MODULE',
+      name: '调用方网关',
+      code: 'MOD_CALLER',
+      depth: 2,
+      ancestors: ['sub_1', 'grp_1'],
+      sort_order: 1,
+      meta: { module_kind: 'BUSINESS' },
+    };
+    const contractLibNode: GraphNode = {
+      id: 'mod_2',
+      type: 'MODULE',
+      name: '同步公共契约库',
+      code: 'LIB_SYNC',
+      depth: 2,
+      ancestors: ['sub_1', 'grp_1'],
+      sort_order: 2,
+      meta: { module_kind: 'CONTRACT_LIB' },
+    };
+    const aggStaticEdge: GraphEdge = {
+      id: 'e_agg_sync',
+      kind: 'CROSS_PROCESS',
+      source_node_id: 'mod_1',
+      target_node_id: 'mod_2',
+      src_module_id: 1,
+      dst_module_id: 2,
+      definer_module_id: 2,
+      contract_id: 100,
+      services: [
+        {
+          service_name: 'SyncService',
+          contract_id: 100,
+        },
+      ],
+    };
+
+    const report: ConsistencyReportDTO = {
+      session_id: 'sess-adr16-v2',
+      edges: [
+        {
+          src_module_id: 1,
+          src_module_name: '调用方网关',
+          dst_module_id: 3,
+          dst_module_name: 'DH 同步实现',
+          service_name: 'DH_SyncService',
+          operation: 'DoSync',
+          contract_id: 100,
+          contract_service_name: 'SyncService',
+          category: 'VERIFIED',
+          status: 'VERIFIED',
+          call_count: 42,
+          sample_traffic_record_id: 7,
+        },
+      ],
+    };
+
+    const result = synthesizeOverlay([callerNode, contractLibNode], [aggStaticEdge], report, 'LOGICAL');
+    expect(result.edgeStatusMap.get('e_agg_sync')).toBe('VERIFIED');
+    expect(result.edgeCallCountMap.get('e_agg_sync')).toBe(42);
+    expect(result.edgeSampleRecordMap.get('e_agg_sync')).toBe(7);
+    expect(result.workingEdges).toHaveLength(1);
+  });
 });

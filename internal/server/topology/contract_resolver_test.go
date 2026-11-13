@@ -413,3 +413,170 @@ func TestOfflineBatchAttribution_MultiImplThreeTier(t *testing.T) {
 		t.Fatalf("rec3 归集不符合预期 (应为 nil, contractID): mod=%v, contract=%v", res3.DstModuleID, res3.DstContractID)
 	}
 }
+
+func TestCustomServiceName_Tier1bAttributionAndConsistencyAndGraph(t *testing.T) {
+	db := setupIsolatedTopologyDB(t)
+	ctx := context.Background()
+
+	sub, _ := CreateSubsystem(db, SubsystemInput{Code: "SUB_ALIAS", Name: "自定义名子系统"})
+	grp, _ := CreateFunctionalGroup(db, FunctionalGroupInput{SubsystemID: sub.ID, Code: "GRP_ALIAS", Name: "自定义名功能组"})
+
+	libA, _ := CreateModule(db, ModuleInput{
+		GroupID:    grp.ID,
+		Code:       "LIB_SYNC_E2E",
+		Name:       "SyncService LIB",
+		ModuleKind: models.ModuleKindContractLib,
+	})
+
+	apg := models.ArchProcessGroup{Code: "APG_ALIAS", Name: "Alias进程组"}
+	db.Create(&apg)
+	apCaller := models.ArchProcess{GroupID: apg.ID, Code: "PROC_CALLER", Name: "调度进程", DefaultListenPort: 19100}
+	apShared := models.ArchProcess{GroupID: apg.ID, Code: "PROC_WORKERS", Name: "共署实现进程", DefaultListenPort: 19101}
+	db.Create(&apCaller)
+	db.Create(&apShared)
+
+	modCaller, _ := CreateModule(db, ModuleInput{GroupID: grp.ID, Code: "MOD_CALLER", Name: "调度模块", ArchProcessID: &apCaller.ID})
+	modDH, _ := CreateModule(db, ModuleInput{GroupID: grp.ID, Code: "MOD_DH_E2E", Name: "DH实现", ArchProcessID: &apShared.ID})
+	modKH, _ := CreateModule(db, ModuleInput{GroupID: grp.ID, Code: "MOD_KH_E2E", Name: "KH实现", ArchProcessID: &apShared.ID})
+
+	agt := models.Agent{Name: "agt-alias", Endpoint: "127.0.0.1:19190", Scope: models.ScopeShared, Status: models.AgentStatusOnline}
+	db.Create(&agt)
+	pCaller, _ := CreateProcess(db, ProcessInput{AgentID: agt.ID, ArchProcessID: apCaller.ID, ListenPort: 19100})
+	pShared, _ := CreateProcess(db, ProcessInput{AgentID: agt.ID, ArchProcessID: apShared.ID, ListenPort: 19101})
+
+	contract, _ := CreateServiceContract(db, ServiceContractInput{
+		ServiceName:     "SyncService",
+		DefinerModuleID: libA.ID,
+	})
+	if _, err := CreateModuleService(db, ModuleServiceInput{
+		ModuleID:    modDH.ID,
+		ContractID:  &contract.ID,
+		ImplKey:     "DH",
+		ServiceName: "DH_SyncService",
+	}); err != nil {
+		t.Fatalf("创建 DH_SyncService 失败: %v", err)
+	}
+	if _, err := CreateModuleService(db, ModuleServiceInput{
+		ModuleID:    modKH.ID,
+		ContractID:  &contract.ID,
+		ImplKey:     "KH",
+		ServiceName: "KH_SyncService",
+	}); err != nil {
+		t.Fatalf("创建 KH_SyncService 失败: %v", err)
+	}
+
+	if _, err := CreateModuleDependency(db, ModuleDependencyInput{
+		ConsumerModuleID: modCaller.ID,
+		ContractID:       &contract.ID,
+	}); err != nil {
+		t.Fatalf("声明 DISPATCH 依赖失败: %v", err)
+	}
+
+	// 1. OfflineBatchAttribution Tier 1b：仅凭 DH_SyncService  wire name（无需端点快照）精确归因至 modDH 与 contract
+	targetBytes, _ := json.Marshal([]uint64{pCaller.ID, pShared.ID})
+	session := models.RecordingSession{
+		SessionNo:          "REC_ALIAS_01",
+		Name:               "别名归因会话",
+		Scope:              models.ScopeShared,
+		Status:             models.SessionStatusCompleted,
+		TargetProcessIDs:   datatypes.JSON(targetBytes),
+		LeasedAgentIDs:     datatypes.JSON([]byte("[]")),
+		ProcessSnapshots:   datatypes.JSON([]byte("[]")),
+		EndpointSnapshots:  datatypes.JSON([]byte("[]")),
+		ProcessDiagnostics: datatypes.JSON([]byte("[]")),
+	}
+	db.Create(&session)
+
+	rec := models.TrafficRecord{
+		CreatedAt:   time.Now(),
+		SessionID:   session.ID,
+		ProcessID:   pCaller.ID,
+		Direction:   models.TrafficDirEgress,
+		ServiceName: "DH_SyncService",
+		Operation:   "Sync",
+		DstAddr:     "10.99.99.99:9999",
+	}
+	db.Create(&rec)
+
+	if err := OfflineBatchAttribution(ctx, db, session.ID); err != nil {
+		t.Fatalf("OfflineBatchAttribution 失败: %v", err)
+	}
+
+	var updatedRec models.TrafficRecord
+	db.First(&updatedRec, rec.ID)
+	if updatedRec.SrcModuleID == nil || *updatedRec.SrcModuleID != modCaller.ID {
+		t.Fatalf("期望 SrcModuleID=%d, got %v", modCaller.ID, updatedRec.SrcModuleID)
+	}
+	if updatedRec.DstModuleID == nil || *updatedRec.DstModuleID != modDH.ID || updatedRec.DstContractID == nil || *updatedRec.DstContractID != contract.ID {
+		t.Fatalf("Tier 1b 归因失败: dstMod=%v, dstContract=%v", updatedRec.DstModuleID, updatedRec.DstContractID)
+	}
+
+	// 2. VerifySessionTopology：DISPATCH 按 impl.ServiceName 展开，DH_SyncService 为 VERIFIED，KH_SyncService 为 UNCOVERED
+	report, err := VerifySessionTopology(ctx, db, session.ID, true)
+	if err != nil {
+		t.Fatalf("VerifySessionTopology 失败: %v", err)
+	}
+	foundDHVerified := false
+	foundKHUncovered := false
+	for _, edge := range report.Edges {
+		if edge.ServiceName == "DH_SyncService" && edge.Status == StatusVerified {
+			foundDHVerified = true
+			if edge.ContractServiceName != "SyncService" {
+				t.Errorf("期望 ContractServiceName=SyncService, got %s", edge.ContractServiceName)
+			}
+		}
+		if edge.ServiceName == "KH_SyncService" && edge.Status == StatusUncovered {
+			foundKHUncovered = true
+		}
+	}
+	if !foundDHVerified || !foundKHUncovered {
+		t.Fatalf("一致性边结果不符: dhVerified=%v khUncovered=%v edges=%+v", foundDHVerified, foundKHUncovered, report.Edges)
+	}
+
+	// 3. BuildTopologyGraph：LOGICAL 同时输出 AGG (X->LIB) 和 EXPAND (X->DH/KH)，PHYSICAL 仅输出 X->DH/KH
+	gLog, err := BuildTopologyGraph(db, TopologyViewLogical)
+	if err != nil {
+		t.Fatalf("BuildTopologyGraph(LOGICAL) 失败: %v", err)
+	}
+	var foundAgg, foundExpDH, foundExpKH bool
+	for _, edge := range gLog.Edges {
+		if edge.SourceNodeID == "mod_"+stringUint(modCaller.ID) && edge.ContractID != nil && *edge.ContractID == contract.ID {
+			if edge.TargetNodeID == "mod_"+stringUint(libA.ID) && edge.ImplKey == "" {
+				foundAgg = true
+			}
+			if edge.TargetNodeID == "mod_"+stringUint(modDH.ID) && edge.ImplKey == "DH" {
+				foundExpDH = true
+			}
+			if edge.TargetNodeID == "mod_"+stringUint(modKH.ID) && edge.ImplKey == "KH" {
+				foundExpKH = true
+			}
+		}
+	}
+	if !foundAgg || !foundExpDH || !foundExpKH {
+		t.Fatalf("逻辑拓扑图缺少聚合或展开边: agg=%v dh=%v kh=%v", foundAgg, foundExpDH, foundExpKH)
+	}
+
+	gPhys, err := BuildTopologyGraph(db, TopologyViewPhysical)
+	if err != nil {
+		t.Fatalf("BuildTopologyGraph(PHYSICAL) 失败: %v", err)
+	}
+	var foundPhysDH, foundPhysKH bool
+	for _, edge := range gPhys.Edges {
+		if edge.SourceNodeID == "mod_"+stringUint(modCaller.ID) && edge.ContractID != nil && *edge.ContractID == contract.ID {
+			if edge.TargetNodeID == "mod_"+stringUint(modDH.ID) && edge.ImplKey == "DH" {
+				foundPhysDH = true
+			}
+			if edge.TargetNodeID == "mod_"+stringUint(modKH.ID) && edge.ImplKey == "KH" {
+				foundPhysKH = true
+			}
+		}
+	}
+	if !foundPhysDH || !foundPhysKH {
+		t.Fatalf("物理拓扑图缺少展开边: physDH=%v physKH=%v", foundPhysDH, foundPhysKH)
+	}
+}
+
+func stringUint(v uint64) string {
+	b, _ := json.Marshal(v)
+	return string(b)
+}

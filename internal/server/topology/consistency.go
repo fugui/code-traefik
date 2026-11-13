@@ -28,23 +28,24 @@ const (
 
 // ConsistencyEdgeResult 单条边一致性验证结果
 type ConsistencyEdgeResult struct {
-	Status             VerificationStatus `json:"status"`
-	Category           VerificationStatus `json:"category"`
-	SrcModuleID        *uint64            `json:"src_module_id,omitempty"`
-	SourceModuleName   string             `json:"source_module_name,omitempty"`
-	SrcProcessID       *uint64            `json:"src_process_id,omitempty"`
-	CandidateModuleIDs []uint64           `json:"candidate_module_ids,omitempty"`
-	DstModuleID        *uint64            `json:"dst_module_id,omitempty"` // nil 表示未登记外部接口
-	TargetModuleName   string             `json:"target_module_name,omitempty"`
-	ContractID         *uint64            `json:"contract_id,omitempty"`
-	ImplKey            string             `json:"impl_key,omitempty"`
-	ServiceName        string             `json:"service_name"`
-	Operation          string             `json:"operation"`
-	ObservedCallCount  int64              `json:"observed_call_count"`
-	CallCount          int64              `json:"call_count"`
-	AttributionMode    string             `json:"attribution_mode,omitempty"`
-	SampleTrafficRecID *uint64            `json:"sample_traffic_record_id,omitempty"`
-	Detail             string             `json:"detail,omitempty"`
+	Status              VerificationStatus `json:"status"`
+	Category            VerificationStatus `json:"category"`
+	SrcModuleID         *uint64            `json:"src_module_id,omitempty"`
+	SourceModuleName    string             `json:"source_module_name,omitempty"`
+	SrcProcessID        *uint64            `json:"src_process_id,omitempty"`
+	CandidateModuleIDs  []uint64           `json:"candidate_module_ids,omitempty"`
+	DstModuleID         *uint64            `json:"dst_module_id,omitempty"` // nil 表示未登记外部接口
+	TargetModuleName    string             `json:"target_module_name,omitempty"`
+	ContractID          *uint64            `json:"contract_id,omitempty"`
+	ContractServiceName string             `json:"contract_service_name,omitempty"`
+	ImplKey             string             `json:"impl_key,omitempty"`
+	ServiceName         string             `json:"service_name"`
+	Operation           string             `json:"operation"`
+	ObservedCallCount   int64              `json:"observed_call_count"`
+	CallCount           int64              `json:"call_count"`
+	AttributionMode     string             `json:"attribution_mode,omitempty"`
+	SampleTrafficRecID  *uint64            `json:"sample_traffic_record_id,omitempty"`
+	Detail              string             `json:"detail,omitempty"`
 }
 
 // ConsistencyReportDTO 一致性验证报告响应 DTO
@@ -167,46 +168,57 @@ func VerifySessionTopology(ctx context.Context, db *gorm.DB, sessionID uint64, r
 	}
 
 	type expandedDep struct {
-		ConsumerModuleID uint64
-		ProviderModuleID *uint64
-		ContractID       *uint64
-		ImplKey          string
-		ServiceName      string
-		IsExternal       bool
+		ConsumerModuleID    uint64
+		ProviderModuleID    *uint64
+		ContractID          *uint64
+		ContractServiceName string
+		ImplKey             string
+		ServiceName         string
+		IsExternal          bool
 	}
 	var expandedDeps []expandedDep
 	for _, dep := range declaredDependencies {
 		if dep.ContractID != nil {
-			// DISPATCH 依赖：对该契约下的每一个实现模块分别生成期望依赖
+			// DISPATCH 依赖：对该契约下的每一个实现模块分别生成期望依赖（匹配运行期实际服务名 impl.ServiceName）
 			impls := contractImplsMap[*dep.ContractID]
 			c := contractMap[*dep.ContractID]
 			for _, impl := range impls {
 				mID := impl.ModuleID
 				cID := *dep.ContractID
+				svcName := strings.TrimSpace(impl.ServiceName)
+				if svcName == "" {
+					svcName = c.ServiceName
+				}
 				expandedDeps = append(expandedDeps, expandedDep{
-					ConsumerModuleID: dep.ConsumerModuleID,
-					ProviderModuleID: &mID,
-					ContractID:       &cID,
-					ImplKey:          impl.ImplKey,
-					ServiceName:      c.ServiceName,
-					IsExternal:       false,
+					ConsumerModuleID:    dep.ConsumerModuleID,
+					ProviderModuleID:    &mID,
+					ContractID:          &cID,
+					ContractServiceName: c.ServiceName,
+					ImplKey:             impl.ImplKey,
+					ServiceName:         svcName,
+					IsExternal:          false,
 				})
 			}
 		} else if dep.Service != nil {
 			mID := dep.Service.ModuleID
 			var cID *uint64
 			var implKey string
+			var contractSvcName string
 			if dep.Service.ContractID != nil {
 				cID = dep.Service.ContractID
 				implKey = dep.Service.ImplKey
+				if c, ok := contractMap[*dep.Service.ContractID]; ok {
+					contractSvcName = c.ServiceName
+				}
 			}
 			expandedDeps = append(expandedDeps, expandedDep{
-				ConsumerModuleID: dep.ConsumerModuleID,
-				ProviderModuleID: &mID,
-				ContractID:       cID,
-				ImplKey:          implKey,
-				ServiceName:      dep.Service.ServiceName,
-				IsExternal:       false,
+				ConsumerModuleID:    dep.ConsumerModuleID,
+				ProviderModuleID:    &mID,
+				ContractID:          cID,
+				ContractServiceName: contractSvcName,
+				ImplKey:             implKey,
+				ServiceName:         dep.Service.ServiceName,
+				IsExternal:          false,
 			})
 		} else if dep.IsExternal {
 			expandedDeps = append(expandedDeps, expandedDep{
@@ -362,16 +374,17 @@ func VerifySessionTopology(ctx context.Context, db *gorm.DB, sessionID uint64, r
 				status = StatusVerified // 外部服务实测捕获出站调用，外部依赖验证合规
 			}
 			edge := ConsistencyEdgeResult{
-				Status:             status,
-				SrcModuleID:        &srcModID,
-				SrcProcessID:       &srcProcID,
-				DstModuleID:        nil,
-				ContractID:         dep.ContractID,
-				ImplKey:            dep.ImplKey,
-				ServiceName:        svc,
-				Operation:          "",
-				ObservedCallCount:  obsCount,
-				SampleTrafficRecID: sampleID,
+				Status:              status,
+				SrcModuleID:         &srcModID,
+				SrcProcessID:        &srcProcID,
+				DstModuleID:         nil,
+				ContractID:          dep.ContractID,
+				ContractServiceName: dep.ContractServiceName,
+				ImplKey:             dep.ImplKey,
+				ServiceName:         svc,
+				Operation:           "",
+				ObservedCallCount:   obsCount,
+				SampleTrafficRecID:  sampleID,
 			}
 			edges = append(edges, edge)
 			continue
@@ -382,16 +395,17 @@ func VerifySessionTopology(ctx context.Context, db *gorm.DB, sessionID uint64, r
 		// 判定 ①: 进程内调用 (INTRA_PROCESS) -> NOT_OBSERVABLE
 		if srcProcID > 0 && dstProcID > 0 && srcProcID == dstProcID {
 			edge := ConsistencyEdgeResult{
-				Status:             StatusNotObservable,
-				SrcModuleID:        &srcModID,
-				SrcProcessID:       &srcProcID,
-				DstModuleID:        dstModID,
-				ContractID:         dep.ContractID,
-				ImplKey:            dep.ImplKey,
-				ServiceName:        svc,
-				Operation:          "",
-				ObservedCallCount:  obsCount,
-				SampleTrafficRecID: sampleID,
+				Status:              StatusNotObservable,
+				SrcModuleID:         &srcModID,
+				SrcProcessID:        &srcProcID,
+				DstModuleID:         dstModID,
+				ContractID:          dep.ContractID,
+				ContractServiceName: dep.ContractServiceName,
+				ImplKey:             dep.ImplKey,
+				ServiceName:         svc,
+				Operation:           "",
+				ObservedCallCount:   obsCount,
+				SampleTrafficRecID:  sampleID,
 			}
 			edges = append(edges, edge)
 			continue
@@ -402,32 +416,34 @@ func VerifySessionTopology(ctx context.Context, db *gorm.DB, sessionID uint64, r
 			if obsCount > 0 {
 				// VERIFIED: 目标与来源均纳管且实测跨进程调用 >= 1 (双端闭环验证合规)
 				edge := ConsistencyEdgeResult{
-					Status:             StatusVerified,
-					SrcModuleID:        &srcModID,
-					SrcProcessID:       &srcProcID,
-					DstModuleID:        dstModID,
-					ContractID:         dep.ContractID,
-					ImplKey:            dep.ImplKey,
-					ServiceName:        svc,
-					Operation:          "",
-					ObservedCallCount:  obsCount,
-					SampleTrafficRecID: sampleID,
-					AttributionMode:    AttributionUniqueDepend,
+					Status:              StatusVerified,
+					SrcModuleID:         &srcModID,
+					SrcProcessID:        &srcProcID,
+					DstModuleID:         dstModID,
+					ContractID:          dep.ContractID,
+					ContractServiceName: dep.ContractServiceName,
+					ImplKey:             dep.ImplKey,
+					ServiceName:         svc,
+					Operation:           "",
+					ObservedCallCount:   obsCount,
+					SampleTrafficRecID:  sampleID,
+					AttributionMode:     AttributionUniqueDepend,
 				}
 				edges = append(edges, edge)
 			} else {
 				// UNCOVERED: 均纳管但未捕获调用
 				edge := ConsistencyEdgeResult{
-					Status:             StatusUncovered,
-					SrcModuleID:        &srcModID,
-					SrcProcessID:       &srcProcID,
-					DstModuleID:        dstModID,
-					ContractID:         dep.ContractID,
-					ImplKey:            dep.ImplKey,
-					ServiceName:        svc,
-					Operation:          "",
-					ObservedCallCount:  0,
-					SampleTrafficRecID: nil,
+					Status:              StatusUncovered,
+					SrcModuleID:         &srcModID,
+					SrcProcessID:        &srcProcID,
+					DstModuleID:         dstModID,
+					ContractID:          dep.ContractID,
+					ContractServiceName: dep.ContractServiceName,
+					ImplKey:             dep.ImplKey,
+					ServiceName:         svc,
+					Operation:           "",
+					ObservedCallCount:   0,
+					SampleTrafficRecID:  nil,
 				}
 				edges = append(edges, edge)
 			}
@@ -438,32 +454,34 @@ func VerifySessionTopology(ctx context.Context, db *gorm.DB, sessionID uint64, r
 		if obsCount > 0 {
 			// OUTBOUND_VERIFIED: 单端已出站（源端已监控且实测出站调用 >= 1，但目标供给方物理进程未纳入本次监控）
 			edge := ConsistencyEdgeResult{
-				Status:             StatusOutboundVerified,
-				SrcModuleID:        &srcModID,
-				SrcProcessID:       &srcProcID,
-				DstModuleID:        dstModID,
-				ContractID:         dep.ContractID,
-				ImplKey:            dep.ImplKey,
-				ServiceName:        svc,
-				Operation:          "",
-				ObservedCallCount:  obsCount,
-				SampleTrafficRecID: sampleID,
-				AttributionMode:    AttributionUniqueDepend,
+				Status:              StatusOutboundVerified,
+				SrcModuleID:         &srcModID,
+				SrcProcessID:        &srcProcID,
+				DstModuleID:         dstModID,
+				ContractID:          dep.ContractID,
+				ContractServiceName: dep.ContractServiceName,
+				ImplKey:             dep.ImplKey,
+				ServiceName:         svc,
+				Operation:           "",
+				ObservedCallCount:   obsCount,
+				SampleTrafficRecID:  sampleID,
+				AttributionMode:     AttributionUniqueDepend,
 			}
 			edges = append(edges, edge)
 		} else {
 			// NOT_MONITORED: 目标供给模块所在物理进程未加入本次监控批次，且未捕获调用，不计入未覆盖分母
 			edge := ConsistencyEdgeResult{
-				Status:             StatusNotMonitored,
-				SrcModuleID:        &srcModID,
-				SrcProcessID:       &srcProcID,
-				DstModuleID:        dstModID,
-				ContractID:         dep.ContractID,
-				ImplKey:            dep.ImplKey,
-				ServiceName:        svc,
-				Operation:          "",
-				ObservedCallCount:  0,
-				SampleTrafficRecID: nil,
+				Status:              StatusNotMonitored,
+				SrcModuleID:         &srcModID,
+				SrcProcessID:        &srcProcID,
+				DstModuleID:         dstModID,
+				ContractID:          dep.ContractID,
+				ContractServiceName: dep.ContractServiceName,
+				ImplKey:             dep.ImplKey,
+				ServiceName:         svc,
+				Operation:           "",
+				ObservedCallCount:   0,
+				SampleTrafficRecID:  nil,
 			}
 			edges = append(edges, edge)
 		}

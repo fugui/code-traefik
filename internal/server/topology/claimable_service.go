@@ -77,7 +77,10 @@ func ListClaimableProtoServices(db *gorm.DB) ([]ClaimableProtoServiceDTO, error)
 
 	claimedMap := make(map[string]*models.Module)
 	for _, ms := range modSvcs {
-		claimedMap[ms.ServiceName] = ms.Module
+		// 独占服务或自定义的唯一运行期服务名占据了该 service_name 命名空间；共享契约名实现由 contractMap 引导
+		if ms.ContractID == nil || ms.IsCustomServiceName {
+			claimedMap[ms.ServiceName] = ms.Module
+		}
 	}
 
 	// 3.1 查询当前已登记的多实现契约表 (ADR-16, M20)

@@ -217,14 +217,16 @@ func buildLogicalTopologyGraph(db *gorm.DB, dto *TopologyGraphDTO) error {
 		contractCountMap[c.DefinerModuleID]++
 	}
 
-	svcProvideMap := make(map[uint64]uint64) // serviceID -> moduleID
-	svcNameMap := make(map[uint64]string)    // serviceID -> serviceName
-	provideCountMap := make(map[uint64]int)  // moduleID -> count
+	svcProvideMap := make(map[uint64]uint64)                    // serviceID -> moduleID
+	svcNameMap := make(map[uint64]string)                       // serviceID -> serviceName
+	provideCountMap := make(map[uint64]int)                     // moduleID -> count
+	contractImplsMap := make(map[uint64][]models.ModuleService) // contractID -> impl services
 	for _, svc := range services {
 		svcProvideMap[svc.ID] = svc.ModuleID
 		svcNameMap[svc.ID] = svc.ServiceName
 		provideCountMap[svc.ModuleID]++
 		if svc.ContractID != nil && *svc.ContractID > 0 {
+			contractImplsMap[*svc.ContractID] = append(contractImplsMap[*svc.ContractID], svc)
 			if c, ok := contractMap[*svc.ContractID]; ok {
 				implCountMap[c.DefinerModuleID]++
 			}
@@ -434,12 +436,16 @@ func buildLogicalTopologyGraph(db *gorm.DB, dto *TopologyGraphDTO) error {
 					edgeMap[key] = edge
 				}
 				sID := svc.ID
+				desc := fmt.Sprintf("实现契约 %s (impl_key: %s)", c.ServiceName, svc.ImplKey)
+				if svc.ServiceName != c.ServiceName {
+					desc = fmt.Sprintf("实现契约 %s -> 运行期服务 %s (impl_key: %s)", c.ServiceName, svc.ServiceName, svc.ImplKey)
+				}
 				edge.Services = append(edge.Services, EdgeServiceItem{
 					ServiceID:   &sID,
 					ContractID:  &cID,
 					ImplKey:     svc.ImplKey,
-					ServiceName: c.ServiceName,
-					Description: fmt.Sprintf("实现契约 %s (impl_key: %s)", c.ServiceName, svc.ImplKey),
+					ServiceName: svc.ServiceName,
+					Description: desc,
 				})
 			}
 		}
@@ -473,7 +479,7 @@ func buildLogicalTopologyGraph(db *gorm.DB, dto *TopologyGraphDTO) error {
 			kind = EdgeKindExternalUnregistered
 			extSys = sysName
 		} else if dep.ContractID != nil {
-			// DISPATCH 契约依赖 -> 目标为定义库模块
+			// DISPATCH 契约依赖 -> 1) 聚合边 (X -> 接口库 A，供 AGG 模式展示)
 			c, ok := contractMap[*dep.ContractID]
 			if !ok {
 				continue
@@ -484,6 +490,48 @@ func buildLogicalTopologyGraph(db *gorm.DB, dto *TopologyGraphDTO) error {
 			definerModID = &dID
 			depContractID = dep.ContractID
 			kind = EdgeKindCrossProcess
+
+			// 2) 同步发射展开边 (X -> 各实际实现模块 B/C，携带 ImplKey 与运行期服务名，供 EXPAND 模式切换)
+			for _, impl := range contractImplsMap[*dep.ContractID] {
+				implDstNodeID := fmt.Sprintf("mod_%d", impl.ModuleID)
+				implModID := impl.ModuleID
+				var implProcID *uint64
+				if implMod, ok2 := modMap[implModID]; ok2 && implMod.ArchProcessID != nil && *implMod.ArchProcessID > 0 {
+					implProcID = implMod.ArchProcessID
+				}
+				implKind := EdgeKindCrossProcess
+				if srcProcID != nil && implProcID != nil && *srcProcID == *implProcID {
+					implKind = EdgeKindIntraProcess
+				}
+				expKey := edgeKey{src: srcNodeID, dst: implDstNodeID, kind: implKind}
+				expEdge, expExists := edgeMap[expKey]
+				if !expExists {
+					expEdge = &GraphEdge{
+						ID:              fmt.Sprintf("edge_%s_%s", srcNodeID, implDstNodeID),
+						Kind:            implKind,
+						SourceNodeID:    srcNodeID,
+						TargetNodeID:    implDstNodeID,
+						SrcModuleID:     dep.ConsumerModuleID,
+						DstModuleID:     &implModID,
+						SrcProcessID:    srcProcID,
+						DstProcessID:    implProcID,
+						ContractID:      dep.ContractID,
+						ImplKey:         impl.ImplKey,
+						DefinerModuleID: definerModID,
+						Services:        make([]EdgeServiceItem, 0),
+					}
+					edgeMap[expKey] = expEdge
+				}
+				implSvcID := impl.ID
+				expEdge.Services = append(expEdge.Services, EdgeServiceItem{
+					ServiceID:    &implSvcID,
+					ContractID:   dep.ContractID,
+					ImplKey:      impl.ImplKey,
+					ServiceName:  impl.ServiceName,
+					DependencyID: dep.ID,
+					Description:  dep.Description,
+				})
+			}
 		} else {
 			if dep.ServiceID == nil {
 				continue
@@ -631,7 +679,14 @@ func buildPhysicalTopologyGraph(db *gorm.DB, dto *TopologyGraphDTO, envAgentID u
 		}
 	}
 
-	// 5. 加载服务供给与依赖关系
+	// 5. 加载服务供给、契约与依赖关系
+	var contracts []models.ServiceContract
+	_ = db.Find(&contracts).Error
+	contractMap := make(map[uint64]models.ServiceContract, len(contracts))
+	for _, c := range contracts {
+		contractMap[c.ID] = c
+	}
+
 	var services []models.ModuleService
 	if err := db.Find(&services).Error; err != nil {
 		return err
@@ -639,14 +694,18 @@ func buildPhysicalTopologyGraph(db *gorm.DB, dto *TopologyGraphDTO, envAgentID u
 	svcProvideMap := make(map[uint64]uint64)
 	svcNameMap := make(map[uint64]string)
 	provideCountMap := make(map[uint64]int)
+	contractImplsMap := make(map[uint64][]models.ModuleService)
 	for _, svc := range services {
 		svcProvideMap[svc.ID] = svc.ModuleID
 		svcNameMap[svc.ID] = svc.ServiceName
 		provideCountMap[svc.ModuleID]++
+		if svc.ContractID != nil && *svc.ContractID > 0 {
+			contractImplsMap[*svc.ContractID] = append(contractImplsMap[*svc.ContractID], svc)
+		}
 	}
 
 	var dependencies []models.ModuleDependency
-	if err := db.Preload("Service").Find(&dependencies).Error; err != nil {
+	if err := db.Preload("Service").Preload("Contract").Find(&dependencies).Error; err != nil {
 		return err
 	}
 
@@ -972,6 +1031,58 @@ func buildPhysicalTopologyGraph(db *gorm.DB, dto *TopologyGraphDTO, envAgentID u
 			dstNodeID = fmt.Sprintf("ext_sys_%s", sysName)
 			kind = EdgeKindExternalUnregistered
 			extSys = sysName
+		} else if dep.ContractID != nil {
+			// 物理视角：DISPATCH 契约依赖恒展开为消费者到各部署实现模块的真实进程间/内连线 (ADR-16)
+			var definerID *uint64
+			if c, ok := contractMap[*dep.ContractID]; ok {
+				dID := c.DefinerModuleID
+				definerID = &dID
+			}
+			for _, impl := range contractImplsMap[*dep.ContractID] {
+				implDstNodeID := fmt.Sprintf("mod_%d", impl.ModuleID)
+				implModID := impl.ModuleID
+				var implDstProcID *uint64
+				if dstMod, ok2 := moduleMap[implModID]; ok2 && dstMod.ArchProcessID != nil && *dstMod.ArchProcessID > 0 {
+					implDstProcID = dstMod.ArchProcessID
+				}
+				var implKind string
+				if srcProcID == nil || implDstProcID == nil {
+					implKind = "UNDEPLOYED"
+				} else if *srcProcID == *implDstProcID {
+					implKind = EdgeKindIntraProcess
+				} else {
+					implKind = EdgeKindCrossProcess
+				}
+				key := edgeKey{src: srcNodeID, dst: implDstNodeID}
+				edge, exists := edgeMap[key]
+				if !exists {
+					edge = &GraphEdge{
+						ID:              fmt.Sprintf("edge_%s_%s", srcNodeID, implDstNodeID),
+						Kind:            implKind,
+						SourceNodeID:    srcNodeID,
+						TargetNodeID:    implDstNodeID,
+						SrcModuleID:     dep.ConsumerModuleID,
+						DstModuleID:     &implModID,
+						SrcProcessID:    srcProcID,
+						DstProcessID:    implDstProcID,
+						ContractID:      dep.ContractID,
+						ImplKey:         impl.ImplKey,
+						DefinerModuleID: definerID,
+						Services:        make([]EdgeServiceItem, 0),
+					}
+					edgeMap[key] = edge
+				}
+				implSvcID := impl.ID
+				edge.Services = append(edge.Services, EdgeServiceItem{
+					ServiceID:    &implSvcID,
+					ContractID:   dep.ContractID,
+					ImplKey:      impl.ImplKey,
+					ServiceName:  impl.ServiceName,
+					DependencyID: dep.ID,
+					Description:  dep.Description,
+				})
+			}
+			continue
 		} else {
 			if dep.ServiceID == nil {
 				continue
@@ -1001,6 +1112,18 @@ func buildPhysicalTopologyGraph(db *gorm.DB, dto *TopologyGraphDTO, envAgentID u
 			}
 		}
 
+		var depContractID *uint64
+		var depImplKey string
+		var definerModID *uint64
+		if dep.Service != nil && dep.Service.ContractID != nil {
+			depContractID = dep.Service.ContractID
+			depImplKey = dep.Service.ImplKey
+			if c, ok := contractMap[*dep.Service.ContractID]; ok {
+				dID := c.DefinerModuleID
+				definerModID = &dID
+			}
+		}
+
 		svcName := ""
 		if dep.Service != nil && dep.Service.ServiceName != "" {
 			svcName = dep.Service.ServiceName
@@ -1018,22 +1141,27 @@ func buildPhysicalTopologyGraph(db *gorm.DB, dto *TopologyGraphDTO, envAgentID u
 		edge, exists := edgeMap[key]
 		if !exists {
 			edge = &GraphEdge{
-				ID:             fmt.Sprintf("edge_%s_%s", srcNodeID, dstNodeID),
-				Kind:           kind,
-				SourceNodeID:   srcNodeID,
-				TargetNodeID:   dstNodeID,
-				SrcModuleID:    dep.ConsumerModuleID,
-				DstModuleID:    dstModID,
-				SrcProcessID:   srcProcID,
-				DstProcessID:   dstProcID,
-				Services:       make([]EdgeServiceItem, 0),
-				ExternalSystem: extSys,
+				ID:              fmt.Sprintf("edge_%s_%s", srcNodeID, dstNodeID),
+				Kind:            kind,
+				SourceNodeID:    srcNodeID,
+				TargetNodeID:    dstNodeID,
+				SrcModuleID:     dep.ConsumerModuleID,
+				DstModuleID:     dstModID,
+				SrcProcessID:    srcProcID,
+				DstProcessID:    dstProcID,
+				ContractID:      depContractID,
+				ImplKey:         depImplKey,
+				DefinerModuleID: definerModID,
+				Services:        make([]EdgeServiceItem, 0),
+				ExternalSystem:  extSys,
 			}
 			edgeMap[key] = edge
 		}
 
 		edge.Services = append(edge.Services, EdgeServiceItem{
 			ServiceID:    dep.ServiceID,
+			ContractID:   depContractID,
+			ImplKey:      depImplKey,
 			ServiceName:  svcName,
 			DependencyID: dep.ID,
 			Description:  dep.Description,

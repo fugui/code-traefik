@@ -97,7 +97,8 @@ export function synthesizeOverlay(
     }
 
     const staticEdgeByModulePair = new Map<number, GraphEdge[]>();
-    if (neededPairs.size > 0) {
+    const staticEdgeByContractPair = new Map<string, GraphEdge[]>();
+    if (neededPairs.size > 0 || consistencyReport.edges.some((item) => item.contract_id != null)) {
       for (const e of edges) {
         if (e.src_module_id != null && e.dst_module_id != null) {
           const pairKey = Number(e.src_module_id) * 1000000 + Number(e.dst_module_id);
@@ -107,6 +108,16 @@ export function synthesizeOverlay(
               bucket.push(e);
             } else {
               staticEdgeByModulePair.set(pairKey, [e]);
+            }
+          }
+          // 支持逻辑视图 AGG 模式：DISPATCH 边指向接口库 (dst_module_id === definer_module_id)
+          if (e.contract_id != null && e.definer_module_id != null && e.dst_module_id === e.definer_module_id) {
+            const cKey = `${e.src_module_id}:${e.contract_id}`;
+            const cBucket = staticEdgeByContractPair.get(cKey);
+            if (cBucket) {
+              cBucket.push(e);
+            } else {
+              staticEdgeByContractPair.set(cKey, [e]);
             }
           }
         }
@@ -301,19 +312,40 @@ export function synthesizeOverlay(
         } else {
           unattributedPendingList.push(item);
         }
-      } else if (srcModuleId != null && dstModuleId != null) {
-        const pairKey = Number(srcModuleId) * 1000000 + Number(dstModuleId);
-        const candidates = staticEdgeByModulePair.get(pairKey);
-        if (candidates) {
-          for (const e of candidates) {
-            const matchSvc = e.services.some(
-              (s) =>
-                s.service_name === item.service_name ||
-                s.service_name === `${item.service_name}.${item.operation}` ||
-                s.service_name.includes(item.service_name)
-            );
+      } else if (srcModuleId != null && (dstModuleId != null || item.contract_id != null)) {
+        let stainedDirect = false;
+        if (dstModuleId != null) {
+          const pairKey = Number(srcModuleId) * 1000000 + Number(dstModuleId);
+          const candidates = staticEdgeByModulePair.get(pairKey);
+          if (candidates) {
+            for (const e of candidates) {
+              const matchSvc =
+                (item.contract_id != null && e.contract_id != null && Number(e.contract_id) === Number(item.contract_id)) ||
+                e.services.some(
+                  (s) =>
+                    s.service_name === item.service_name ||
+                    s.service_name === `${item.service_name}.${item.operation}` ||
+                    s.service_name.includes(item.service_name)
+                );
 
-            if (matchSvc) {
+              if (matchSvc) {
+                stainedDirect = true;
+                const currStatus = edgeStatusMap.get(e.id);
+                edgeStatusMap.set(e.id, mergeStatus(currStatus, status) || status);
+                edgeCallCountMap.set(e.id, (edgeCallCountMap.get(e.id) || 0) + callCount);
+                if (sampleId && !edgeSampleRecordMap.has(e.id)) {
+                  edgeSampleRecordMap.set(e.id, sampleId);
+                }
+              }
+            }
+          }
+        }
+
+        // 若当前画布处于逻辑视图 AGG 模式（X -> A 接口库边存在），同步聚合染色至 X -> A 边
+        if (item.contract_id != null) {
+          const aggCandidates = staticEdgeByContractPair.get(`${srcModuleId}:${item.contract_id}`);
+          if (aggCandidates && (!stainedDirect || view === 'LOGICAL')) {
+            for (const e of aggCandidates) {
               const currStatus = edgeStatusMap.get(e.id);
               edgeStatusMap.set(e.id, mergeStatus(currStatus, status) || status);
               edgeCallCountMap.set(e.id, (edgeCallCountMap.get(e.id) || 0) + callCount);
