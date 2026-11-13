@@ -59,6 +59,7 @@ func SetupWithDB(db *gorm.DB) error {
 		&GoldenSuite{},
 		&GoldenSuiteItem{},
 		&TopologyLayout{},
+		&ProtoDocSymbol{},
 	); err != nil {
 		return fmt.Errorf("迁移数据表结构失败: %w", err)
 	}
@@ -169,6 +170,13 @@ BEGIN
         CHECK ((scope = 'SHARED' AND owner_id IS NULL AND focus_scope = 'GLOBAL' AND is_default = false)
             OR (scope = 'PRIVATE' AND owner_id IS NOT NULL));
 
+    -- traefik_proto_doc_symbols 符号类型检查约束 (F-18, M23)
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_traefik_pdoc_kind') THEN
+        ALTER TABLE traefik_proto_doc_symbols DROP CONSTRAINT chk_traefik_pdoc_kind;
+    END IF;
+    ALTER TABLE traefik_proto_doc_symbols ADD CONSTRAINT chk_traefik_pdoc_kind
+        CHECK (symbol_kind IN ('SERVICE','METHOD','MESSAGE','ENUM'));
+
     -- 移除旧版 uk_traefik_replay_task_item 索引（若存在），由 uk_traefik_replay_task_seq 替代
     DROP INDEX IF EXISTS uk_traefik_replay_task_item;
 END $$;`
@@ -244,6 +252,10 @@ END $$;`
 		`CREATE UNIQUE INDEX IF NOT EXISTS uk_traefik_mod_svc_contract_impl ON traefik_module_services (contract_id, impl_key) WHERE contract_id IS NOT NULL;`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS uk_traefik_mod_svc_contract_mod ON traefik_module_services (contract_id, module_id) WHERE contract_id IS NOT NULL;`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS uk_traefik_dep_consumer_contract ON traefik_module_dependencies (consumer_module_id, contract_id) WHERE contract_id IS NOT NULL;`,
+		`CREATE INDEX IF NOT EXISTS idx_traefik_pdoc_schema_kind ON traefik_proto_doc_symbols (schema_id, symbol_kind);`,
+		`CREATE INDEX IF NOT EXISTS idx_traefik_pdoc_fts ON traefik_proto_doc_symbols USING gin (to_tsvector('simple', coalesce(full_name,'') || ' ' || coalesce(summary,'') || ' ' || coalesce(leading_comments,'') || ' ' || coalesce(trailing_comments,'') || ' ' || coalesce(owner_tag,'')));`,
+		`CREATE INDEX IF NOT EXISTS idx_traefik_pdoc_fields_gin ON traefik_proto_doc_symbols USING gin (fields_meta_json);`,
+		`CREATE INDEX IF NOT EXISTS idx_traefik_pdoc_err_gin ON traefik_proto_doc_symbols USING gin (error_codes_json);`,
 	}
 	for _, idxSQL := range partialIndexes {
 		if err := DB.Exec(idxSQL).Error; err != nil {
@@ -364,6 +376,12 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_traefik_proto_op_schema') THEN
         ALTER TABLE traefik_proto_operations
         ADD CONSTRAINT fk_traefik_proto_op_schema
+        FOREIGN KEY (schema_id) REFERENCES traefik_proto_schemas(id)
+        ON UPDATE CASCADE ON DELETE CASCADE;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_traefik_pdoc_schema') THEN
+        ALTER TABLE traefik_proto_doc_symbols
+        ADD CONSTRAINT fk_traefik_pdoc_schema
         FOREIGN KEY (schema_id) REFERENCES traefik_proto_schemas(id)
         ON UPDATE CASCADE ON DELETE CASCADE;
     END IF;

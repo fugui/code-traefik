@@ -731,6 +731,8 @@ func UploadProtoSchema(c *gin.Context) {
 		breakingWarnings, _ = reg.DetectBreakingChangesAgainstActive(schema.Name, rawBytes)
 	}
 
+	docCount := rebuildProtoDocSymbolsForSchema(schema)
+
 	auditSummary := fmt.Sprintf("上传描述集 [%s] 版本 %d", schema.Name, schema.Version)
 	if autoActivate && allowBreaking {
 		auditSummary = fmt.Sprintf("强制上传并激活破坏性描述集 [%s] 版本 %d (授权原因: %s)", schema.Name, schema.Version, breakingReason)
@@ -740,6 +742,7 @@ func UploadProtoSchema(c *gin.Context) {
 	respData := gin.H{
 		"schema":                    schema,
 		"operations":                ops,
+		"doc_symbol_count":          docCount,
 		"inherited_ignore_op_count": inheritedCount,
 	}
 	if len(breakingWarnings) > 0 {
@@ -890,6 +893,7 @@ func CompileProtoSchema(c *gin.Context) {
 		externalImports = []string{}
 	}
 	resolvedDeps := resolveDependenciesWithLookup(externalImports, buildActiveProtoLookup(models.DB))
+	docCount := rebuildProtoDocSymbolsForSchema(schema)
 
 	auditSummary := fmt.Sprintf("在线编译描述集 [%s] 版本 %d (来源: ONLINE_COMPILE)", schema.Name, schema.Version)
 	if req.AutoActivate && req.AllowBreaking {
@@ -904,7 +908,7 @@ func CompileProtoSchema(c *gin.Context) {
 		"compiled_files":            compiledFiles,
 		"external_imports":          externalImports,
 		"resolved_dependencies":     resolvedDeps,
-		"doc_symbol_count":          0,
+		"doc_symbol_count":          docCount,
 		"inherited_ignore_op_count": inheritedCount,
 	}
 	if len(breakingWarnings) > 0 {
@@ -1046,6 +1050,8 @@ func ActivateProtoSchema(c *gin.Context) {
 		return
 	}
 
+	docCount := rebuildProtoDocSymbolsForSchema(activatedSchema)
+
 	auditSummary := fmt.Sprintf("激活描述集 [%s] 版本 %d", activatedSchema.Name, activatedSchema.Version)
 	if req.AllowBreaking {
 		auditSummary = fmt.Sprintf("强制激活破坏性描述集 [%s] 版本 %d (授权原因: %s)", activatedSchema.Name, activatedSchema.Version, req.BreakingReason)
@@ -1055,6 +1061,7 @@ func ActivateProtoSchema(c *gin.Context) {
 	respData := gin.H{
 		"schema":               activatedSchema,
 		"activated_operations": count,
+		"doc_symbol_count":     docCount,
 	}
 	if req.AllowBreaking {
 		respData["forced_breaking"] = true
@@ -1178,6 +1185,11 @@ func BatchActivateProtoSchemas(c *gin.Context) {
 		return
 	}
 
+	totalDocSymbols := 0
+	for i := range schemas {
+		totalDocSymbols += rebuildProtoDocSymbolsForSchema(&schemas[i])
+	}
+
 	auditSummary := fmt.Sprintf("批量激活 %d 个描述集", len(schemas))
 	if req.AllowBreaking {
 		auditSummary = fmt.Sprintf("强制批量激活 %d 个描述集 (授权原因: %s)", len(schemas), req.BreakingReason)
@@ -1187,6 +1199,7 @@ func BatchActivateProtoSchemas(c *gin.Context) {
 	respData := gin.H{
 		"activated_schemas":       schemas,
 		"total_active_operations": totalOps,
+		"doc_symbol_count":        totalDocSymbols,
 	}
 	if req.AllowBreaking {
 		respData["forced_breaking"] = true

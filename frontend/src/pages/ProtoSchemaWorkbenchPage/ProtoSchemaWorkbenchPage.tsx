@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Modal, usePaginationState } from '@code/common';
+import { BookOpen, Code2, ShieldCheck, FolderKanban, Network } from 'lucide-react';
+import { Drawer, Modal, usePaginationState } from '@code/common';
 import { useToast } from '../../utils/toast';
 import { useModuleUser } from '../../context/ModuleUserContext';
 import * as schemaApi from '../../api/schema';
@@ -13,6 +14,7 @@ import type {
   ServiceContractGroupDTO,
   BreakingRuleViolation,
   AffectedDependent,
+  ReconstructedProtoFileDTO,
 } from '../../types';
 import { SchemaPoolSummaryBar } from './SchemaPoolSummaryBar';
 import { SchemaAssetLedgerTable } from './SchemaAssetLedgerTable';
@@ -23,6 +25,12 @@ import { BreakingChangeAlertDrawer } from '../ProtoSchemasPage/BreakingChangeAle
 import { OperationMappingTable } from './OperationMappingTable';
 import { OperationDocDrawer } from './OperationDocDrawer';
 import { ProtoDependenciesGraphPane } from './ProtoDependenciesGraphPane';
+import { LivingProtoDocsPane } from './LivingProtoDocsPane';
+import { ProtoSourcesBrowserPane } from './ProtoSourcesBrowserPane';
+import { ProtoReadOnlyCodeViewer } from './ProtoReadOnlyCodeViewer';
+import './ProtoDocsAndCodeViewer.css';
+
+export type SchemaWorkbenchTab = 'docs' | 'sources' | 'mr-gates' | 'assets' | 'graph';
 
 export const ProtoSchemaWorkbenchPage: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -30,27 +38,49 @@ export const ProtoSchemaWorkbenchPage: React.FC = () => {
   const toast = useToast();
   const isAdmin = Boolean(user?.is_module_admin || user?.is_super_admin);
 
-  // 1. 顶层 Tab 判断与深链路由自动切换
+  // 1. 顶层 5 视窗 Tab 判断（无损重映射旧版 ?tab=catalog -> docs）
   const rawTab = searchParams.get('tab');
   const serviceNameQuery = searchParams.get('service_name');
   const schemaIdQuery = searchParams.get('schema_id');
-  const legacyActiveSearch = searchParams.get('active_only') === 'true' && Boolean(searchParams.get('search'));
+  const claimedStatusQuery = searchParams.get('claimed_status');
+  const searchQueryParam = searchParams.get('search') || '';
 
-  // 若携带深链参数且未显式指定 tab=assets/graph，则自动切入 catalog 视图
-  const activeTab: 'assets' | 'catalog' | 'graph' =
-    rawTab === 'graph'
-      ? 'graph'
-      : rawTab === 'catalog' || (!rawTab && (serviceNameQuery || schemaIdQuery || legacyActiveSearch))
-        ? 'catalog'
-        : 'assets';
+  const resolveActiveTab = (): SchemaWorkbenchTab => {
+    switch (rawTab) {
+      case 'graph':
+        return 'graph';
+      case 'assets':
+        return 'assets';
+      case 'sources':
+        return 'sources';
+      case 'mr-gates':
+        return 'mr-gates';
+      case 'docs':
+      case 'catalog':
+      default:
+        return 'docs';
+    }
+  };
+  const activeTab: SchemaWorkbenchTab = resolveActiveTab();
 
-  const setTab = (tab: 'assets' | 'catalog' | 'graph') => {
+  const setTab = (tab: SchemaWorkbenchTab) => {
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
       next.set('tab', tab);
       return next;
     });
   };
+
+  // docs 视窗内部兼容模式：当由大盘跳入 ?claimed_status=UNCLAIMED 时默认进入契约认领列表，可一键切回参考文档
+  const [docsSubMode, setDocsSubMode] = useState<'reference' | 'catalog-ops'>(() =>
+    claimedStatusQuery === 'UNCLAIMED' ? 'catalog-ops' : 'reference'
+  );
+
+  // M23 只读源码跳转抽屉状态（由 ?tab=docs 点击 file.proto#L42 触发）
+  const [sourceDrawerOpen, setSourceDrawerOpen] = useState(false);
+  const [sourceDrawerLoading, setSourceDrawerLoading] = useState(false);
+  const [sourceDrawerFile, setSourceDrawerFile] = useState<ReconstructedProtoFileDTO | null>(null);
+  const [sourceDrawerLine, setSourceDrawerLine] = useState<number>(1);
 
   // 2. 全局生效池摘要状态
   const [poolSummary, setPoolSummary] = useState<ProtoPoolSummaryDTO | null>(null);
@@ -165,10 +195,10 @@ export const ProtoSchemaWorkbenchPage: React.FC = () => {
   }, [schemaIdQuery, orphanOnly, serviceNameQuery, assetSearch, catalogPage, catalogPageSize, toast]);
 
   useEffect(() => {
-    if (activeTab === 'catalog') {
+    if (activeTab === 'docs' && docsSubMode === 'catalog-ops') {
       void loadCatalogServices();
     }
-  }, [activeTab, loadCatalogServices]);
+  }, [activeTab, docsSubMode, loadCatalogServices]);
 
   // 初始时若在 catalog 模式，补拉取一次 poolSummary
   useEffect(() => {
@@ -234,7 +264,7 @@ export const ProtoSchemaWorkbenchPage: React.FC = () => {
       const res = await schemaApi.activateProtoSchema(s.id);
       toast.success(`描述集 [${s.name} v${s.version}] 激活成功，生效 ${res.activated_operations} 个服务契约`);
       void loadAssetLedger();
-      if (activeTab === 'catalog') void loadCatalogServices();
+      if (activeTab === 'docs' && docsSubMode === 'catalog-ops') void loadCatalogServices();
       if (inspectDrawerOpen && inspectSchema?.name === s.name) {
         setInspectSchema(res.schema);
       }
@@ -265,7 +295,7 @@ export const ProtoSchemaWorkbenchPage: React.FC = () => {
       const res = await schemaApi.deactivateProtoSchema(s.id);
       toast.success(`描述集 [${s.name} v${s.version}] 已停用，卸载 ${res.deactivated_operations} 个服务契约`);
       void loadAssetLedger();
-      if (activeTab === 'catalog') void loadCatalogServices();
+      if (activeTab === 'docs' && docsSubMode === 'catalog-ops') void loadCatalogServices();
       if (inspectDrawerOpen && inspectSchema?.name === s.name) {
         setInspectSchema(res.schema);
       }
@@ -286,7 +316,7 @@ export const ProtoSchemaWorkbenchPage: React.FC = () => {
       const res = await schemaApi.batchActivateProtoSchemas(selectedIds);
       toast.success(res.message || `成功批量激活 ${res.activated_count} 个描述集`);
       void loadAssetLedger();
-      if (activeTab === 'catalog') void loadCatalogServices();
+      if (activeTab === 'docs' && docsSubMode === 'catalog-ops') void loadCatalogServices();
     } catch (err: unknown) {
       const respData = (err as unknown as { responseData?: ConflictOrBrokenResponse })?.responseData;
       if (respData && (respData.code === 'BREAKING_CHANGE_DETECTED' || (respData.breaking_rules && respData.breaking_rules.length > 0))) {
@@ -331,7 +361,7 @@ export const ProtoSchemaWorkbenchPage: React.FC = () => {
       setBreakingDrawerOpen(false);
       setBreakingDrawerData(null);
       void loadAssetLedger();
-      if (activeTab === 'catalog') void loadCatalogServices();
+      if (activeTab === 'docs' && docsSubMode === 'catalog-ops') void loadCatalogServices();
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : '强制激活操作失败');
     } finally {
@@ -353,7 +383,7 @@ export const ProtoSchemaWorkbenchPage: React.FC = () => {
       setDeleteConfirmOpen(false);
       setSchemaToDelete(null);
       void loadAssetLedger();
-      if (activeTab === 'catalog') void loadCatalogServices();
+      if (activeTab === 'docs' && docsSubMode === 'catalog-ops') void loadCatalogServices();
       if (inspectDrawerOpen && inspectSchema?.id === schemaToDelete.id) {
         setInspectDrawerOpen(false);
       }
@@ -404,15 +434,33 @@ export const ProtoSchemaWorkbenchPage: React.FC = () => {
     }
   };
 
-  // 从抽屉跳至全局目录
+  // 从抽屉跳至活体文档参考中心
   const handleNavigateToCatalog = (schemaId: string | number) => {
     setInspectDrawerOpen(false);
+    setDocsSubMode('reference');
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
-      next.set('tab', 'catalog');
+      next.set('tab', 'docs');
       next.set('schema_id', String(schemaId));
       return next;
     });
+  };
+
+  // M23: 从文档页跳入只读源码抽屉定位至 file.proto#L<n>
+  const handleJumpToSourceDrawer = async (schemaId: number, filePath: string, line: number) => {
+    setSourceDrawerOpen(true);
+    setSourceDrawerLine(line > 0 ? line : 1);
+    setSourceDrawerLoading(true);
+    try {
+      const res = await schemaApi.getProtoSchemaSources(schemaId, filePath);
+      const hit = res.files.find((f) => f.file_path === filePath) ?? res.files[0] ?? null;
+      setSourceDrawerFile(hit);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '加载只读源码视图失败');
+      setSourceDrawerFile(null);
+    } finally {
+      setSourceDrawerLoading(false);
+    }
   };
 
   // 从依赖图节点跳回文件资产台账并透视该描述集
@@ -444,124 +492,96 @@ export const ProtoSchemaWorkbenchPage: React.FC = () => {
         }}
       />
 
-      {/* 顶层无侧栏分段 Tab 切换导航 */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          borderBottom: '1px solid var(--color-border-primary)',
-          marginBottom: '20px',
-        }}
-      >
-        <div style={{ display: 'flex', gap: '8px' }}>
+      {/* 顶层无侧栏 5 视窗分段 Tab 切换导航 (M23 IA 收口) */}
+      <div className="pdoc-top-tabs">
+        <div className="pdoc-top-tabs__list" role="tablist" aria-label="契约治理视窗">
           <button
             type="button"
+            role="tab"
+            aria-selected={activeTab === 'docs'}
+            onClick={() => setTab('docs')}
+            className={`pdoc-top-tab ${activeTab === 'docs' ? 'pdoc-top-tab--active' : ''}`}
+          >
+            <BookOpen size={15} />
+            <span>接口参考文档</span>
+          </button>
+
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'sources'}
+            onClick={() => setTab('sources')}
+            className={`pdoc-top-tab ${activeTab === 'sources' ? 'pdoc-top-tab--active' : ''}`}
+          >
+            <Code2 size={15} />
+            <span>只读源码</span>
+          </button>
+
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'mr-gates'}
+            onClick={() => setTab('mr-gates')}
+            className={`pdoc-top-tab ${activeTab === 'mr-gates' ? 'pdoc-top-tab--active' : ''}`}
+          >
+            <ShieldCheck size={15} />
+            <span>Git MR 门禁</span>
+          </button>
+
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'assets'}
             onClick={() => setTab('assets')}
-            style={{
-              padding: '10px 20px',
-              fontSize: '14px',
-              fontWeight: activeTab === 'assets' ? 600 : 400,
-              color: activeTab === 'assets' ? 'var(--color-primary, #3b82f6)' : 'var(--color-text-secondary)',
-              borderBottom: activeTab === 'assets' ? '2px solid var(--color-primary, #3b82f6)' : '2px solid transparent',
-              background: 'none',
-              borderTop: 'none',
-              borderLeft: 'none',
-              borderRight: 'none',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-            }}
+            className={`pdoc-top-tab ${activeTab === 'assets' ? 'pdoc-top-tab--active' : ''}`}
           >
-            <span>🗂️</span>
-            <span>描述集文件台账</span>
+            <FolderKanban size={15} />
+            <span>描述集资产台账</span>
           </button>
 
           <button
             type="button"
-            onClick={() => setTab('catalog')}
-            style={{
-              padding: '10px 20px',
-              fontSize: '14px',
-              fontWeight: activeTab === 'catalog' ? 600 : 400,
-              color: activeTab === 'catalog' ? 'var(--color-primary, #3b82f6)' : 'var(--color-text-secondary)',
-              borderBottom: activeTab === 'catalog' ? '2px solid var(--color-primary, #3b82f6)' : '2px solid transparent',
-              background: 'none',
-              borderTop: 'none',
-              borderLeft: 'none',
-              borderRight: 'none',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-            }}
-          >
-            <span>🔍</span>
-            <span>全局服务与接口目录</span>
-          </button>
-
-          <button
-            type="button"
+            role="tab"
+            aria-selected={activeTab === 'graph'}
             onClick={() => setTab('graph')}
-            style={{
-              padding: '10px 20px',
-              fontSize: '14px',
-              fontWeight: activeTab === 'graph' ? 600 : 400,
-              color: activeTab === 'graph' ? 'var(--color-primary, #3b82f6)' : 'var(--color-text-secondary)',
-              borderBottom: activeTab === 'graph' ? '2px solid var(--color-primary, #3b82f6)' : '2px solid transparent',
-              background: 'none',
-              borderTop: 'none',
-              borderLeft: 'none',
-              borderRight: 'none',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-            }}
+            className={`pdoc-top-tab ${activeTab === 'graph' ? 'pdoc-top-tab--active' : ''}`}
           >
-            <span>🕸️</span>
+            <Network size={15} />
             <span>跨包依赖关系图</span>
           </button>
         </div>
+
+        {activeTab === 'docs' && (
+          <div className="code-tab-pills">
+            <button
+              type="button"
+              className={`code-pill-btn ${docsSubMode === 'reference' ? 'code-pill-btn-active' : ''}`}
+              onClick={() => setDocsSubMode('reference')}
+            >
+              全注释参考文档
+            </button>
+            <button
+              type="button"
+              className={`code-pill-btn ${docsSubMode === 'catalog-ops' ? 'code-pill-btn-active' : ''}`}
+              onClick={() => setDocsSubMode('catalog-ops')}
+            >
+              契约认领与方法目录
+            </button>
+          </div>
+        )}
       </div>
 
-      {/* 主视图 1: 描述集文件台账 */}
-      {activeTab === 'assets' && (
-        <SchemaAssetLedgerTable
-          schemas={assetSchemas}
-          total={totalAssetSchemas}
-          page={assetPage}
-          pageSize={assetPageSize}
-          onPageChange={setAssetPage}
-          onPageSizeChange={setAssetPageSize}
-          selectedCategory={selectedCategory}
-          onCategoryChange={handleCategoryChange}
-          activeStatusFilter={activeStatusFilter}
-          onStatusFilterChange={handleStatusFilterChange}
-          sourceTypeFilter={sourceTypeFilter}
-          onSourceTypeFilterChange={handleSourceTypeFilterChange}
-          highlightedSchemaId={schemaIdQuery}
-          searchKeyword={assetSearch}
-          onSearchChange={handleSearchChange}
-          loading={assetLoading}
-          isAdmin={isAdmin}
-          onInspect={handleInspectSchema}
-          onUploadNewVersion={(s) => {
-            setUploadModalMode('upload');
-            setTargetSchemaForNewVer(s);
-            setUploadModalOpen(true);
-          }}
-          onActivate={(s) => void handleActivateSchema(s)}
-          onDeactivate={(s) => void handleDeactivateSchema(s)}
-          onBatchActivate={(ids) => void handleBatchActivate(ids)}
-          onDelete={handleDeleteSchema}
-          onDownload={(s) => void schemaApi.downloadProtoSchema(s.id, s.file_name)}
+      {/* 主视图 1: 活体接口参考文档中心（兼容 ?tab=catalog 与 ?claimed_status=UNCLAIMED） */}
+      {activeTab === 'docs' && docsSubMode === 'reference' && (
+        <LivingProtoDocsPane
+          initialServiceName={serviceNameQuery || ''}
+          initialSchemaId={schemaIdQuery || ''}
+          initialSearch={searchQueryParam}
+          onJumpToSource={(sid, fp, line) => void handleJumpToSourceDrawer(sid, fp, line)}
         />
       )}
 
-      {/* 主视图 2: 全局服务与接口目录 */}
-      {activeTab === 'catalog' && (
+      {activeTab === 'docs' && docsSubMode === 'catalog-ops' && (
         <OperationMappingTable
           serviceGroups={catalogGroups}
           totalServices={totalCatalogServices}
@@ -603,7 +623,69 @@ export const ProtoSchemaWorkbenchPage: React.FC = () => {
         />
       )}
 
-      {/* 主视图 3: 跨描述集依赖关系图 */}
+      {/* 主视图 2: 轻量级只读源码浏览与历史 Diff */}
+      {activeTab === 'sources' && (
+        <ProtoSourcesBrowserPane initialSchemaName={searchQueryParam} />
+      )}
+
+      {/* 主视图 3: Git MR 四合一门禁检查雷达（M26 完整接入前置工作台） */}
+      {activeTab === 'mr-gates' && (
+        <div className="pdoc-card" data-testid="proto-mr-gates-placeholder">
+          <div className="pdoc-card__header">
+            <div>
+              <h3 className="pdoc-card__title">Git MR 四合一门禁与防重查重控制台</h3>
+              <p className="pdoc-card__subtitle">
+                M23 已完成底层 AST 文档符号索引与只读 Diff 阅读组件就绪；M25/M26 将接通 GitLab/GitHub/Gitea Webhook、静态词汇检查、Jaccard AST 防重检测与合规回写门禁。
+              </p>
+            </div>
+            <span className="code-badge code-badge-info">M26 全链路接入中</span>
+          </div>
+          <div className="pdoc-meta-row">
+            <button type="button" className="btn btn-secondary" onClick={() => setTab('sources')}>
+              前往只读源码与 Diff 浏览器
+            </button>
+            <button type="button" className="btn btn-secondary" onClick={() => setTab('docs')}>
+              返回活体接口参考文档
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 主视图 4: 描述集资产台账 */}
+      {activeTab === 'assets' && (
+        <SchemaAssetLedgerTable
+          schemas={assetSchemas}
+          total={totalAssetSchemas}
+          page={assetPage}
+          pageSize={assetPageSize}
+          onPageChange={setAssetPage}
+          onPageSizeChange={setAssetPageSize}
+          selectedCategory={selectedCategory}
+          onCategoryChange={handleCategoryChange}
+          activeStatusFilter={activeStatusFilter}
+          onStatusFilterChange={handleStatusFilterChange}
+          sourceTypeFilter={sourceTypeFilter}
+          onSourceTypeFilterChange={handleSourceTypeFilterChange}
+          highlightedSchemaId={schemaIdQuery}
+          searchKeyword={assetSearch}
+          onSearchChange={handleSearchChange}
+          loading={assetLoading}
+          isAdmin={isAdmin}
+          onInspect={handleInspectSchema}
+          onUploadNewVersion={(s) => {
+            setUploadModalMode('upload');
+            setTargetSchemaForNewVer(s);
+            setUploadModalOpen(true);
+          }}
+          onActivate={(s) => void handleActivateSchema(s)}
+          onDeactivate={(s) => void handleDeactivateSchema(s)}
+          onBatchActivate={(ids) => void handleBatchActivate(ids)}
+          onDelete={handleDeleteSchema}
+          onDownload={(s) => void schemaApi.downloadProtoSchema(s.id, s.file_name)}
+        />
+      )}
+
+      {/* 主视图 5: 跨描述集依赖关系图 */}
       {activeTab === 'graph' && (
         <ProtoDependenciesGraphPane onNavigateToSchemaAsset={handleNavigateToSchemaAsset} />
       )}
@@ -620,7 +702,7 @@ export const ProtoSchemaWorkbenchPage: React.FC = () => {
         initialMode={uploadModalMode}
         onSuccess={() => {
           void loadAssetLedger();
-          if (activeTab === 'catalog') void loadCatalogServices();
+          if (activeTab === 'docs' && docsSubMode === 'catalog-ops') void loadCatalogServices();
         }}
         onConflict={(cData) => {
           setConflictData(cData);
@@ -704,6 +786,38 @@ export const ProtoSchemaWorkbenchPage: React.FC = () => {
           );
         }}
       />
+
+      {/* M23 只读源码 #L<n> 定位浏览抽屉 */}
+      <Drawer
+        open={sourceDrawerOpen}
+        onClose={() => {
+          setSourceDrawerOpen(false);
+          setSourceDrawerFile(null);
+        }}
+        title={
+          sourceDrawerFile
+            ? `只读源码锚点浏览: ${sourceDrawerFile.file_path}#L${sourceDrawerLine}`
+            : '只读源码锚点浏览'
+        }
+        width={880}
+      >
+        {sourceDrawerLoading ? (
+          <p className="pdoc-card__subtitle">正在加载只读源码与精确行号锚点...</p>
+        ) : sourceDrawerFile ? (
+          <ProtoReadOnlyCodeViewer
+            filePath={sourceDrawerFile.file_path}
+            content={sourceDrawerFile.content}
+            highlightLine={sourceDrawerLine}
+            symbolAnchors={sourceDrawerFile.symbol_anchors}
+            versionLabel={`${sourceDrawerFile.schema_name} v${sourceDrawerFile.schema_version}`}
+            hasSourceInfo={sourceDrawerFile.has_source_info}
+            sourceOrigin={sourceDrawerFile.source_origin}
+            onSelectLine={(line) => setSourceDrawerLine(line)}
+          />
+        ) : (
+          <p className="pdoc-card__subtitle">未能加载指定描述集的只读源码内容。</p>
+        )}
+      </Drawer>
 
       {/* 受控删除确认弹窗 */}
       <Modal

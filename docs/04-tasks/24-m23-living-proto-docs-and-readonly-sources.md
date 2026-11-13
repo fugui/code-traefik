@@ -7,7 +7,7 @@
 > **里程碑编号**：`M23 — 活体接口参考文档中心 (Reference Docs) 与轻量只读源码浏览`
 > **覆盖需求范围**：`F-03.7`（契约目录与参考文档收口兼容）、`F-15`（`/schemas` 无侧栏 5 视窗 IA 与 `?tab=catalog` 兼容）、`F-18`（活体接口参考文档中心与 Markdown 导出）、`F-28`（轻量级只读源码阅读器、行号锚点与只读 Diff，零前端重型编辑器）、`SC-14`
 > **前置依赖**：`M22`（`protocompile` + `SourceInfoStandard`）、[`../05-adr/18-proto-full-lifecycle-and-git-mr-governance-adr.md`](../05-adr/18-proto-full-lifecycle-and-git-mr-governance-adr.md) (`v1.2.0`)
-> **当前状态**：📋 **已定稿待实施 (Planned)**
+> **当前状态**：✅ **已交付 (Delivered)**
 
 ### 修订记录
 

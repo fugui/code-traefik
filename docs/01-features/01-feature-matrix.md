@@ -2,9 +2,9 @@
 
 - **文档编号**：`01-feature-matrix.md`
 - **文档版本**：v2.20.0
-- **更新日期**：2026-11-13
+- **更新日期**：2026-11-14
 - **当前阶段**：阶段一：特性清单与边界明确（同步阶段二/三/四 SDD 定稿）
-- **状态**：已批准待实施 (M1~M21 已交付；M22~M26 已完成 SDD 检视定稿与任务拆解，详见 ADR-18 v1.3.0)
+- **状态**：M1~M23 已交付；M24~M26 已完成 SDD 检视定稿与任务拆解，详见 ADR-18 v1.3.0
 - **协议依据**：详见项目内置参考文档 [`docs/07-references/01-cros-rpc-protocol-spec.md`](../07-references/01-cros-rpc-protocol-spec.md)（文档编号：`01-cros-rpc-protocol-spec.md` v1.0.0，基于 DOPHI 平台 `cros_rpccore.ph` / `cros_rpctcp` 规范，本文所有字段名、偏移与取值均以该规范原文为准）
 
 ### 修订记录

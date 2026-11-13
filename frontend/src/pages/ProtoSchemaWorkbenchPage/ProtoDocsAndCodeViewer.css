@@ -1,0 +1,705 @@
+/* ============================================================================
+ * M23: 活体接口参考文档中心 & 轻量只读代码/Diff 视图样式
+ * 严格使用 --color-* 语义化 Design Tokens，100% 适配亮色 / 暗色双模主题
+ * ============================================================================ */
+
+.pdoc-workbench {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+@media (max-width: 1024px) {
+  .pdoc-workbench {
+    grid-template-columns: 1fr;
+  }
+}
+
+.pdoc-tree-panel {
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-border-primary);
+  border-radius: var(--radius-lg, 12px);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  position: sticky;
+  top: 16px;
+  max-height: calc(100vh - 150px);
+  overflow-y: auto;
+}
+
+.pdoc-tree-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.pdoc-tree-panel__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin: 0;
+}
+
+.pdoc-tree-panel__stats {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pdoc-tree-panel__filters {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pdoc-tree-panel__filter-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.pdoc-tree-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.pdoc-tree-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pdoc-tree-group__label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  padding: 6px 8px 2px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.pdoc-tree-schema__label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  padding: 4px 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pdoc-tree-pkg__label {
+  font-size: 11px;
+  font-family: var(--font-mono, monospace);
+  color: var(--color-text-muted);
+  padding: 3px 16px;
+}
+
+.pdoc-tree-svc-btn {
+  width: 100%;
+  text-align: left;
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: var(--radius-md, 8px);
+  padding: 7px 10px 7px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  cursor: pointer;
+  color: var(--color-text-primary);
+  font-size: 13px;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.pdoc-tree-svc-btn:hover {
+  background: var(--color-bg-hover);
+}
+
+.pdoc-tree-svc-btn--active {
+  background: var(--color-bg-selected);
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+  font-weight: 600;
+}
+
+.pdoc-tree-svc-btn__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pdoc-tree-svc-btn--deprecated .pdoc-tree-svc-btn__name {
+  text-decoration: line-through;
+  opacity: 0.78;
+}
+
+.pdoc-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.pdoc-banner {
+  border-radius: var(--radius-md, 8px);
+  padding: 10px 14px;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 13px;
+  border: 1px solid var(--color-border-primary);
+}
+
+.pdoc-banner--deprecated {
+  background: color-mix(in srgb, var(--color-danger) 12%, var(--color-bg-surface));
+  border-color: color-mix(in srgb, var(--color-danger) 42%, var(--color-border-primary));
+  color: var(--color-text-primary);
+}
+
+.pdoc-banner--warning {
+  background: color-mix(in srgb, var(--color-warning) 12%, var(--color-bg-surface));
+  border-color: color-mix(in srgb, var(--color-warning) 42%, var(--color-border-primary));
+  color: var(--color-text-primary);
+}
+
+.pdoc-banner--info {
+  background: color-mix(in srgb, var(--color-info) 10%, var(--color-bg-surface));
+  border-color: color-mix(in srgb, var(--color-info) 35%, var(--color-border-primary));
+  color: var(--color-text-primary);
+}
+
+.pdoc-card {
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-border-primary);
+  border-radius: var(--radius-lg, 12px);
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.pdoc-card__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.pdoc-card__title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  word-break: break-all;
+}
+
+.pdoc-card__subtitle {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  white-space: pre-wrap;
+}
+
+.pdoc-meta-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.pdoc-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  background: var(--color-bg-muted);
+  border: 1px solid var(--color-border-subtle);
+  color: var(--color-text-secondary);
+}
+
+.pdoc-source-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-family: var(--font-mono, monospace);
+  background: color-mix(in srgb, var(--color-primary) 12%, var(--color-bg-surface));
+  border: 1px solid color-mix(in srgb, var(--color-primary) 35%, var(--color-border-primary));
+  color: var(--color-primary);
+  cursor: pointer;
+}
+
+.pdoc-source-link:hover {
+  background: color-mix(in srgb, var(--color-primary) 20%, var(--color-bg-surface));
+}
+
+.pdoc-section-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pdoc-lineage-links {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.pdoc-deep-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--color-primary);
+  text-decoration: none;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.pdoc-deep-link:hover {
+  text-decoration: underline;
+}
+
+.pdoc-method-card {
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-border-primary);
+  border-radius: var(--radius-lg, 12px);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.pdoc-method-card__top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.pdoc-method-card__sig {
+  font-family: var(--font-mono, monospace);
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+.pdoc-field-indent {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pdoc-json-panel {
+  border: 1px solid var(--color-border-primary);
+  border-radius: var(--radius-md, 8px);
+  overflow: hidden;
+  background: var(--color-bg-subtle);
+}
+
+.pdoc-json-panel__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--color-bg-muted);
+  border-bottom: 1px solid var(--color-border-primary);
+  flex-wrap: wrap;
+}
+
+.pdoc-json-panel__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  padding: 12px;
+}
+
+@media (max-width: 960px) {
+  .pdoc-json-panel__grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.pdoc-json-pre {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm, 6px);
+  border: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-surface);
+  color: var(--color-text-primary);
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-x: auto;
+  max-height: 280px;
+}
+
+/* ============================================================================
+ * 轻量只读 .proto 代码阅读器 (ProtoReadOnlyCodeViewer)
+ * ============================================================================ */
+
+.pdoc-code-viewer {
+  border: 1px solid var(--color-border-primary);
+  border-radius: var(--radius-lg, 12px);
+  background: var(--color-bg-surface);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.pdoc-code-viewer__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 14px;
+  background: var(--color-bg-muted);
+  border-bottom: 1px solid var(--color-border-primary);
+  flex-wrap: wrap;
+}
+
+.pdoc-code-viewer__filepath {
+  font-family: var(--font-mono, monospace);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.pdoc-code-viewer__anchors {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-subtle);
+}
+
+.pdoc-code-anchor-btn {
+  border: 1px solid var(--color-border-primary);
+  background: var(--color-bg-surface);
+  color: var(--color-text-secondary);
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-family: var(--font-mono, monospace);
+  cursor: pointer;
+}
+
+.pdoc-code-anchor-btn:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.pdoc-code-scroll {
+  overflow-x: auto;
+  overflow-y: auto;
+  max-height: 620px;
+  background: var(--color-bg-surface);
+}
+
+.pdoc-code-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono, monospace);
+  font-size: 12.5px;
+  line-height: 1.58;
+}
+
+.pdoc-code-line {
+  transition: background-color 0.12s ease;
+}
+
+.pdoc-code-line:hover {
+  background: var(--color-bg-hover);
+}
+
+.pdoc-code-line--highlighted {
+  background: color-mix(in srgb, var(--color-warning) 16%, var(--color-bg-surface));
+  box-shadow: inset 3px 0 0 var(--color-warning);
+}
+
+.pdoc-code-line__gutter {
+  width: 56px;
+  min-width: 56px;
+  padding: 1px 10px;
+  text-align: right;
+  user-select: none;
+  color: var(--color-text-muted);
+  border-right: 1px solid var(--color-border-subtle);
+  vertical-align: top;
+}
+
+.pdoc-code-line__anchor {
+  color: inherit;
+  text-decoration: none;
+  display: inline-block;
+  width: 100%;
+}
+
+.pdoc-code-line__anchor:hover {
+  color: var(--color-primary);
+}
+
+.pdoc-code-line__code {
+  padding: 1px 14px;
+  white-space: pre;
+  color: var(--color-text-primary);
+  vertical-align: top;
+}
+
+.pdoc-code-line__wavy--error {
+  text-decoration: underline wavy var(--color-danger);
+  text-underline-offset: 3px;
+}
+
+.pdoc-code-line__wavy--warning {
+  text-decoration: underline wavy var(--color-warning);
+  text-underline-offset: 3px;
+}
+
+.pdoc-code-diag-row {
+  background: color-mix(in srgb, var(--color-warning) 10%, var(--color-bg-surface));
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.pdoc-code-diag-row__cell {
+  padding: 4px 14px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+/* 词法高亮语义色 (仅采用 theme.css 语义变量) */
+.pdoc-tok--comment {
+  color: var(--color-text-muted);
+  font-style: italic;
+}
+
+.pdoc-tok--keyword {
+  color: var(--color-purple);
+  font-weight: 600;
+}
+
+.pdoc-tok--type {
+  color: var(--color-info);
+}
+
+.pdoc-tok--string {
+  color: var(--color-success);
+}
+
+.pdoc-tok--number {
+  color: var(--color-orange);
+}
+
+.pdoc-tok--tag {
+  color: var(--color-primary);
+  font-weight: 600;
+}
+
+/* ============================================================================
+ * 只读提交 Diff 对比视图 (ProtoCommitDiffView)
+ * ============================================================================ */
+
+.pdoc-diff-viewer {
+  border: 1px solid var(--color-border-primary);
+  border-radius: var(--radius-lg, 12px);
+  overflow: hidden;
+  background: var(--color-bg-surface);
+}
+
+.pdoc-diff-viewer__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  background: var(--color-bg-muted);
+  border-bottom: 1px solid var(--color-border-primary);
+  flex-wrap: wrap;
+  font-size: 13px;
+}
+
+.pdoc-diff-stat--add {
+  color: var(--color-success);
+  font-weight: 600;
+}
+
+.pdoc-diff-stat--del {
+  color: var(--color-danger);
+  font-weight: 600;
+}
+
+.pdoc-diff-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono, monospace);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.pdoc-diff-row--add {
+  background: color-mix(in srgb, var(--color-success) 13%, var(--color-bg-surface));
+}
+
+.pdoc-diff-row--del {
+  background: color-mix(in srgb, var(--color-danger) 13%, var(--color-bg-surface));
+}
+
+.pdoc-diff-row--hunk {
+  background: color-mix(in srgb, var(--color-info) 12%, var(--color-bg-surface));
+  color: var(--color-text-secondary);
+}
+
+.pdoc-diff-cell__sign {
+  width: 28px;
+  min-width: 28px;
+  text-align: center;
+  padding: 1px 6px;
+  user-select: none;
+  color: var(--color-text-muted);
+  border-right: 1px solid var(--color-border-subtle);
+}
+
+.pdoc-diff-cell__text {
+  padding: 1px 12px;
+  white-space: pre;
+  color: var(--color-text-primary);
+}
+
+/* ============================================================================
+ * ?tab=sources 只读源码浏览器布局
+ * ============================================================================ */
+
+.pdoc-sources-shell {
+  display: grid;
+  grid-template-columns: 360px minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+@media (max-width: 1080px) {
+  .pdoc-sources-shell {
+    grid-template-columns: 1fr;
+  }
+}
+
+.pdoc-sources-list {
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-border-primary);
+  border-radius: var(--radius-lg, 12px);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.pdoc-file-item {
+  width: 100%;
+  text-align: left;
+  border: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-subtle);
+  border-radius: var(--radius-md, 8px);
+  padding: 9px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  cursor: pointer;
+  color: var(--color-text-primary);
+}
+
+.pdoc-file-item:hover {
+  border-color: var(--color-primary);
+  background: var(--color-bg-hover);
+}
+
+.pdoc-file-item--active {
+  border-color: var(--color-primary);
+  background: var(--color-bg-selected);
+}
+
+.pdoc-file-item__path {
+  font-family: var(--font-mono, monospace);
+  font-size: 12.5px;
+  font-weight: 600;
+  word-break: break-all;
+}
+
+.pdoc-file-item__meta {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+/* ============================================================================
+ * /schemas 顶部 5 视窗无侧栏导航栏样式
+ * ============================================================================ */
+
+.pdoc-top-tabs {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--color-border-primary);
+  margin-bottom: 20px;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.pdoc-top-tabs__list {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.pdoc-top-tab {
+  padding: 10px 18px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  border-top: none;
+  border-left: none;
+  border-right: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.pdoc-top-tab:hover {
+  color: var(--color-text-primary);
+}
+
+.pdoc-top-tab--active {
+  font-weight: 600;
+  color: var(--color-primary);
+  border-bottom-color: var(--color-primary);
+}
