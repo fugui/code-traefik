@@ -1,11 +1,11 @@
 # 架构与活体契约治理 (`code-traefik`) 系统总体架构与主从协同设计
 
 - **文档编号**：`01-system-architecture.md`
-- **文档版本**：v1.7.0
-- **更新日期**：2026-11-11
+- **文档版本**：v1.8.0（依据 `ADR-18` v1.2.0 更新 `30` 张核心表 + `traefik_settings` 共 `31` 张、`TRAEFIK_CRYPTO_KEY` 与跨机 `code-notifier` / `SafeDialer` 信任白名单架构）
+- **更新日期**：2026-11-13
 - **归属阶段**：阶段二：系统架构与数据模型设计 (`02-design`)
-- **状态**：已批准待实施 (Approved for M20)
-- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.15.0)、[`01-cros-rpc-protocol-spec.md`](../07-references/01-cros-rpc-protocol-spec.md) (v1.0.0)、[`02-ebpf-hook-and-dual-subsystem-adr.md`](../05-adr/02-ebpf-hook-and-dual-subsystem-adr.md)、[`03-control-plane-state-recovery-and-lease-reconciliation.md`](../05-adr/03-control-plane-state-recovery-and-lease-reconciliation.md)、[`09-arch-process-ssot-and-ebpf-premount-standby-adr.md`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md) (ADR-09 v1.1.0)、[`11-single-process-bidirectional-capture-and-recording-ux-adr.md`](../05-adr/11-single-process-bidirectional-capture-and-recording-ux-adr.md) (ADR-11 v1.0.0)、[`12-packet-causality-call-tree-and-sequence-ux-adr.md`](../05-adr/12-packet-causality-call-tree-and-sequence-ux-adr.md) (ADR-12 v1.0.0)、[`16-multi-implementation-service-contract-adr.md`](../05-adr/16-multi-implementation-service-contract-adr.md) (ADR-16 v1.0.0)
+- **状态**：M1~M21 已交付；M22~M26 已完成设计待实施 (Approved for M22~M26)
+- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.19.0)、[`01-cros-rpc-protocol-spec.md`](../07-references/01-cros-rpc-protocol-spec.md) (v1.0.0)、[`02-ebpf-hook-and-dual-subsystem-adr.md`](../05-adr/02-ebpf-hook-and-dual-subsystem-adr.md)、[`03-control-plane-state-recovery-and-lease-reconciliation.md`](../05-adr/03-control-plane-state-recovery-and-lease-reconciliation.md)、[`09-arch-process-ssot-and-ebpf-premount-standby-adr.md`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md) (ADR-09 v1.1.0)、[`11-single-process-bidirectional-capture-and-recording-ux-adr.md`](../05-adr/11-single-process-bidirectional-capture-and-recording-ux-adr.md) (ADR-11 v1.0.0)、[`12-packet-causality-call-tree-and-sequence-ux-adr.md`](../05-adr/12-packet-causality-call-tree-and-sequence-ux-adr.md) (ADR-12 v1.0.0)、[`16-multi-implementation-service-contract-adr.md`](../05-adr/16-multi-implementation-service-contract-adr.md) (ADR-16 v2.0.0)、[`17-topology-single-layer-drilldown-and-layout-ux-adr.md`](../05-adr/17-topology-single-layer-drilldown-and-layout-ux-adr.md) (ADR-17 v1.1.0)、[`18-proto-full-lifecycle-and-git-mr-governance-adr.md`](../05-adr/18-proto-full-lifecycle-and-git-mr-governance-adr.md) (ADR-18 v1.2.0)
 
 ### 修订记录
 
@@ -13,7 +13,8 @@
 | :--- | :--- | :--- |
 | v1.5.0 | 2026-11-05 | 对齐 ADR-11 / ADR-12 双录、调用树与 `ScopedEgressMocks` 事务闭包重放设计 |
 | v1.6.0 | 2026-11-11 | 依据 ADR-16 (v1.0.0 / M20) 同步核心 `traefik_*` 业务表总数（扩展至 19 张，新增 `traefik_service_contracts`）、录制 `endpoint_snapshots` 固化及 `DownstreamEndpoint.DstTag` 多实现重放 Mock 隔离标签契约 |
-| v1.7.0 | 2026-11-13 | 依据 [`ADR-18`](../05-adr/18-proto-full-lifecycle-and-git-mr-governance-adr.md) (v1.1.0, `M22~M25`) 升级架构基线：1. 核心 `traefik_*` 业务表扩展至 29 张（含 `traefik_settings` 共 30 张物理表），增设纯 Go `protocompile`、`gitclient`、`protodoc`、`linter`、`notify` 与 `security` 模块，严格恪守 `cmd/agent` 与 `pkg/*` 零 `.pb`/零 DB/零 Git 防腐红线；2. 新增场景四时序图（Git-Only 同步、MR 虚拟目录树四合一门禁、Override 审计、`traefik_notifications`/`code-notifier`/SMTP）；3. 第 6 节补全 AES-256-GCM、`SafeDialer` SSRF 阻断、3s LLM 硬熔断与前端 `< 1.5MB` / `blob:` 导出安全基线 |
+| v1.7.0 | 2026-11-13 | 依据 [`ADR-18`](../05-adr/18-proto-full-lifecycle-and-git-mr-governance-adr.md) (v1.1.0, `M22~M25`) 升级架构基线：增设纯 Go `protocompile`、`gitclient`、`protodoc`、`linter`、`notify` 与 `security` 模块，严格恪守 `cmd/agent` 与 `pkg/*` 零 `.pb`/零 DB/零 Git 防腐红线 |
+| v1.8.0 | 2026-11-13 | 依据 [`ADR-18`](../05-adr/18-proto-full-lifecycle-and-git-mr-governance-adr.md) (v1.2.0, `M22~M26`) 全面检视修订：1. 核心表收敛为 **`30` 张核心 `traefik_*` 业务表 + `traefik_settings`（共 `31` 张物理表）**，拆分 `GitRepo (1:N) GitProtoBundle` 支持 Monorepo 多目录包、MR 原位评论去重与 `COALESCE(bundle_id,0)` 防 Fast-Forward 同 SHA 误丢；2. 明确统一主密钥 env **`TRAEFIK_CRYPTO_KEY`**；3. `SafeDialer` 在永久阻断云元数据/组播前提下支持 `outbound_trusted_cidrs` 白名单放行同内网 GitLab/LLM 与**跨机部署的 `code-notifier` 邮件服务**（调用 `POST /api/notify/email` 严格校验非空 `markdown_content` 并解析真实收件邮箱）；4. 明确 `handlers/settings.go` 敏感字段脱敏及审计掩码 `***REDACTED***`，并将前端预算精确校准为基于 M21 基线的 **`<= 150KB gzip`（`<= 500KB` 原始文本）增量上限** |
 
 ---
 
@@ -79,7 +80,7 @@ flowchart LR
 | :--- | :--- | :--- |
 | **部署拓扑与规模** | 集中式无特权部署（对接 CodeBench 网关与共享 PostgreSQL） | 每台受控业务宿主机部署 1 个守护进程（`1 Agent : N 目标进程`） |
 | **操作系统特权** | 普通非特权用户运行，**零内核钩子、零业务宿主机 `/proc` 访问** | 需具备 `CAP_BPF` + `CAP_NET_ADMIN`（挂载 eBPF 与读取本机 `/proc`） |
-| **持久化与状态** | 有状态：唯一连接 PostgreSQL（读写 29 张核心 `traefik_*` 业务表、`traefik_settings` 及共享表） | **完全无数据库**：不连任何 DB、不持有数据库凭据，仅维护运行期内存态 |
+| **持久化与状态** | 有状态：唯一连接 PostgreSQL（读写 **30 张核心 `traefik_*` 业务表**、`traefik_settings` 及共享表） | **完全无数据库**：不连任何 DB、不持有数据库凭据，仅维护运行期内存态 |
 | **Protobuf 依赖** | 引入 `google.golang.org/protobuf/types/dynamicpb` 动态反序列化、`protocompile` 纯 Go 编译与 AST Diff | **零 `.pb` 依赖**：编译依赖图严禁出现 `dynamicpb` / `protoregistry` / `protocompile` / `gorm` |
 | **协议解析深度** | 调用 `pkg/crosrpc` 解析头 + 调用 `internal/server/decoder` 解码 Payload | 仅调用 `pkg/crosrpc` 解析 `24 + usHeadLen` 之前的协议头，Payload 视为不透明字节切片 |
 | **录制与重放职责** | 批次协同编排、落盘归档、模块穿透定位、架构一致性验证、双层回归 Diff 报告 | 入站旁路复制、出站透明代理、重放连接注入、二进制 Mock 匹配与头部偏移自愈 |
@@ -98,24 +99,24 @@ code-traefik/
 │   └── replay/                      # Agent 专属：零 .pb 二进制 Mock 匹配器、请求注入器与应答头偏移自愈改写器
 ├── internal/
 │   └── server/                      # Server 专属核心业务引擎
-│       ├── security/                # AES-256-GCM 凭据加解密、SafeDialer SSRF 出站防护拨号器与常量时间验签工具 (ADR-18)
-│       ├── hub/                     # Agent 连接池、10s 心跳探活、WebSocket 接收器与 SSE 广播中心
+│       ├── security/                # AES-256-GCM (TRAEFIK_CRYPTO_KEY)、SafeDialer SSRF 含信任白名单与常量时间验签工具 (M24)
+│       ├── hub/                     # Agent 连接池、10s 心跳探活、WebSocket 接收器与按 userID 定向的 SSEBroker 中心
 │       ├── recorder/                # 多进程协同录制编排器、发起序 SeqNo + SNO 配对器与异步批量落盘流水线
 │       ├── callgraph/               # DOTR 事务调用树组装、跨进程 EGRESS⇔INGRESS 缝合、参数数据流血缘与跨事务实体链引擎
-│       ├── decoder/                 # .pb 注册校验、protocompile 纯 Go 编译与虚拟 Resolver、AST 破坏性变更分析与 dynamicpb 编解码中心
+│       ├── decoder/                 # .pb 注册校验、protocompile 纯 Go 编译与统一四级虚拟 Resolver、AST 破坏性变更分析 (含 BASE_LIB 传递) 与 dynamicpb 编解码中心 (M22)
 │       ├── protodoc/                # 活体接口参考文档中心：SourceCodeInfo 注释/标签萃取、Enum 字典、黄金/缺省 JSON 与 Markdown 导出 (M23)
-│       ├── linter/                  # 静态检查引擎：可配置正则规则、词根切分与缓存、3s 超时可选 LLM 客户端、带护栏 AST 重复结构探测 (M24)
-│       ├── gitclient/               # 无状态 Git 仓适配器：REST API / go-git memfs 拉取、MR Diff 虚拟树合成、Webhook 解析与状态回写 (M25)
-│       ├── notify/                  # 持久化站内通知中心 + 异步外发通道（code-notifier /api/notify/email 与可选 SMTP，M25）
+│       ├── linter/                  # 静态检查引擎：可配置正则规则、词根切分与缓存、3s 超时可选 LLM 客户端、Jaccard>=0.85 三护栏 AST 重复探测 (M24)
+│       ├── gitclient/               # 无状态 Git 仓/1:N Bundle 适配器：REST API / go-git memfs 拉取、MR Diff 虚拟树合成、Webhook 解析与原位评论回写 (M25~M26)
+│       ├── notify/                  # 持久化站内通知中心 + SSE 定向推送 + 异步外发通道（跨机 LAN code-notifier /api/notify/email 与可选 SMTP，M26）
 │       ├── dashboard/               # 治理大盘聚合引擎（含三维健康指数与 F-24 独立静态合标率指标卡片）
-│       ├── topology/                # 三级架构树、layer_level 分层与成环守卫、静态拓扑推导、报文穿透定位与一致性八分类引擎
+│       ├── topology/                # 三级架构树、layer_level 正反向与成环守卫、静态拓扑推导、报文穿透定位与一致性八分类引擎
 │       └── diff/                    # 协议头级 + Protobuf 语义字段级双层回归 Diff 断言与重放调度器
-├── config/                          # Server 与 Agent 各自的配置结构体、AES 主密钥/LLM/Notifier 配置注入与安全默认值
-├── models/                          # 29 张核心 traefik_* + traefik_settings GORM 实体模型、幂等迁移与级联校验辅助函数
-├── handlers/                        # Server HTTP/Webhook/SSE 控制器、参数白名单校验、RBAC 守卫与 commonAudit 接入
+├── config/                          # Server 与 Agent 各自的配置结构体、TRAEFIK_CRYPTO_KEY/LLM/Notifier 配置注入与安全默认值
+├── models/                          # 30 张核心 traefik_* + traefik_settings 共 31 张 GORM 实体模型、幂等迁移与级联校验辅助函数
+├── handlers/                        # Server HTTP/Webhook/SSE 控制器、settings.go 脱敏、参数白名单校验、RBAC 守卫与 commonAudit 接入
 ├── scripts/
-│   └── migrate_protohub_vocab/      # 一次性独立 CLI 迁移工具：将 protohub SQLite vocabulary_terms 无损导入 traefik_vocabulary_terms (M24)
-└── frontend/                        # React 18 + TypeScript + Vite 5 微前端控制台工程（M22~M25 新增静态资产严格 < 1.5MB）
+│   └── migrate_protohub_vocab/      # 一次性独立 CLI 迁移工具：从 protohub SQLite / JSON 无损导入 traefik_vocabulary_terms (M24)
+└── frontend/                        # React 18 + TypeScript + Vite 5 微前端控制台工程（M22~M26 新增 JS 增量 <= 150KB gzip / <= 500KB raw）
 ```
 
 > [!IMPORTANT]
@@ -495,40 +496,40 @@ sequenceDiagram
     Server-->>UI: 返回完整双层 Diff 回归报告
 ```
 
-### 5.4 场景四：Git 无状态同步、MR 四合一静态门禁、`Approve with Override` 与持久化通知时序 (`ADR-18` / M25)
+### 5.4 场景四：Git 无状态同步、MR 四合一静态门禁、`Approve with Override` 与跨机通知时序 (`ADR-18` / M25~M26)
 
 ```mermaid
 sequenceDiagram
     autonumber
     actor Dev as 开发者 / Git 托管平台
-    participant Webhook as Server Webhook (/api/webhooks/git-mr)
-    participant Worker as Async MR Gate Worker ( SafeDialer + memfs )
+    participant Webhook as Server Webhook (/api/webhooks/git-mr/:repoId)
+    participant Worker as Async MR Gate Worker (SafeDialer + memfs)
     participant Compiler as protocompile + Linter + AST Diff
-    participant DB as PostgreSQL (29 表)
-    participant Notifier as Notify Engine (Web + code-notifier/SMTP)
+    participant DB as PostgreSQL (30+1 表)
+    participant Notifier as Notify Engine (Web SSE + 跨机 code-notifier/SMTP)
     actor Admin as 架构师 (traefik_admin)
 
     Dev->>Webhook: 1. 推送 MR (open/update) 携带 X-Gitlab-Token / X-Hub-Signature-256
-    Webhook->>DB: 查找 GitRepo 并解密 WebhookSecret -> ConstantTimeCompare 常量时间验签
-    Webhook->>DB: INSERT traefik_mr_check_runs ON CONFLICT (git_repo_id, head_commit_sha) DO NOTHING
+    Webhook->>DB: 查找 GitRepo 并经 TRAEFIK_CRYPTO_KEY 解密 Secret -> ConstantTimeCompare 验签
+    Webhook->>DB: INSERT traefik_mr_check_runs ON CONFLICT uk_traefik_mr_dedup DO NOTHING (含 target_head_sha 防 FF 漏判)
     Webhook-->>Dev: 202 Accepted (accepted / duplicate_ignored, < 50ms 快速响应)
 
-    Note over Worker,Compiler: 后台协程受并发池与 SafeDialer 防 SSRF 保护
-    Worker->>GitHost: 2. 通过 Git REST API / go-git memfs 获取 Target 基线树 + MR Diff 变更列表
+    Note over Worker,Compiler: 后台协程受并发池与 SafeDialer (信任白名单含内网 GitLab/LLM/跨机 code-notifier) 保护
+    Worker->>GitHost: 2. 通过 Git REST API / go-git memfs 获取对应 Bundle (proto_root_dir) Target 基线树 + MR Diff
     Worker->>Worker: 合成虚拟目录树 (覆写 Added/Modified, 剔除 Deleted/Renamed-Old，杜绝幽灵依赖)
-    Worker->>Compiler: 3. 四合一检查：protocompile 编译 + Linter/词库(含 3s LLM 熔断) + AST 重复探测 + F-26 Breaking Diff
-    Compiler->>DB: 写入 traefik_check_reports / violations + 更新 MRCheckRun (PASSED | FAILED)
+    Worker->>Compiler: 3. 四合一检查：protocompile 编译 + Linter/词库(含 3s LLM 熔断) + AST 重复(>=0.85) + F-26 (含 BASE_LIB 传递影响)
+    Compiler->>DB: 写入 traefik_check_reports / violations + 更新 MRCheckRun (含 bundle_id / remote_comment_id)
 
     alt 检出 ERROR 违规或 FATAL Breaking 且 merge_blocking_enabled=true
-        Worker->>GitHost: 4a. 回写 failed 提交状态 + 结构化 Markdown 评审意见与直达链接
-        Worker->>Notifier: 写入 traefik_notifications (MR_GATE_FAILED) -> SSE 推送 + 异步投递 code-notifier/SMTP
+        Worker->>GitHost: 4a. 回写 failed 提交状态 + 按 remote_comment_id 原位更新/新建 Bot Markdown 评审意见
+        Worker->>Notifier: 写入 traefik_notifications (MR_GATE_FAILED) -> SSEBroker(userID) 定向推送 + 异步投递跨机 code-notifier/SMTP
         Dev->>UI: 查看失败详情并评估是否为授权重构
         Admin->>Webhook: POST /api/mr-check-runs/:id/override (携带 override_reason)
         Webhook->>DB: 更新 Status=OVERRIDDEN + 写入 P1 高危审计日志
         Webhook->>GitHost: 回写 passed (overridden) 状态解除阻塞 + 下发 MR_GATE_OVERRIDDEN 通知
     else 门禁通过且收到 event_action=merge
-        Worker->>Compiler: 4b. 若 auto_compile_on_merge=true 执行默认分支最新树全量 protocompile
-        Compiler->>DB: 写入新版本 ProtoSchema (SOURCE_TYPE=GIT_MR_AUTO) & 刷新 traefik_proto_doc_symbols + 通知
+        Worker->>Compiler: 4b. 若 auto_compile_on_merge=true 执行对应 Bundle 默认分支最新树全量 protocompile
+        Compiler->>DB: 写入新版本 ProtoSchema (GIT_MR_AUTO, source_bundle_id) & 刷新 traefik_proto_doc_symbols + 通知
     end
 ```
 
@@ -545,12 +546,16 @@ sequenceDiagram
    - **公私域防横向越权（Anti-IDOR）**：所有涉及 `PRIVATE` Agent、名下进程及 `PRIVATE` 录制素材的查询、修改、SSE 订阅与重放接口，普通用户之间强制在数据访问层校验 `owner_id == currentUser.ID`（未匹配返回 `403 Forbidden`）；管理员（`traefik_admin`）被授予全团队运维查看、审计、租约异常解锁与安全审查特权，严禁仅靠前端隐藏入口。
 2. **输入校验、编译沙箱与出站 SSRF/凭据零信任**：
    - `.pb` 描述集上传与 `POST /api/proto-schemas/compile` / Git `protocompile` Compilation Bundle 统一强制通过流式 `http.MaxBytesReader` / 解压边界校验 `<= 16MB` 体积上限；编译 100% 运行于纯 Go `github.com/bufbuild/protocompile` 内存虚拟文件解析器中（**全仓严禁 `os/exec` 调用外部 `protoc` 或 `git` 命令行**），所有 `.proto` 相对路径与 `proto_include_dirs` 经 `path.Clean` 强制消毒，拒绝 `..` 路径穿越与绝对路径；二进制 `FileDescriptorSet` 直接存入 PostgreSQL `bytea` 字段，不落地宿主机可执行文件系统，下载响应强制附加 `Content-Disposition: attachment`、`X-Content-Type-Options: nosniff` 与 `Cache-Control: no-store`（病毒扫描外部网关集成留存 `// TODO(security): 接入企业制品防病毒扫描服务`）。
-   - **Git 凭据 / 敏感集成配置加密与脱敏**：`traefik_git_repos` 的 `credentials_encrypted`、`webhook_secret_encrypted` 及 `traefik_settings` 的 `llm_api_key_enc`、`smtp_password_enc` 统一使用主密钥 **AES-256-GCM**（通过 `TRAEFIK_MASTER_KEY` 环境变量或 `config.yaml` KMS 注入，`// TODO(security): 生产环境接入 KMS`）加密持久化；API 响应结构体统一标注 `json:"-"`，仅透出 `has_credentials`、`has_webhook_secret` 与脱敏 Hint；Webhook 回调签名为常量时间比对 (`subtle.ConstantTimeCompare`) 并受 `(git_repo_id, head_commit_sha)` 唯一约束保护，防重放与状态风暴。
-   - **出站请求 `SafeDialer` SSRF 防护与 3s 熔断超时**：所有由主控主动发起的外网请求（Git REST API / `go-git memfs` 拉取、MR 状态回写、可选外部 LLM 词根建议、`code-notifier` / SMTP 通知投递）统一经 `internal/server/security.SafeDialer`（通过 `net.Dialer{Control: ...}` 在 TCP 建连前校验解析后 IP，默认拒绝 `127.0.0.0/8`、私网 RFC1918/RFC4193、链路本地 `169.254.0.0/16` 元数据地址及 `::1`，并禁用危险跨网重定向；仅单测沙箱可通过显式构建期或隔离开关允许受控本地 mock server）并设置强制硬超时（LLM 固定 `<= 3s`、Git API `<= 30s`），任何外部依赖不可用均安全降级为纯本地离线报告与持久化 Web 通知，严禁阻塞核心研发与 MR 门禁主路径。
+   - **Git 凭据 / 敏感集成配置加密与脱敏**：`traefik_git_repos` 的 `credentials_encrypted`、`webhook_secret_encrypted` 及 `traefik_settings` 的 `llm_api_key_enc`、`smtp_password_enc`、`code_notifier_token_enc` 统一使用主密钥 **AES-256-GCM**（通过 **`TRAEFIK_CRYPTO_KEY`** 环境变量或 KMS 注入；`// TODO(security): 生产环境接入 KMS`，严禁生产模式静默无密钥回退）加密持久化；改造 `handlers/settings.go` 与 `git_handler.go`，API 响应结构体统一标注 `json:"-"` 并过滤全部 `*_enc` / `*_sha256` 内部键，仅透出 `has_credentials`、`has_webhook_secret`、`llm_key_configured` 等布尔标记，且严禁向 `commonAudit` 写入未脱敏的敏感配置字段级 Diff；Webhook 回调签名为常量时间比对 (`subtle.ConstantTimeCompare`) 并受 `uk_traefik_mr_dedup` (`git_repo_id, COALESCE(bundle_id, 0), event_phase, head_commit_sha, target_head_sha`) 唯一约束保护，兼顾 Fast-Forward/Rebase 同 SHA 合并门禁与重放幂等性。
+   - **出站请求 `SafeDialer` SSRF 防护、信任内网白名单与 3s 熔断超时**：所有由主控主动发起的出站 HTTP/Git 请求（Git REST API / `go-git memfs` 拉取、MR 状态回写、可选外部 LLM 词根建议、**部署在同内网另一台主机上的 `code-notifier` 邮件投递** / SMTP）统一经 `internal/server/security.SafeDialer`：
+     1. **永久硬阻断（不可豁免）**：云元数据与链路本地地址（`169.254.0.0/16`、`fe80::/10`、`100.100.100.200/32`、`metadata.google.internal`）、多播段与未指定地址（`0.0.0.0/8`）；
+     2. **默认拦截 + 管理员信任白名单放行 (`outbound_trusted_cidrs`)**：默认拒绝回环（`127.0.0.0/8`、`::1`）、RFC1918 私网与 RFC4193 ULA，同时显式允许管理员在 `traefik_settings.outbound_trusted_cidrs` 配置受信任内网 CIDR 或精确主机（放行企业内网 GitLab/CodeHub、内网 LLM 网关及跨机部署的 `code-notifier`），单测沙箱可通过显式构建期或隔离开关放行受控 `127.0.0.1` mock server；
+     3. **Dial/Control DNS 重绑定复检与重定向守卫**：通过 `net.Dialer{Control: ...}` 在 TCP 实际建连前再次校验解析后的最终 IP（防止域名通过 DNS 重绑定跳入元数据 IP 或未授权内网段），并禁止跨信任边界自动跳转；
+     4. **强制硬超时与安全降级**：LLM 固定 `<= 3s`、Git API `<= 30s`、`code-notifier` `<= 5s`，任何外部依赖离线或返回 `4xx/5xx` 均安全降级（记录 `TIMEOUT_FALLBACK` 或 `email_status='FAILED'`），严禁阻塞核心研发与 MR 门禁主路径。
    - Agent 进程探查与连接诊断 100% 通过 Go 标准库只读解析 `/proc/<pid>/*` 虚拟文件，**全仓严禁调用 `os/exec` 拼接执行外部 Shell 命令**。
    - 数据库交互 100% 使用 GORM 参数化预编译查询，排序字段与状态枚举执行严格白名单校验，SQL 原始错误严禁透出至客户端响应。
 3. **浏览器安全响应头与前端防 XSS**：
-   - 控制面全局注入 `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; frame-ancestors 'self'`（允许纯客户端 SVG/Canvas 拓扑与架构图高清导出所需 `blob:` URL，注：Vite 微前端样式注入需 `style-src 'unsafe-inline'`，`script-src` 严禁启用 `unsafe-inline` 或 `unsafe-eval`）、`X-Content-Type-Options: nosniff`、`X-Frame-Options: SAMEORIGIN`、`Permissions-Policy: camera=(), microphone=(), geolocation=()`，敏感 API 响应附加 `Cache-Control: no-store`，CORS 严格限定受信任门户域名白名单（严禁 `*`）并挂载 API 速率限制器。
+   - 保留并在 `cmd/server/main.go` 演进全局安全响应头：`Content-Security-Policy`（注：当前 `cmd/server/main.go` 已放行 `img-src`/`connect-src` 的 `blob:`，供 `/topology` 与 `/schemas?tab=graph` 纯客户端程序化矢量 SVG / 离屏 Canvas PNG 导出使用；Vite 微前端兼容期间保留 `style-src 'unsafe-inline'`，`script-src` 严禁启用 `unsafe-inline` 或 `unsafe-eval`）、`X-Content-Type-Options: nosniff`、`X-Frame-Options: SAMEORIGIN`、`Permissions-Policy: camera=(), microphone=(), geolocation=()`，敏感 API 响应附加 `Cache-Control: no-store`；注：由于 `code-common/backend/server` 默认全局挂载 `Access-Control-Allow-Origin: *`，独立部署模式应通过 `commonServer.Options.CustomMiddlewares` 在门户路由前置覆盖严格受信任 CORS 域名白名单并挂载 API 速率限制器（`// TODO(security): 按生产门户域名收敛 CORS 白名单并收紧生产 CSP`）。
    - 来自网络报文、`Git` 仓库提交信息或 `.proto` 源文件注释（`LeadingComments` / `@deprecated` / `@owner` / `Markdown` 预览）的全部外部文本均视为不可信外部输入，前端（含活体参考文档、只读代码浏览器、Commit Diff、SVG 时序泳道图与树形表格）100% 依赖 React JSX 原生文本转义，严禁使用 `dangerouslySetInnerHTML`、`innerHTML` 或原生 `alert()` / `confirm()`；控制面调用树组装与参数血缘扫描强制实施有界递归与节点上限（`max_depth <= 16`、单事务返回子节点 `<= 200`、JSON 血缘递归 `<= 6` 层且标量上限 `<= 500`；`.proto` 参考文档嵌套展开同样受 `max_depth <= 12` 环路防护），防止恶意循环 `FatherSpanID` 或自引用 Proto Message 引发 CPU/内存耗尽（DoS）。
 4. **测试绑定红线**：
    - 所有单元与集成测试中拉起的临时 `Server`、Mock `Agent`、模拟业务 TCP 服务及测试数据库均**强制仅监听 `127.0.0.1`**，严禁绑定 `0.0.0.0`；测试结束在 `t.Cleanup` 中确保端口与 eBPF 探针 100% 释放。

@@ -1,11 +1,11 @@
 # 架构与活体契约治理 (`code-traefik`) 数据库物理模型与 GORM 建模字典
 
 - **文档编号**：`05-database-schema.md`
-- **文档版本**：v1.7.0
+- **文档版本**：v1.8.0
 - **更新日期**：2026-11-13
 - **归属阶段**：阶段二：系统架构与数据模型设计 (`02-design`)
-- **状态**：M1~M20 已交付；M21 零 DDL 兼容已批准 (Zero-DDL for M21)
-- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.16.0)、[`01-system-architecture.md`](./01-system-architecture.md)、[`04-traffic-storage-partitioning-and-relational-normalization.md`](../05-adr/04-traffic-storage-partitioning-and-relational-normalization.md)、[`09-arch-process-ssot-and-ebpf-premount-standby-adr.md`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md) (ADR-09 v1.1.0)、[`12-packet-causality-call-tree-and-sequence-ux-adr.md`](../05-adr/12-packet-causality-call-tree-and-sequence-ux-adr.md) (ADR-12 v1.0.0)、[`14-governance-dashboard-golden-suite-and-ci-gate-adr.md`](../05-adr/14-governance-dashboard-golden-suite-and-ci-gate-adr.md) (ADR-14 v1.1.0)、[`15-scalable-topology-focus-and-layout-persistence-adr.md`](../05-adr/15-scalable-topology-focus-and-layout-persistence-adr.md) (ADR-15 v1.3.0)、[`16-multi-implementation-service-contract-adr.md`](../05-adr/16-multi-implementation-service-contract-adr.md) (ADR-16 v2.0.0)、[`17-topology-single-layer-drilldown-and-layout-ux-adr.md`](../05-adr/17-topology-single-layer-drilldown-and-layout-ux-adr.md) (ADR-17 v1.1.0)
+- **状态**：M1~M21 已交付；M22~M26 已批准待实施 (Approved for M22~M26)
+- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.19.0)、[`01-system-architecture.md`](./01-system-architecture.md) (v1.8.0)、[`04-traffic-storage-partitioning-and-relational-normalization.md`](../05-adr/04-traffic-storage-partitioning-and-relational-normalization.md)、[`09-arch-process-ssot-and-ebpf-premount-standby-adr.md`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md) (ADR-09 v1.1.0)、[`12-packet-causality-call-tree-and-sequence-ux-adr.md`](../05-adr/12-packet-causality-call-tree-and-sequence-ux-adr.md) (ADR-12 v1.0.0)、[`14-governance-dashboard-golden-suite-and-ci-gate-adr.md`](../05-adr/14-governance-dashboard-golden-suite-and-ci-gate-adr.md) (ADR-14 v1.1.0)、[`15-scalable-topology-focus-and-layout-persistence-adr.md`](../05-adr/15-scalable-topology-focus-and-layout-persistence-adr.md) (ADR-15 v1.3.0)、[`16-multi-implementation-service-contract-adr.md`](../05-adr/16-multi-implementation-service-contract-adr.md) (ADR-16 v2.0.0)、[`17-topology-single-layer-drilldown-and-layout-ux-adr.md`](../05-adr/17-topology-single-layer-drilldown-and-layout-ux-adr.md) (ADR-17 v1.1.0)、[`18-proto-full-lifecycle-and-git-mr-governance-adr.md`](../05-adr/18-proto-full-lifecycle-and-git-mr-governance-adr.md) (ADR-18 v1.2.0)
 
 ### 修订记录
 
@@ -14,13 +14,14 @@
 | v1.5.1 | 2026-11-09 | 同步 ADR-15 (v1.1.0) 拓扑画布双层布局持久化表 `traefik_topology_layouts`（18 张核心业务表） |
 | v1.6.0 | 2026-11-11 | 依据 ADR-16 (v1.0.0) 同步多实现服务契约与接口库建模（`F-02.1` / `F-04.4` / `F-05.1` / `SC-12` / `M20`，核心业务表扩充为 19 张）：1. 新增 `traefik_service_contracts` 多实现服务契约表；2. `traefik_modules` 新增 `module_kind` 与库模块禁绑进程 `CHECK`；3. `traefik_module_services` 新增 `contract_id`、`impl_key`，将 `uk_traefik_mod_svc_name` 平滑替换为部分唯一索引 `uk_traefik_mod_svc_name_excl`、`uk_traefik_mod_svc_contract_impl`、`uk_traefik_mod_svc_contract_mod`（修订 `A-05`、守护 `A-09`）；4. `traefik_module_dependencies` 新增 `contract_id` 分发依赖与三选一 `CHECK`；5. `traefik_recording_sessions` 新增 `endpoint_snapshots`、`traefik_traffic_records` 新增 `dst_contract_id` 及存量平滑迁移规范 |
 | v1.6.1 | 2026-11-13 | 同步 [`ADR-17`](../05-adr/17-topology-single-layer-drilldown-and-layout-ux-adr.md) (`M21`) 零 DDL 布局持久化兼容约定：保持 `traefik_topology_layouts` 既有表结构与约束不变，明确单层平铺模式下内部子节点直接复用原节点 ID 存储各聚焦域平铺坐标，外部传送门卡跨聚焦域差量坐标采用 `${focusScope}::${extNodeId}` 复合键名（满足 `len <= 128` 校验），`expand_state` 保持向后兼容反序列化 |
-| v1.7.0 | 2026-11-13 | 依据 [`ADR-18`](../05-adr/18-proto-full-lifecycle-and-git-mr-governance-adr.md) (v1.1.0, `M22~M25`) 扩充至 **29 张核心 `traefik_*` 业务表 + `traefik_settings` 运行配置表**：1. `traefik_subsystems` 与 `traefik_modules` 新增 `layer_level` 支持可配置分层架构约束；2. `traefik_proto_schemas` 新增 `source_type`、`git_repo_id`、`source_commit_sha`、`source_mr_iid` 支持来源溯源；3. 新增 `traefik_git_repos`、`traefik_mr_check_runs`、`traefik_proto_files`（无 `file_lock` / `locked` 字段）、`traefik_proto_file_versions`、`traefik_proto_doc_symbols`、`traefik_check_rules`、`traefik_vocabulary_terms`、`traefik_check_reports`、`traefik_check_violations` 与 `traefik_notifications` 十张表；4. 扩充 `traefik_settings` 脱敏配置键、`protohub` 词库一次性迁移契约与幂等 DDL |
+| v1.7.0 | 2026-11-13 | 依据 [`ADR-18`](../05-adr/18-proto-full-lifecycle-and-git-mr-governance-adr.md) (v1.1.0, `M22~M25`) 扩充 Proto 全生命周期、Git 同步、MR 门禁与通知实体 |
+| v1.8.0 | 2026-11-13 | 依据 [`ADR-18`](../05-adr/18-proto-full-lifecycle-and-git-mr-governance-adr.md) (v1.2.0, `M22~M26`) 检视修订：全库扩充为 **30 张核心 `traefik_*` 业务表 + `traefik_settings` 运行配置表（共 31 张物理表）**：1. 将 `GitRepo` 拆分为 **Git 仓连接 (`traefik_git_repos`, #20) `1:N` 编译单元 (`traefik_git_proto_bundles`, #21)** 原生支持 Monorepo 多子目录包，对应为 `ProtoSchema` 增补 `source_bundle_id`，`ProtoFile` (#22) 增补 `bundle_id`/`target_schema_name`/`latest_version_id`/`is_deleted`（零写锁）；2. `MRCheckRun` (#29) 增补 `bundle_id`/`mr_url`/`target_head_sha`/`remote_comment_id`/`event_phase`，去重索引升级为 `uk_traefik_mr_dedup (git_repo_id, COALESCE(bundle_id, 0), event_phase, head_commit_sha, target_head_sha)` 防 Fast-Forward 同 SHA 误丢；3. `CheckRule` (#25) 增补 `suggestion_template`，`VocabularyTerm` (#26) 补齐 `aliases`/`description_en`/`similar_terms`/`domain`，`protohub` 迁移 CLI 默认指向 `protohub/storage/database/protohub.db`（支持 `--json-path` / 内置 seed）；4. `Notification` (#30) 规范为 `email_status`/`external_channel`/`email_error`，`traefik_settings` 增补 `outbound_trusted_cidrs`、`code_notifier_enabled`、`code_notifier_url`、`code_notifier_token_enc` 支持跨机 LAN 部署的 `code-notifier`（AES 主密钥统一为 `TRAEFIK_CRYPTO_KEY`） |
 
 ---
 
 ## 1. 数据库共享隔离原则、分区规范与类型安全约定
 
-1. **共享库表名前缀强制隔离**：`code-traefik-server` 与宿主门户 `code-bench` 共享同一 PostgreSQL 实例，直接复用 `code-common/backend/models` 中的 `users`、`departments`、`audit_logs` 公共表；本子系统全部 **29 张核心业务实体表**（及平台治理参数表 `traefik_settings`）必须显式实现 `TableName() string` 并冠以 `config.TablePrefix`（**`traefik_`**）前缀。
+1. **共享库表名前缀强制隔离**：`code-traefik-server` 与宿主门户 `code-bench` 共享同一 PostgreSQL 实例，直接复用 `code-common/backend/models` 中的 `users`、`departments`、`audit_logs` 公共表；本子系统全部 **30 张核心业务实体表**（及平台治理参数表 `traefik_settings`，共 `31` 张表）必须显式实现 `TableName() string` 并冠以 `config.TablePrefix`（**`traefik_`**）前缀。
 2. **架构物理进程蓝图解耦与「单 Agent 单环境」关系规范化（[`ADR-09`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md)）**：
    - 将全局架构物理进程蓝图独立建模为 **`traefik_arch_process_groups`** 与 **`traefik_arch_processes`**，通过 `traefik_modules.arch_process_id` 唯一表达 `1 ArchProcess : N Module` 组装关系（守护 `A-03` 单模块单标准进程归属）；
    - **1 台 `Agent` 即代表 1 套独立运行环境**（支持多套 `SHARED` 公共测试环境与多套 `PRIVATE` 个人环境对等并存，不同 `SHARED` Agent 允许各自挂载同一 `ArchProcess`；`traefik_agents.fallback_agent_id` 支持可选关联某套公共基准环境用于混合下游推导）；
@@ -36,11 +37,11 @@
      2. **流量分区母表幂等扩列**：在 `PartitionManager.EnsureParentTable` 中执行 `ALTER TABLE traefik_traffic_records ADD COLUMN IF NOT EXISTS dst_contract_id BIGINT;` 与 `CREATE INDEX IF NOT EXISTS idx_traefik_tr_dst_contract ON traefik_traffic_records (dst_contract_id);`，PostgreSQL 自动将该可空列与索引传播至全部既有及新建按日分区子表，无需重写分区数据；
      3. **旧唯一索引 `uk_traefik_mod_svc_name` 平滑替换与部分唯一索引创建**：在 `DO $$ ... END $$` 块中幂等移除旧的无条件唯一索引/约束（`ALTER TABLE traefik_module_services DROP CONSTRAINT IF EXISTS uk_traefik_mod_svc_name; DROP INDEX IF EXISTS uk_traefik_mod_svc_name;`；同时对 `traefik_module_dependencies` 执行 `ALTER TABLE traefik_module_dependencies DROP CONSTRAINT IF EXISTS uk_traefik_dep_tuple; DROP INDEX IF EXISTS uk_traefik_dep_tuple;`），随后通过 `CREATE UNIQUE INDEX IF NOT EXISTS` 创建部分唯一索引 `uk_traefik_mod_svc_name_excl`、`uk_traefik_mod_svc_contract_impl`、`uk_traefik_mod_svc_contract_mod`、`uk_traefik_dep_tuple (consumer_module_id, service_id) WHERE service_id IS NOT NULL` 与 `uk_traefik_dep_consumer_contract (consumer_module_id, contract_id) WHERE contract_id IS NOT NULL`；
      4. **`CHECK` 约束与外键幂等刷新**：先 `DROP CONSTRAINT IF EXISTS` 再 `ADD CONSTRAINT` 刷新 `chk_traefik_modules_kind`、`chk_traefik_modules_lib_no_proc`、`chk_traefik_svc_contract_mode`、`chk_traefik_mod_svc_impl_key`、`chk_traefik_dep_target_xor` 及外键 `fk_traefik_svc_contract_definer`、`fk_traefik_mod_svc_contract`、`fk_traefik_dep_contract`，重复启动 100% 幂等。
-   - **M22~M25 Proto 全生命周期增量迁移与 `protohub` 一次性词汇迁入（`ADR-18`）**：
-     1. **GORM `AutoMigrate` 与默认列升级**：在 `SetupWithDB` 中扩充 `&GitRepo{}`、`&MRCheckRun{}`、`&ProtoFile{}`、`&ProtoFileVersion{}`、`&ProtoDocSymbol{}`、`&CheckRule{}`、`&VocabularyTerm{}`、`&CheckReport{}`、`&CheckViolation{}`、`&Notification{}` 十张新表；为存量 `traefik_subsystems` 与 `traefik_modules` 幂等追加 `layer_level INT NOT NULL DEFAULT 0`（默认 `0` = 不限制分层，零破坏存量依赖）；为 `traefik_proto_schemas` 幂等追加 `source_type VARCHAR(16) NOT NULL DEFAULT 'UPLOAD_PB'`、`git_repo_id BIGINT NULL`、`source_commit_sha VARCHAR(64) NOT NULL DEFAULT ''` 与 `source_mr_iid INT NULL`；
-     2. **部分唯一索引与外键/检查约束**：在 `DO $$ ... END $$` 中创建部分唯一索引 `uk_traefik_pfile_repo_path UNIQUE (git_repo_id, file_path) WHERE git_repo_id IS NOT NULL` 与推荐通知复合倒序索引 `idx_traefik_notif_user_read (recipient_user_id, is_read, created_at DESC)`，幂等刷新新域表全部 `CHECK` 约束；
-     3. **内置静态规则与标准词根幂等初始化**：首次迁移采用 `INSERT ... ON CONFLICT (rule_code) DO NOTHING` 预置 ADR-18 默认静态规则矩阵（含多段包名规则与默认 `WARNING` 的 `COMMENT_REQUIRED`、`DUPLICATE_MESSAGE_AST`）及高频通用缩写基础词根；
-     4. **`protohub` 历史词库一次性迁入**：提供独立 CLI 工具/子命令 `scripts/migrate_protohub_vocab`（隔离 SQLite 读取依赖，避免污染 `code-traefik-server` 主运行库），读取原 `protohub.db` 的 `vocabulary_terms(term, description, category, created_at)` 表并按 `ON CONFLICT (term) DO NOTHING` 幂等写入 `traefik_vocabulary_terms`（标记 `source = 'PROTOHUB_IMPORT'`、`is_approved = true`）。
+   - **M22~M26 Proto 全生命周期增量迁移与 `protohub` 一次性词汇迁入（`ADR-18` v1.2.0）**：
+     1. **GORM `AutoMigrate` 与默认列升级**：在 `SetupWithDB` 中按里程碑扩充 **11 张新表**：`&ProtoDocSymbol{}` (M23)、`&CheckRule{}`/`&VocabularyTerm{}`/`&CheckReport{}`/`&CheckViolation{}` (M24)、`&GitRepo{}`/`&GitProtoBundle{}`/`&ProtoFile{}`/`&ProtoFileVersion{}` (M25)、`&MRCheckRun{}`/`&Notification{}` (M26)；为存量 `traefik_subsystems` 与 `traefik_modules` 幂等追加 `layer_level INT NOT NULL DEFAULT 0`（默认 `0` = 不限制分层，零破坏存量依赖）；为 `traefik_proto_schemas` 幂等追加 `source_type VARCHAR(16) NOT NULL DEFAULT 'UPLOAD_PB'`、`git_repo_id BIGINT NULL`、`source_bundle_id BIGINT NULL`、`source_commit_sha VARCHAR(64) NOT NULL DEFAULT ''` 与 `source_mr_iid INT NULL`；
+     2. **部分唯一索引、表达式去重索引与约束**：在 `DO $$ ... END $$` 中创建部分唯一索引 `uk_traefik_pfile_bundle_path UNIQUE (bundle_id, file_path) WHERE is_deleted = false`、`uk_traefik_mr_dedup UNIQUE (git_repo_id, COALESCE(bundle_id, 0), event_phase, head_commit_sha, target_head_sha)` 与通知覆盖索引 `idx_traefik_notif_user_read (recipient_user_id, is_read, created_at DESC)`，幂等刷新新域表全部 `CHECK` 约束；
+     3. **内置静态规则与标准词根幂等初始化**：首次迁移采用 `INSERT ... ON CONFLICT (rule_code) DO NOTHING` 预置 ADR-18 默认静态规则矩阵（含多段包名规则与默认 `WARNING` 的 `COMMENT_REQUIRED`、`DUPLICATE_MESSAGE_AST` 及模板字段 `suggestion_template`）及高频通用缩写基础词根；
+     4. **`protohub` 历史词库一次性迁入**：提供独立纯 Go CLI 工具 `scripts/migrate_protohub_vocab`（仅在该独立 CLI 内引入无 CGO 的 `modernc.org/sqlite`，严禁污染 `cmd/server` / `cmd/agent` 运行时），同时支持 `--sqlite-path`（默认指向遗留运维库 `../protohub/storage/database/protohub.db`，因 `../protohub/storage/protohub.db` 为 `0B` 空文件）与 `--json-path` / 内置 seed，读取 `vocabulary_terms(term, description, description_en, aliases, similar_terms, domain, category, created_at)` 并按 `ON CONFLICT (term) DO NOTHING` 幂等写入 `traefik_vocabulary_terms`（标记 `source = 'PROTOHUB_IMPORT'`、`is_approved = true`）。
 4. **海量流量时间范围物理分区 (`Range Partitioning`)**：
    - 核心流量往返表 **`traefik_traffic_records`** 采用 PostgreSQL 原生 **`PARTITION BY RANGE (created_at)`** 按日（或按周）自动建表；
    - 30 天保留期清理流水线采用轻量级 **`DROP TABLE traefik_traffic_records_yYYYYmMMdDD`**，实现磁盘空间毫秒级无锁释放。
@@ -83,12 +84,16 @@ erDiagram
 
     TRAEFIK_PROTO_SCHEMAS ||--o{ TRAEFIK_PROTO_OPERATIONS : "schema_id (CASCADE)"
     TRAEFIK_PROTO_SCHEMAS ||--o{ TRAEFIK_PROTO_DOC_SYMBOLS : "schema_id (CASCADE, F-18 活体文档符号)"
+    TRAEFIK_GIT_REPOS ||--o{ TRAEFIK_GIT_PROTO_BUNDLES : "git_repo_id (CASCADE, Monorepo 1:N 包)"
+    TRAEFIK_SUBSYSTEMS |o--o{ TRAEFIK_GIT_PROTO_BUNDLES : "subsystem_id (SET NULL)"
     TRAEFIK_GIT_REPOS |o--o{ TRAEFIK_PROTO_SCHEMAS : "git_repo_id (SET NULL, 编译来源溯源)"
-    TRAEFIK_GIT_REPOS ||--o{ TRAEFIK_PROTO_FILES : "git_repo_id (CASCADE, Git-Only 只读快照)"
-    TRAEFIK_SUBSYSTEMS |o--o{ TRAEFIK_GIT_REPOS : "subsystem_id (SET NULL)"
+    TRAEFIK_GIT_PROTO_BUNDLES |o--o{ TRAEFIK_PROTO_SCHEMAS : "source_bundle_id (SET NULL)"
+    TRAEFIK_GIT_REPOS ||--o{ TRAEFIK_PROTO_FILES : "git_repo_id (CASCADE)"
+    TRAEFIK_GIT_PROTO_BUNDLES ||--o{ TRAEFIK_PROTO_FILES : "bundle_id (CASCADE, Git-Only 只读快照)"
     TRAEFIK_PROTO_SCHEMAS |o--o{ TRAEFIK_PROTO_FILES : "schema_id (SET NULL)"
     TRAEFIK_PROTO_FILES ||--o{ TRAEFIK_PROTO_FILE_VERSIONS : "proto_file_id (CASCADE)"
     TRAEFIK_GIT_REPOS ||--o{ TRAEFIK_MR_CHECK_RUNS : "git_repo_id (CASCADE)"
+    TRAEFIK_GIT_PROTO_BUNDLES |o--o{ TRAEFIK_MR_CHECK_RUNS : "bundle_id (CASCADE)"
     TRAEFIK_CHECK_REPORTS |o--|| TRAEFIK_MR_CHECK_RUNS : "check_report_id (SET NULL)"
     TRAEFIK_PROTO_SCHEMAS |o--o{ TRAEFIK_MR_CHECK_RUNS : "compiled_schema_id (SET NULL)"
     TRAEFIK_GIT_REPOS |o--o{ TRAEFIK_CHECK_REPORTS : "git_repo_id (SET NULL)"
@@ -116,7 +121,7 @@ erDiagram
 
 ---
 
-## 3. 29 张 `traefik_*` 核心业务表完整 GORM 模型定义
+## 3. 30 张 `traefik_*` 核心业务表完整 GORM 模型定义
 
 ### 3.1 逻辑架构元素领域表（表 1 ~ 表 3）
 
@@ -529,6 +534,8 @@ type ProtoSchema struct {
 	SourceType      string         `gorm:"size:16;not null;default:'UPLOAD_PB';index:idx_traefik_proto_source_type;check:chk_traefik_proto_source_type,source_type IN ('UPLOAD_PB','ONLINE_COMPILE','GIT_SYNC','GIT_MR_AUTO')" json:"source_type"` // ADR-18 编译来源溯源
 	GitRepoID       *uint64        `gorm:"index:idx_traefik_proto_git_repo" json:"git_repo_id,omitempty"`
 	GitRepo         *GitRepo       `gorm:"foreignKey:GitRepoID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"-"`
+	SourceBundleID  *uint64        `gorm:"index:idx_traefik_proto_bundle" json:"source_bundle_id,omitempty"`
+	SourceBundle    *GitProtoBundle `gorm:"foreignKey:SourceBundleID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"-"`
 	SourceCommitSHA string         `gorm:"size:64;not null;default:'';index:idx_traefik_proto_commit" json:"source_commit_sha,omitempty"`
 	SourceMRIID     *int           `gorm:"default:null" json:"source_mr_iid,omitempty"`
 	Description     string         `gorm:"type:text" json:"description"`
@@ -878,12 +885,13 @@ type SavedViewport struct {
 func (TopologyLayout) TableName() string { return config.TablePrefix + "topology_layouts" }
 ```
 
-### 3.8 Git 集成、只读源码、活体文档、静态检查与持久通知域（表 20 ~ 表 29，`ADR-18` / M22~M25）
+### 3.8 Git 集成、只读源码、活体文档、静态检查与持久通知域（表 20 ~ 表 30，`ADR-18` v1.2.0 / M23~M26）
 
 > **设计红线**：
-> - `traefik_proto_files` 严格定位为 **Git-Only 只读快照缓存**，**禁止**出现 `locked` / `locked_by` / `file_lock` 等悲观编辑锁字段；
-> - `traefik_git_repos` 的 `CredentialsEncrypted` 与 `WebhookSecretEncrypted` 均标注 `json:"-"`，由服务端采用主密钥 **AES-256-GCM** 加密落库并在所有 JSON 响应中仅返回脱敏状态位；
-> - `traefik_mr_check_runs` 通过组合唯一索引 `uk_traefik_mr_repo_head_sha (git_repo_id, head_commit_sha)` 强制保证同仓同提交的 Webhook 幂等去重；`rerun` 操作事务内复用并递增 `attempt_count` 同时清空旧 `Override` 记录。
+> - `traefik_git_repos`（#20）与 `traefik_git_proto_bundles`（#21）呈 **`1:N`** 拆分，原生兼容 Monorepo 单仓多协议子目录编译入池；创建单仓时允许内联默认 Bundle；
+> - `traefik_proto_files`（#22）严格定位为 **Git-Only 只读快照缓存**，**禁止**出现 `locked` / `locked_by` / `file_lock` 等悲观编辑锁字段；支持 `is_deleted` 软删与 `latest_version_id` 历史溯源；
+> - `traefik_git_repos` 的 `CredentialsEncrypted` 与 `WebhookSecretEncrypted` 均标注 `json:"-"`，由服务端采用环境主密钥 **`TRAEFIK_CRYPTO_KEY`** 派生密钥行 **AES-256-GCM** 加密落库，并在所有 JSON 响应中仅返回脱敏状态位；
+> - `traefik_mr_check_runs`（#29）由 `db.go` 创建表达式组合唯一索引 **`uk_traefik_mr_dedup (git_repo_id, COALESCE(bundle_id, 0), event_phase, head_commit_sha, target_head_sha)`** 保证 MR 更新推流幂等去重的同时防止 Fast-Forward / Rebase 同 SHA 合并事件被误丢，并记录 `remote_comment_id` 支持 Bot 评论原位更新；`rerun` 操作事务内复用并递增 `attempt_count` 同时清空旧 `Override` 记录。
 
 ```go
 // Git 托管平台、认证类型与同步/门禁枚举常量
@@ -903,6 +911,9 @@ const (
 	GitSyncSuccess = "SUCCESS"
 	GitSyncFailed  = "FAILED"
 
+	MREventPhaseGate      = "MR_GATE"
+	MREventPhaseMainMerge = "MAIN_MERGE"
+
 	MRStatusPending    = "PENDING"
 	MRStatusRunning    = "RUNNING"
 	MRStatusPassed     = "PASSED"
@@ -920,103 +931,85 @@ const (
 	CheckSeverityInfo    = "INFO"
 )
 
-// 20. GitRepo Git 契约源码仓集成与 Compilation Bundle 规则表 (traefik_git_repos)
+// 20. GitRepo Git 契约源码仓连接与凭据主表 (traefik_git_repos, M25)
 type GitRepo struct {
-	ID                     uint64         `gorm:"primaryKey;autoIncrement" json:"id"`
-	Name                   string         `gorm:"size:128;not null;uniqueIndex:uk_traefik_git_repos_name" json:"name"`
-	Provider               string         `gorm:"size:24;not null;default:'GITLAB';check:chk_traefik_git_repo_provider,provider IN ('GITLAB','GITHUB','GITEA','GENERIC')" json:"provider"`
-	RepoURL                string         `gorm:"size:512;not null" json:"repo_url"`
-	WebBaseURL             string         `gorm:"size:512;not null;default:''" json:"web_base_url"` // 可选网页跳链基址 (用于生成 file.proto#L42 源码跳链)
-	DefaultBranch          string         `gorm:"size:128;not null;default:'main'" json:"default_branch"`
-	ProtoRootDir           string         `gorm:"size:255;not null;default:'.'" json:"proto_root_dir"`                // 仓内扫描 .proto 根目录
-	ProtoIncludeDirs       datatypes.JSON `gorm:"type:jsonb;not null;default:'[\".\"]'" json:"proto_include_dirs"`   // Compilation Bundle include 根目录清单 []string
-	TargetSchemaName       string         `gorm:"size:128;not null;uniqueIndex:uk_traefik_git_repos_target_schema" json:"target_schema_name"` // 编译输出的目标 ProtoSchema.Name
-	TargetCategory         string         `gorm:"size:32;not null;default:'BUSINESS';check:chk_traefik_git_repo_category,target_category IN ('BASE_LIB','BUSINESS','GATEWAY')" json:"target_category"`
-	SubsystemID            *uint64        `gorm:"index:idx_traefik_git_repo_sub" json:"subsystem_id"`
-	Subsystem              *Subsystem     `gorm:"foreignKey:SubsystemID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"subsystem,omitempty"`
-	AuthType               string         `gorm:"size:16;not null;default:'TOKEN';check:chk_traefik_git_repo_auth,auth_type IN ('NONE','TOKEN','BASIC','SSH_KEY')" json:"auth_type"`
-	CredentialsEncrypted   string         `gorm:"type:text;not null;default:''" json:"-"` // AES-256-GCM 密文 Base64；永不通过 API 透出
-	WebhookSecretEncrypted string         `gorm:"type:text;not null;default:''" json:"-"` // AES-256-GCM 密文 Base64；用于 Webhook 常量时间验签
-	AutoCompileOnMerge     bool           `gorm:"not null;default:true" json:"auto_compile_on_merge"`
-	AutoActivateOnMerge    bool           `gorm:"not null;default:false" json:"auto_activate_on_merge"`   // 仅在无 FATAL Breaking 且不冲突时自动入池激活
-	MergeBlockingEnabled   bool           `gorm:"not null;default:true" json:"merge_blocking_enabled"`    // 是否向托管平台回写 MR 提交状态检查
-	LastSyncedCommitSHA    string         `gorm:"size:64;not null;default:''" json:"last_synced_commit_sha"`
-	LastSyncStatus         string         `gorm:"size:16;not null;default:'NEVER';index:idx_traefik_git_sync_status;check:chk_traefik_git_sync_status,last_sync_status IN ('NEVER','RUNNING','SUCCESS','FAILED')" json:"last_sync_status"`
-	LastSyncError          string         `gorm:"type:text;not null;default:''" json:"last_sync_error"`
-	LastSyncAt             *time.Time     `json:"last_sync_at"`
-	CreatedBy              uint           `gorm:"not null;default:0" json:"created_by"`
-	UpdatedBy              uint           `gorm:"not null;default:0" json:"updated_by"`
-	CreatedAt              time.Time      `json:"created_at"`
-	UpdatedAt              time.Time      `json:"updated_at"`
+	ID                     uint64           `gorm:"primaryKey;autoIncrement" json:"id"`
+	Name                   string           `gorm:"size:128;not null;uniqueIndex:uk_traefik_git_repos_name" json:"name"`
+	Provider               string           `gorm:"size:24;not null;default:'GITLAB';check:chk_traefik_git_repo_provider,provider IN ('GITLAB','GITHUB','GITEA','GENERIC')" json:"provider"`
+	RepoURL                string           `gorm:"size:512;not null" json:"repo_url"`
+	WebBaseURL             string           `gorm:"size:512;not null;default:''" json:"web_base_url"` // 可选网页跳链基址 (用于生成 file.proto#L42 源码跳链)
+	DefaultBranch          string           `gorm:"size:128;not null;default:'main'" json:"default_branch"`
+	AuthType               string           `gorm:"size:16;not null;default:'TOKEN';check:chk_traefik_git_repo_auth,auth_type IN ('NONE','TOKEN','BASIC','SSH_KEY')" json:"auth_type"`
+	CredentialsEncrypted   string           `gorm:"type:text;not null;default:''" json:"-"` // TRAEFIK_CRYPTO_KEY AES-256-GCM 密文 Base64；永不通过 API 透出
+	WebhookSecretEncrypted string           `gorm:"type:text;not null;default:''" json:"-"` // TRAEFIK_CRYPTO_KEY AES-256-GCM 密文 Base64；用于 Webhook 常量时间验签
+	LastSyncedCommitSHA    string           `gorm:"size:64;not null;default:''" json:"last_synced_commit_sha"`
+	LastSyncStatus         string           `gorm:"size:16;not null;default:'NEVER';index:idx_traefik_git_sync_status;check:chk_traefik_git_sync_status,last_sync_status IN ('NEVER','RUNNING','SUCCESS','FAILED')" json:"last_sync_status"`
+	LastSyncError          string           `gorm:"type:text;not null;default:''" json:"last_sync_error"`
+	LastSyncAt             *time.Time       `json:"last_sync_at"`
+	Bundles                []GitProtoBundle `gorm:"foreignKey:GitRepoID" json:"bundles,omitempty"`
+	CreatedBy              uint             `gorm:"not null;default:0" json:"created_by"`
+	UpdatedBy              uint             `gorm:"not null;default:0" json:"updated_by"`
+	CreatedAt              time.Time        `json:"created_at"`
+	UpdatedAt              time.Time        `json:"updated_at"`
 }
 
 func (GitRepo) TableName() string { return config.TablePrefix + "git_repos" }
 
-// 21. MRCheckRun Git Merge Request 四合一静态门禁执行记录表 (traefik_mr_check_runs)
-type MRCheckRun struct {
-	ID                    uint64         `gorm:"primaryKey;autoIncrement" json:"id"`
-	GitRepoID             uint64         `gorm:"not null;uniqueIndex:uk_traefik_mr_repo_head_sha,priority:1;index:idx_traefik_mr_repo" json:"git_repo_id"`
-	GitRepo               *GitRepo       `gorm:"foreignKey:GitRepoID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"git_repo,omitempty"`
-	MRIID                 int            `gorm:"not null;index:idx_traefik_mr_iid" json:"mr_iid"`
-	MRTitle               string         `gorm:"size:255;not null;default:''" json:"mr_title"`
-	SourceBranch          string         `gorm:"size:128;not null" json:"source_branch"`
-	TargetBranch          string         `gorm:"size:128;not null" json:"target_branch"`
-	AuthorName            string         `gorm:"size:128;not null;default:''" json:"author_name"`
-	AuthorEmail           string         `gorm:"size:255;not null;default:''" json:"author_email"`
-	HeadCommitSHA         string         `gorm:"size:64;not null;uniqueIndex:uk_traefik_mr_repo_head_sha,priority:2" json:"head_commit_sha"` // (git_repo_id, head_commit_sha) 强幂等去重
-	AttemptCount          int            `gorm:"not null;default:1" json:"attempt_count"`
-	EventAction           string         `gorm:"size:32;not null;default:'open'" json:"event_action"` // open | update | reopen | merge | manual_rerun
-	Status                string         `gorm:"size:16;not null;default:'PENDING';index:idx_traefik_mr_status;check:chk_traefik_mr_status,status IN ('PENDING','RUNNING','PASSED','FAILED','OVERRIDDEN','ERROR')" json:"status"`
-	CompilePassed         bool           `gorm:"not null;default:false" json:"compile_passed"`
-	LintPassed            bool           `gorm:"not null;default:false" json:"lint_passed"`
-	DuplicatePassed       bool           `gorm:"not null;default:true" json:"duplicate_passed"` // 默认 WARNING 不阻断，可按配置升级或保留提醒
-	BreakingPassed        bool           `gorm:"not null;default:false" json:"breaking_passed"`
-	CompileErrors         datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"compile_errors"`          // []CompileDiagnosticDTO
-	CheckReportID         *uint64        `gorm:"index:idx_traefik_mr_report" json:"check_report_id,omitempty"`
-	CheckReport           *CheckReport   `gorm:"foreignKey:CheckReportID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"-"`
-	BreakingReportJSON    datatypes.JSON `gorm:"type:jsonb;not null;default:'{}'" json:"breaking_report_json"`    // {breaking_rules, affected_dependents}
-	DuplicateFindingsJSON datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"duplicate_findings_json"` // []DuplicateGroupDTO
-	ChangedFilesJSON      datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"changed_files_json"`      // [{path, change_type, old_path}]
-	ReportMarkdown        string         `gorm:"type:text;not null;default:''" json:"report_markdown"`
-	CheckRunDurationMs    int            `gorm:"not null;default:0" json:"check_run_duration_ms"`
-	OverriddenByUserID    *uint          `json:"overridden_by_user_id,omitempty"`
-	OverriddenByName      string         `gorm:"size:128;not null;default:''" json:"overridden_by_name,omitempty"`
-	OverrideReason        string         `gorm:"type:text;not null;default:''" json:"override_reason,omitempty"`
-	OverriddenAt          *time.Time     `json:"overridden_at,omitempty"`
-	CompiledSchemaID      *uint64        `gorm:"index:idx_traefik_mr_schema" json:"compiled_schema_id,omitempty"` // Merge 后自动入库的新 ProtoSchema.ID
-	StartedAt             *time.Time     `json:"started_at"`
-	FinishedAt            *time.Time     `json:"finished_at"`
-	CreatedAt             time.Time      `json:"created_at"`
-	UpdatedAt             time.Time      `json:"updated_at"`
+// 21. GitProtoBundle Git 仓库内 Proto 编译单元规则表 (traefik_git_proto_bundles, M25, 1:N 归属 GitRepo)
+type GitProtoBundle struct {
+	ID                   uint64         `gorm:"primaryKey;autoIncrement" json:"id"`
+	GitRepoID            uint64         `gorm:"not null;uniqueIndex:uk_traefik_git_bundle_repo_name,priority:1;index:idx_traefik_git_bundle_repo" json:"git_repo_id"`
+	GitRepo              *GitRepo       `gorm:"foreignKey:GitRepoID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
+	Name                 string         `gorm:"size:128;not null;uniqueIndex:uk_traefik_git_bundle_repo_name,priority:2" json:"name"`
+	ProtoRootDir         string         `gorm:"size:255;not null;default:'.'" json:"proto_root_dir"`                // 仓内扫描 .proto 子目录
+	ProtoIncludeDirs     datatypes.JSON `gorm:"type:jsonb;not null;default:'[\".\"]'" json:"proto_include_dirs"`   // Compilation Bundle include 根目录清单 []string
+	TargetSchemaName     string         `gorm:"size:128;not null;uniqueIndex:uk_traefik_git_bundle_target_schema" json:"target_schema_name"` // 编译输出的目标 ProtoSchema.Name（全局唯一防并发竞争）
+	TargetCategory       string         `gorm:"size:32;not null;default:'BUSINESS';check:chk_traefik_git_bundle_category,target_category IN ('BASE_LIB','BUSINESS','GATEWAY')" json:"target_category"`
+	SubsystemID          *uint64        `gorm:"index:idx_traefik_git_bundle_sub" json:"subsystem_id"`
+	Subsystem            *Subsystem     `gorm:"foreignKey:SubsystemID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"subsystem,omitempty"`
+	AutoCompileOnMerge   bool           `gorm:"not null;default:true" json:"auto_compile_on_merge"`
+	AutoActivateOnMerge  bool           `gorm:"not null;default:false" json:"auto_activate_on_merge"`   // 仅在无 FATAL Breaking 且不冲突时自动入池激活
+	MergeBlockingEnabled bool           `gorm:"not null;default:true" json:"merge_blocking_enabled"`    // 是否向托管平台回写 MR 提交状态检查与评论
+	LastSyncedCommitSHA  string         `gorm:"size:64;not null;default:''" json:"last_synced_commit_sha"`
+	LastCompiledSchemaID *uint64        `json:"last_compiled_schema_id,omitempty"`
+	CreatedBy            uint           `gorm:"not null;default:0" json:"created_by"`
+	UpdatedBy            uint           `gorm:"not null;default:0" json:"updated_by"`
+	CreatedAt            time.Time      `json:"created_at"`
+	UpdatedAt            time.Time      `json:"updated_at"`
 }
 
-func (MRCheckRun) TableName() string { return config.TablePrefix + "mr_check_runs" }
+func (GitProtoBundle) TableName() string { return config.TablePrefix + "git_proto_bundles" }
 
-// 22. ProtoFile Git-Only .proto 只读源码快照缓存表 (traefik_proto_files)
+// 22. ProtoFile Git-Only .proto 只读源码快照缓存表 (traefik_proto_files, M25)
 // 注意：遵循 ADR-18 Git-Only SSOT，本表严格禁止定义 locked / locked_by 等写锁列
 type ProtoFile struct {
-	ID             uint64       `gorm:"primaryKey;autoIncrement" json:"id"`
-	GitRepoID      *uint64      `gorm:"index:idx_traefik_pfile_repo" json:"git_repo_id,omitempty"` // 部分唯一索引 uk_traefik_pfile_repo_path (git_repo_id, file_path) WHERE git_repo_id IS NOT NULL
-	GitRepo        *GitRepo     `gorm:"foreignKey:GitRepoID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
-	SchemaID       *uint64      `gorm:"index:idx_traefik_pfile_schema" json:"schema_id,omitempty"` // 关联最近一次成功编译的 ProtoSchema
-	Schema         *ProtoSchema `gorm:"foreignKey:SchemaID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"-"`
-	SubsystemID    *uint64      `gorm:"index:idx_traefik_pfile_sub" json:"subsystem_id,omitempty"`
-	FilePath       string       `gorm:"size:255;not null" json:"file_path"`   // 相对仓库目录的规范化 POSIX 路径，如 "dophi/order/v1/order.proto"
-	FileName       string       `gorm:"size:128;not null" json:"file_name"`
-	PackageName    string       `gorm:"size:128;not null;default:'';index:idx_traefik_pfile_pkg" json:"package_name"`
-	Content        string       `gorm:"type:text;not null" json:"content"`    // UTF-8 原文快照
-	SHA256         string       `gorm:"size:64;not null;index:idx_traefik_pfile_sha" json:"sha256"`
-	LineCount      int          `gorm:"not null;default:0" json:"line_count"`
-	CommitSHA      string       `gorm:"size:64;not null;default:''" json:"commit_sha"`
-	CurrentVersion int          `gorm:"not null;default:1" json:"current_version"`
-	SyncedAt       time.Time    `json:"synced_at"`
-	CreatedAt      time.Time    `json:"created_at"`
-	UpdatedAt      time.Time    `json:"updated_at"`
+	ID               uint64          `gorm:"primaryKey;autoIncrement" json:"id"`
+	GitRepoID        *uint64         `gorm:"index:idx_traefik_pfile_repo" json:"git_repo_id,omitempty"`
+	GitRepo          *GitRepo        `gorm:"foreignKey:GitRepoID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
+	BundleID         *uint64         `gorm:"index:idx_traefik_pfile_bundle" json:"bundle_id,omitempty"` // 部分唯一索引 uk_traefik_pfile_bundle_path (bundle_id, file_path) WHERE is_deleted = false
+	Bundle           *GitProtoBundle `gorm:"foreignKey:BundleID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
+	TargetSchemaName string          `gorm:"size:128;not null;default:'';index:idx_traefik_pfile_schema_name" json:"target_schema_name"`
+	SchemaID         *uint64         `gorm:"index:idx_traefik_pfile_schema" json:"schema_id,omitempty"` // 关联最近一次成功编译的 ProtoSchema
+	Schema           *ProtoSchema    `gorm:"foreignKey:SchemaID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"-"`
+	SubsystemID      *uint64         `gorm:"index:idx_traefik_pfile_sub" json:"subsystem_id,omitempty"`
+	FilePath         string          `gorm:"size:255;not null" json:"file_path"`   // 相对仓库根目录的规范化 POSIX 路径，如 "services/order/v1/order.proto"
+	FileName         string          `gorm:"size:128;not null" json:"file_name"`
+	PackageName      string          `gorm:"size:128;not null;default:'';index:idx_traefik_pfile_pkg" json:"package_name"`
+	Content          string          `gorm:"type:text;not null" json:"content"`    // UTF-8 原文快照
+	SHA256           string          `gorm:"size:64;not null;index:idx_traefik_pfile_sha" json:"sha256"`
+	LineCount        int             `gorm:"not null;default:0" json:"line_count"`
+	CommitSHA        string          `gorm:"size:64;not null;default:''" json:"commit_sha"`
+	CurrentVersion   int             `gorm:"not null;default:1" json:"current_version"`
+	LatestVersionID  *uint64         `json:"latest_version_id,omitempty"`
+	IsDeleted        bool            `gorm:"not null;default:false;index:idx_traefik_pfile_deleted" json:"is_deleted"`
+	SyncedAt         time.Time       `json:"synced_at"`
+	CreatedAt        time.Time       `json:"created_at"`
+	UpdatedAt        time.Time       `json:"updated_at"`
 }
 
 func (ProtoFile) TableName() string { return config.TablePrefix + "proto_files" }
 
-// 23. ProtoFileVersion Git-Only .proto 只读历史提交快照表 (traefik_proto_file_versions)
+// 23. ProtoFileVersion Git-Only .proto 只读历史提交快照表 (traefik_proto_file_versions, M25)
 type ProtoFileVersion struct {
 	ID            uint64     `gorm:"primaryKey;autoIncrement" json:"id"`
 	ProtoFileID   uint64     `gorm:"not null;uniqueIndex:uk_traefik_pfver_file_ver,priority:1;index:idx_traefik_pfver_file" json:"proto_file_id"`
@@ -1034,7 +1027,7 @@ type ProtoFileVersion struct {
 
 func (ProtoFileVersion) TableName() string { return config.TablePrefix + "proto_file_versions" }
 
-// 24. ProtoDocSymbol 活体接口参考文档符号与注释元数据表 (traefik_proto_doc_symbols, F-18)
+// 24. ProtoDocSymbol 活体接口参考文档符号与注释元数据表 (traefik_proto_doc_symbols, F-18 / M23)
 type ProtoDocSymbol struct {
 	ID                  uint64         `gorm:"primaryKey;autoIncrement" json:"id"`
 	SchemaID            uint64         `gorm:"not null;uniqueIndex:uk_traefik_pdoc_schema_kind_full,priority:1;index:idx_traefik_pdoc_schema" json:"schema_id"`
@@ -1062,38 +1055,42 @@ type ProtoDocSymbol struct {
 
 func (ProtoDocSymbol) TableName() string { return config.TablePrefix + "proto_doc_symbols" }
 
-// 25. CheckRule 可配置静态规范检查规则矩阵表 (traefik_check_rules)
+// 25. CheckRule 可配置静态规范检查规则矩阵表 (traefik_check_rules, M24)
 type CheckRule struct {
-	ID              uint64         `gorm:"primaryKey;autoIncrement" json:"id"`
-	RuleCode        string         `gorm:"size:64;not null;uniqueIndex:uk_traefik_check_rule_code" json:"rule_code"`
-	RuleName        string         `gorm:"size:128;not null" json:"rule_name"`
-	RuleType        string         `gorm:"size:32;not null;index:idx_traefik_check_rule_type;check:chk_traefik_check_rule_type,rule_type IN ('NAMING','COMMENT','VOCABULARY','STRUCTURE','DUPLICATE')" json:"rule_type"`
-	TargetScope     string         `gorm:"size:32;not null;default:'ALL'" json:"target_scope"` // FILE | PACKAGE | SERVICE | METHOD | MESSAGE | FIELD | ENUM | ENUM_VALUE | ALL
-	Pattern         string         `gorm:"size:512;not null;default:''" json:"pattern"`
-	DefaultSeverity string         `gorm:"size:16;not null;default:'WARNING';check:chk_traefik_check_rule_sev,default_severity IN ('ERROR','WARNING','INFO')" json:"default_severity"`
-	Enabled         bool           `gorm:"not null;default:true;index:idx_traefik_check_rule_enabled" json:"enabled"`
-	IsBuiltin       bool           `gorm:"not null;default:true" json:"is_builtin"`
-	ExemptionRule   datatypes.JSON `gorm:"type:jsonb;not null;default:'{}'" json:"exemption_rule"` // {exclude_paths, exclude_packages, exclude_categories}
-	Description     string         `gorm:"type:text;not null;default:''" json:"description"`
-	CreatedBy       uint           `gorm:"not null;default:0" json:"created_by"`
-	UpdatedBy       uint           `gorm:"not null;default:0" json:"updated_by"`
-	CreatedAt       time.Time      `json:"created_at"`
-	UpdatedAt       time.Time      `json:"updated_at"`
+	ID                 uint64         `gorm:"primaryKey;autoIncrement" json:"id"`
+	RuleCode           string         `gorm:"size:64;not null;uniqueIndex:uk_traefik_check_rule_code" json:"rule_code"`
+	RuleName           string         `gorm:"size:128;not null" json:"rule_name"`
+	RuleType           string         `gorm:"size:32;not null;index:idx_traefik_check_rule_type;check:chk_traefik_check_rule_type,rule_type IN ('NAMING','COMMENT','VOCABULARY','STRUCTURE','DUPLICATE')" json:"rule_type"`
+	TargetScope        string         `gorm:"size:32;not null;default:'ALL'" json:"target_scope"` // FILE | PACKAGE | SERVICE | METHOD | MESSAGE | FIELD | ENUM | ENUM_VALUE | ALL
+	Pattern            string         `gorm:"size:512;not null;default:''" json:"pattern"`
+	DefaultSeverity    string         `gorm:"size:16;not null;default:'WARNING';check:chk_traefik_check_rule_sev,default_severity IN ('ERROR','WARNING','INFO')" json:"default_severity"`
+	Enabled            bool           `gorm:"not null;default:true;index:idx_traefik_check_rule_enabled" json:"enabled"`
+	IsBuiltin          bool           `gorm:"not null;default:true" json:"is_builtin"`
+	SuggestionTemplate string         `gorm:"type:text;not null;default:''" json:"suggestion_template"` // 修复建议模板（支持占位符 {symbol} / {expected} / {example}）
+	ExemptionRule      datatypes.JSON `gorm:"type:jsonb;not null;default:'{}'" json:"exemption_rule"` // {exclude_paths, exclude_packages, exclude_categories}
+	Description        string         `gorm:"type:text;not null;default:''" json:"description"`
+	CreatedBy          uint           `gorm:"not null;default:0" json:"created_by"`
+	UpdatedBy          uint           `gorm:"not null;default:0" json:"updated_by"`
+	CreatedAt          time.Time      `json:"created_at"`
+	UpdatedAt          time.Time      `json:"updated_at"`
 }
 
 func (CheckRule) TableName() string { return config.TablePrefix + "check_rules" }
 
-// 26. VocabularyTerm 标准业务词根词典表 (traefik_vocabulary_terms，承接原 protohub vocabulary_terms)
+// 26. VocabularyTerm 标准业务词根词典表 (traefik_vocabulary_terms, M24，承接原 protohub vocabulary_terms)
 type VocabularyTerm struct {
 	ID               uint64         `gorm:"primaryKey;autoIncrement" json:"id"`
 	Term             string         `gorm:"size:64;not null;uniqueIndex:uk_traefik_vocab_term" json:"term"` // 标准小写词根，如 "order", "amt", "ts"
 	StandardFullName string         `gorm:"size:128;not null;default:''" json:"standard_full_name"`
 	ChineseName      string         `gorm:"size:128;not null;default:''" json:"chinese_name"`
-	Category         string         `gorm:"size:64;not null;default:'COMMON';index:idx_traefik_vocab_category" json:"category"` // COMMON | DOMAIN_TRADE | TYPE_SUFFIX | ABBREVIATION 等
-	Aliases          datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"aliases"`                                   // 常见不规范别名列表 ["amnt", "mony"]
-	IsApproved       bool           `gorm:"not null;default:true;index:idx_traefik_vocab_approved" json:"is_approved"`         // true=已审核标准词根；false=LLM 建议待审词根
-	Source           string         `gorm:"size:32;not null;default:'MANUAL'" json:"source"`                                   // MANUAL | PROTOHUB_IMPORT | LLM_SUGGESTED
+	Domain           string         `gorm:"size:64;not null;default:'COMMON';index:idx_traefik_vocab_domain" json:"domain"`       // 所属业务域，承接 protohub domain 列
+	Category         string         `gorm:"size:64;not null;default:'COMMON';index:idx_traefik_vocab_category" json:"category"`   // COMMON | DOMAIN_TRADE | TYPE_SUFFIX | ABBREVIATION 等
+	Aliases          datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"aliases"`                                     // 常见不规范别名列表 ["amnt", "mony"]
+	SimilarTerms     datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"similar_terms"`                               // 相似可比词根/相近词推荐 []string
+	DescriptionEn    string         `gorm:"type:text;not null;default:''" json:"description_en"`                                 // 英文标准释义（承接 protohub description_en）
 	Description      string         `gorm:"type:text;not null;default:''" json:"description"`
+	IsApproved       bool           `gorm:"not null;default:true;index:idx_traefik_vocab_approved" json:"is_approved"`           // true=已审核标准词根；false=LLM 建议待审词根
+	Source           string         `gorm:"size:32;not null;default:'MANUAL'" json:"source"`                                     // MANUAL | BUILTIN_SEED | PROTOHUB_IMPORT | LLM_SUGGESTED
 	CreatedBy        uint           `gorm:"not null;default:0" json:"created_by"`
 	UpdatedBy        uint           `gorm:"not null;default:0" json:"updated_by"`
 	CreatedAt        time.Time      `json:"created_at"`
@@ -1102,35 +1099,37 @@ type VocabularyTerm struct {
 
 func (VocabularyTerm) TableName() string { return config.TablePrefix + "vocabulary_terms" }
 
-// 27. CheckReport 静态规范与重复结构体检报告表 (traefik_check_reports)
+// 27. CheckReport 静态规范与重复结构体检报告表 (traefik_check_reports, M24)
 type CheckReport struct {
-	ID                  uint64     `gorm:"primaryKey;autoIncrement" json:"id"`
-	TriggerSource       string     `gorm:"size:24;not null;index:idx_traefik_chk_rpt_trigger;check:chk_traefik_chk_rpt_trigger,trigger_source IN ('GIT_SYNC','MR_GATE','MANUAL_SCAN','CI_API')" json:"trigger_source"`
-	GitRepoID           *uint64    `gorm:"index:idx_traefik_chk_rpt_repo" json:"git_repo_id,omitempty"`
-	GitRepo             *GitRepo   `gorm:"foreignKey:GitRepoID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"-"`
-	ProtoFileID         *uint64    `gorm:"index:idx_traefik_chk_rpt_pfile" json:"proto_file_id,omitempty"`
-	ProtoFile           *ProtoFile `gorm:"foreignKey:ProtoFileID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"-"`
-	MRCheckRunID        *uint64    `gorm:"index:idx_traefik_mr_chk_run" json:"mr_check_run_id,omitempty"`
-	SchemaID            *uint64    `gorm:"index:idx_traefik_chk_rpt_schema" json:"schema_id,omitempty"`
-	CommitSHA           string     `gorm:"size:64;not null;default:''" json:"commit_sha"`
-	Passed              bool       `gorm:"not null;default:false;index:idx_traefik_chk_rpt_passed" json:"passed"`
-	TotalFiles          int        `gorm:"not null;default:0" json:"total_files"`
-	ErrorCount          int        `gorm:"not null;default:0" json:"error_count"`
-	WarningCount        int        `gorm:"not null;default:0" json:"warning_count"`
-	InfoCount           int        `gorm:"not null;default:0" json:"info_count"`
-	DuplicateGroupCount int        `gorm:"not null;default:0" json:"duplicate_group_count"`
-	ComplianceScore     float64    `gorm:"not null;default:100" json:"compliance_score"`
-	LLMUsed             bool       `gorm:"not null;default:false" json:"llm_used"`
-	LLMStatus           string     `gorm:"size:24;not null;default:'SKIPPED'" json:"llm_status"` // SKIPPED | HIT_CACHE | SUCCEEDED | TIMEOUT_FALLBACK | ERROR_FALLBACK
-	DurationMs          int        `gorm:"not null;default:0" json:"duration_ms"`
-	CheckedBy           uint       `gorm:"not null;default:0" json:"checked_by"`
-	CheckedAt           time.Time  `json:"checked_at"`
-	CreatedAt           time.Time  `json:"created_at"`
+	ID                  uint64          `gorm:"primaryKey;autoIncrement" json:"id"`
+	TriggerSource       string          `gorm:"size:24;not null;index:idx_traefik_chk_rpt_trigger;check:chk_traefik_chk_rpt_trigger,trigger_source IN ('GIT_SYNC','MR_GATE','MANUAL_SCAN','CI_API')" json:"trigger_source"`
+	GitRepoID           *uint64         `gorm:"index:idx_traefik_chk_rpt_repo" json:"git_repo_id,omitempty"`
+	GitRepo             *GitRepo        `gorm:"foreignKey:GitRepoID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"-"`
+	BundleID            *uint64         `gorm:"index:idx_traefik_chk_rpt_bundle" json:"bundle_id,omitempty"`
+	Bundle              *GitProtoBundle `gorm:"foreignKey:BundleID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"-"`
+	ProtoFileID         *uint64         `gorm:"index:idx_traefik_chk_rpt_pfile" json:"proto_file_id,omitempty"`
+	ProtoFile           *ProtoFile      `gorm:"foreignKey:ProtoFileID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"-"`
+	MRCheckRunID        *uint64         `gorm:"index:idx_traefik_mr_chk_run" json:"mr_check_run_id,omitempty"`
+	SchemaID            *uint64         `gorm:"index:idx_traefik_chk_rpt_schema" json:"schema_id,omitempty"`
+	CommitSHA           string          `gorm:"size:64;not null;default:''" json:"commit_sha"`
+	Passed              bool            `gorm:"not null;default:false;index:idx_traefik_chk_rpt_passed" json:"passed"`
+	TotalFiles          int             `gorm:"not null;default:0" json:"total_files"`
+	ErrorCount          int             `gorm:"not null;default:0" json:"error_count"`
+	WarningCount        int             `gorm:"not null;default:0" json:"warning_count"`
+	InfoCount           int             `gorm:"not null;default:0" json:"info_count"`
+	DuplicateGroupCount int             `gorm:"not null;default:0" json:"duplicate_group_count"`
+	ComplianceScore     float64         `gorm:"not null;default:100" json:"compliance_score"`
+	LLMUsed             bool            `gorm:"not null;default:false" json:"llm_used"`
+	LLMStatus           string          `gorm:"size:24;not null;default:'SKIPPED'" json:"llm_status"` // SKIPPED | HIT_CACHE | SUCCEEDED | TIMEOUT_FALLBACK | ERROR_FALLBACK
+	DurationMs          int             `gorm:"not null;default:0" json:"duration_ms"`
+	CheckedBy           uint            `gorm:"not null;default:0" json:"checked_by"`
+	CheckedAt           time.Time       `json:"checked_at"`
+	CreatedAt           time.Time       `json:"created_at"`
 }
 
 func (CheckReport) TableName() string { return config.TablePrefix + "check_reports" }
 
-// 28. CheckViolation 静态检查明细违规条目表 (traefik_check_violations)
+// 28. CheckViolation 静态检查明细违规条目表 (traefik_check_violations, M24)
 type CheckViolation struct {
 	ID                   uint64       `gorm:"primaryKey;autoIncrement" json:"id"`
 	ReportID             uint64       `gorm:"not null;index:idx_traefik_violation_report" json:"report_id"`
@@ -1153,41 +1152,97 @@ type CheckViolation struct {
 
 func (CheckViolation) TableName() string { return config.TablePrefix + "check_violations" }
 
-// 29. Notification 持久化通知收件箱与外发回执表 (traefik_notifications)
+// 29. MRCheckRun Git Merge Request 四合一静态门禁执行记录表 (traefik_mr_check_runs, M26)
+// 注意：幂等组合唯一索引 uk_traefik_mr_dedup ON (git_repo_id, COALESCE(bundle_id, 0), event_phase, head_commit_sha, target_head_sha) 由 models/db.go SQL 块维护
+type MRCheckRun struct {
+	ID                    uint64          `gorm:"primaryKey;autoIncrement" json:"id"`
+	GitRepoID             uint64          `gorm:"not null;index:idx_traefik_mr_repo" json:"git_repo_id"`
+	GitRepo               *GitRepo        `gorm:"foreignKey:GitRepoID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"git_repo,omitempty"`
+	BundleID              *uint64         `gorm:"index:idx_traefik_mr_bundle" json:"bundle_id,omitempty"`
+	Bundle                *GitProtoBundle `gorm:"foreignKey:BundleID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"bundle,omitempty"`
+	EventPhase            string          `gorm:"size:16;not null;default:'MR_GATE';check:chk_traefik_mr_phase,event_phase IN ('MR_GATE','MAIN_MERGE')" json:"event_phase"`
+	MRIID                 int             `gorm:"not null;index:idx_traefik_mr_iid" json:"mr_iid"`
+	MRTitle               string          `gorm:"size:255;not null;default:''" json:"mr_title"`
+	MRURL                 string          `gorm:"size:512;not null;default:''" json:"mr_url"`
+	SourceBranch          string          `gorm:"size:128;not null" json:"source_branch"`
+	TargetBranch          string          `gorm:"size:128;not null" json:"target_branch"`
+	AuthorName            string          `gorm:"size:128;not null;default:''" json:"author_name"`
+	AuthorEmail           string          `gorm:"size:255;not null;default:''" json:"author_email"`
+	HeadCommitSHA         string          `gorm:"size:64;not null;index:idx_traefik_mr_head_sha" json:"head_commit_sha"`
+	TargetHeadSHA         string          `gorm:"size:64;not null;default:''" json:"target_head_sha"`     // 目标分支基准头 SHA；避免 Fast-Forward 同 SHA 合并被 MR 阶段去重吞掉
+	RemoteCommentID       string          `gorm:"size:64;not null;default:''" json:"remote_comment_id"`   // 托管平台 Bot 评论 ID，实现同 MR 新 Push 原位 upsert 更新
+	AttemptCount          int             `gorm:"not null;default:1" json:"attempt_count"`
+	EventAction           string          `gorm:"size:32;not null;default:'open'" json:"event_action"` // open | update | reopen | merge | manual_rerun
+	Status                string          `gorm:"size:16;not null;default:'PENDING';index:idx_traefik_mr_status;check:chk_traefik_mr_status,status IN ('PENDING','RUNNING','PASSED','FAILED','OVERRIDDEN','ERROR')" json:"status"`
+	CompilePassed         bool            `gorm:"not null;default:false" json:"compile_passed"`
+	LintPassed            bool            `gorm:"not null;default:false" json:"lint_passed"`
+	DuplicatePassed       bool            `gorm:"not null;default:true" json:"duplicate_passed"` // 默认 WARNING 不阻断，可按配置升级或保留提醒
+	BreakingPassed        bool            `gorm:"not null;default:false" json:"breaking_passed"`
+	CompileErrors         datatypes.JSON  `gorm:"type:jsonb;not null;default:'[]'" json:"compile_errors"`          // []CompileDiagnosticDTO
+	CheckReportID         *uint64         `gorm:"index:idx_traefik_mr_report" json:"check_report_id,omitempty"`
+	CheckReport           *CheckReport    `gorm:"foreignKey:CheckReportID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"-"`
+	BreakingReportJSON    datatypes.JSON  `gorm:"type:jsonb;not null;default:'{}'" json:"breaking_report_json"`    // {breaking_rules, affected_dependents}
+	DuplicateFindingsJSON datatypes.JSON  `gorm:"type:jsonb;not null;default:'[]'" json:"duplicate_findings_json"` // []DuplicateGroupDTO
+	ChangedFilesJSON      datatypes.JSON  `gorm:"type:jsonb;not null;default:'[]'" json:"changed_files_json"`      // [{path, change_type, old_path}]
+	ReportMarkdown        string          `gorm:"type:text;not null;default:''" json:"report_markdown"`
+	CheckRunDurationMs    int             `gorm:"not null;default:0" json:"check_run_duration_ms"`
+	OverriddenByUserID    *uint           `json:"overridden_by_user_id,omitempty"`
+	OverriddenByName      string          `gorm:"size:128;not null;default:''" json:"overridden_by_name,omitempty"`
+	OverrideReason        string          `gorm:"type:text;not null;default:''" json:"override_reason,omitempty"`
+	OverriddenAt          *time.Time      `json:"overridden_at,omitempty"`
+	CompiledSchemaID      *uint64         `gorm:"index:idx_traefik_mr_schema" json:"compiled_schema_id,omitempty"` // Merge 后自动入库的新 ProtoSchema.ID
+	StartedAt             *time.Time      `json:"started_at"`
+	FinishedAt            *time.Time      `json:"finished_at"`
+	CreatedAt             time.Time       `json:"created_at"`
+	UpdatedAt             time.Time       `json:"updated_at"`
+}
+
+func (MRCheckRun) TableName() string { return config.TablePrefix + "mr_check_runs" }
+
+// 30. Notification 持久化通知收件箱与外发回执表 (traefik_notifications, M26)
 type Notification struct {
-	ID                     uint64     `gorm:"primaryKey;autoIncrement" json:"id"`
-	RecipientUserID        uint       `gorm:"not null;index:idx_traefik_notif_user_read,priority:1;index:idx_traefik_notif_user_created,priority:1" json:"recipient_user_id"`
-	RecipientUser          *User      `gorm:"foreignKey:RecipientUserID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
-	EventType              string     `gorm:"size:48;not null;index:idx_traefik_notif_event" json:"event_type"` // MR_GATE_FAILED | MR_GATE_PASSED | MR_GATE_OVERRIDDEN | GIT_SYNC_FAILED | GIT_SYNC_MERGED | BREAKING_IMPACT_ALERT | REPLAY_REGRESSION_ALERT
-	Severity               string     `gorm:"size:16;not null;default:'INFO';check:chk_traefik_notif_sev,severity IN ('CRITICAL','WARNING','INFO')" json:"severity"`
-	Title                  string     `gorm:"size:255;not null" json:"title"`
-	BodyMarkdown           string     `gorm:"type:text;not null;default:''" json:"body_markdown"`
-	LinkURL                string     `gorm:"size:512;not null;default:''" json:"link_url"`
-	ResourceType           string     `gorm:"size:32;not null;default:''" json:"resource_type"` // MR_CHECK_RUN | GIT_REPO | PROTO_SCHEMA | REPLAY_TASK
-	ResourceID             uint64     `gorm:"not null;default:0" json:"resource_id"`
-	IsRead                 bool       `gorm:"not null;default:false;index:idx_traefik_notif_user_read,priority:2" json:"is_read"`
-	ReadAt                 *time.Time `json:"read_at"`
-	ExternalChannel        string     `gorm:"size:24;not null;default:'WEB_ONLY'" json:"external_channel"` // WEB_ONLY | CODE_NOTIFIER | SMTP
-	ExternalDispatchStatus string     `gorm:"size:16;not null;default:'SKIPPED';check:chk_traefik_notif_ext_status,external_dispatch_status IN ('SKIPPED','PENDING','SENT','FAILED')" json:"external_dispatch_status"`
-	ExternalError          string     `gorm:"size:512;not null;default:''" json:"external_error"`
-	CreatedAt              time.Time  `gorm:"index:idx_traefik_notif_user_created,priority:2" json:"created_at"`
+	ID              uint64     `gorm:"primaryKey;autoIncrement" json:"id"`
+	RecipientUserID uint       `gorm:"not null;index:idx_traefik_notif_user_read,priority:1;index:idx_traefik_notif_user_created,priority:1" json:"recipient_user_id"`
+	RecipientUser   *User      `gorm:"foreignKey:RecipientUserID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
+	EventType       string     `gorm:"size:48;not null;index:idx_traefik_notif_event" json:"event_type"` // MR_GATE_FAILED | MR_GATE_PASSED | MR_GATE_OVERRIDDEN | GIT_SYNC_FAILED | GIT_SYNC_MERGED | BREAKING_IMPACT_ALERT | REPLAY_REGRESSION_ALERT
+	Severity        string     `gorm:"size:16;not null;default:'INFO';check:chk_traefik_notif_sev,severity IN ('CRITICAL','WARNING','INFO')" json:"severity"`
+	Title           string     `gorm:"size:255;not null" json:"title"`
+	BodyMarkdown    string     `gorm:"type:text;not null;default:''" json:"body_markdown"`
+	LinkURL         string     `gorm:"size:512;not null;default:''" json:"link_url"`
+	ResourceType    string     `gorm:"size:32;not null;default:''" json:"resource_type"` // MR_CHECK_RUN | GIT_REPO | PROTO_SCHEMA | REPLAY_TASK
+	ResourceID      uint64     `gorm:"not null;default:0" json:"resource_id"`
+	IsRead          bool       `gorm:"not null;default:false;index:idx_traefik_notif_user_read,priority:2" json:"is_read"`
+	ReadAt          *time.Time `json:"read_at"`
+	ExternalChannel string     `gorm:"size:24;not null;default:'WEB_ONLY'" json:"external_channel"` // WEB_ONLY | CODE_NOTIFIER | SMTP
+	EmailStatus     string     `gorm:"size:16;not null;default:'SKIPPED';check:chk_traefik_notif_email_status,email_status IN ('SKIPPED','PENDING','SENT','FAILED')" json:"email_status"`
+	EmailError      string     `gorm:"size:512;not null;default:''" json:"email_error"`
+	CreatedAt       time.Time  `gorm:"index:idx_traefik_notif_user_created,priority:2" json:"created_at"`
 }
 
 func (Notification) TableName() string { return config.TablePrefix + "notifications" }
 ```
 
 > **附：`protohub` `vocabulary_terms` 一次性迁移字段对照表 (`scripts/migrate_protohub_vocab`)**：
+> - 默认源库路径优先指向运维实际 SQLite 文件 **`../protohub/storage/database/protohub.db`**（仓库根目录遗留 `protohub/storage/protohub.db` 为 `0B` 空占位文件），同时支持 `--json-path` 离线词库 JSON 与内置 seed 导入：
 > | 原 `protohub.vocabulary_terms` 列 | 目标 `traefik_vocabulary_terms` 列 | 转换规则 |
 > | :--- | :--- | :--- |
 > | `term` (`TEXT UNIQUE`) | `term` (`VARCHAR(64) UNIQUE`) | `strings.ToLower(strings.TrimSpace(term))`；幂等冲突策略 `ON CONFLICT (term) DO NOTHING` |
+> | `aliases` (`TEXT / JSON`) | `aliases` (`JSONB`) | 解析 JSON 数组或逗号分隔字符串；归一化小写去重写入 |
+> | `similar_terms` (`TEXT / JSON`) | `similar_terms` (`JSONB`) | 解析相似推荐词列表；空值存 `'[]'` |
 > | `description` (`TEXT`) | `description` (`TEXT`) + 辅助拆解 `standard_full_name` | 原样保留；未超出 128 字符时同步摘要写入 |
+> | `description_en` (`TEXT`) | `description_en` (`TEXT`) | 原样保留英文释义 |
+> | `domain` (`TEXT`) | `domain` (`VARCHAR(64)`) | 空值回退 `'COMMON'` |
 > | `category` (`TEXT`) | `category` (`VARCHAR(64)`) | 空值回退 `'COMMON'`，其余保留 |
 > | `created_at` (`TEXT`) | `created_at` (`TIMESTAMPTZ`), `is_approved=true`, `source='PROTOHUB_IMPORT'` | ISO8601 解析；解析失败回退迁移执行时间 |
 
 > **附：治理配置表与自定义 GIN 索引迁移说明**：
 > 1. 工程初始化模板自带的 `TraefikSetting`（`traefik_settings`）保留用于持久化管理员可调模块治理参数：
 >    - 既有运维参数：`traffic_retention_days`、`default_max_frames`、`default_max_duration_sec`、新挂载进程默认预挂策略 `default_probe_desired_state_shared='ARMED'` / `default_probe_desired_state_private='ARMED'`、以及 `F-27` CI 门禁机器凭据摘要 `ci_gate_token_sha256`（**仅存 SHA-256 哈希，永不存明文且不在通用配置列表中回显**）；
->    - ADR-18 新增可选协同配置键：`llm_enabled` (`true|false`)、`llm_base_url`、`llm_model`、`llm_timeout_ms`（默认 `3000`）、`llm_api_key_enc`（AES-256-GCM 密文）；`notifier_enabled`、`code_notifier_url`、`smtp_host`、`smtp_port`、`smtp_username`、`smtp_from`、`smtp_password_enc`（AES-256-GCM 密文）；其中所有 `*_enc` / `*_secret` / `*_sha256` 键均强制禁止在 `GET /api/admin/settings` 回显明文或密文，仅返回脱敏状态标识（如 `ci_token_configured` / `llm_key_configured` / `smtp_password_configured`）且拒绝通过通用 `PUT /api/admin/settings` 直接明文写入保留摘要键；
+>    - ADR-18 (`v1.2.0`) 新增可选协同配置键（均使用环境主密钥 **`TRAEFIK_CRYPTO_KEY`** 执行 AES-256-GCM 加密，且放宽配置值长度上限，如 `outbound_trusted_cidrs` 支持 `4096` 字符）：
+>      - **出站信任白名单**：`outbound_trusted_cidrs`（逗号分隔的内网 CIDR / 精确 `host:port`，供 `SafeDialer` 在永久阻断云元数据与组播段后放行同内网 GitLab、内网 LLM 与**跨机独立部署的 `code-notifier` 机器**）；
+>      - **可选 LLM 建议**：`llm_enabled` (`true|false`)、`llm_base_url`、`llm_model`、`llm_timeout_ms`（默认 `3000`）、`llm_api_key_enc`（AES-256-GCM 密文）；
+>      - **跨机 `code-notifier` / SMTP 邮件外发**：`code_notifier_enabled` (`true|false`)、`code_notifier_url`（指向独立机器上的 `code-notifier`，服务端发起 `POST <url>/api/notify/email` 时校验非空 `markdown_content`、HTML 正文与解析后的真实收件邮箱）、`code_notifier_token_enc`（AES-256-GCM 密文）；`smtp_host`、`smtp_port`、`smtp_username`、`smtp_from`、`smtp_password_enc`（AES-256-GCM 密文）；
+>      - **严密脱敏与审计红线**：`handlers/settings.go` 对所有 `*_enc` / `*_secret` / `*_sha256` 键在 `GET /api/admin/settings` 中强制过滤，仅返回布尔状态位（`ci_token_configured` / `llm_key_configured` / `code_notifier_token_configured` / `smtp_password_configured`），拒绝通过通用配置直改摘要键，且写入 `commonAudit` 前将所有密钥替换成 `***REDACTED***` 占位符；
 >    - 模板示例占位表 `traefik_items` 在阶段四 M1 迁移时已彻底移除；
 > 2. `traefik_traffic_records` 分区母表 DDL 由独立 SQL 执行（M20 起幂等追加 `dst_contract_id BIGINT` 及索引 `idx_traefik_tr_dst_contract`）：
 >    ```sql
@@ -1279,14 +1334,15 @@ func (Notification) TableName() string { return config.TablePrefix + "notificati
 | `traefik_traffic_records` | `idx_traefik_tr_dst_contract` | `BTREE (dst_contract_id)` | **F-05.1 (ADR-16)**：加速按多实现契约筛选流量记录与 `IMPL_UNRESOLVED` 离线归因对账 |
 | `traefik_traffic_records` | `idx_traefik_tr_payload_gin` | `GIN (payload_json jsonb_path_ops)` | **F-11**：加速 `payload_json` 结构化请求/应答载荷的明文键值条件检索 |
 | `traefik_subsystems` / `traefik_modules` | `chk_traefik_subsystems_layer` / `chk_traefik_modules_layer` | `CHECK (layer_level >= 0 AND layer_level <= 99)` | **M22 (ADR-18)**：架构层级值域约束（`0` 为未分层不限制） |
-| `traefik_git_repos` | `uk_traefik_git_repos_name` / `uk_traefik_git_repos_target_schema` | `UNIQUE (name)` / `UNIQUE (target_schema_name)` | **F-21 & F-29 (ADR-18)**：防止多仓库配置指向同一 `target_schema_name` 触发并发动池竞争 |
-| `traefik_mr_check_runs` | `uk_traefik_mr_repo_head_sha` / `chk_traefik_mr_status` | `UNIQUE (git_repo_id, head_commit_sha)`；`CHECK (status IN ('PENDING','RUNNING','PASSED','FAILED','OVERRIDDEN','ERROR'))` | **F-29 & F-31 (ADR-18)**：同仓同 Commit Webhook 强幂等去重；门禁状态机枚举强约束 |
-| `traefik_proto_files` | `uk_traefik_pfile_repo_path` | `UNIQUE (git_repo_id, file_path) WHERE git_repo_id IS NOT NULL` | **F-28 (ADR-18)**：同仓内部相对 POSIX 路径唯一（Git-Only 只读，无写锁字段） |
-| `traefik_proto_file_versions` | `uk_traefik_pfver_file_ver` | `UNIQUE (proto_file_id, version)` | **F-28 (ADR-18)**：同源文件历史版本严格递增不冲突 |
-| `traefik_proto_doc_symbols` | `uk_traefik_pdoc_schema_kind_full` | `UNIQUE (schema_id, symbol_kind, full_name)` | **F-18 (ADR-18)**：同一编译版描述集内每类文档符号唯一，支撑毫秒级服务文档与枚举字典检索 |
-| `traefik_check_rules` | `uk_traefik_check_rule_code` | `UNIQUE (rule_code)` | **F-30 (ADR-18)**：静态规范规则编码全局唯一，支持内置规则幂等初始化 |
-| `traefik_vocabulary_terms` | `uk_traefik_vocab_term` | `UNIQUE (term)` | **F-30 (ADR-18)**：标准小写词根全局唯一，保证 `protohub` 迁移 `ON CONFLICT DO NOTHING` 幂等 |
-| `traefik_notifications` | `idx_traefik_notif_user_read` | `BTREE (recipient_user_id, is_read, created_at DESC)` | **F-31 / M25 (ADR-18)**：支撑全站未读通知角标与用户分页收件箱毫秒级覆盖扫描 |
+| `traefik_git_repos` | `uk_traefik_git_repos_name` | `UNIQUE (name)` | **F-21 & F-29 (ADR-18)**：Git 仓库连接配置全局唯一 |
+| `traefik_git_proto_bundles` | `uk_traefik_git_bundle_repo_name` / `uk_traefik_git_bundle_target_schema` | `UNIQUE (git_repo_id, name)` / `UNIQUE (target_schema_name)` | **F-21 & F-29 (ADR-18 v1.2)**：支持 Monorepo 单仓多协议包编译入池且不同包输出 `target_schema_name` 全局互斥防并发覆盖 |
+| `traefik_mr_check_runs` | `uk_traefik_mr_dedup` / `chk_traefik_mr_status` | `UNIQUE (git_repo_id, COALESCE(bundle_id, 0), event_phase, head_commit_sha, target_head_sha)`；`CHECK (status IN ('PENDING','RUNNING','PASSED','FAILED','OVERRIDDEN','ERROR'))` | **F-29 & F-31 (ADR-18 v1.2 / M26)**：区分 Bundle、`MR_GATE`/`MAIN_MERGE` 与目标分支头防止 Fast-Forward 合并同 SHA 误丢；门禁状态机枚举强约束 |
+| `traefik_proto_files` | `uk_traefik_pfile_bundle_path` | `UNIQUE (bundle_id, file_path) WHERE is_deleted = false` | **F-28 (ADR-18 / M25)**：同 Bundle 有效文件相对 POSIX 路径唯一（Git-Only 只读，无写锁字段） |
+| `traefik_proto_file_versions` | `uk_traefik_pfver_file_ver` | `UNIQUE (proto_file_id, version)` | **F-28 (ADR-18 / M25)**：同源文件历史版本严格递增不冲突 |
+| `traefik_proto_doc_symbols` | `uk_traefik_pdoc_schema_kind_full` | `UNIQUE (schema_id, symbol_kind, full_name)` | **F-18 (ADR-18 / M23)**：同一编译版描述集内每类文档符号唯一，支撑毫秒级服务文档与枚举字典检索 |
+| `traefik_check_rules` | `uk_traefik_check_rule_code` | `UNIQUE (rule_code)` | **F-30 (ADR-18 / M24)**：静态规范规则编码全局唯一，支持内置规则幂等初始化 |
+| `traefik_vocabulary_terms` | `uk_traefik_vocab_term` | `UNIQUE (term)` | **F-30 (ADR-18 / M24)**：标准小写词根全局唯一，保证 `protohub` 迁移 `ON CONFLICT DO NOTHING` 幂等 |
+| `traefik_notifications` | `idx_traefik_notif_user_read` | `BTREE (recipient_user_id, is_read, created_at DESC)` | **F-31 / M26 (ADR-18)**：支撑全站未读通知角标与用户分页收件箱毫秒级覆盖扫描 |
 
 ---
 
@@ -1319,8 +1375,8 @@ func (Notification) TableName() string { return config.TablePrefix + "notificati
 | 发布/重置团队基准布局 (`SHARED` `TopologyLayout`) | 1. 非 `traefik_admin` 调用 `PUT/DELETE /api/arch/topology/layouts/canonical`；<br>2. `expected_revision` 与当前 `revision` 不一致或并发首次创建 | `403 Forbidden`<br>`409 LAYOUT_REVISION_CONFLICT` | `requireAdmin` 守卫 + 事务内 `SELECT ... FOR UPDATE` 乐观锁 + `uk_traefik_topo_layout_shared` 兜底；审计仅记录摘要（视图、坐标条目数、`structure_version`、`revision`） |
 | 读写个人视图书签 (`PRIVATE` `TopologyLayout`) | 1. 非 `owner_id` 本人读取/修改他人书签，或非本人且非管理员删除他人书签；<br>2. 单人书签总数超过 `20` 个；<br>3. 同视图重名；<br>4. 请求体超过 `1MB` | `403 Forbidden`<br>`400 PERSONAL_VIEW_QUOTA_EXCEEDED`<br>`409 Conflict`<br>`413 PAYLOAD_TOO_LARGE` | 应用层 `owner_id` Anti-IDOR 校验 + 事务内 `pg_advisory_xact_lock(hashtext('traefik_topo_layout_quota'), owner_id)` 串行化配额计数 + `uk_traefik_topo_layout_private_name` / `uk_traefik_topo_layout_private_default` + 专用 DTO 绑定防批量赋值 |
 | CI/CD 门禁评估 `POST /api/gates/evaluate` | 1. 目标 Agent 离线、进程 `NEED_RECONNECT` 或排他锁等待超过 `wait_lease_seconds` 仍繁忙；<br>2. 重放检出未报备 `Violation` 或套件 `FAILED Diff / MOCK_MISS` | `503` (环境忙/未就绪)<br>`422` (质量门禁阻断) | 服务端有界退避排队获取 `REPLAY` 租约，区分环境瞬态不可用 (`503`) 与代码违规红牌 (`422`) |
-| 架构依赖层级与成环检查 (`POST/PUT /api/arch/modules/:id/dependencies`, `PUT subsystems/modules`) | 1. 设置 `layer_level > 0` 后出现**下层模块依赖上层模块**（`consumer.EffectiveLayer < provider.EffectiveLayer`）或调整层级造成既有依赖/契约倒挂；<br>2. 模块间 `DEPEND` 边构成**有向环** (`A -> B -> A`)；<br>3. `REALIZATION` 实现模块层级低于接口库（`impl.EffectiveLayer < contract_lib.EffectiveLayer`） | `409 Conflict` | 返回结构化错误码 `ERR_LAYER_VIOLATION` / `ERR_CYCLIC_DEPENDENCY` / `ERR_REALIZATION_LAYER_INVERSION` 与冲突路径节点详情 |
-| Git 仓配置、Sync、Webhook 与路径校验 (`traefik_git_repos` / `traefik_proto_files`) | 1. Webhook Header `X-Gitlab-Token` / `X-Hub-Signature-256` / `X-Gitea-Signature` 校验失败；<br>2. 出站 URL 解析命中回环/私网/链路本地（`SafeDialer` 拦截 SSRF）或 `proto_include_dirs` / `file_path` 含 `..` 路径穿越；<br>3. `TargetSchemaName` 与既有仓冲突或正在运行全量同步并发争用 | `401 / 403`<br>`400 Bad Request`<br>`409 Conflict` | `WebhookSecret` 解密后用 `subtle.ConstantTimeCompare` 常量时间比对；删除 `GitRepo` 级联 `CASCADE` 清理只读 `ProtoFile` / `MRCheckRun` 并对已入池 `ProtoSchema.git_repo_id` 执行 `ON DELETE SET NULL` |
+| 架构依赖层级与成环检查 (`POST/PUT /api/arch/modules/:id/dependencies`, `PUT subsystems/modules`, `module-services`) | 1. 设置 `layer_level > 0` 后出现**下层模块依赖上层模块**（`consumer.EffectiveLayer < provider.EffectiveLayer`）或调整层级/绑定多实现 `ContractID` 时造成既有 `DEPEND` / `DISPATCH` 消费方层级倒挂；<br>2. 模块间 `DEPEND` 边构成**有向环** (`A -> B -> A`)；<br>3. `REALIZATION` 实现模块层级低于接口库（`impl.EffectiveLayer < contract_lib.EffectiveLayer`） | `409 Conflict` | 返回结构化错误码 `ERR_LAYER_VIOLATION` / `ERR_CYCLIC_DEPENDENCY` / `ERR_REALIZATION_LAYER_INVERSION` 与冲突路径节点详情 |
+| Git 仓/Bundle 配置、Sync、Webhook 与路径校验 (`traefik_git_repos` / `traefik_git_proto_bundles` / `traefik_proto_files`) | 1. 优先匹配 `/api/webhooks/git-mr/:repoId` 并对 Webhook Header `X-Gitlab-Token` / `X-Hub-Signature-256` / `X-Gitea-Signature` 执行 `subtle.ConstantTimeCompare` 校验；<br>2. 出站 URL 解析命中云元数据或未列入 `outbound_trusted_cidrs` 的回环/私网（`SafeDialer` 拦截 SSRF）或 `proto_include_dirs` / `file_path` 含 `..` 路径穿越；<br>3. `GitProtoBundle.TargetSchemaName` 与既有 Bundle 冲突或正在运行全量同步并发争用 | `401 / 403`<br>`400 Bad Request`<br>`409 Conflict` | 使用 `TRAEFIK_CRYPTO_KEY` AES-256-GCM 解密校验凭据；删除 `GitRepo` 级联 `CASCADE` 清理 `GitProtoBundle` / `ProtoFile` / `MRCheckRun`，并对已入池 `ProtoSchema.git_repo_id` / `source_bundle_id` 执行 `ON DELETE SET NULL` |
 | MR 门禁人工豁免 `POST /api/mr-check-runs/:id/override` | 1. 非 `traefik_admin` 尝试覆盖豁免；<br>2. 当前状态非 `FAILED`、包含 `compile_passed=false` 语法编译错误或 `override_reason` 缺失 | `403 Forbidden`<br>`409 / 400` | `requireAdmin` + `override_reason` 必填 + 禁止豁免语法编译失败（仅可豁免 Breaking/规则冲突）+ 强制产生 `P1` 级高危审计并向 Git 平台回写豁免状态 |
 | 静态规则与通知收件箱 (`CheckRule` / `Notification`) | 1. 非 `traefik_admin` 增删改 `CheckRule` 或 `VocabularyTerm`，或尝试删除 `is_builtin=true` 内置规则；<br>2. 普通用户读写他人 `Notification`（IDOR） | `403 Forbidden`<br>`409 Conflict` | `requireAdmin` + 内置规则仅允许关闭 `enabled=false` 或调规则正则，禁止物理删除；通知接口强制 `WHERE recipient_user_id = currentUserID` 过滤 |
 
