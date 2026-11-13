@@ -1,12 +1,12 @@
 # 架构与活体契约治理 (`code-traefik`) 架构元素建模与拓扑一致性验证设计
 
 - **文档编号**：`03-architecture-elements-and-topology.md`
-- **文档版本**：v1.6.0
-- **更新日期**：2026-11-11
+- **文档版本**：v1.7.0
+- **更新日期**：2026-11-13
 - **归属阶段**：阶段二：系统架构与数据模型设计 (`02-design`)
-- **状态**：已批准（待 M20 实施）(Approved for M20)
-- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.15.0)、[`01-system-architecture.md`](./01-system-architecture.md)、[`09-arch-process-ssot-and-ebpf-premount-standby-adr.md`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md) (ADR-09 v1.1.0)、[`15-scalable-topology-focus-and-layout-persistence-adr.md`](../05-adr/15-scalable-topology-focus-and-layout-persistence-adr.md) (ADR-15 v1.1.0)、[`16-multi-implementation-service-contract-adr.md`](../05-adr/16-multi-implementation-service-contract-adr.md) (ADR-16 v1.0.0)
-- **关联工程作战卡**：[`docs/04-tasks/21-m20-multi-implementation-service-contract.md`](../04-tasks/21-m20-multi-implementation-service-contract.md) (M20)
+- **状态**：M1~M20 已交付；M21 已批准待实施 (Approved for M21)
+- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.16.0)、[`01-system-architecture.md`](./01-system-architecture.md)、[`09-arch-process-ssot-and-ebpf-premount-standby-adr.md`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md) (ADR-09 v1.1.0)、[`15-scalable-topology-focus-and-layout-persistence-adr.md`](../05-adr/15-scalable-topology-focus-and-layout-persistence-adr.md) (ADR-15 v1.3.0)、[`16-multi-implementation-service-contract-adr.md`](../05-adr/16-multi-implementation-service-contract-adr.md) (ADR-16 v2.0.0)、[`17-topology-single-layer-drilldown-and-layout-ux-adr.md`](../05-adr/17-topology-single-layer-drilldown-and-layout-ux-adr.md) (ADR-17 v1.0.0)
+- **关联工程作战卡**：[`docs/04-tasks/21-m20-multi-implementation-service-contract.md`](../04-tasks/21-m20-multi-implementation-service-contract.md) (M20)、[`docs/04-tasks/22-m21-topology-single-layer-drilldown-and-layout-ux.md`](../04-tasks/22-m21-topology-single-layer-drilldown-and-layout-ux.md) (M21)
 
 ### 修订记录
 
@@ -14,6 +14,7 @@
 | :--- | :--- | :--- |
 | v1.5.1 | 2026-11-09 | 依据 ADR-15 (v1.1.0) 增补 §6 大规模拓扑五段式渲染管线、作用域裁剪、有向 N-Hop 邻域、Hub 插头折叠与位置记忆双层持久化设计 |
 | v1.6.0 | 2026-11-11 | 依据 ADR-16 (v1.0.0 / M20) 同步多实现服务契约建模与拓扑验证设计：1. §1.1/§1.3 补充 `module_kind ∈ {BUSINESS, CONTRACT_LIB}` 与库模块/契约删除与改类型保护；2. §2 修订 `A-05` 为分模式唯一并新增 §2.2 多实现服务契约（`traefik_service_contracts`、`impl_key`、`A-09` 进程互斥双入口守卫、分发依赖 `DISPATCH` 与存量迁移）；3. §3 补充 `A-03` 对 `CONTRACT_LIB` 的豁免、分发依赖下游推导、`endpoint_snapshots` 端点字典快照及重放兼容校验；4. §4 增补 `«interface»` 库卡、`REALIZATION` 边图层、逻辑视图默认按接口聚合 (`topo_contract_mode=AGG\|EXPAND`)、物理视图库模块豁免与 DTO 增量；5. §5 升级 `ResolveDestinationModule` v2 按目的进程消歧定位，将一致性比对从七分类扩展为八分类（新增第八类 `IMPL_UNRESOLVED` 实现待定），并补充双视图叠加挂载规则 |
+| v1.7.0 | 2026-11-13 | 依据 [`ADR-17`](../05-adr/17-topology-single-layer-drilldown-and-layout-ux-adr.md) (v1.0.0 / M21) 同步拓扑单层平铺逐级下钻与 ELK 正交布局校准设计：1. §4.2 更新前端实时边汇总与单层代表节点规则（内部直属子容器代表 $R_{\text{in}}(u)$ 与跨界外部传送门卡 $R_{\text{ext}}(u)$，聚焦根自身不渲染外层包裹框）；2. §6 重构作用域裁剪与布局规范——ELK 统一单层 `layered` 参数（`nodeNodeBetweenLayers=110`、`FIRST/LAST` 约束）、CSS `border-box` 与 ELK `1:1` 尺寸契约、四向智能锚点 `selectOptimalHandles` 与多边标签偏移、按 `(view, focus_scope)` 分桶隔离且仅显式拖拽/图钉才锁定的位置记忆策略，以及 `${focusScope}::${extId}` 零 DDL 持久化兼容约定 |
 
 ---
 
@@ -434,38 +435,31 @@ func ValidateReplayProcessCompatibility(
  └── ImplUnresolved (动态虚拟节点: 物理视图下多实现契约命中但目的实现无法定位时按需注入，展示「实现待定: pkg.IfaceSvc」)
 ```
 
-### 4.2 前端实时边汇总算法 (Edge Rollup) 与复合坐标规则
+### 4.2 前端实时边汇总算法 (Edge Rollup) 与单层平铺代表节点规则 (`ADR-17`)
 
-后端接口一次性返回全系统架构节点与最细粒度的**模块/外部端点级原子叶子边**集合。在前端画布中，无论用户如何展开或折叠容器，有向连线始终动态聚合连接至**当前状态下两端最近的可见代表节点 (Representative Visible Ancestor)**：
+后端接口一次性返回全系统架构节点与最细粒度的**模块/外部端点级原子叶子边**集合。依据 [`ADR-17`](../05-adr/17-topology-single-layer-drilldown-and-layout-ux-adr.md)，前端画布从「同屏多级框中框复合嵌套」演进为**「单层平铺逐级下钻 (Scoped Flat Canvas)」**：在任意聚焦作用域（全局 `GLOBAL` 或特定容器 `focusNodeId`）下，有向连线实时上卷连接至**当前画布可见的直接子节点代表或跨界外部传送门卡**：
 
 ```mermaid
 flowchart LR
-    subgraph SubA["子系统 A (已展开)"]
-        subgraph Grp1["功能组 1 (已展开)"]
-            Mod1["模块 M1"]
-        end
-        subgraph Grp2["功能组 2 (已折叠)"]
-            Mod2["模块 M2"]
-            Mod3["模块 M3"]
-        end
-    end
-    subgraph SubB["子系统 B (已折叠)"]
-        Mod4["模块 M4"]
-        Mod5["模块 M5"]
-    end
-
-    Mod1 -- "单条直连" --> Grp2
-    Grp2 == "聚合汇总边 (3 条契约)" ==> SubB
+    ExtUp["外部传送门卡 (FIRST 最左列)<br/>交易中枢与网关 (⬅️ 上游)"] ==> ModA["alipay 模块卡<br/>PAYMENT_ALIPAY"]
+    ExtUp ==> Iface["«interface» 契约库卡<br/>LIB_PAYMENT_IFACE"]
+    ModA -. "REALIZATION" .-> Iface
+    ModB["wechat 模块卡<br/>PAYMENT_WECHAT"] -. "REALIZATION" .-> Iface
+    Iface ==> ExtDown["外部传送门卡 (LAST 最右列)<br/>第三方渠道银行 (➡️ 下游)"]
 ```
 
-#### 边汇总与复合排版核心不变量：
-1. **代表节点查找 (`rep(nodeId)`)**：沿当前节点的 `ancestors[]` 路径从顶层根（`depth=0`）向下扫描，首个处于“折叠 (Collapsed)”状态的容器即为其可见代表节点；若其所有祖先均处于展开状态，则该叶子节点自身即为代表节点；
-2. **同容器内收敛 (Internal Dependency)**：若源与目标的代表节点相同（$S_{\text{rep}} = T_{\text{rep}}$，即两端落在同一个折叠容器内部）：
-   - **逻辑视图**：在折叠容器的标题栏徽章累计为「内部依赖: $N$」；
-   - **物理视图**：若两端落在同一折叠 `Process` 容器内，自动收敛为进程卡片右上角的「进程内调用: $N$」徽章（契合 A-04 不经内核 Socket、物理不可观测语义）；
-3. **跨容器聚合边 (Rollup Edge) 与实现边分层**：若代表节点不同（$S_{\text{rep}} \neq T_{\text{rep}}$），将底层调用叶子边按有向对偶元组 `(S_rep, T_rep)` 归并为一条汇总边，附带聚合去重后的契约清单，线宽依据 $\log_2(\text{count} + 1)$ 动态缩放；`Kind == "REALIZATION"` 的实现关系边在独立图层内按 `(S_rep, T_rep, "REALIZATION")` 单独上卷，绝不与运行期调用边混并；
-4. **环路标红 (Cycle Detection)**：在当前可见代表节点导出的**运行期调用有向图**（剔除 `REALIZATION` 实现关系边）上执行 Tarjan 强连通分量 (SCC) 算法，处于大小 $\ge 2$ 强连通分量内的汇总边标记 `isCycle = true` 并以 `--color-danger` 高亮报警；
-5. **React Flow v12 父先于子拓扑序与全局拐点换算**：输出给 React Flow 的可见节点必须按 `depth` 升序排列（确保 `parentId` 父容器先于子节点出现）；ELK `INCLUDE_CHILDREN` 输出的跨层边 `bendPoints` 必须累加所属 `containingNode` 的全局绝对坐标 `(absX, absY)`，且在节点被用户手动拖拽后自动退化为 `SmoothStep` 动态正交路径。
+#### 单层边汇总与排版核心不变量：
+1. **单层代表节点映射 (`scopedRep(nodeId, focusNodeId)`)**：
+   - **全局层 (`focusNodeId == null`)**：每个内部节点的代表为其所在顶层容器（`depth === 0`，如 `sub_1`、`pgrp_1`、`ext_sys_*`）；
+   - **聚焦下钻层 (`focusNodeId != null`)**：
+     - 若目标 $u \in V_{\text{in}}$（聚焦根后代），沿 `u.ancestors` 定位其在 `focusNode` 下`relativeDepth === 1` 的直接子祖先（即 `parent_id === focusNode.id` 的可见直接子节点）作为 $R_{\text{in}}(u)$；聚焦根自身仅作为顶栏面包屑展示，**画布不渲染包裹父框**；
+     - 若目标 $u \notin V_{\text{in}}$（聚焦域外节点），沿 `LCA(u, focus)` 的直接子节点收敛为外部传送门卡 $R_{\text{ext}}(u)$（外部系统与动态虚拟节点单独成卡）；
+2. **同容器内收敛 (Internal Dependency)**：若源与目标落在聚焦域内同一个直接子容器（$R_{\text{in}}(S) = R_{\text{in}}(T)$ 且均非当前层直属叶子）：
+   - **逻辑视图**：累计至该直接子容器卡片的 `内部依赖: N` 徽章；
+   - **物理视图**：若两端落在同一标准 `Process` 容器卡内，自动收敛为卡片徽章 `进程内调用: N`（契合 `A-04` 不经内核 Socket、物理不可观测语义）；
+3. **跨卡片聚合边 (Rollup Edge) 与实现边分层**：若可见代表节点不同（$S_{\text{rep}} \neq T_{\text{rep}}$），将底层调用叶子边按有向对偶元组 `(S_rep, T_rep)` 归并为一条汇总边，附带聚合去重后的契约清单，线宽依据 $\log_2(\text{count} + 1)$ 动态缩放；`Kind == "REALIZATION"` 的实现关系边在独立图层内按 `(S_rep, T_rep, "REALIZATION")` 单独上卷，绝不与运行期调用边混并；
+4. **环路标红 (Cycle Detection)**：在当前单层可见节点的**运行期调用有向图**（剔除 `REALIZATION` 实现关系边）上执行 Tarjan 强连通分量 (SCC) 算法，处于大小 $\ge 2$ 强连通分量内的汇总边标记 `isCycle = true` 并以 `--color-danger` 高亮报警；
+5. **扁平单层零嵌套与智能正交走线**：全部可见节点在 React Flow 中均为顶级平铺卡片（`parentId = undefined`），ELK 直接在扁平图上以 `nodeNodeBetweenLayers = 110px` 输出正交 `bendPoints`；当节点被手动固定并发生上下垂直或反向位置关系时，由 `selectOptimalHandles` 动态切换四向锚点走 `SmoothStep`（不再退化全图已有未固定节点的正交边）。
 
 ### 4.3 静态拓扑图完整 DTO 契约 (`TopologyGraphDTO`)
 
@@ -695,34 +689,34 @@ type ConsistencyReportDTO struct {
 
 ---
 
-## 6. 大规模拓扑渐进式下钻聚焦、多维降噪与位置记忆混合布局引擎 (`F-04.1`~`F-04.4`, [`ADR-15`](../05-adr/15-scalable-topology-focus-and-layout-persistence-adr.md) & [`ADR-16`](../05-adr/16-multi-implementation-service-contract-adr.md))
+## 6. 单层平铺逐级下钻、ELK 正交布局校准与作用域持久化引擎 (`F-04.1`~`F-04.4`, [`ADR-15`](../05-adr/15-scalable-topology-focus-and-layout-persistence-adr.md)、[`ADR-16`](../05-adr/16-multi-implementation-service-contract-adr.md) & [`ADR-17`](../05-adr/17-topology-single-layer-drilldown-and-layout-ux-adr.md))
 
-在 25 个子系统 × 10 个功能组 × 10 个功能模块（约 **2,775 个节点 + 5,000~10,000 条底层边**）的生产规模下，前端拓扑引擎采用「全量下发、前端纯函数裁剪」策略，将渲染链路重排为**五段式纯函数管线**，并新增 **`subgraph.ts` / `noiseReduction.ts`（探索与降噪）** 与 **`layoutMerger.ts` / `layoutPersistence.ts`（位置记忆混合布局与持久化）**；后端由 `traefik_topology_layouts`（第 18 张表，连同 ADR-16 第 19 张表 `traefik_service_contracts` 共 19 张核心业务表）承载位置层（团队基准）与视角层（个人书签）。
+在 25 个子系统 × 10 个功能组 × 10 个功能模块（约 **2,775 个节点 + 5,000~10,000 条底层边**）的生产规模下，前端拓扑引擎采用「全量下发、前端五段式纯函数裁剪 + 单层平铺按需下钻」策略，彻底消除多级复合框中框嵌套导致的 ELK 间距挤压与视觉毛线团；后端由 `traefik_topology_layouts`（第 18 张表，连同 `traefik_service_contracts` 共 19 张核心业务表）零 DDL 变更地承载团队基准与个人书签双层持久化。
 
 > [!IMPORTANT]
-> 本节全部阈值、URL 参数、CSS 类名与节点数据字段以 [`ADR-15` §6 统一参数与命名字典](../05-adr/15-scalable-topology-focus-and-layout-persistence-adr.md) 及 [`ADR-16` §6](../05-adr/16-multi-implementation-service-contract-adr.md) 为唯一基准。
+> 本节参数、单层下钻契约、1:1 `border-box` 尺寸表、ELK 间距参数、四向智能锚点及位置记忆规则以 [`ADR-17`](../05-adr/17-topology-single-layer-drilldown-and-layout-ux-adr.md) 为最新权威基准，配合 [`ADR-15` §6](../05-adr/15-scalable-topology-focus-and-layout-persistence-adr.md) 与 [`ADR-16` §6](../05-adr/16-multi-implementation-service-contract-adr.md) 协同落地。
 
-### 6.1 五段式渲染管线与作用域裁剪 (`overlay.ts` → `subgraph.ts` → `rollup.ts` → `noiseReduction.ts` → `layoutMerger.ts`)
+### 6.1 五段式渲染管线与单层作用域裁剪 (`overlay.ts` → `subgraph.ts` → `rollup.ts` → `noiseReduction.ts` → `layoutMerger.ts`)
 
 ```mermaid
 flowchart LR
-    S1["① synthesizeOverlay<br/>(overlay.ts)"] --> S2["② scopeAndFilter<br/>(subgraph.ts)"]
+    S1["① synthesizeOverlay<br/>(overlay.ts)"] --> S2["② scopeAndFilter<br/>(subgraph.ts: 单层平铺直属节点)"]
     S2 --> S3["③ aggregateRollup + pruneIsolated<br/>(rollup.ts / subgraph.ts)"]
     S3 --> S4["④ foldHubEdges<br/>(noiseReduction.ts)"]
-    S4 --> S5["⑤ planLayout / ELK / resolveOverlapsBottomUp<br/>(layoutMerger.ts)"]
+    S4 --> S5["⑤ planFlatLayout / ELK / SmartHandles<br/>(layoutMerger.ts + useElkLayout.ts)"]
 ```
 
-1. **① 一致性叠加与多实现契约模式合成 (`synthesizeOverlay`)**：从原 `rollupEdges` 中拆出动态 `VIOLATION / UNATTRIBUTED / IMPL_UNRESOLVED` 边、`VIRTUAL_UNREGISTERED_INTERFACE` / `VIRTUAL_IMPL_UNRESOLVED_<contract_id>` 虚拟节点合成、逻辑视图 `topo_contract_mode=AGG|EXPAND` 分发边聚合/展开转换、`REALIZATION` 图层开关过滤与静态边状态映射；静态边匹配以 `(src_module_id, dst_module_id)` 建立索引，消除 O(报告条数 × 边数) 嵌套扫描。`rollupEdges(...)` 保留为兼容门面（`aggregateRollup(nodeMap, synthesizeOverlay(...), expandState)`）。
-2. **② 作用域裁剪 (`scopeAndFilter`)**：**不删除任何节点**（`nodeMap` 始终全量，保证 `rep()` 收敛不丢边），输出：
+1. **① 一致性叠加与多实现契约模式合成 (`synthesizeOverlay`)**：保持从底层边与一致性报告合入动态 `VIOLATION / UNATTRIBUTED / IMPL_UNRESOLVED` 边与虚拟节点，执行 `topo_contract_mode=AGG|EXPAND` 投影与 `REALIZATION` 开关控制。
+2. **② 单层作用域裁剪 (`scopeAndFilter`)**：**不删除原始 `nodeMap` 节点**，面向单层平铺视口计算可见集合与代表映射：
 
 ```typescript
 export interface TopologyFilterState {
-  focusNodeId: string | null;          // 聚焦根容器 ID (如 "sub_1", "grp_10", "pgrp_3", "proc_7")
-  egoNodeId: string | null;            // 邻域追踪中心 ID (模块或容器)
+  focusNodeId: string | null;          // 聚焦域容器 ID ("sub_1", "grp_10", "pgrp_3", "proc_7")，null 代表 L0 全系统全景
+  egoNodeId: string | null;            // 有向邻域追踪中心 ID
   egoHops: 1 | 2;                      // 有向邻域跳数，默认 1
   subsystemIds: string[];              // 顶层容器多选白名单 (空数组表示不过滤)
   onlyMyScope: boolean;                // 仅看当前登录用户负责的节点
-  status: 'ALL' | 'ABNORMAL' | 'VIOLATION_ONLY'; // 未挂载一致性报告时忽略
+  status: 'ALL' | 'ABNORMAL' | 'VIOLATION_ONLY';
   hideIsolated: boolean;               // 边上卷后隐藏孤立节点
   hubFold: boolean;                    // 是否开启 Hub 插头折叠
   contractMode?: 'AGG' | 'EXPAND';     // 逻辑视图多实现契约展示模式，默认 'AGG' (URL: topo_contract_mode, ADR-16)
@@ -732,74 +726,74 @@ export interface TopologyFilterState {
 export type NeighborDirection = 'UPSTREAM' | 'DOWNSTREAM' | 'BIDIRECTIONAL';
 
 export interface ScopedGraph {
-  visibleIds: Set<string>;                     // 显式可见集 (取代“祖先全部展开即可见”规则)
-  effectiveExpandState: ExpandStateMap;        // 用户展开态 ⊕ 透明祖先 ⊕ 强制折叠邻居 ⊕ 邻域祖先展开
-  relativeDepth: Record<string, number>;       // depth − 聚焦根 depth (全局态等于 depth)
-  neighborMeta: Record<string, NeighborDirection>; // 外部邻居卡方向
-  breadcrumbs: GraphNode[];                    // 根 → 聚焦根 的面包屑路径
-  estimatedVisibleCount: number;               // 供统一守卫使用
+  visibleIds: Set<string>;                     // 当前单层可见平铺节点 ID 集合 (全为顶级节点, parentId=undefined)
+  repOverrides: Record<string, string>;        // nodeId -> 当前层可见代表节点 ID (R_in 或 R_ext)
+  relativeDepth: Record<string, number>;       // depth − 聚焦根 depth (聚焦层内节点均为 1)
+  neighborMeta: Record<string, NeighborDirection>; // 外部传送门卡方向 (用于 FIRST / LAST 列约束与 UI 修饰)
+  breadcrumbs: GraphNode[];                    // 根 → 当前聚焦根 的有序面包屑路径
+  estimatedVisibleCount: number;               // 供统一可见规模守卫使用
 }
 ```
 
-#### 核心裁剪规则
-1. **统一可见规模守卫 (`estimateVisibleNodeCount` + `applyVisibilityChange`)**：
-   - 页面层所有改变展开态或可见集的入口——层级滑杆、全展、单点展开、滚轮语义展开、搜索定位、邻域追踪、多维过滤、聚焦切换、书签应用——统一调用 `applyVisibilityChange(next)`，对候选状态执行同一裁剪逻辑仅计数；
-   - 预估 `> MAX_SAFE_VISIBLE_NODES (150)` 时拦截，**与是否处于聚焦/过滤态无关**；弹出引导（先聚焦 / 先过滤 / 仍要展开），滚轮语义展开改为非模态提示并放弃本次展开；
-   - **删除**现有“输入搜索关键字自动展开全部命中节点父链”的副作用。
-2. **容器下钻聚焦 (`focusNodeId`)**：
-   - 内部集 $V_{\text{in}}$ = 聚焦根 + 其全部后代；聚焦根默认展开 `1` 层，层级滑杆在聚焦态下按 `relativeDepth` 计量；
-   - **透明祖先**：聚焦根的祖先在 `effectiveExpandState` 中置为展开但不进入 `visibleIds`，聚焦根即成为画布根（`buildElkGraph` 已按“父节点不可见即为根”处理，无需改写节点 `ancestors`）；
-   - **外部邻居代表 (`resolveExternalRep`)**：对一端在 $V_{\text{in}}$、另一端 $u \notin V_{\text{in}}$ 的边（含 ① 合成的动态边），$R_{\text{ext}}(u)$ 取 $u$ 祖先链上 $\text{LCA}(u, \text{focus})$ 的直接子节点，无公共祖先时取 $u$ 的顶层祖先；若结果为 `ext_container`，则 `EXTERNAL_SYSTEM` / `EXTERNAL_ENDPOINT` 叶子单独成卡；`VIRTUAL_UNREGISTERED_INTERFACE` 与 `VIRTUAL_IMPL_UNRESOLVED_*` 单独成卡；
-   - $R_{\text{ext}}$ 在 `effectiveExpandState` 中强制折叠、其祖先链置为透明展开，使 `rep(u) = R_ext(u)`；`meta.isExternalNeighbor = true`，`neighborMeta` 记录方向；两端均在 $V_{\text{in}}$ 外的边全部剔除；
-   - 点击外部邻居卡 `[↗ 切换聚焦]` 即将 `focusNodeId` 切换至该邻居。
-3. **有向 N-Hop 邻域 (`extractEgoNetwork`)**：
-   - 在叶子层有向图上，上游沿反向边扩展 `egoHops` 跳、下游沿正向边扩展 `egoHops` 跳后取并集，**严禁混合方向扩展**；容器作为中心时以其全部叶子后代为种子；
-   - 命中叶子的祖先链在 `effectiveExpandState` 中自动展开，未命中的兄弟节点不可见。
-4. **多维切片过滤 (`applySliceFilters`)**：各维度取交集，命中节点的祖先链（直至当前画布根）自动保留并重新计算折叠徽章计数，严禁产生无父容器的悬空内部节点：
-   - **`subsystemIds`**：仅保留所选顶层容器子树及其互调边；
-   - **`onlyMyScope`**：命中 `meta.owner_id === currentUserId` 的子系统（整棵子树）与模块（后端 Graph DTO 已为 `MODULE` 节点输出 `owner_id`），并保留命中模块的叶子级 1-Hop 上下游；
-   - **`status`**：`ABNORMAL` 保留至少关联 1 条 `VIOLATION / UNATTRIBUTED / IMPL_UNRESOLVED / UNCOVERED` 边的节点，`VIOLATION_ONLY` 仅保留关联 `VIOLATION` 边的节点。
-5. **孤立节点裁剪 (`pruneIsolated`)**：在 ③ 边上卷之后执行，隐藏无任何关联汇总边的可见叶子/折叠容器，并级联隐藏被清空的容器。
+#### 单层平铺核心裁剪规则 (`ADR-17`)
+1. **单层直属节点可见原则（无外层包裹框、废除全局层级滑杆与全展）**：
+   - 全局层（`focusNodeId === null`）：`visibleIds` 仅包含顶层 `depth === 0` 节点（`SUBSYSTEM` / `PROCESS_GROUP` / `UNDEPLOYED_CONTAINER` / `EXTERNAL_*`），各子节点上卷至所属顶层容器；
+   - 聚焦下钻层（`focusNodeId !== null`）：**聚焦根自身不加入 `visibleIds`**（其标题与层深展示在顶栏面包屑 `.code-arch-breadcrumb` 中）；内部节点仅保留 `node.parent_id === focusNodeId` 的**直接子节点（`relativeDepth === 1`）**，更深层后代通过 `repOverrides` 自动映射回所属直接子容器。所有进入画布的节点均平铺在根平面（`parentId = undefined`）。
+2. **跨界外部传送门卡 (`resolveExternalRep`)**：对一端在 $V_{\text{in}}$（聚焦根全部后代）、另一端 $u \notin V_{\text{in}}$ 的边（含 ① 合成的动态边），$R_{\text{ext}}(u)$ 取 $u$ 祖先链上 $\text{LCA}(u, \text{focus})$ 的直接子节点（无公共祖先时取顶层祖先；`EXTERNAL_*`、`VIRTUAL_*` 叶子单独成卡），注入 `visibleIds` 并写入 `neighborMeta[R_ext] ∈ {'UPSTREAM', 'DOWNSTREAM', 'BIDIRECTIONAL'}`；两端均在 $V_{\text{in}}$ 外的边剔除；点击/双击外部卡的 `[↗ 跳转至该域]` 即直接切换 `focusNodeId`。
+3. **统一可见规模守卫 (`MAX_SAFE_VISIBLE_NODES = 150`)**：切换聚焦域（含极少数超大功能组直属 >150 个模块时）、开启 N-Hop 邻域或组合切片筛选时统一经 `applyVisibilityChange()` 预估 `visibleIds.size`，超 `150` 时弹窗引导「先过滤 / 仍要展示」。
+4. **有向 N-Hop 邻域 (`extractEgoNetwork`) & 多维切片过滤 (`applySliceFilters`)**：
+   - 上游沿反向边、下游沿正向边分别扩展 `egoHops` 跳后取并集（不混合方向）；若选中邻域或切片过滤条件命中当前层内部子孙节点，向上投影保留对应的当前层直接子节点代表；多维条件取交集并保留 `repOverrides` 一致性。
+5. **孤立节点裁剪 (`pruneIsolated`)**：在 ③ 边上卷之后执行，隐藏当前单层无任何关联汇总边与内部依附边的卡片（保持画布聚焦在有效调用网络上）。
 
-### 6.2 1-Hop 聚光灯 (`Spotlight`) 与高扇入公共节点插头折叠 (`Hub Pill`)
+### 6.2 1-Hop 聚光灯 (`Spotlight`)、Hub 插头折叠与语义 LOD
 
-1. **聚光灯染色 (`computeSpotlightSet`)**：
-   - 悬停（`80ms` 防抖）或单击选中节点 $v$（或汇总边 $e$）时，纯函数 `computeSpotlightSet(activeId, rollupEdges, nodeMap)` 计算关联节点集合 $S_{\text{node}}$（含命中节点的祖先容器，容器不淡化）与关联边集合 $S_{\text{edge}}$；
-   - 非命中节点附加 `.code-arch-node--dimmed`（`opacity: var(--arch-dim-node-opacity)`，即 `0.2`），非命中边附加 `.code-arch-edge--dimmed`（`0.15`）；单击锁定，点击空白或 Esc 清除；聚光灯为渲染期计算，不触发重排。
-2. **高扇入公共节点插头折叠 (`foldHubEdges`)**：
-   - 开启 `hubFold` 时，在 ③ 边上卷之后统计每个可见节点的跨顶层入边中**不同调用方顶层容器**数量，`≥ HUB_CALLER_THRESHOLD (8)` 且不在 `expandedHubIds` 中即判定为 Hub；
-   - 移除该 Hub 的跨顶层汇总边，**`VIOLATION / UNATTRIBUTED / IMPL_UNRESOLVED` 状态边豁免折叠**；为每个调用方生成插头徽章 `HubPillSummary { hubId, hubName, contractCount, worstStatus }`，渲染为 `.code-arch-hub-pill`（如 `🔗 → 统一鉴权 (3 契约)`），徽章颜色继承被折叠边的最差状态；
-   - 点击徽章将该 Hub 加入 `expandedHubIds`，恢复其完整连线。
-3. **语义 LOD**：`.code-arch-canvas--lod-macro`（`zoom < 0.45`，简版大字卡片）/ `--lod-medium` / `--lod-detail`（`zoom ≥ 0.85`）。
+1. **三态聚光灯 (`computeSpotlightSet`)**：无选中时悬停（`100ms` 防抖）预览、单击选中锁定 1-Hop 关联节点与边（`UPSTREAM` / `DOWNSTREAM` 分色高亮），其余节点附加 `.code-arch-node--dimmed`（`0.2`）、边 `.code-arch-edge--dimmed`（`0.15`）；单击空白或 `Esc` 清除选中，继续按 `Esc` 或 `Backspace`（非输入态）返回上一级面包屑聚焦域。
+2. **高扇入公共节点插头折叠 (`foldHubEdges`)**：开启 `hubFold` 时，对当前层入边不同调用方数量 `≥ HUB_CALLER_THRESHOLD (8)` 且不在 `expandedHubIds` 的节点折叠为调用方卡上的 `.code-arch-hub-pill`，**`VIOLATION / UNATTRIBUTED / IMPL_UNRESOLVED` 边豁免折叠**。
+3. **语义 LOD**：缩放 `< 0.45` / `0.45~0.85` / `≥ 0.85` 切换 `.code-arch-canvas--lod-macro` / `--lod-medium` / `--lod-detail`。
 
-### 6.3 位置记忆混合布局引擎 (`layoutMerger.ts`)
+### 6.3 ELK 单层正交参数校准、1:1 `border-box` 盒模型、四向智能锚点与作用域位置记忆 (`layoutMerger.ts`)
 
-1. **视口相机锚定定律 (`Viewport Camera Retention`)**：
-   - 废除 `ArchCanvas.tsx` 中监听 `layoutNodes.length` 自动触发全局 `rfInstance.fitView()` 的逻辑；
-   - **仅在以下场景执行全局 `fitView`**：① 首次加载完成且布局无有效视口；② 切换 `LOGICAL / PHYSICAL` 视图；③ 切换聚焦域；④ 用户点击 `[居中]` 或 `[重新自动排版]`；⑤ 应用个人书签；
-   - 单点展开/折叠与拖拽严禁 `fitView`；若被操作节点绝对坐标位移 $(\Delta x, \Delta y)$，按 `viewport -= Δ × zoom` 补偿（本算法下锚点不动，补偿量通常为 0）。
-2. **位置记忆与布局模式 (`planLayout`)**：
-   - 维护会话内 `positions: Record<string, { x: number; y: number }>`（全部已排布节点相对 `parentId` 父容器的局部坐标，画布根节点相对根原点）与 `pinned: Set<string>`（用户拖拽过的节点，语义为“重新自动排版时保留”）；
-   - `GLOBAL_ELK`：首次加载且无任何持久化坐标，或用户点击 `[重新自动排版]`（`pinned` 节点保留坐标）；
-   - `LOCAL_ELK`：展开容器 $C$ 且其子节点缺少坐标时，仅对 $C$ 子树执行局部 ELK 得到 $C$ 新尺寸，$C$ 左上锚点与 $C$ 外全部节点原位不动；
-   - `FAST_PATH`：全部可见节点均有坐标时免 ELK 直接套用；
-   - 折叠容器 $C$ 时 $C$ 收缩为卡片尺寸，兄弟节点不回缩；
-   - **拖拽结束 (`onNodeDragStop`)**：坐标钳制于父容器内边距内（越界则撑开父容器），写入 `positions` 与 `pinned`，以被拖节点为锚点执行碰撞消解，**严禁触发 ELK**；`draggedNodeIds` 不再作为 ELK 重排依赖。
-3. **自底向上碰撞消解 (`resolveOverlapsBottomUp`)**：
-   - 在锚点所在父容器内按距锚点由近及远逐个处理兄弟节点，与已落定集合检测包围盒 $[x, x+w+\text{gap}] \times [y, y+h+\text{gap}]$（`gap = LAYOUT_SIBLING_GAP = 32px`）重叠，重叠时沿最小穿透轴（水平向右或垂直向下）平移；
-   - **锚点永不移动；未固定节点优先移动；`pinned` 节点仅在确实重叠时被推开并保持原相对方位**，同步更新其固定坐标；
-   - 父容器尺寸重算为子节点包围盒 + 内边距（顶部 `52px`、其余 `16px`，与 ELK `elk.padding` 一致），尺寸变化时以该父容器为新锚点在祖父容器继续消解，直至根或尺寸不变；单调平移 + 每层单次扫描保证终止。
-4. **边退化判定 (`markDegradedEdges`)**：凡边的源/目标或其任一祖先相对最近一次 ELK 输出的绝对坐标发生位移（含被推开节点与被移动容器的全部后代），或该汇总边在最近一次 ELK 输出中不存在拐点数据（如局部排版或折叠后新生成的汇总边），标记 `isDraggedDegraded = true` 并由 `<RollupEdge>` 使用 `getSmoothStepPath` 实时绘制；`FAST_PATH` 下全部边退化（ADR-15 决策 #9）。
-5. **外部邻居卡排版**：`UPSTREAM` 邻居设置 `elk.layered.layering.layerConstraint = FIRST`，`DOWNSTREAM` 设置 `LAST`，`BIDIRECTIONAL` 不约束；外部邻居卡与聚焦根坐标属于聚焦专属根层，不进入持久化。
-6. **架构演进增量 Diff 合并 (`diffLayoutAgainstGraph` + `placeNewNodes`)**：
-   - 后端 `TopologyGraphDTO.structure_version` 仅对排序后的 `(id, parent_id)` 计算，与已保存布局的 `structure_version` 相同则跳过 Diff；
-   - 不同则：已保存坐标中不存在于当前图的节点静默清理；当前可见、无保存坐标、但父容器下至少有 1 个已保存坐标兄弟的节点视为新增，放置于父容器已排布包围盒右侧/底部网格空位，`data.isNewInLayout = true` 并渲染 `✨ 新增` 徽标；
-   - 仅当 `addedCount > 0 || removedCount > 0` 时显示琥珀色提示条，纯依赖边、名称、描述或环境端点变化不提示。
+1. **ELK 单层正交配置参数与 `FIRST / LAST` 列约束**：
+   - 因每个 `focusScope` 均为扁平单层图（零 `INCLUDE_CHILDREN` 嵌套），消除子容器缺失 `nodeNodeBetweenLayers` 回退 `20px` 造成的标签挤压，统一配置：
+     - `elk.algorithm`: `'layered'`，`elk.direction`: `'RIGHT'`
+     - `elk.spacing.nodeNode`: `'48'`（同层垂直间距 `48px`）
+     - **`elk.layered.spacing.nodeNodeBetweenLayers`: `'110'`**（跨层水平间距 `110px`，足以容纳 `"1 契约"` / `"2 契约"` 等标签胶囊并保留两侧呼吸净空）
+     - `elk.spacing.edgeNode`: `'36'`，`elk.spacing.edgeEdge`: `'24'`，`elk.layered.spacing.edgeNodeBetweenLayers`: `'36'`
+     - `elk.edgeRouting`: `'ORTHOGONAL'`，`elk.layered.nodePlacement.strategy`: `'BRANDES_KOEPF'`
+     - `elk.layered.crossingMinimization.semiInteractive`: `'true'`，`elk.layered.considerModelOrder.strategy`: `'NODES_AND_EDGES'`
+   - **外部传送门卡方向列约束 (`layerConstraint`)**：
+     - `UPSTREAM` $\rightarrow$ `elk.layered.layering.layerConstraint: 'FIRST'`（强制最左列）
+     - `DOWNSTREAM` $\rightarrow$ `elk.layered.layering.layerConstraint: 'LAST'`（强制最右列）
+     - `BIDIRECTIONAL` $\rightarrow$ 不约束，由拓扑流向自然放置。
 
-### 6.4 位置层 + 视角层双层持久化 (`layoutPersistence.ts`)
+2. **CSS `border-box` 与 ELK 节点尺寸 `1:1` 严格对齐表**：
 
-1. **生效坐标叠加**：`composeEffectivePositions` = ELK 结果 ⊕ 团队基准（`SHARED`，按 `view` 唯一，完整坐标）⊕ 个人书签坐标差量（`PRIVATE`）⊕ `localStorage` 草稿差量；坐标为相对父坐标，聚焦视图与全景视图复用同一位置层；
-2. **加载优先级 (`resolveInitialLayout`)**：基线 = URL `topo_layout_id` 书签 ≻ 当前 `(view, focus_scope)` 默认书签 ≻ 团队基准 ≻ 无（ELK）；草稿（键 `traefik_topo_draft_v2_${userId}_${view}`，含 `base = { canonical_revision, bookmark_id }`）仅在 `base` 与基线一致时叠加，否则丢弃并提示；
-3. **持久化切片 (`extractPersistablePositions`)**：聚焦态仅持久化聚焦根严格后代坐标；保存个人书签时 `diffOverrides` 仅提交相对团队基准变化或被固定的节点；
-4. **团队基准发布**：读取最新基准 ➔ 合并可持久化坐标 ➔ 携带 `expected_revision` 整体提交，`409 LAYOUT_REVISION_CONFLICT` 时提示刷新重试；
-5. **降级**：书签 `403 / 404` 降级至团队基准并 toast；书签 `focus_scope` 容器已删除时降级至全局。
+| 节点渲染类别 | 适用节点类型 (`GraphNodeType` / 形态) | ELK 宽高 (`width × height`) | CSS 盒模型约束 (`ArchCanvas.css`) |
+| :--- | :--- | :---: | :--- |
+| **容器卡** | 平铺渲染的 `SUBSYSTEM` / `FUNCTIONAL_GROUP` / `PROCESS_GROUP` / `PROCESS` / `UNDEPLOYED_CONTAINER` | **`260 × 96`** | `box-sizing: border-box; width: 260px; height: 96px;`（标题单行省略，徽章置底固定行高） |
+| **功能模块卡** | `MODULE`（含 `BUSINESS` 与 `«interface»` `CONTRACT_LIB`） | **`240 × 88`** | `box-sizing: border-box; width: 240px; height: 88px;`（彻底消除 `content-box` 导致的 16~26px 宽度溢出与多行撑破高度） |
+| **外部传送门卡** | 聚焦态下跨界外部邻居 `ExternalContextNode` | **`240 × 104`** | `box-sizing: border-box; width: 240px; height: 104px;`（消除 `230px` vs `240px` 造成的右侧 `<Handle>` 悬空 10px 缺陷） |
+| **外部/虚拟终端卡** | `EXTERNAL_SYSTEM` / `EXTERNAL_ENDPOINT` / `UNREGISTERED_INTERFACE` / `IMPL_UNRESOLVED` | **`216 × 72`** | `box-sizing: border-box; width: 216px; height: 72px;` |
+
+3. **四向智能锚点路由 (`selectOptimalHandles`) 与多边同锚点徽章防叠**：
+   - 每个卡片组件在 `top` / `right` / `bottom` / `left` 四个方位挂载标准 React Flow `<Handle>`；
+   - 连线计算根据源节点包围盒 $B_s$ 与目标节点包围盒 $B_t$ 的中心距 $(\Delta x, \Delta y)$ 动态选用最优走线口：
+     - **垂直优先**：当 $|\Delta y| > |\Delta x| \times 1.15$ 且（两节点水平投影重叠或 $\Delta x < 40\text{px}$）时，$\Delta y > 0$ 选 `bottom -> top`，$\Delta y < 0$ 选 `top -> bottom`（典型覆盖 `REALIZATION` 实现模块在接口库正上方/正下方场景）；
+     - **逆向直线**：当 $\Delta x < -40\text{px}$ 时选 `left -> right`（避免绕回卡片外侧）；
+     - **标准正向**：其余默认 `right -> left`。
+   - **同锚点多边错位**：当 $K \ge 2$ 条非 ELK 拐点边（`SmoothStep`）汇聚于同一目标/源锚点（如 `left`）时，在 `RollupEdge` 中依据边在同组汇聚序列中的下标计算偏移量 $\text{offset} = (\text{idx} - (K - 1) / 2) \times 26\text{px}$ 错开标签与路由中心线，避免徽章互相覆盖。
+
+4. **按作用域隔离的位置记忆与「仅显式固定才锁定」定律 (`planFlatLayout`)**：
+   - **废除自动坐标全锁定**：`onPositionsComputed` 产出的 ELK 自动排布坐标**不写入 `pinned` 也不污染持久固定集**；当切换筛选条件（如 `AGG/EXPAND`、`REALIZATION`、状态快筛、邻域）或点击 `[✨ 自动整理]` 时，凡未显式 `pinned` 的节点一律交由 ELK 重新产出带正交 `bendPoints` 的干净排布（仅有固定节点时维持固定坐标并在相邻碰撞时触发 `resolveOverlapsBottomUp` 32px 间距推开）；
+   - **显式锁定触发源**：仅用户拖拽结束（`onNodeDragStop`，同时对绝对坐标钳制并更新节点坐标）或点击卡片图钉（`📌`）将节点置入 `pinnedIds` 并记录其坐标；
+   - **按 `(view, focus_scope)` 隔离**：会话位置记忆与 `localStorage` 草稿均按 `(view, focusScope)` 独立分桶存储，杜绝不同聚焦域之间坐标串扰；
+   - **视口居中门禁**：单次拖拽与图钉固定严禁 `fitView`；仅首次加载（无有效视口）、切换视图、`focusScope` 变更、点击 `[居中]` / `[✨ 自动整理]` 或应用书签时执行 `fitView`。
+
+5. **架构演进增量 Diff 合并 (`diffLayoutAgainstGraph` + `placeNewNodes`)**：
+   - `structure_version` 仅对 `(id, parent_id)` 计算；若变化，仅比对当前单层可见集合中存量节点与新建节点：已固定节点 100% 保持原位，新建直属子节点落位于空余网格并标注 `✨ 新增`。
+
+### 6.4 位置层 + 视角层零 DDL 持久化兼容 (`layoutPersistence.ts`)
+
+1. **内部节点坐标天然对齐**：在树模型中每个内部子节点（`sub_x`、`grp_x`、`mod_x`、`pgrp_x`、`proc_x`）仅属于唯一父容器（`GLOBAL` 或 `parent_id`），其单层平铺下的 `(x, y)` 仍以原节点 ID 作为键持久化至 `traefik_topology_layouts.node_positions`，与团队基准（`SHARED`）完全同构，**无需改动后端表结构或 API 字段**。
+2. **作用域限定外部传送门卡键 (`scopedPositionKey`)**：若用户在某个下钻视图 `focusScope` 内拖拽固定了外部传送门卡 `extId`，写入个人书签/草稿时使用复合键 **`${focusScope}::${extId}`**（如 `sub_1::sub_2` 或 `grp_10::ext_sys_WeChatPay`，长度远低于后端校验上限 `128`），保证外部卡在不同聚焦域中的左右排布位置各自独立、互不覆盖。
+3. **加载优先级与草稿密钥**：按 `URL 书签 ≻ 当前 (view, focus_scope) 默认书签 ≻ 团队基准 ≻ ELK` 加载；`localStorage` 草稿键扩展为按 `focusScope` 隔离，基准版本不一致时安全丢弃并提示。

@@ -37,6 +37,7 @@ code-traefik/
   2. **协议与契约唯一性**：仅处理 IPv4 TCP 明文 DOPHI `CROS RPC` 报文；`ascServiceName` 强制采用点分规范 `{package}.{serviceName}`（若无 package 则为 `{serviceName}`）；独占契约（`EXCLUSIVE`）`PROVIDE` 全局唯一，多实现契约（`MULTI_IMPL`，由 `CONTRACT_LIB` 接口库模块定义）按 `(contract_id, impl_key)` 唯一且同一契约的各实现模块必须两两分属不同 `ArchProcess`（[`ADR-16`](docs/05-adr/16-multi-implementation-service-contract-adr.md)）。
   3. **公私域隔离与 Agent 动态排他租约**：三级架构元素与 `.pb` 为全局唯一公共 SSOT；`Agent` 与 `RecordingSession` 严格区分 `SHARED`（团队共享）与 `PRIVATE`（仅 `owner_id` 本人可见与操作，横向越权返 `403`）；同一台 `Agent` 同一时刻仅允许 1 名用户持有 1 项录制或重放排他租约（并发争抢返 `409 Conflict`）；`traefik_traffic_records` 强制采用单次往返一行双模持久化（`raw_req_packet` + `raw_rsp_packet` `bytea` 与 `payload_json` `jsonb`）。
   4. **重放零外泄与探针卫生**：重放 `MOCK_MISS` 严禁转发至真实下游；主控失联超宽限期（5 分钟）或收到退出信号时，Agent 必须自动卸载全部 eBPF 探针与监听端口。
+  5. **架构拓扑单层平铺与布局校准（[`ADR-17`](docs/05-adr/17-topology-single-layer-drilldown-and-layout-ux-adr.md)）**：架构拓扑严格遵循「单层平铺逐级下钻（无外层包裹框、仅展示直属子节点 + 左右 `FIRST/LAST` 外部传送门卡）」、CSS `border-box` 与 ELK 节点宽高 `1:1` 对齐、四向智能锚点路由，以及按 `(view, focus_scope)` 隔离且仅用户显式拖拽/图钉固定才锁位的位置记忆策略。
 
 ---
 

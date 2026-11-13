@@ -1,13 +1,13 @@
 # ADR-15: 大规模架构拓扑渐进式下钻聚焦、多维降噪与双层混合布局持久化设计
 
 - **文档编号**：`15-scalable-topology-focus-and-layout-persistence-adr.md`
-- **文档版本**：v1.2.0（经架构深度检视加固与三态交互/子树聚光灯重构修订）
-- **日期**：2026-11-10
-- **状态**：已采纳 (Accepted)
+- **文档版本**：v1.3.0（经架构深度检视加固，且多级框中框展开部分已由 ADR-17 演进升级）
+- **日期**：2026-11-13
+- **状态**：已采纳 (Accepted)（局部渲染交互已由 [`ADR-17`](./17-topology-single-layer-drilldown-and-layout-ux-adr.md) 演进替代）
 - **关联特性**：`F-04`（分层复合架构拓扑与一致性画布）、`F-04.1`（C4 渐进式钻取、容器下钻聚焦与 N-Hop 邻域视图）、`F-04.2`（多维切片过滤、聚光灯降噪、高扇入折叠与搜索飞跃）、`F-04.3`（位置记忆混合布局引擎与公私双层布局持久化）、`SC-11`（大规模拓扑端到端验收）
 - **关联设计**：[`docs/02-design/03-architecture-elements-and-topology.md` §6](../02-design/03-architecture-elements-and-topology.md)、[`docs/02-design/05-database-schema.md` §3.7](../02-design/05-database-schema.md)、[`docs/03-api/01-http-api-contract.md` §2.2](../03-api/01-http-api-contract.md)
-- **关联作战卡**：[`docs/04-tasks/20-m19-scalable-topology-focus-and-layout-persistence.md`](../04-tasks/20-m19-scalable-topology-focus-and-layout-persistence.md)（M19，单里程碑 7 个子阶段 `M19-P1` ~ `M19-P7` 及 `M19.1` 交互与布局精修）
-- **演进关系**：保留 [`ADR-05`](./05-hierarchical-topology-canvas-redesign.md) 的分层复合图与边上卷底座，**正式修正并取代 ADR-05 §2 决策项 #3（“手动拖动后的排版不保存”）**。
+- **关联作战卡**：[`docs/04-tasks/20-m19-scalable-topology-focus-and-layout-persistence.md`](../04-tasks/20-m19-scalable-topology-focus-and-layout-persistence.md)（M19）、[`docs/04-tasks/22-m21-topology-single-layer-drilldown-and-layout-ux.md`](../04-tasks/22-m21-topology-single-layer-drilldown-and-layout-ux.md)（M21）
+- **演进关系**：保留 [`ADR-05`](./05-hierarchical-topology-canvas-redesign.md) 的分层模型与边上卷底座，**正式修正并取代 ADR-05 §2 决策项 #3（“手动拖动后的排版不保存”）**；本 ADR 中的「同屏多级框中框嵌套展开（`INCLUDE_CHILDREN`、全局深度滑杆 `L0~Ln`、`全展` 按钮、滚轮语义展开）」部分自 **M21 起已由 [`ADR-17`](./17-topology-single-layer-drilldown-and-layout-ux-adr.md) 演进升级为「单层平铺逐级下钻（Scoped Flat Canvas）」**，其余五段式纯函数管线、LCA 外部邻居代表、有向 N-Hop 邻域、聚光灯、Hub 插头折叠及 `traefik_topology_layouts` 双层持久化底座继续沿用。
 
 ### 修订记录
 
@@ -16,6 +16,10 @@
 | v1.0.0 | 2026-11-09 | 初版：C4 渐进式探索、Pinned + AABB 混合布局与 `(view, focus_scope)` 双层布局持久化 |
 | v1.1.0 | 2026-11-09 | **架构深度检视加固**：1. 渲染管线重排为「一致性叠加合成 ➔ 作用域裁剪 ➔ 边上卷 ➔ Hub 折叠 ➔ 布局」五段式，以「透明祖先 + 显式可见集」实现聚焦与外部邻居卡（修正裁剪先于动态违规边合成导致的边丢失缺陷）；2. 混合布局由「全局 ELK + Pinned 覆写」改为「**位置记忆 + 局部子树排版 + 自底向上碰撞消解**」，明确 Pinned 与推开优先级、父容器尺寸逐层传播与边退化判定，拖拽不再触发 ELK；3. 布局过期判定由全内容哈希 `model_version` 改为树结构指纹 `structure_version` + 前端节点集合 Diff；4. 持久化模型拆分为「**位置层（按视图统一、相对父坐标）**」与「**视角层（个人书签）**」，团队基准按 `view` 唯一、个人书签仅存差量覆写；5. 统一守卫出口并封堵搜索/滚轮/邻域等绕过路径；6. 统一全部跨文档参数（§6 参数字典）；7. 以可度量性能预算替代未经验证的耗时承诺 |
 | v1.2.0 | 2026-11-10 | **三态交互分离、子树聚光灯与父容器包围盒加固 (`M19.1`)**：1. **修正决策 #1 双击语义**：废除反直觉的“展开态双击收起”，确立**双击单向渐进下钻（折叠容器双击 ➔ 原地展开；已展开容器双击 ➔ 进入隔离聚焦；叶子模块双击 ➔ 打开画像抽屉上下游关系页；空白处双击 ➔ 退回上一级聚焦）**，收起操作仅通过标题栏折叠按钮 `▾` 或浮动操作条触发，并移除 220ms 单击防抖延迟；2. **修正决策 #8 聚光灯集合与三态分离**：将 `Hover 预览`、`Selection 选中`、`Focus 下钻` 显式分离（存在选中主体时鼠标悬停与移出不再改写聚光灯锁定态；单击选中默认不弹抽屉，抽屉开启时跟随选中自动切换）；`computeSpotlightSet` 升级为以**主体子树 $S = \{v\} \cup \text{descendants}(v)$** 为计算单元，内部后代节点与内部边 100% 保亮，跨子树边界的 1-Hop 关联拆分为上游调用方（`UPSTREAM`）与下游被调方（`DOWNSTREAM`）语义分层染色；3. **新增选中浮动操作条 (`NodeActionBar`) 与画像抽屉「上下游关系」页**：支持一键切换 1/2 跳邻域过滤、展开/聚焦/折叠、查看上下游列表并点击逐跳定位对端；4. **加固决策 #4 父容器包围盒与未展开子节点 Diff 防腐**：修复未展开容器内子节点被误判为新增节点触发横向堆叠溢出的缺陷，并在坐标后处理与混合合并阶段强制执行自底向上父容器包围盒撑大与位移边退化（`SmoothStep`）标记 |
+| v1.3.0 | 2026-11-13 | **演进对齐 [`ADR-17`](./17-topology-single-layer-drilldown-and-layout-ux-adr.md) (`M21`)**：标注 M19 建立的五段式管线、LCA 外部邻居卡、有向 N-Hop 邻域、聚光灯、Hub 插头折叠与 `traefik_topology_layouts` 双层持久化表继续作为核心底座；同屏多层复合框中框展开（`INCLUDE_CHILDREN`、全局深度滑杆、全展、滚轮展开）正式升级为 `ADR-17` 定义的「单层平铺逐级下钻 + ELK 110px 层距 + 1:1 `border-box` + 四向智能锚点 + 按作用域隔离的显式固定位置记忆」 |
+
+> [!NOTE]
+> **向后演进提示 (`ADR-15` ➔ `ADR-17`)**：若涉及单层平铺下钻规则、ELK 正交参数表、`border-box` 尺寸常量、四向智能锚点、工具栏四组收纳及位置记忆作用域隔离的最新权威规范，请直接以 [`ADR-17`](./17-topology-single-layer-drilldown-and-layout-ux-adr.md) 为准。
 
 ---
 

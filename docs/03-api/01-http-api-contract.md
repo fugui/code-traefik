@@ -1,11 +1,11 @@
 # 架构与活体契约治理 (`code-traefik`) HTTP / SSE 与主从通信接口契约规范
 
 - **文档编号**：`01-http-api-contract.md`
-- **文档版本**：v1.6.0
-- **更新日期**：2026-11-11
+- **文档版本**：v1.6.1
+- **更新日期**：2026-11-13
 - **归属阶段**：阶段三：接口与数据契约冻结 (`03-api`)
-- **状态**：已批准待实施 (Approved for M14~M20)
-- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.15.0, `F-01`~`F-16`、`F-24`~`F-27`、`SC-01`~`SC-12`)、[`01-system-architecture.md`](../02-design/01-system-architecture.md) (v1.6.0)、[`03-architecture-elements-and-topology.md`](../02-design/03-architecture-elements-and-topology.md) (v1.6.0)、[`04-control-plane-and-web-console.md`](../02-design/04-control-plane-and-web-console.md) (v1.8.0)、[`05-database-schema.md`](../02-design/05-database-schema.md) (v1.6.0)、[`09-arch-process-ssot-and-ebpf-premount-standby-adr.md`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md) (ADR-09 v1.1.0)、[`10-enhanced-proto-schema-file-management-adr.md`](../05-adr/10-enhanced-proto-schema-file-management-adr.md) (ADR-10 v1.1.0)、[`11-single-process-bidirectional-capture-and-recording-ux-adr.md`](../05-adr/11-single-process-bidirectional-capture-and-recording-ux-adr.md) (ADR-11 v1.0.0)、[`12-packet-causality-call-tree-and-sequence-ux-adr.md`](../05-adr/12-packet-causality-call-tree-and-sequence-ux-adr.md) (ADR-12 v1.0.0)、[`14-governance-dashboard-golden-suite-and-ci-gate-adr.md`](../05-adr/14-governance-dashboard-golden-suite-and-ci-gate-adr.md) (ADR-14 v1.1.0)、[`15-scalable-topology-focus-and-layout-persistence-adr.md`](../05-adr/15-scalable-topology-focus-and-layout-persistence-adr.md) (ADR-15 v1.2.0)、[`16-multi-implementation-service-contract-adr.md`](../05-adr/16-multi-implementation-service-contract-adr.md) (ADR-16 v1.0.0)
+- **状态**：M1~M20 已交付；M21 零接口破坏兼容 (Backward Compatible for M21)
+- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.16.0, `F-01`~`F-16`、`F-24`~`F-27`、`SC-01`~`SC-12`)、[`01-system-architecture.md`](../02-design/01-system-architecture.md) (v1.6.0)、[`03-architecture-elements-and-topology.md`](../02-design/03-architecture-elements-and-topology.md) (v1.7.0)、[`04-control-plane-and-web-console.md`](../02-design/04-control-plane-and-web-console.md) (v1.9.0)、[`05-database-schema.md`](../02-design/05-database-schema.md) (v1.6.1)、[`09-arch-process-ssot-and-ebpf-premount-standby-adr.md`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md) (ADR-09 v1.1.0)、[`10-enhanced-proto-schema-file-management-adr.md`](../05-adr/10-enhanced-proto-schema-file-management-adr.md) (ADR-10 v1.1.0)、[`11-single-process-bidirectional-capture-and-recording-ux-adr.md`](../05-adr/11-single-process-bidirectional-capture-and-recording-ux-adr.md) (ADR-11 v1.0.0)、[`12-packet-causality-call-tree-and-sequence-ux-adr.md`](../05-adr/12-packet-causality-call-tree-and-sequence-ux-adr.md) (ADR-12 v1.0.0)、[`14-governance-dashboard-golden-suite-and-ci-gate-adr.md`](../05-adr/14-governance-dashboard-golden-suite-and-ci-gate-adr.md) (ADR-14 v1.1.0)、[`15-scalable-topology-focus-and-layout-persistence-adr.md`](../05-adr/15-scalable-topology-focus-and-layout-persistence-adr.md) (ADR-15 v1.3.0)、[`16-multi-implementation-service-contract-adr.md`](../05-adr/16-multi-implementation-service-contract-adr.md) (ADR-16 v2.0.0)、[`17-topology-single-layer-drilldown-and-layout-ux-adr.md`](../05-adr/17-topology-single-layer-drilldown-and-layout-ux-adr.md) (ADR-17 v1.0.0)
 
 ### 修订记录
 
@@ -13,6 +13,7 @@
 | :--- | :--- | :--- |
 | v1.5.1 | 2026-11-09 | 同步 ADR-15 (v1.1.0) 拓扑画布双层布局持久化 API（`/api/arch/topology/layouts*`）与 `structure_version` / `gzip` 协商契约 |
 | v1.6.0 | 2026-11-11 | 依据 ADR-16 (v1.0.0) 同步多实现服务契约、接口库建模与重放 Mock 隔离契约（`F-02.1` / `F-04.4` / `F-05.1` / `SC-12` / `M20`）：1. 模块 CRUD 增加 `module_kind`（`BUSINESS \| CONTRACT_LIB`）及库模块禁绑进程/禁删守卫；2. 新增 `/api/arch/service-contracts` CRUD 与 `/api/arch/service-contracts/convert` 存量独占平滑转换接口；3. 服务供给 `POST /api/arch/modules/:id/services` 增加 `impl_key` 与 `A-09` 进程互斥 `409 CONTRACT_IMPL_PROCESS_CONFLICT` 响应，依赖 `POST /api/arch/modules/:id/dependencies` 增加 `contract_id` 分发依赖；4. 拓扑图 DTO 增加 `module_kind`、`implements`、`REALIZATION` 边及 `contract_id / impl_key`；5. 录制批次增加 `endpoint_snapshots`，一致性报告升级为八分类（新增 `IMPL_UNRESOLVED` 与 `impl_unresolved_count`），流量记录增加 `dst_contract_id`；6. 主从重放协议 `DownstreamEndpoint` 与 `MockRuleDownstream` 增加可选 `dst_tag` 向后兼容隔离字段 |
+| v1.6.1 | 2026-11-13 | 同步 [`ADR-17`](../05-adr/17-topology-single-layer-drilldown-and-layout-ux-adr.md) (`M21`) 拓扑布局 API 语义澄清：后端接口与请求体上限完全向后兼容不变，§2.2.1 `node_positions` 明确支持内部节点 ID 与外部传送门复合键 `${focusScope}::${extNodeId}`，且前端仅提交用户显式固定 (`pinned`) 节点覆盖差量 |
 
 ---
 
@@ -163,9 +164,9 @@
 
 | 类型 | 字段定义 | 校验规则 |
 | :--- | :--- | :--- |
-| `SavedNodePosition` | `{x: number, y: number, pinned?: boolean}` | `x / y` 必须为有限实数（拦截 `NaN / ±Inf`）；坐标为相对 `parentId` 父容器的局部坐标 |
-| `node_positions` | `Record<nodeId, SavedNodePosition>` | 条目数 `<= 5000`；键非空且长度 `<= 128` |
-| `SavedExpandState` | `{level: int, overrides?: Record<nodeId, boolean>}` | `level ∈ [0, 16]`（相对聚焦根深度档位）；`overrides` 条目数 `<= 5000` |
+| `SavedNodePosition` | `{x: number, y: number, pinned?: boolean}` | `x / y` 必须为有限实数（拦截 `NaN / ±Inf`）；单层平铺下为当前聚焦层平面坐标（含内部子节点 ID 及外部传送门复合键 `${focusScope}::${extNodeId}`） |
+| `node_positions` | `Record<nodeId, SavedNodePosition>` | 条目数 `<= 5000`；键非空且长度 `<= 128`（含 `::` 复合键） |
+| `SavedExpandState` | `{level: int, overrides?: Record<nodeId, boolean>}` | 向后兼容保留：`level ∈ [0, 16]`，`overrides <= 5000`（`ADR-17` 单层下钻模式仅需保持反序列化兼容） |
 | `SavedFilterState` | `{subsystem_ids?: string[], only_my_scope?: boolean, status?: "ALL" \| "ABNORMAL" \| "VIOLATION_ONLY", ego_node_id?: string, ego_hops?: 1 \| 2, hide_isolated?: boolean, hub_fold?: boolean}` | `subsystem_ids` 条目数 `<= 100`；枚举值严格白名单 |
 | `SavedViewport` | `{x: number, y: number, zoom: number}` | 有限实数；`zoom ∈ [0.15, 2.0]` |
 | `focus_scope` | `string` | 缺省规范化为 `"GLOBAL"`；必须匹配 `^(GLOBAL\|(sub\|grp\|pgrp\|proc)_[0-9]+\|ext_container\|undeployed_container)$`；`SHARED` 记录恒为 `"GLOBAL"` |

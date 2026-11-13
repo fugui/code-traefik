@@ -1,11 +1,11 @@
 # 架构与活体契约治理 (`code-traefik`) 数据库物理模型与 GORM 建模字典
 
 - **文档编号**：`05-database-schema.md`
-- **文档版本**：v1.6.0
-- **更新日期**：2026-11-11
+- **文档版本**：v1.6.1
+- **更新日期**：2026-11-13
 - **归属阶段**：阶段二：系统架构与数据模型设计 (`02-design`)
-- **状态**：已批准待实施 (Approved for M14~M20)
-- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.15.0)、[`01-system-architecture.md`](./01-system-architecture.md)、[`04-traffic-storage-partitioning-and-relational-normalization.md`](../05-adr/04-traffic-storage-partitioning-and-relational-normalization.md)、[`09-arch-process-ssot-and-ebpf-premount-standby-adr.md`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md) (ADR-09 v1.1.0)、[`12-packet-causality-call-tree-and-sequence-ux-adr.md`](../05-adr/12-packet-causality-call-tree-and-sequence-ux-adr.md) (ADR-12 v1.0.0)、[`14-governance-dashboard-golden-suite-and-ci-gate-adr.md`](../05-adr/14-governance-dashboard-golden-suite-and-ci-gate-adr.md) (ADR-14 v1.1.0)、[`15-scalable-topology-focus-and-layout-persistence-adr.md`](../05-adr/15-scalable-topology-focus-and-layout-persistence-adr.md) (ADR-15 v1.1.0)、[`16-multi-implementation-service-contract-adr.md`](../05-adr/16-multi-implementation-service-contract-adr.md) (ADR-16 v1.0.0)
+- **状态**：M1~M20 已交付；M21 零 DDL 兼容已批准 (Zero-DDL for M21)
+- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.16.0)、[`01-system-architecture.md`](./01-system-architecture.md)、[`04-traffic-storage-partitioning-and-relational-normalization.md`](../05-adr/04-traffic-storage-partitioning-and-relational-normalization.md)、[`09-arch-process-ssot-and-ebpf-premount-standby-adr.md`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md) (ADR-09 v1.1.0)、[`12-packet-causality-call-tree-and-sequence-ux-adr.md`](../05-adr/12-packet-causality-call-tree-and-sequence-ux-adr.md) (ADR-12 v1.0.0)、[`14-governance-dashboard-golden-suite-and-ci-gate-adr.md`](../05-adr/14-governance-dashboard-golden-suite-and-ci-gate-adr.md) (ADR-14 v1.1.0)、[`15-scalable-topology-focus-and-layout-persistence-adr.md`](../05-adr/15-scalable-topology-focus-and-layout-persistence-adr.md) (ADR-15 v1.3.0)、[`16-multi-implementation-service-contract-adr.md`](../05-adr/16-multi-implementation-service-contract-adr.md) (ADR-16 v2.0.0)、[`17-topology-single-layer-drilldown-and-layout-ux-adr.md`](../05-adr/17-topology-single-layer-drilldown-and-layout-ux-adr.md) (ADR-17 v1.0.0)
 
 ### 修订记录
 
@@ -13,6 +13,7 @@
 | :--- | :--- | :--- |
 | v1.5.1 | 2026-11-09 | 同步 ADR-15 (v1.1.0) 拓扑画布双层布局持久化表 `traefik_topology_layouts`（18 张核心业务表） |
 | v1.6.0 | 2026-11-11 | 依据 ADR-16 (v1.0.0) 同步多实现服务契约与接口库建模（`F-02.1` / `F-04.4` / `F-05.1` / `SC-12` / `M20`，核心业务表扩充为 19 张）：1. 新增 `traefik_service_contracts` 多实现服务契约表；2. `traefik_modules` 新增 `module_kind` 与库模块禁绑进程 `CHECK`；3. `traefik_module_services` 新增 `contract_id`、`impl_key`，将 `uk_traefik_mod_svc_name` 平滑替换为部分唯一索引 `uk_traefik_mod_svc_name_excl`、`uk_traefik_mod_svc_contract_impl`、`uk_traefik_mod_svc_contract_mod`（修订 `A-05`、守护 `A-09`）；4. `traefik_module_dependencies` 新增 `contract_id` 分发依赖与三选一 `CHECK`；5. `traefik_recording_sessions` 新增 `endpoint_snapshots`、`traefik_traffic_records` 新增 `dst_contract_id` 及存量平滑迁移规范 |
+| v1.6.1 | 2026-11-13 | 同步 [`ADR-17`](../05-adr/17-topology-single-layer-drilldown-and-layout-ux-adr.md) (`M21`) 零 DDL 布局持久化兼容约定：保持 `traefik_topology_layouts` 既有表结构与约束不变，明确单层平铺模式下内部子节点直接复用原节点 ID 存储各聚焦域平铺坐标，外部传送门卡跨聚焦域差量坐标采用 `${focusScope}::${extNodeId}` 复合键名（满足 `len <= 128` 校验），`expand_state` 保持向后兼容反序列化 |
 
 ---
 
@@ -779,12 +780,13 @@ func (GoldenSuiteItem) TableName() string { return config.TablePrefix + "golden_
 ### 3.7 拓扑画布双层布局与个人视图书签表（表 19，`F-04.3`, [`ADR-15`](../05-adr/15-scalable-topology-focus-and-layout-persistence-adr.md)）
 
 ```go
-// 19. TopologyLayout 拓扑画布双层布局表 (traefik_topology_layouts)，位置层 + 视角层分离 (ADR-15 v1.1.0 §4.2)：
+// 19. TopologyLayout 拓扑画布双层布局表 (traefik_topology_layouts)，位置层 + 视角层分离 (ADR-15 v1.1.0 §4.2 / ADR-17)：
 //   - SHARED（团队基准布局 / 位置层）：每个 view 至多 1 条 (uk_traefik_topo_layout_shared)，由 traefik_admin 发布；
 //     owner_id 为 NULL、focus_scope 恒为 'GLOBAL'；node_positions 为全视图完整相对父坐标；revision 乐观锁防并发覆盖；
 //   - PRIVATE（个人视图书签 / 视角层）：单人上限 20 条，保存聚焦域、过滤条件、展开态与视口，
 //     node_positions 仅存相对团队基准的坐标差量覆写（团队基准更新后未覆写节点自动继承）；
-//   - 坐标均为相对 parentId 父容器的局部坐标，与聚焦域无关；聚焦根与外部邻居卡坐标不落库。
+//   - ADR-17 零 DDL 兼容：单层平铺模式下各内部直接子节点沿用原节点 ID 映射各自父聚焦域坐标；
+//     若用户在某聚焦域固定了外部传送门卡，node_positions 允许使用 `${focusScope}::${extNodeId}` 复合键名隔离存储（仅包含用户显式拖拽/图钉固定的坐标）。
 //   - 约束：chk_traefik_topo_layout_scope / chk_traefik_topo_layout_view / chk_traefik_topo_layout_owner（见 §4 约束说明）。
 type TopologyLayout struct {
 	ID               uint64             `gorm:"primaryKey;autoIncrement" json:"id"`

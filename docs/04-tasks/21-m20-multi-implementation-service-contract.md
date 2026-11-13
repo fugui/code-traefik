@@ -2,12 +2,12 @@
 
 > **文档版本**：`v1.0.0`
 > **创建日期**：`2026-11-11`
-> **最后更新**：`2026-11-11`
+> **最后更新**：`2026-11-13`
 > **所属阶段**：阶段四 — 研发实施与 TDD 门禁 (Implementation & TDD Gate)
 > **里程碑编号**：`M20 — 多实现服务契约（接口库定义 + 多进程实现 + 调度中心分发）建模、实测定位、拓扑表达与重放隔离`
 > **覆盖需求范围**：`F-02.1`（多实现服务契约与接口库建模）、`F-04.4`（多实现契约拓扑表达）、`F-05.1`（多实现目的实现定位与第八类状态 `IMPL_UNRESOLVED`）、`SC-12`（X 分发到 B/C/D 三进程，录制后三条边分别判定，构造一条地址不匹配产生 `IMPL_UNRESOLVED`，重放 X 时 B/C Mock 不串用）、修订假设 `A-05` 与新增 `A-09`、第 19 张核心业务表 `traefik_service_contracts`
-> **前置依赖**：`M19`（大规模拓扑图聚焦探索与布局持久化闭环）、[`../05-adr/16-multi-implementation-service-contract-adr.md`](../05-adr/16-multi-implementation-service-contract-adr.md) (`v1.0.0`)
-> **当前状态**：⏳ **待实施 (Planned)**
+> **前置依赖**：`M19`（大规模拓扑图聚焦探索与布局持久化闭环）、[`../05-adr/16-multi-implementation-service-contract-adr.md`](../05-adr/16-multi-implementation-service-contract-adr.md) (`v2.0.0`)
+> **当前状态**：✅ **已交付 (Delivered)**（含 `ADR-16 v2.0.0` 自定义运行期发布名扩展）
 
 ### 修订记录
 
