@@ -1,10 +1,10 @@
 # 架构与活体契约治理 (`code-traefik`) 特性清单与需求范围界定规范 (Feature Matrix & Scope)
 
 - **文档编号**：`01-feature-matrix.md`
-- **文档版本**：v2.16.0
+- **文档版本**：v2.17.0
 - **更新日期**：2026-11-13
 - **当前阶段**：阶段一：特性清单与边界明确
-- **状态**：已批准待实施 (Approved for M10~M21)
+- **状态**：已批准待实施 (Approved for M10~M21；M22+ 规划见 ADR-18)
 - **协议依据**：详见项目内置参考文档 [`docs/07-references/01-cros-rpc-protocol-spec.md`](../07-references/01-cros-rpc-protocol-spec.md)（文档编号：`01-cros-rpc-protocol-spec.md` v1.0.0，基于 DOPHI 平台 `cros_rpccore.ph` / `cros_rpctcp` 规范，本文所有字段名、偏移与取值均以该规范原文为准）
 
 ### 修订记录
@@ -34,6 +34,7 @@
 | v2.14.1 | 2026-11-09 | **依据 ADR-15 (v1.1.0) 架构深度检视加固**：1. `F-04.1` 明确五段式管线（一致性叠加合成先于作用域裁剪，修正动态违规边丢失）、透明祖先聚焦、`LCA` 外部邻居代表规则与**有向** N-Hop 邻域，可见节点守卫改为覆盖滑杆/全展/滚轮/搜索/邻域/过滤/聚焦/书签全部入口的单一出口并删除搜索自动全展；2. `F-04.2` 统一状态快筛为 `ALL / ABNORMAL / VIOLATION_ONLY`，「我负责的」补齐后端 `MODULE.meta.owner_id`，Hub 判定统一为「不同顶层调用方 `≥ 8`」且违规边豁免折叠，统一聚光灯透明度、LOD 档位、飞跃参数与扁平 BEM 类名；3. `F-04.3` 由「全局 ELK + Pinned 覆写」改为「位置记忆 + 局部子树排版 + 自底向上碰撞消解」，拖拽不再触发 ELK，布局过期判定改用树结构指纹 `structure_version` + 节点集合 Diff，持久化拆分为按视图统一的位置层（团队基准，`revision` 乐观锁）与仅存差量的视角层（个人书签）；4. 新增 `SC-11` 大规模拓扑端到端验收场景与拓扑性能基线；M19 保持单里程碑，内部拆分 `M19-P1` ~ `M19-P7` 七个子阶段 |
 | v2.15.0 | 2026-11-11 | **多实现服务契约、接口库建模与按目的进程实现定位 (ADR-16 / M20)**：面向「接口库 `FM A` 定义 + 多进程模块 `B/C/D` 实现 + 调度中心 `X` 按注册表分发」业务形态（详见 [`docs/05-adr/16-multi-implementation-service-contract-adr.md`](../05-adr/16-multi-implementation-service-contract-adr.md) 与作战卡 [`docs/04-tasks/21-m20-multi-implementation-service-contract.md`](../04-tasks/21-m20-multi-implementation-service-contract.md)），扩展 `F-02.1`、`F-04.4`、`F-05.1`：1. **关键假设演进**：修订 `A-05`（收窄为独占契约 `EXCLUSIVE` 全局唯一；多实现契约 `MULTI_IMPL` 按 `(contract_id, impl_key)` 与 `(contract_id, module_id)` 唯一），新增 `A-09`（同一多实现契约的实现模块两两分属不同 `ArchProcess`），明确 `A-03` 对 `CONTRACT_LIB` 接口库模块的豁免；2. **多实现服务契约与接口库建模 (`F-02.1`)**：`traefik_modules` 新增 `module_kind ∈ {BUSINESS, CONTRACT_LIB}`，新增第 19 张核心业务表 `traefik_service_contracts`，`traefik_module_services` 扩展 `contract_id + impl_key` 并统一执行 `A-09` 进程互斥守卫，`traefik_module_dependencies` 支持 `contract_id` 分发依赖 (`DISPATCH`)；3. **多实现契约拓扑表达 (`F-04.4`)**：逻辑视图渲染 `«interface»` 库卡与独立可开关的 `REALIZATION` 实现边图层，默认采用「按接口聚合 (`topo_contract_mode=AGG`)」并支持切换「按实现展开 (`EXPAND`)」，物理视图按实现展开且不渲染库模块；4. **多实现目的实现定位与第八类一致性状态 `IMPL_UNRESOLVED` (`F-05.1`)**：录制批次固化 `endpoint_snapshots` 端点字典快照，按目的进程消歧定位实现模块并回填 `traffic_records.dst_contract_id`，新增第八类一致性状态 `IMPL_UNRESOLVED`（实现待定，不计入 `UNCOVERED` 分母），重放下游 Mock 方法键扩展 `@dst_tag` 防止多实现应答串用；新增 `SC-12` 验收场景与 Non-Goal 11 |
 | v2.16.0 | 2026-11-13 | **架构拓扑单层平铺逐级下钻重构、ELK 正交布局校准与全链路易用性升级 (ADR-17 / M21)**：依据 [`ADR-17`](../05-adr/17-topology-single-layer-drilldown-and-layout-ux-adr.md) 演进更新 `F-04`、`F-04.1`、`F-04.2`、`F-04.3` 与 `SC-11`：1. **单层平铺逐级下钻**：废除同屏多级「框中框」复合嵌套展开、全局层级滑杆 (`L0~Ln`)、`全展` 与滚轮语义展开；双击容器或点击 `[进入 ▸]` 直接下钻进入该作用域的单层平铺画布（不渲染聚焦根外层虚线包裹框，仅展示 `relativeDepth === 1` 直接子节点与左右 `FIRST/LAST` 外部传送门卡），顶栏提供层级面包屑、统计胶囊与 `Esc/Backspace` 返回上层；2. **ELK 单层参数与 `1:1 border-box` 对齐**：层间水平净空升至 `110px`、同层垂直 `48px`、`edgeNode 36px`，所有节点强约束 `box-sizing: border-box` 并像素级对齐 ELK 宽高；3. **四向智能锚点与多边错位防叠**：根据源/目标相对几何坐标自动优选 `Right->Left` / `Bottom->Top` / `Top->Bottom` / `Left->Right`，消除纵向回环；同锚点汇聚 `SmoothStep` 边自动施加标签偏移；4. **作用域隔离位置记忆与工具栏/抽屉提纯**：按 `(view, focus_scope)` 分桶记忆坐标且仅用户拖拽/`📌` 图钉节点锁定坐标；工具栏收敛为 4 个高频控制组 + `[⚙️ 筛选与图层]` Popover；`EdgeDetailDrawer` 显示节点中文名与类型徽章 |
+| v2.17.0 | 2026-11-13 | **Proto 全生命周期治理收口与 Git/MR 协同边界修订 (ADR-18 / M22~M25 Proposed)**：鉴于外部兄弟项目 `code-proto` 与原型项目 `protohub` 已正式废弃，依据 [`ADR-18`](../05-adr/18-proto-full-lifecycle-and-git-mr-governance-adr.md) 修订边界：1. 撤销 `Non-Goal 4` 中“接口变更 MR 追踪与 `.proto` 源码管理归属 `code-proto`”旧约束，更新 §2.3 SSOT 说明、`F-18` 说明与 `Non-Goal 7`；2. 将 `F-21` 由“已取消”重定义为“`.proto` 源码全生命周期、Git/MR 协同门禁与统一编译入池”；3. 规划新增 `F-28`~`F-32`（涵盖纯 Go `protocompile` 编译池、`.proto` 源码托管/Monaco 编辑/悲观锁/Diff、Git 同步与 MR 自动化预检回写、静态命名/词汇/重复消息抽取/层级校验、审核流/持久化通知/异步 LLM 检查与依赖图前端挂载/导出） |
 
 
 ---
@@ -151,7 +152,7 @@ flowchart TB
 
 ### 2.3 架构元素与运行映射数据模型
 
-**SSOT 选型依据**：`code-proto` 专注 Protobuf 仓库管理、`.proto` 解析与接口变更 MR 追踪，没有「子系统-功能组-功能模块-标准业务进程」概念，也没有运行态进程挂载；`code-bench` 只管理用户、组织与审计。两者都不能作为架构元素的可靠来源，因此由 `code-traefik` 在自己的 `traefik_*` 表中闭环维护。
+**SSOT 选型依据**：原外部系统 `code-proto` 与原型 `protohub` 均已正式废弃；`code-bench` 只管理用户、组织与审计，没有「子系统-功能组-功能模块-标准业务进程」与运行态进程挂载。因此，由 `code-traefik` 在自己的 `traefik_*` 表中闭环维护架构元素 SSOT，并依据 [`ADR-18`](../05-adr/18-proto-full-lifecycle-and-git-mr-governance-adr.md) 统筹 `.proto` 源码到 `.pb` 运行态契约的全生命周期。
 
 下图只描述实体关系与关键约束，完整物理建模见阶段二 [`05-database-schema.md`](../02-design/05-database-schema.md)：
 
@@ -315,12 +316,17 @@ erDiagram
 | 编号 | 特性名称 | 优先级 | 说明 |
 | :--- | :--- | :---: | :--- |
 | **F-17** | **Agent Token 鉴权加固** | **P1** | Agent 从环境变量或安全配置加载高强度 Token（禁止硬编码）；HTTP 指令与 WebSocket 握手校验 `X-Traefik-Agent-Token`（`subtle.ConstantTimeCompare`）。验收：Token 缺失或错误时返回 `401`。 |
-| **F-18** | **结构化接口文档浏览** | **P1** | 基于 `.pb` 反射展示接口清单、入参 / 出参 Message 嵌套树、字段 Tag、类型（含 `repeated`、`map`、`enum`）及注释，可从模块详情跳转。与 `code-proto` 的区别：以运行时 `(ascServiceName, ascOperation)` 为视角，并与功能模块、流量记录关联，不管理 `.proto` 源码与 MR。 |
+| **F-18** | **结构化接口文档浏览** | **P1** | 基于 `.pb` 反射展示接口清单、入参 / 出参 Message 嵌套树、字段 Tag、类型（含 `repeated`、`map`、`enum`）及注释，可从模块详情跳转；以运行时 `(ascServiceName, ascOperation)` 为核心视角与功能模块、流量记录双向关联，并按 [`ADR-18`](../05-adr/18-proto-full-lifecycle-and-git-mr-governance-adr.md) 向上溯源至 `.proto` 源码版本与 Git MR。 |
 | **F-19** | **报文敏感字段脱敏与查看权限细分** | **P1** | 按字段路径配置脱敏规则；Payload 明文查看可限定角色。 |
 | **F-20** | **录制批次一键回归套件** | - | **已收敛 (SUPERSEDED)**：已升维融入 `F-25` 黄金契约套件资产库。 |
-| **F-21** | **从 `code-proto` 导入 `.pb`** | - | **已取消 (CANCELLED)** | 因兄弟模块 `code-proto` 排期推迟，取消联动强依赖。`code-traefik` 转为由自身闭环提供多 `.pb` 描述集资产台账管理与 OpenAPI CI/CD 直推能力（详见 ADR-10）。 | - |
+| **F-21** | **`.proto` 源码全生命周期、Git/MR 门禁与统一编译入池** | **P1 (M22+)** | **已重定义 (REDEFINED -> ADR-18)**：M11 阶段曾因外部 `code-proto` 推迟而取消联动并先行建成 `.pb` 生效池底座；现因 `code-proto` 与 `protohub` 全面废弃，本项重定义为由 `code-traefik` 内部通过纯 Go `protocompile` 打通 `.proto` 源码到 `.pb` 生效池的原生编译、版本溯源与 Git/MR 协同闭环（详见 [`ADR-18`](../05-adr/18-proto-full-lifecycle-and-git-mr-governance-adr.md)）。 |
 | **F-22** | **无特权用户态代理降级模式** | **P2** | 不具备 eBPF 特权时，由业务方把下游地址配置为 Agent 代理端口完成采集与重放。 |
 | **F-23** | **基于 `.pb` 契约的在线构造参数主动发包调试** | **P2** | 在 `流量调试` 台不依赖既有录制包，选定已激活 `.pb` 的 `(ascServiceName, ascOperation)` 在线填写/编辑 JSON 请求体，由主控 `dynamicpb` 编码并封装 CROS RPC 帧下发目标 Agent 注入业务进程，类似 CROS RPC 版 `grpcurl` / Postman。 |
+| **F-28** | **`.proto` 源码托管、Monaco 在线编辑、悲观锁与历史 Diff** | **P1 (Proposed M23)** | 按 `ADR-18` 承接并升级原 `protohub` 源码管理能力：PostgreSQL 持久化源码版本（淘汰本地磁盘裸存）、基于 `protocompile` 的 AST 解析、并发悲观编辑锁（`409` 拦截与管理员强制解锁审计）、Monaco Editor 语法高亮与版本 Diff。 |
+| **F-29** | **Git 仓库同步、SHA256 对账与 MR Webhook 门禁回写** | **P1 (Proposed M24)** | 纳管 `traefik_git_repos`（凭据 AES-256-GCM 加密与 SSRF 防护），接入 CodeHub/GitLab MR Webhook 触发“编译 + 静态规范 + `F-26` 破坏性变更 + 分层依赖”五合一预检并回写 MR Comment/Status；合入主干自动编译生成 `.pb`；Web 修改 Git 绑定文件自动提分支 MR 防止双写脑裂。 |
+| **F-30** | **可配置命名规范、领域术语库与 AST 重复消息抽取** | **P1 (Proposed M22~M23)** | 提供可配置规则正则（默认兼容 `dophi.order.v1` 等多段式包名）、`traefik_vocabulary_terms` 领域词汇表、基于 AST 真实字段类型的跨文件重复 Message 公共抽取建议，以及 `layer_level` 分层逆向依赖校验与可选异步熔断 LLM 辅助检查。 |
+| **F-31** | **`.proto` 变更审核工作台与持久化通知中心** | **P1 (Proposed M25)** | 收口平台内部审核单与 Git MR 预检记录（同屏查看文本 Diff + 规范报告 + `F-26` 下游影响面），支持 PostgreSQL 持久化站内通知与 SMTP/`code-notifier` 异步重试推送（替代 `protohub` 内存通知）。 |
+| **F-32** | **`.pb`/`.proto` 依赖关系图挂载与拓扑图导出** | **P1 (Proposed M22)** | 前端在 `/schemas?tab=graph` 正式挂载 `dependencies-graph` 接口可视化视图，并在 `/topology` 画布补齐 PNG/SVG 一键导出能力。 |
 
 ---
 
@@ -352,10 +358,10 @@ erDiagram
 - **Non-Goal 1（只支持 CROS RPC over IPv4 TCP 明文）**：不设计可插拔的多协议框架，不支持 HTTP/REST、gRPC 或其他私有协议；首期只覆盖经内核 Socket 的 **IPv4 TCP 明文**通信底座，不覆盖 `Mesh`、`Domain`（Unix Socket）、IPv6、TLS 加密流，也不介入不经 Socket 的共享内存 `FRPC`；Payload 只解码 Protobuf（`RPC_IDL_MSG_TYPE_PB`）。
 - **Non-Goal 2（首期不实现 Agent Token 鉴权）**：首期基于部署 IP 保密 + 源 IP 白名单，Token 鉴权列为 `F-17 / P1`，代码预留 `TODO(security)`。
 - **Non-Goal 3（主控不抓包、不发重放包）**：主控是无特权控制面，不挂载 eBPF、不扫描业务 `/proc`、不跨网直接向业务进程发送报文；监测与重放全部由 Agent 完成。
-- **Non-Goal 4（不引入 Keploy，不重复建设 MR 追踪）**：不依赖外部 Keploy 工具链；接口变更 MR 追踪与 `.proto` 源码管理归属 `code-proto`。
+- **Non-Goal 4（不引入 Keploy，但收口 `.proto` 与 MR 治理）**：不依赖外部 Keploy 工具链；原计划由 `code-proto` 承担的 `.proto` 源码管理与 Git/MR 门禁因外部系统废弃，正式由 [`ADR-18`](../05-adr/18-proto-full-lifecycle-and-git-mr-governance-adr.md) 纳入 `code-traefik` M22~M25 规划，不再作为平台永久非目标。
 - **Non-Goal 5（Agent 无状态、无 Schema）**：Agent 不连数据库、不持有数据库凭据、不接收或解析 `.pb`；主控所有业务表冠以 `traefik_` 前缀。
 - **Non-Goal 6（不污染宿主机全局网络）**：eBPF 只作用于主控下发的目标 PID 集合、监听端口与下游 `IP:Port`，其余连接原样放行。
-- **Non-Goal 7（不依赖外部系统同步架构元数据）**：`code-traefik` 是架构元素与拓扑的 SSOT，不与 `code-proto`、`code-bench` 建立元数据轮询或强同步。
+- **Non-Goal 7（不依赖外部系统同步架构元数据）**：`code-traefik` 是架构元素与拓扑的 SSOT，不与 `code-bench` 等外部系统建立架构元数据轮询或强同步（Git 仓库仅作为 `.proto` 契约源码同步与 MR 门禁集成源）。
 - **Non-Goal 8（不隔离非 CROS RPC 依赖的副作用）**：重放只在测试环境执行 (A-06)；目标进程对 DB、缓存、MQ 等的访问不做 Mock 或回滚。
 - **Non-Goal 9（不做 MNG 握手语义仿真）**：MNG 管理消息只解析展示并原样回放 (A-08)；含挑战—应答或一次性随机数的握手不保证重放成功。
 - **Non-Goal 10（不支持容器 PID 命名空间与多副本模块）**：首期只支持宿主机 PID 命名空间内的进程；不支持同一功能模块多副本部署 (A-03)。

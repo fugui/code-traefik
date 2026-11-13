@@ -67,7 +67,8 @@ docs/
 │   ├── 14-governance-dashboard-golden-suite-and-ci-gate-adr.md        # ADR-14：契约治理全景大盘、黄金用例套件与 CI/CD 发布强阻断门禁架构决策
 │   ├── 15-scalable-topology-focus-and-layout-persistence-adr.md       # ADR-15：大规模架构拓扑渐进式下钻聚焦、多维降噪与双层混合布局持久化架构决策
 │   ├── 16-multi-implementation-service-contract-adr.md               # ADR-16：多实现服务契约（接口库定义 + 多进程实现 + 调度中心分发）建模与表达架构决策
-│   └── 17-topology-single-layer-drilldown-and-layout-ux-adr.md       # ADR-17：架构拓扑单层平铺逐级下钻、ELK 正交布局校准与全链路易用性升级设计
+│   ├── 17-topology-single-layer-drilldown-and-layout-ux-adr.md       # ADR-17：架构拓扑单层平铺逐级下钻、ELK 正交布局校准与全链路易用性升级设计
+│   └── 18-proto-full-lifecycle-and-git-mr-governance-adr.md            # ADR-18：废弃 code-proto 与 protohub 后，Proto 全生命周期与 Git/MR 协同治理架构决策
 ├── 06-ops/          # 交付与验证：双模联调、物理隔离数据库测试与生产环境单二进制部署手册
 │   └── 01-verification-and-deployment-guide.md    # 联调验证、自动化回归测试与生产部署操作指南
 └── 07-references/   # 外部参考与上位契约基准：协议包规范、字节字典与领域标准文档
