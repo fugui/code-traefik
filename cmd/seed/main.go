@@ -12,6 +12,7 @@ import (
 	"code-traefik/pkg/version"
 
 	"gorm.io/datatypes"
+	"gorm.io/gorm"
 )
 
 func main() {
@@ -33,12 +34,41 @@ func main() {
 		log.Fatalf("初始化数据库连接失败: %v", err)
 	}
 
-	db := models.DB
+	if err := seedDemoData(models.DB, *demoPbPath); err != nil {
+		log.Fatalf("执行 Demo 数据重构失败: %v", err)
+	}
 
-	// 3. 清理所有 traefik_* 业务数据表 (保留平台公共 users/departments/sys_audit_logs)
+	log.Println("==========================================================")
+	log.Println(" 全部 Demo 进程与架构数据重构完成！")
+	log.Println("==========================================================")
+}
+
+func mustCreate(db *gorm.DB, label string, value interface{}) error {
+	if err := db.Create(value).Error; err != nil {
+		return fmt.Errorf("%s 失败: %w", label, err)
+	}
+	return nil
+}
+
+func createFunctionalGroup(db *gorm.DB, fg *models.FunctionalGroup) error {
+	if err := db.Create(fg).Error; err != nil {
+		return fmt.Errorf("创建功能组 %s 失败: %w", fg.Code, err)
+	}
+	fg.Path = fmt.Sprintf("/%d/", fg.ID)
+	if err := db.Model(fg).Update("path", fg.Path).Error; err != nil {
+		return fmt.Errorf("更新功能组 %s 路径失败: %w", fg.Code, err)
+	}
+	return nil
+}
+
+func seedDemoData(db *gorm.DB, demoPbPath string) error {
+	// 3. 清理所有 traefik_* 业务数据表 (保留平台公共 users/departments/sys_audit_logs 与系统配置)
 	log.Println("[1/7] 清空历史 traefik_* 业务数据表...")
 	truncateSQL := `
-		TRUNCATE TABLE 
+		TRUNCATE TABLE
+			traefik_golden_suite_items,
+			traefik_golden_suites,
+			traefik_topology_layouts,
 			traefik_traffic_records,
 			traefik_recording_sessions,
 			traefik_replay_items,
@@ -58,7 +88,7 @@ func main() {
 		RESTART IDENTITY CASCADE;
 	`
 	if err := db.Exec(truncateSQL).Error; err != nil {
-		log.Fatalf("清空表失败: %v", err)
+		return fmt.Errorf("清空表失败: %w", err)
 	}
 
 	// 4. 重建默认公共 Agent (demo-local-agent)
@@ -76,8 +106,8 @@ func main() {
 		MountsRevision:  1,
 		CreatedBy:       1,
 	}
-	if err := db.Create(&agent).Error; err != nil {
-		log.Fatalf("创建 Agent 失败: %v", err)
+	if err := mustCreate(db, "创建 Agent", &agent); err != nil {
+		return err
 	}
 	log.Printf("  • 已创建 Agent [%s] (ID: %d)", agent.Name, agent.ID)
 
@@ -86,11 +116,11 @@ func main() {
 	subsysEcommerce := models.Subsystem{
 		Code:        "ECOMMERCE",
 		Name:        "电商交易微服务系统",
-		Description: "基于 CROS RPC 协议构建的高并发电商分布式微服务集群（含交易中枢、账户资产与仓储履约）",
+		Description: "基于 CROS RPC 协议构建的高并发电商分布式微服务集群（含交易中枢、账户资产、仓储履约与多渠道支付 LIB 契约）",
 		CreatedBy:   1,
 	}
-	if err := db.Create(&subsysEcommerce).Error; err != nil {
-		log.Fatalf("创建电商子系统失败: %v", err)
+	if err := mustCreate(db, "创建电商子系统", &subsysEcommerce); err != nil {
+		return err
 	}
 
 	subsysClient := models.Subsystem{
@@ -99,8 +129,8 @@ func main() {
 		Description: "包含 TUI 交互式控制台终端与压力测试流量发生器",
 		CreatedBy:   1,
 	}
-	if err := db.Create(&subsysClient).Error; err != nil {
-		log.Fatalf("创建客户端子系统失败: %v", err)
+	if err := mustCreate(db, "创建客户端子系统", &subsysClient); err != nil {
+		return err
 	}
 
 	fgTrade := models.FunctionalGroup{
@@ -111,9 +141,9 @@ func main() {
 		Level:       1,
 		CreatedBy:   1,
 	}
-	db.Create(&fgTrade)
-	fgTrade.Path = fmt.Sprintf("/%d/", fgTrade.ID)
-	db.Model(&fgTrade).Update("path", fgTrade.Path)
+	if err := createFunctionalGroup(db, &fgTrade); err != nil {
+		return err
+	}
 
 	fgAsset := models.FunctionalGroup{
 		SubsystemID: subsysEcommerce.ID,
@@ -123,9 +153,9 @@ func main() {
 		Level:       1,
 		CreatedBy:   1,
 	}
-	db.Create(&fgAsset)
-	fgAsset.Path = fmt.Sprintf("/%d/", fgAsset.ID)
-	db.Model(&fgAsset).Update("path", fgAsset.Path)
+	if err := createFunctionalGroup(db, &fgAsset); err != nil {
+		return err
+	}
 
 	fgInventory := models.FunctionalGroup{
 		SubsystemID: subsysEcommerce.ID,
@@ -135,9 +165,9 @@ func main() {
 		Level:       1,
 		CreatedBy:   1,
 	}
-	db.Create(&fgInventory)
-	fgInventory.Path = fmt.Sprintf("/%d/", fgInventory.ID)
-	db.Model(&fgInventory).Update("path", fgInventory.Path)
+	if err := createFunctionalGroup(db, &fgInventory); err != nil {
+		return err
+	}
 
 	fgPayment := models.FunctionalGroup{
 		SubsystemID: subsysEcommerce.ID,
@@ -147,9 +177,9 @@ func main() {
 		Level:       1,
 		CreatedBy:   1,
 	}
-	db.Create(&fgPayment)
-	fgPayment.Path = fmt.Sprintf("/%d/", fgPayment.ID)
-	db.Model(&fgPayment).Update("path", fgPayment.Path)
+	if err := createFunctionalGroup(db, &fgPayment); err != nil {
+		return err
+	}
 
 	fgCli := models.FunctionalGroup{
 		SubsystemID: subsysClient.ID,
@@ -159,9 +189,9 @@ func main() {
 		Level:       1,
 		CreatedBy:   1,
 	}
-	db.Create(&fgCli)
-	fgCli.Path = fmt.Sprintf("/%d/", fgCli.ID)
-	db.Model(&fgCli).Update("path", fgCli.Path)
+	if err := createFunctionalGroup(db, &fgCli); err != nil {
+		return err
+	}
 
 	log.Printf("  • 已创建 2 个子系统与 5 个功能组")
 
@@ -174,7 +204,9 @@ func main() {
 		SortOrder:   1,
 		CreatedBy:   1,
 	}
-	db.Create(&apgGateway)
+	if err := mustCreate(db, "创建进程组 GROUP_GATEWAY", &apgGateway); err != nil {
+		return err
+	}
 
 	apgDownstream := models.ArchProcessGroup{
 		Code:        "GROUP_DOWNSTREAM",
@@ -183,7 +215,9 @@ func main() {
 		SortOrder:   2,
 		CreatedBy:   1,
 	}
-	db.Create(&apgDownstream)
+	if err := mustCreate(db, "创建进程组 GROUP_DOWNSTREAM", &apgDownstream); err != nil {
+		return err
+	}
 
 	apgClient := models.ArchProcessGroup{
 		Code:        "GROUP_CLIENT",
@@ -192,7 +226,9 @@ func main() {
 		SortOrder:   3,
 		CreatedBy:   1,
 	}
-	db.Create(&apgClient)
+	if err := mustCreate(db, "创建进程组 GROUP_CLIENT", &apgClient); err != nil {
+		return err
+	}
 
 	apSutOrder := models.ArchProcess{
 		GroupID:                 apgGateway.ID,
@@ -205,7 +241,9 @@ func main() {
 		Description:             "电商交易被测核心网关服务，监听 9001 端口",
 		CreatedBy:               1,
 	}
-	db.Create(&apSutOrder)
+	if err := mustCreate(db, "创建架构进程 PROC_SUT_ORDER", &apSutOrder); err != nil {
+		return err
+	}
 
 	apBackendAccount := models.ArchProcess{
 		GroupID:                 apgDownstream.ID,
@@ -218,7 +256,9 @@ func main() {
 		Description:             "核心下游账户资产服务，监听 9002 端口",
 		CreatedBy:               1,
 	}
-	db.Create(&apBackendAccount)
+	if err := mustCreate(db, "创建架构进程 PROC_BACKEND_ACCOUNT", &apBackendAccount); err != nil {
+		return err
+	}
 
 	apBackendInventory := models.ArchProcess{
 		GroupID:                 apgDownstream.ID,
@@ -231,7 +271,9 @@ func main() {
 		Description:             "核心下游仓储库存服务，监听 9003 端口",
 		CreatedBy:               1,
 	}
-	db.Create(&apBackendInventory)
+	if err := mustCreate(db, "创建架构进程 PROC_BACKEND_INVENTORY", &apBackendInventory); err != nil {
+		return err
+	}
 
 	apBackendPayAlipay := models.ArchProcess{
 		GroupID:                 apgDownstream.ID,
@@ -244,7 +286,9 @@ func main() {
 		Description:             "支付 LIB 契约的支付宝实现实例，监听 9004 端口",
 		CreatedBy:               1,
 	}
-	db.Create(&apBackendPayAlipay)
+	if err := mustCreate(db, "创建架构进程 PROC_BACKEND_PAYMENT_ALIPAY", &apBackendPayAlipay); err != nil {
+		return err
+	}
 
 	apBackendPayWechat := models.ArchProcess{
 		GroupID:                 apgDownstream.ID,
@@ -257,7 +301,9 @@ func main() {
 		Description:             "支付 LIB 契约的微信支付实现实例，监听 9005 端口",
 		CreatedBy:               1,
 	}
-	db.Create(&apBackendPayWechat)
+	if err := mustCreate(db, "创建架构进程 PROC_BACKEND_PAYMENT_WECHAT", &apBackendPayWechat); err != nil {
+		return err
+	}
 
 	apClientTui := models.ArchProcess{
 		GroupID:                 apgClient.ID,
@@ -270,7 +316,9 @@ func main() {
 		Description:             "TUI 终端交互客户端，发压与交易触发器",
 		CreatedBy:               1,
 	}
-	db.Create(&apClientTui)
+	if err := mustCreate(db, "创建架构进程 PROC_CLIENT_TUI", &apClientTui); err != nil {
+		return err
+	}
 
 	log.Printf("  • 已创建 3 个架构物理进程组与 6 个标准架构进程蓝图")
 
@@ -285,7 +333,9 @@ func main() {
 		Description:   "负责订单生命周期、两阶段预占与状态流转",
 		CreatedBy:     1,
 	}
-	db.Create(&modOrder)
+	if err := mustCreate(db, "创建模块 ORDER_CORE", &modOrder); err != nil {
+		return err
+	}
 
 	modAccount := models.Module{
 		SubsystemID:   subsysEcommerce.ID,
@@ -296,7 +346,9 @@ func main() {
 		Description:   "资金账本与扣减补偿服务",
 		CreatedBy:     1,
 	}
-	db.Create(&modAccount)
+	if err := mustCreate(db, "创建模块 ACCOUNT_CORE", &modAccount); err != nil {
+		return err
+	}
 
 	modInventory := models.Module{
 		SubsystemID:   subsysEcommerce.ID,
@@ -307,7 +359,9 @@ func main() {
 		Description:   "库存两阶段预占与释放管理",
 		CreatedBy:     1,
 	}
-	db.Create(&modInventory)
+	if err := mustCreate(db, "创建模块 INVENTORY_CORE", &modInventory); err != nil {
+		return err
+	}
 
 	modClient := models.Module{
 		SubsystemID:   subsysClient.ID,
@@ -318,7 +372,9 @@ func main() {
 		Description:   "TUI 控制台客户端与录制触发入口",
 		CreatedBy:     1,
 	}
-	db.Create(&modClient)
+	if err := mustCreate(db, "创建模块 CLIENT_TUI", &modClient); err != nil {
+		return err
+	}
 
 	modLibPayment := models.Module{
 		SubsystemID: subsysEcommerce.ID,
@@ -329,7 +385,9 @@ func main() {
 		Description: "ADR-16 v2.0 示例接口模块（CONTRACT_LIB，不绑定宿主进程，仅承载统一 .pb 服务契约）",
 		CreatedBy:   1,
 	}
-	db.Create(&modLibPayment)
+	if err := mustCreate(db, "创建模块 LIB_PAYMENT_CONTRACT", &modLibPayment); err != nil {
+		return err
+	}
 
 	modPayAlipay := models.Module{
 		SubsystemID:   subsysEcommerce.ID,
@@ -341,7 +399,9 @@ func main() {
 		Description:   "支付 LIB 契约的支付宝业务实现（发布自定义服务名 demo.payment.ALIPAY_PaymentService）",
 		CreatedBy:     1,
 	}
-	db.Create(&modPayAlipay)
+	if err := mustCreate(db, "创建模块 PAYMENT_ALIPAY", &modPayAlipay); err != nil {
+		return err
+	}
 
 	modPayWechat := models.Module{
 		SubsystemID:   subsysEcommerce.ID,
@@ -353,7 +413,9 @@ func main() {
 		Description:   "支付 LIB 契约的微信支付业务实现（发布自定义服务名 demo.payment.WECHAT_PaymentService）",
 		CreatedBy:     1,
 	}
-	db.Create(&modPayWechat)
+	if err := mustCreate(db, "创建模块 PAYMENT_WECHAT", &modPayWechat); err != nil {
+		return err
+	}
 
 	// 7.0 多实现接口契约定义 (ServiceContract)
 	payContract := models.ServiceContract{
@@ -364,8 +426,8 @@ func main() {
 		Description:     "统一支付渠道接口 LIB 契约，各实现实例可自定义运行期服务名并共用 .pb 解码",
 		CreatedBy:       1,
 	}
-	if err := db.Create(&payContract).Error; err != nil {
-		log.Fatalf("创建支付多实现契约失败: %v", err)
+	if err := mustCreate(db, "创建支付多实现契约", &payContract); err != nil {
+		return err
 	}
 
 	// 7.1 服务契约 (ModuleServices)
@@ -376,7 +438,9 @@ func main() {
 		Description:     "CROS RPC 订单微服务对外契约",
 		CreatedBy:       1,
 	}
-	db.Create(&svcOrder)
+	if err := mustCreate(db, "创建服务契约 demo.order.OrderService", &svcOrder); err != nil {
+		return err
+	}
 
 	svcAccount := models.ModuleService{
 		ModuleID:        modAccount.ID,
@@ -385,7 +449,9 @@ func main() {
 		Description:     "CROS RPC 账户资产微服务契约",
 		CreatedBy:       1,
 	}
-	db.Create(&svcAccount)
+	if err := mustCreate(db, "创建服务契约 demo.account.AccountService", &svcAccount); err != nil {
+		return err
+	}
 
 	svcInventory := models.ModuleService{
 		ModuleID:        modInventory.ID,
@@ -394,7 +460,9 @@ func main() {
 		Description:     "CROS RPC 仓储库存微服务契约",
 		CreatedBy:       1,
 	}
-	db.Create(&svcInventory)
+	if err := mustCreate(db, "创建服务契约 demo.inventory.InventoryService", &svcInventory); err != nil {
+		return err
+	}
 
 	svcPayAlipay := models.ModuleService{
 		ModuleID:            modPayAlipay.ID,
@@ -406,7 +474,9 @@ func main() {
 		Description:         "支付宝渠道运行期自定义服务名实现",
 		CreatedBy:           1,
 	}
-	db.Create(&svcPayAlipay)
+	if err := mustCreate(db, "创建服务契约 ALIPAY_PaymentService", &svcPayAlipay); err != nil {
+		return err
+	}
 
 	svcPayWechat := models.ModuleService{
 		ModuleID:            modPayWechat.ID,
@@ -418,7 +488,9 @@ func main() {
 		Description:         "微信渠道运行期自定义服务名实现",
 		CreatedBy:           1,
 	}
-	db.Create(&svcPayWechat)
+	if err := mustCreate(db, "创建服务契约 WECHAT_PaymentService", &svcPayWechat); err != nil {
+		return err
+	}
 
 	// 7.2 模块间依赖 (ModuleDependencies)
 	depOrderAccount := models.ModuleDependency{
@@ -429,7 +501,9 @@ func main() {
 		Description:      "下单与退款时划扣或返还买家余额",
 		CreatedBy:        1,
 	}
-	db.Create(&depOrderAccount)
+	if err := mustCreate(db, "创建依赖 ORDER->ACCOUNT", &depOrderAccount); err != nil {
+		return err
+	}
 
 	depOrderInventory := models.ModuleDependency{
 		ConsumerModuleID: modOrder.ID,
@@ -439,7 +513,9 @@ func main() {
 		Description:      "下单时锁定与实扣库存，退款时释放库存",
 		CreatedBy:        1,
 	}
-	db.Create(&depOrderInventory)
+	if err := mustCreate(db, "创建依赖 ORDER->INVENTORY", &depOrderInventory); err != nil {
+		return err
+	}
 
 	depOrderPayDispatch := models.ModuleDependency{
 		ConsumerModuleID: modOrder.ID,
@@ -448,7 +524,9 @@ func main() {
 		Description:      "DISPATCH 泛化契约依赖：按支付渠道路由调用 ALIPAY 或 WECHAT 实例",
 		CreatedBy:        1,
 	}
-	db.Create(&depOrderPayDispatch)
+	if err := mustCreate(db, "创建 DISPATCH 依赖 ORDER->PaymentService", &depOrderPayDispatch); err != nil {
+		return err
+	}
 
 	depOrderUnionPay := models.ModuleDependency{
 		ConsumerModuleID: modOrder.ID,
@@ -458,7 +536,9 @@ func main() {
 		Description:      "外部银联通道实名结算网关",
 		CreatedBy:        1,
 	}
-	db.Create(&depOrderUnionPay)
+	if err := mustCreate(db, "创建外部依赖 UNIONPAY", &depOrderUnionPay); err != nil {
+		return err
+	}
 
 	depClientOrder := models.ModuleDependency{
 		ConsumerModuleID: modClient.ID,
@@ -468,20 +548,22 @@ func main() {
 		Description:      "TUI 交互控制台发起交易请求",
 		CreatedBy:        1,
 	}
-	db.Create(&depClientOrder)
+	if err := mustCreate(db, "创建依赖 CLIENT->ORDER", &depClientOrder); err != nil {
+		return err
+	}
 
 	log.Printf("  • 已创建 7 个功能模块（含 1 个 CONTRACT_LIB + 2 个自定义实现实例）、1 个多实现契约、5 个服务供给契约及 5 项服务调用依赖")
 
 	// 8. 导入并激活 Protobuf 描述集 (demo.pb)
 	log.Println("[6/7] 导入并激活 Protobuf 描述集 (demo.pb)...")
-	rawBytes, err := os.ReadFile(*demoPbPath)
+	rawBytes, err := os.ReadFile(demoPbPath)
 	if err != nil {
-		log.Fatalf("读取 Protobuf 描述集 %s 失败: %v", *demoPbPath, err)
+		return fmt.Errorf("读取 Protobuf 描述集 %s 失败: %w", demoPbPath, err)
 	}
 
 	decoderReg, err := decoder.NewRegistry(db)
 	if err != nil {
-		log.Fatalf("初始化 Protobuf 解码注册中心失败: %v", err)
+		return fmt.Errorf("初始化 Protobuf 解码注册中心失败: %w", err)
 	}
 
 	schema, ops, _, err := decoderReg.UploadSchema(decoder.UploadSchemaInput{
@@ -490,12 +572,12 @@ func main() {
 		VersionTag:   "v1.0.0",
 		FileName:     "demo.pb",
 		RawBytes:     rawBytes,
-		Description:  "CROS RPC 4进程微服务电商交易接口描述集",
+		Description:  "CROS RPC 6进程微服务电商交易与多渠道支付接口描述集",
 		AutoActivate: true,
 		OperatorID:   1,
 	})
 	if err != nil {
-		log.Fatalf("上传并激活 Protobuf 描述集失败: %v", err)
+		return fmt.Errorf("上传并激活 Protobuf 描述集失败: %w", err)
 	}
 	log.Printf("  • 已导入描述集 [%s] v%d (已激活，共解析生成 %d 个 ProtoOperation 接口契约)",
 		schema.Name, schema.Version, len(ops))
@@ -579,13 +661,12 @@ func main() {
 
 	for _, p := range procs {
 		if err := db.Create(&p).Error; err != nil {
-			log.Fatalf("挂载进程 [%d] 失败: %v", p.ArchProcessID, err)
+			return fmt.Errorf("挂载进程 [%d] 失败: %w", p.ArchProcessID, err)
 		}
 	}
-	db.Model(&agent).Update("mounts_revision", 1)
+	if err := db.Model(&agent).Update("mounts_revision", 1).Error; err != nil {
+		return fmt.Errorf("更新 Agent mounts_revision 失败: %w", err)
+	}
 	log.Printf("  • 已为 Agent [%s] 成功挂载 %d 个业务物理进程实例", agent.Name, len(procs))
-
-	log.Println("==========================================================")
-	log.Println(" 全部 Demo 进程与架构数据重构完成！")
-	log.Println("==========================================================")
+	return nil
 }
