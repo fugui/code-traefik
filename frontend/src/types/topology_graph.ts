@@ -35,6 +35,8 @@ export interface GraphNodeMeta {
   hidden_module_count?: number;
   cross_edge_count?: number;
   violation_count?: number;
+  layer_level?: number;
+  effective_layer_level?: number;
   [key: string]: string | number | boolean | undefined | null;
 }
 

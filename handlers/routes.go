@@ -140,6 +140,7 @@ func RegisterAPIRoutes(r *gin.Engine) {
 		protected.POST("/proto-schemas/batch-activate", requireAdmin, BatchActivateProtoSchemas)
 		protected.GET("/proto-schemas/:id/download", DownloadProtoSchema)
 		protected.GET("/proto-schemas/:id/summary", GetProtoSchemaSummary)
+		protected.POST("/proto-schemas/compile", requireAdmin, CompileProtoSchema)
 		protected.POST("/proto-schemas", requireAdmin, UploadProtoSchema)
 		protected.PATCH("/proto-schemas/:id", requireAdmin, UpdateProtoSchema)
 		protected.POST("/proto-schemas/:id/activate", requireAdmin, ActivateProtoSchema)

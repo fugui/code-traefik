@@ -299,6 +299,9 @@ func CreateModuleService(db *gorm.DB, in ModuleServiceInput) (*models.ModuleServ
 				}
 				return err
 			}
+			if err := ValidateContractRealizationGuard(tx, *in.ContractID, in.ModuleID); err != nil {
+				return err
+			}
 			created = svc
 			return nil
 		})
@@ -610,74 +613,84 @@ func CreateModuleDependency(db *gorm.DB, in ModuleDependencyInput) (*models.Modu
 		CreatedBy:        in.OperatorID,
 	}
 
-	if in.IsExternal {
-		extSys := strings.TrimSpace(in.ExternalSystem)
-		extSvc := strings.TrimSpace(in.ExternalService)
-		if extSys == "" && extSvc == "" {
-			return nil, ErrInvalidExternalDependency
-		}
-		dep.ExternalSystem = extSys
-		dep.ExternalService = extSvc
-	} else if in.ContractID != nil && *in.ContractID > 0 {
-		// 分发依赖 (DISPATCH, ADR-16 §3.5)
-		var contract models.ServiceContract
-		if err := db.First(&contract, *in.ContractID).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return nil, ErrServiceContractNotFound
+	err := db.Transaction(func(tx *gorm.DB) error {
+		if in.IsExternal {
+			extSys := strings.TrimSpace(in.ExternalSystem)
+			extSvc := strings.TrimSpace(in.ExternalService)
+			if extSys == "" && extSvc == "" {
+				return ErrInvalidExternalDependency
 			}
-			return nil, err
-		}
-
-		// 检查是否已存在对该契约的具体实现依赖（语义重复拦截）
-		var conflictCount int64
-		if err := db.Table("traefik_module_dependencies d").
-			Joins("JOIN traefik_module_services s ON s.id = d.service_id").
-			Where("d.consumer_module_id = ? AND s.contract_id = ?", in.ConsumerModuleID, *in.ContractID).
-			Count(&conflictCount).Error; err != nil {
-			return nil, err
-		}
-		if conflictCount > 0 {
-			return nil, ErrDuplicateContractDependency
-		}
-
-		dep.ContractID = in.ContractID
-	} else {
-		if in.ServiceID == nil || *in.ServiceID == 0 {
-			return nil, errors.New("内部服务依赖必须指定目标 service_id 或 contract_id")
-		}
-		var targetSvc models.ModuleService
-		if err := db.First(&targetSvc, *in.ServiceID).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return nil, ErrModuleServiceNotFound
+			dep.ExternalSystem = extSys
+			dep.ExternalService = extSvc
+		} else if in.ContractID != nil && *in.ContractID > 0 {
+			// 分发依赖 (DISPATCH, ADR-16 §3.5)
+			var contract models.ServiceContract
+			if err := tx.First(&contract, *in.ContractID).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return ErrServiceContractNotFound
+				}
+				return err
 			}
-			return nil, err
-		}
 
-		if targetSvc.ModuleID == in.ConsumerModuleID {
-			return nil, ErrSelfDependency
-		}
-
-		// 若目标服务属于多实现契约，检查消费方是否已声明了该契约的分发依赖（语义重复拦截）
-		if targetSvc.ContractID != nil {
-			var dispatchCount int64
-			if err := db.Model(&models.ModuleDependency{}).
-				Where("consumer_module_id = ? AND contract_id = ?", in.ConsumerModuleID, *targetSvc.ContractID).
-				Count(&dispatchCount).Error; err != nil {
-				return nil, err
+			// 检查是否已存在对该契约的具体实现依赖（语义重复拦截）
+			var conflictCount int64
+			if err := tx.Table("traefik_module_dependencies d").
+				Joins("JOIN traefik_module_services s ON s.id = d.service_id").
+				Where("d.consumer_module_id = ? AND s.contract_id = ?", in.ConsumerModuleID, *in.ContractID).
+				Count(&conflictCount).Error; err != nil {
+				return err
 			}
-			if dispatchCount > 0 {
-				return nil, ErrDuplicateContractDependency
+			if conflictCount > 0 {
+				return ErrDuplicateContractDependency
 			}
+
+			dep.ContractID = in.ContractID
+		} else {
+			if in.ServiceID == nil || *in.ServiceID == 0 {
+				return errors.New("内部服务依赖必须指定目标 service_id 或 contract_id")
+			}
+			var targetSvc models.ModuleService
+			if err := tx.First(&targetSvc, *in.ServiceID).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return ErrModuleServiceNotFound
+				}
+				return err
+			}
+
+			if targetSvc.ModuleID == in.ConsumerModuleID {
+				return ErrSelfDependency
+			}
+
+			// 若目标服务属于多实现契约，检查消费方是否已声明了该契约的分发依赖（语义重复拦截）
+			if targetSvc.ContractID != nil {
+				var dispatchCount int64
+				if err := tx.Model(&models.ModuleDependency{}).
+					Where("consumer_module_id = ? AND contract_id = ?", in.ConsumerModuleID, *targetSvc.ContractID).
+					Count(&dispatchCount).Error; err != nil {
+					return err
+				}
+				if dispatchCount > 0 {
+					return ErrDuplicateContractDependency
+				}
+			}
+
+			dep.ServiceID = in.ServiceID
+			dep.ProviderModuleID = &targetSvc.ModuleID
 		}
 
-		dep.ServiceID = in.ServiceID
-		dep.ProviderModuleID = &targetSvc.ModuleID
-	}
-
-	if err := db.Create(dep).Error; err != nil {
-		if strings.Contains(err.Error(), "duplicate") || strings.Contains(err.Error(), "23505") {
-			return nil, ErrDuplicateDependency
+		if err := tx.Create(dep).Error; err != nil {
+			if strings.Contains(err.Error(), "duplicate") || strings.Contains(err.Error(), "23505") {
+				return ErrDuplicateDependency
+			}
+			return err
 		}
+
+		if err := ValidateDependencyGuard(tx, dep); err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
 

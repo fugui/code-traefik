@@ -652,6 +652,13 @@ func ConvertExclusiveToMultiImplContract(db *gorm.DB, in ConvertExclusiveContrac
 			}
 		}
 
+		if err := ValidateContractRealizationGuard(tx, contract.ID, targetSvc.ModuleID); err != nil {
+			return err
+		}
+		if err := ValidateAllTopologyLayerAndCycleConstraints(tx); err != nil {
+			return err
+		}
+
 		targetSvc.ContractID = &contract.ID
 		targetSvc.ImplKey = implKey
 		targetSvc.IsCustomServiceName = false
@@ -791,6 +798,13 @@ func AttachExclusiveToMultiImplContract(db *gorm.DB, in AttachExclusiveToContrac
 				}
 				convertedDeps++
 			}
+		}
+
+		if err := ValidateContractRealizationGuard(tx, contract.ID, targetSvc.ModuleID); err != nil {
+			return err
+		}
+		if err := ValidateAllTopologyLayerAndCycleConstraints(tx); err != nil {
+			return err
 		}
 
 		targetSvc.ContractID = &contract.ID

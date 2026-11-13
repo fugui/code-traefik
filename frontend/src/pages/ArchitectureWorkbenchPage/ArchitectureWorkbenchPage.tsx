@@ -72,7 +72,12 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
   // 抽屉（Drawer）与表单状态
   const [subsystemDrawerOpen, setSubsystemDrawerOpen] = useState(false);
   const [editingSubsystem, setEditingSubsystem] = useState<Subsystem | null>(null);
-  const [subsystemForm, setSubsystemForm] = useState({ code: '', name: '', description: '' });
+  const [subsystemForm, setSubsystemForm] = useState({
+    code: '',
+    name: '',
+    description: '',
+    layer_level: '',
+  });
 
   const [groupDrawerOpen, setGroupDrawerOpen] = useState(false);
   const [groupParentId, setGroupParentId] = useState<string | null>(null);
@@ -92,6 +97,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
     process_id: string;
     group_id: string;
     module_kind: 'BUSINESS' | 'CONTRACT_LIB';
+    layer_level: string;
   }>({
     code: '',
     name: '',
@@ -99,6 +105,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
     process_id: '',
     group_id: '',
     module_kind: 'BUSINESS',
+    layer_level: '',
   });
   // 视图模式: 逻辑架构 vs 物理进程 (URL 参数 ?tree=logical|physical)
   const initialTree = searchParams.get('tree') === 'physical' ? 'physical' : 'logical';
@@ -609,14 +616,35 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
     }
   };
 
+  const parseOptionalLayerLevel = (raw: string): number | undefined | 'INVALID' => {
+    const trimmed = raw.trim();
+    if (!trimmed) return undefined;
+    const parsed = Number(trimmed);
+    if (!Number.isInteger(parsed) || parsed < 0 || parsed > 99) {
+      return 'INVALID';
+    }
+    return parsed;
+  };
+
   // 子系统 CRUD
   const handleSaveSubsystem = async () => {
+    const parsedLayer = parseOptionalLayerLevel(subsystemForm.layer_level);
+    if (parsedLayer === 'INVALID') {
+      toast.error('子系统架构层级 (layer_level) 须为 0~99 的整数');
+      return;
+    }
     try {
+      const payload = {
+        code: subsystemForm.code,
+        name: subsystemForm.name,
+        description: subsystemForm.description,
+        ...(parsedLayer !== undefined ? { layer_level: parsedLayer } : {}),
+      };
       if (editingSubsystem) {
-        await archApi.updateSubsystem(editingSubsystem.id, subsystemForm);
+        await archApi.updateSubsystem(editingSubsystem.id, payload);
         toast.success('子系统更新成功');
       } else {
-        await archApi.createSubsystem(subsystemForm);
+        await archApi.createSubsystem(payload);
         toast.success('子系统创建成功');
       }
       setSubsystemDrawerOpen(false);
@@ -712,6 +740,11 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
       toast.error('请选择所属功能组');
       return;
     }
+    const parsedLayer = parseOptionalLayerLevel(moduleForm.layer_level);
+    if (parsedLayer === 'INVALID') {
+      toast.error('模块架构层级 (layer_level) 须为 0~99 的整数');
+      return;
+    }
     try {
       const procId = moduleForm.module_kind === 'CONTRACT_LIB' ? null : moduleForm.process_id ? moduleForm.process_id : null;
       if (editingMod) {
@@ -720,6 +753,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
           code: moduleForm.code,
           name: moduleForm.name,
           module_kind: moduleForm.module_kind,
+          ...(parsedLayer !== undefined ? { layer_level: parsedLayer } : {}),
           description: moduleForm.description,
           process_id: procId,
         });
@@ -730,6 +764,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
           code: moduleForm.code,
           name: moduleForm.name,
           module_kind: moduleForm.module_kind,
+          ...(parsedLayer !== undefined ? { layer_level: parsedLayer } : {}),
           description: moduleForm.description,
           process_id: procId,
         });
@@ -1079,6 +1114,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
                   process_id: '',
                   group_id: groupId,
                   module_kind: 'BUSINESS',
+                  layer_level: '',
                 });
                 setModuleDrawerOpen(true);
               }}
@@ -1091,6 +1127,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
                   process_id: mod.process_id || (mod.process?.id ?? ''),
                   group_id: mod.group_id,
                   module_kind: mod.module_kind || 'BUSINESS',
+                  layer_level: mod.layer_level !== undefined ? String(mod.layer_level) : '',
                 });
                 setModuleDrawerOpen(true);
               }}
@@ -1098,12 +1135,17 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
               isAdmin={isAdmin}
               onCreateSubsystem={() => {
                 setEditingSubsystem(null);
-                setSubsystemForm({ code: '', name: '', description: '' });
+                setSubsystemForm({ code: '', name: '', description: '', layer_level: '' });
                 setSubsystemDrawerOpen(true);
               }}
               onEditSubsystem={(sub) => {
                 setEditingSubsystem(sub);
-                setSubsystemForm({ code: sub.code, name: sub.name, description: sub.description || '' });
+                setSubsystemForm({
+                  code: sub.code,
+                  name: sub.name,
+                  description: sub.description || '',
+                  layer_level: sub.layer_level !== undefined ? String(sub.layer_level) : '',
+                });
                 setSubsystemDrawerOpen(true);
               }}
               onDeleteSubsystem={(id) => void handleDeleteSubsystem(id)}
@@ -1183,6 +1225,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
                     process_id: '',
                     group_id: selectedGroupId,
                     module_kind: 'BUSINESS',
+                    layer_level: '',
                   });
                   setModuleDrawerOpen(true);
                 }}
@@ -1195,6 +1238,7 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
                     process_id: mod.process_id || (mod.process?.id ?? ''),
                     group_id: mod.group_id,
                     module_kind: mod.module_kind || 'BUSINESS',
+                    layer_level: mod.layer_level !== undefined ? String(mod.layer_level) : '',
                   });
                   setModuleDrawerOpen(true);
                 }}
@@ -1292,6 +1336,18 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
               value={subsystemForm.name}
               onChange={(e) => setSubsystemForm({ ...subsystemForm, name: e.target.value })}
               placeholder="如 核心账务子系统"
+            />
+          </div>
+          <div className="code-form-item">
+            <label className="code-form-label">架构层级 (layer_level, 0~99, 0 表示不限制):</label>
+            <input
+              type="number"
+              min={0}
+              max={99}
+              className="code-input"
+              value={subsystemForm.layer_level}
+              onChange={(e) => setSubsystemForm({ ...subsystemForm, layer_level: e.target.value })}
+              placeholder="0 表示不限制；数值越大越位于上层（如 1 基础层 < 2 领域层 < 3 网关层）"
             />
           </div>
           <div className="code-form-item">
@@ -1515,6 +1571,18 @@ export const ArchitectureWorkbenchPage: React.FC = () => {
               </select>
             </div>
           )}
+          <div className="code-form-item">
+            <label className="code-form-label">模块架构层级 (layer_level, 0~99, 0/留空表示继承所属子系统):</label>
+            <input
+              type="number"
+              min={0}
+              max={99}
+              className="code-input"
+              value={moduleForm.layer_level}
+              onChange={(e) => setModuleForm({ ...moduleForm, layer_level: e.target.value })}
+              placeholder="留空保存不修改；输入 0 重置为继承子系统层级"
+            />
+          </div>
           <div className="code-form-item">
             <label className="code-form-label">描述说明:</label>
             <textarea

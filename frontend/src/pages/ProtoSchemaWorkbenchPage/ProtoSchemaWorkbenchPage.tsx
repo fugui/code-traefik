@@ -17,11 +17,12 @@ import type {
 import { SchemaPoolSummaryBar } from './SchemaPoolSummaryBar';
 import { SchemaAssetLedgerTable } from './SchemaAssetLedgerTable';
 import { SchemaAssetInspectDrawer } from './SchemaAssetInspectDrawer';
-import { SchemaUploadModal } from './SchemaUploadModal';
+import { SchemaUploadModal, type SchemaUploadMode } from './SchemaUploadModal';
 import { SchemaConflictModal } from './SchemaConflictModal';
 import { BreakingChangeAlertDrawer } from '../ProtoSchemasPage/BreakingChangeAlertDrawer';
 import { OperationMappingTable } from './OperationMappingTable';
 import { OperationDocDrawer } from './OperationDocDrawer';
+import { ProtoDependenciesGraphPane } from './ProtoDependenciesGraphPane';
 
 export const ProtoSchemaWorkbenchPage: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -35,13 +36,15 @@ export const ProtoSchemaWorkbenchPage: React.FC = () => {
   const schemaIdQuery = searchParams.get('schema_id');
   const legacyActiveSearch = searchParams.get('active_only') === 'true' && Boolean(searchParams.get('search'));
 
-  // 若携带深链参数且未显式指定 tab=assets，则自动切入 catalog 视图
-  const activeTab: 'assets' | 'catalog' =
-    rawTab === 'catalog' || (!rawTab && (serviceNameQuery || schemaIdQuery || legacyActiveSearch))
-      ? 'catalog'
-      : 'assets';
+  // 若携带深链参数且未显式指定 tab=assets/graph，则自动切入 catalog 视图
+  const activeTab: 'assets' | 'catalog' | 'graph' =
+    rawTab === 'graph'
+      ? 'graph'
+      : rawTab === 'catalog' || (!rawTab && (serviceNameQuery || schemaIdQuery || legacyActiveSearch))
+        ? 'catalog'
+        : 'assets';
 
-  const setTab = (tab: 'assets' | 'catalog') => {
+  const setTab = (tab: 'assets' | 'catalog' | 'graph') => {
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
       next.set('tab', tab);
@@ -62,6 +65,7 @@ export const ProtoSchemaWorkbenchPage: React.FC = () => {
 
   const selectedCategory = searchParams.get('category') || '';
   const activeStatusFilter = searchParams.get('status') || 'ALL';
+  const sourceTypeFilter = searchParams.get('source_type') || '';
   const assetSearch = searchParams.get('search') || '';
 
   const [assetSchemas, setAssetSchemas] = useState<ProtoSchemaLedgerItemDTO[]>([]);
@@ -83,6 +87,7 @@ export const ProtoSchemaWorkbenchPage: React.FC = () => {
 
   // 5. 弹窗与抽屉受控状态
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
+  const [uploadModalMode, setUploadModalMode] = useState<SchemaUploadMode>('upload');
   const [targetSchemaForNewVer, setTargetSchemaForNewVer] = useState<ProtoSchemaLedgerItemDTO | null>(null);
 
   const [inspectDrawerOpen, setInspectDrawerOpen] = useState(false);
@@ -97,6 +102,7 @@ export const ProtoSchemaWorkbenchPage: React.FC = () => {
     batchIds: (string | number)[] | null;
     breakingRules: BreakingRuleViolation[];
     affectedDependents: AffectedDependent[];
+    onCustomOverride?: (reason: string) => Promise<void>;
   } | null>(null);
   const [isOverriding, setIsOverriding] = useState(false);
 
@@ -113,6 +119,7 @@ export const ProtoSchemaWorkbenchPage: React.FC = () => {
       const res = await schemaApi.listProtoSchemas({
         category: selectedCategory || undefined,
         active_only: activeStatusFilter === 'ACTIVE' ? true : activeStatusFilter === 'INACTIVE' ? false : undefined,
+        source_type: sourceTypeFilter || undefined,
         search: assetSearch || undefined,
         latest_only: true,
         page: assetPage,
@@ -128,7 +135,7 @@ export const ProtoSchemaWorkbenchPage: React.FC = () => {
     } finally {
       setAssetLoading(false);
     }
-  }, [selectedCategory, activeStatusFilter, assetSearch, assetPage, assetPageSize, toast]);
+  }, [selectedCategory, activeStatusFilter, sourceTypeFilter, assetSearch, assetPage, assetPageSize, toast]);
 
   useEffect(() => {
     if (activeTab === 'assets') {
@@ -192,6 +199,17 @@ export const ProtoSchemaWorkbenchPage: React.FC = () => {
       const next = new URLSearchParams(prev);
       if (status !== 'ALL') next.set('status', status);
       else next.delete('status');
+      next.set('page', '1');
+      return next;
+    });
+    setAssetPage(1);
+  };
+
+  const handleSourceTypeFilterChange = (sourceType: string) => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (sourceType) next.set('source_type', sourceType);
+      else next.delete('source_type');
       next.set('page', '1');
       return next;
     });
@@ -295,7 +313,9 @@ export const ProtoSchemaWorkbenchPage: React.FC = () => {
     if (!breakingDrawerData) return;
     setIsOverriding(true);
     try {
-      if (breakingDrawerData.schemaId) {
+      if (breakingDrawerData.onCustomOverride) {
+        await breakingDrawerData.onCustomOverride(reason);
+      } else if (breakingDrawerData.schemaId) {
         const res = await schemaApi.activateProtoSchema(breakingDrawerData.schemaId, {
           allow_breaking: true,
           breaking_reason: reason,
@@ -395,6 +415,17 @@ export const ProtoSchemaWorkbenchPage: React.FC = () => {
     });
   };
 
+  // 从依赖图节点跳回文件资产台账并透视该描述集
+  const handleNavigateToSchemaAsset = (schemaId: string | number) => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.set('tab', 'assets');
+      next.set('schema_id', String(schemaId));
+      return next;
+    });
+    void handleInspectSchemaById(schemaId);
+  };
+
   return (
     <div className="code-proto-schema-workbench" style={{ padding: '20px' }}>
       {/* 顶部全局生效池健康摘要条 */}
@@ -402,12 +433,18 @@ export const ProtoSchemaWorkbenchPage: React.FC = () => {
         summary={poolSummary}
         isAdmin={isAdmin}
         onUploadClick={() => {
+          setUploadModalMode('upload');
+          setTargetSchemaForNewVer(null);
+          setUploadModalOpen(true);
+        }}
+        onCompileClick={() => {
+          setUploadModalMode('compile');
           setTargetSchemaForNewVer(null);
           setUploadModalOpen(true);
         }}
       />
 
-      {/* 顶层无侧栏双模分段 Tab 切换导航 */}
+      {/* 顶层无侧栏分段 Tab 切换导航 */}
       <div
         style={{
           display: 'flex',
@@ -463,6 +500,29 @@ export const ProtoSchemaWorkbenchPage: React.FC = () => {
             <span>🔍</span>
             <span>全局服务与接口目录</span>
           </button>
+
+          <button
+            type="button"
+            onClick={() => setTab('graph')}
+            style={{
+              padding: '10px 20px',
+              fontSize: '14px',
+              fontWeight: activeTab === 'graph' ? 600 : 400,
+              color: activeTab === 'graph' ? 'var(--color-primary, #3b82f6)' : 'var(--color-text-secondary)',
+              borderBottom: activeTab === 'graph' ? '2px solid var(--color-primary, #3b82f6)' : '2px solid transparent',
+              background: 'none',
+              borderTop: 'none',
+              borderLeft: 'none',
+              borderRight: 'none',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+            }}
+          >
+            <span>🕸️</span>
+            <span>跨包依赖关系图</span>
+          </button>
         </div>
       </div>
 
@@ -479,12 +539,16 @@ export const ProtoSchemaWorkbenchPage: React.FC = () => {
           onCategoryChange={handleCategoryChange}
           activeStatusFilter={activeStatusFilter}
           onStatusFilterChange={handleStatusFilterChange}
+          sourceTypeFilter={sourceTypeFilter}
+          onSourceTypeFilterChange={handleSourceTypeFilterChange}
+          highlightedSchemaId={schemaIdQuery}
           searchKeyword={assetSearch}
           onSearchChange={handleSearchChange}
           loading={assetLoading}
           isAdmin={isAdmin}
           onInspect={handleInspectSchema}
           onUploadNewVersion={(s) => {
+            setUploadModalMode('upload');
             setTargetSchemaForNewVer(s);
             setUploadModalOpen(true);
           }}
@@ -539,7 +603,12 @@ export const ProtoSchemaWorkbenchPage: React.FC = () => {
         />
       )}
 
-      {/* 描述集上传与新版本弹窗 */}
+      {/* 主视图 3: 跨描述集依赖关系图 */}
+      {activeTab === 'graph' && (
+        <ProtoDependenciesGraphPane onNavigateToSchemaAsset={handleNavigateToSchemaAsset} />
+      )}
+
+      {/* 描述集上传、在线直编与新版本弹窗 */}
       <SchemaUploadModal
         open={uploadModalOpen}
         onClose={() => {
@@ -548,6 +617,7 @@ export const ProtoSchemaWorkbenchPage: React.FC = () => {
         }}
         initialName={targetSchemaForNewVer ? targetSchemaForNewVer.name : ''}
         initialCategory={targetSchemaForNewVer ? targetSchemaForNewVer.category : 'BUSINESS'}
+        initialMode={uploadModalMode}
         onSuccess={() => {
           void loadAssetLedger();
           if (activeTab === 'catalog') void loadCatalogServices();
@@ -555,6 +625,16 @@ export const ProtoSchemaWorkbenchPage: React.FC = () => {
         onConflict={(cData) => {
           setConflictData(cData);
           setConflictModalOpen(true);
+        }}
+        onBreakingChange={(bData, onOverrideSubmit) => {
+          setBreakingDrawerData({
+            schemaId: null,
+            batchIds: null,
+            breakingRules: bData.breaking_rules || [],
+            affectedDependents: bData.affected_dependents || [],
+            onCustomOverride: onOverrideSubmit,
+          });
+          setBreakingDrawerOpen(true);
         }}
       />
 

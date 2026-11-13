@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import {
   Info,
   ChevronUp,
@@ -122,6 +122,14 @@ export interface ArchCanvasProps {
   containerSearchMatchCounts?: Record<string, number>;
   onVisibleRollupEdgesChange?: (edges: RollupEdgeModel[]) => void;
   panToNodeRequest?: { nodeId: string; seq: number } | null;
+  onExportHandleReady?: (handle: ArchCanvasExportHandle | null) => void;
+}
+
+export interface ArchCanvasExportHandle {
+  getSnapshot: () => {
+    nodes: ArchCanvasNode[];
+    edges: ArchCanvasEdge[];
+  };
 }
 
 export const ArchCanvas: React.FC<ArchCanvasProps> = ({
@@ -168,6 +176,7 @@ export const ArchCanvas: React.FC<ArchCanvasProps> = ({
   containerSearchMatchCounts,
   onVisibleRollupEdgesChange,
   panToNodeRequest = null,
+  onExportHandleReady,
 }) => {
   const [draggedNodeIds, setDraggedNodeIds] = useState<Set<string>>(new Set());
   const [rfInstance, setRfInstance] = useState<ReactFlowInstance<ArchCanvasNode, ArchCanvasEdge> | null>(null);
@@ -717,6 +726,25 @@ export const ArchCanvas: React.FC<ArchCanvasProps> = ({
       };
     });
   }, [flowEdges, spotlight]);
+
+  const exportSnapshotRef = useRef<{ nodes: ArchCanvasNode[]; edges: ArchCanvasEdge[] }>({
+    nodes: highlightedFlowNodes,
+    edges: highlightedFlowEdges,
+  });
+  exportSnapshotRef.current = {
+    nodes: highlightedFlowNodes,
+    edges: highlightedFlowEdges,
+  };
+
+  useEffect(() => {
+    if (!onExportHandleReady) return;
+    onExportHandleReady({
+      getSnapshot: () => exportSnapshotRef.current,
+    });
+    return () => {
+      onExportHandleReady(null);
+    };
+  }, [onExportHandleReady]);
 
   const isSelectedContainer = Boolean(
     selectedGraphNode && isContainerNodeType(selectedGraphNode.type)

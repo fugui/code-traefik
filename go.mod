@@ -4,6 +4,7 @@ go 1.26.1
 
 require (
 	code-common/backend v0.0.0
+	github.com/bufbuild/protocompile v0.14.1
 	github.com/cilium/ebpf v0.22.0
 	github.com/gin-gonic/gin v1.12.0
 	github.com/gorilla/websocket v1.5.3

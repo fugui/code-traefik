@@ -1,6 +1,13 @@
 import React, { useState } from 'react';
 import { Pagination } from '@code/common';
-import type { ProtoCategory, ProtoSchemaLedgerItemDTO } from '../../types';
+import type { ProtoCategory, ProtoSchemaLedgerItemDTO, ProtoSourceType } from '../../types';
+
+const SOURCE_TYPE_META: Record<ProtoSourceType, { label: string; tone: string }> = {
+  UPLOAD_PB: { label: '📦 手动上传 .pb', tone: 'var(--color-text-secondary)' },
+  ONLINE_COMPILE: { label: '⚡ 在线源码编译', tone: 'var(--color-primary)' },
+  GIT_SYNC: { label: '🔗 Git 同步', tone: 'var(--color-success)' },
+  GIT_MR_AUTO: { label: '🤖 MR 自动发布', tone: 'var(--color-warning)' },
+};
 
 export interface SchemaAssetLedgerTableProps {
   schemas: ProtoSchemaLedgerItemDTO[];
@@ -13,6 +20,9 @@ export interface SchemaAssetLedgerTableProps {
   onCategoryChange: (cat: string) => void;
   activeStatusFilter: string;
   onStatusFilterChange: (status: string) => void;
+  sourceTypeFilter?: string;
+  onSourceTypeFilterChange?: (sourceType: string) => void;
+  highlightedSchemaId?: string | number | null;
   searchKeyword: string;
   onSearchChange: (keyword: string) => void;
   loading: boolean;
@@ -37,6 +47,9 @@ export const SchemaAssetLedgerTable: React.FC<SchemaAssetLedgerTableProps> = ({
   onCategoryChange,
   activeStatusFilter,
   onStatusFilterChange,
+  sourceTypeFilter = '',
+  onSourceTypeFilterChange,
+  highlightedSchemaId = null,
   searchKeyword,
   onSearchChange,
   loading,
@@ -66,6 +79,27 @@ export const SchemaAssetLedgerTable: React.FC<SchemaAssetLedgerTableProps> = ({
   };
 
   const isAllSelected = schemas.length > 0 && selectedIds.length === schemas.length;
+
+  const renderSourceTypeBadge = (sourceType?: ProtoSourceType) => {
+    const key: ProtoSourceType = sourceType && sourceType in SOURCE_TYPE_META ? sourceType : 'UPLOAD_PB';
+    const meta = SOURCE_TYPE_META[key];
+    return (
+      <span
+        className="status-badge"
+        style={{
+          fontSize: '10px',
+          padding: '1px 6px',
+          borderRadius: '4px',
+          background: 'var(--color-bg-muted)',
+          border: '1px solid var(--color-border-primary)',
+          color: meta.tone,
+          fontWeight: 500,
+        }}
+      >
+        {meta.label}
+      </span>
+    );
+  };
 
   const renderCategoryBadge = (cat: ProtoCategory) => {
     switch (cat) {
@@ -254,6 +288,28 @@ export const SchemaAssetLedgerTable: React.FC<SchemaAssetLedgerTableProps> = ({
             <option value="INACTIVE">⚪ 未生效 (草稿/历史)</option>
           </select>
 
+          {onSourceTypeFilterChange && (
+            <select
+              aria-label="按来源筛选"
+              value={sourceTypeFilter}
+              onChange={(e) => onSourceTypeFilterChange(e.target.value)}
+              style={{
+                padding: '6px 10px',
+                borderRadius: '6px',
+                border: '1px solid var(--color-border-primary)',
+                background: 'var(--color-bg-surface)',
+                color: 'var(--color-text-primary)',
+                fontSize: '12px',
+              }}
+            >
+              <option value="">全部来源</option>
+              <option value="UPLOAD_PB">📦 手动上传 .pb</option>
+              <option value="ONLINE_COMPILE">⚡ 在线源码编译</option>
+              <option value="GIT_SYNC">🔗 Git 同步</option>
+              <option value="GIT_MR_AUTO">🤖 MR 自动发布</option>
+            </select>
+          )}
+
           {/* 关键字搜索 */}
           <input
             type="text"
@@ -354,15 +410,22 @@ export const SchemaAssetLedgerTable: React.FC<SchemaAssetLedgerTableProps> = ({
               ) : (
                 schemas.map((s, idx) => {
                   const isChecked = selectedIds.includes(s.id);
+                  const isHighlighted = highlightedSchemaId !== null && highlightedSchemaId !== undefined && String(s.id) === String(highlightedSchemaId);
                   const isLast = idx === schemas.length - 1;
                   const claimedPct = Math.round((s.claimed_ratio || 0) * 100);
 
                   return (
                     <tr
                       key={s.id}
+                      data-schema-id={String(s.id)}
                       style={{
                         borderBottom: isLast ? 'none' : '1px solid var(--color-border-primary)',
-                        background: isChecked ? 'rgba(59, 130, 246, 0.04)' : 'transparent',
+                        background: isHighlighted
+                          ? 'var(--color-bg-hover)'
+                          : isChecked
+                            ? 'var(--color-bg-muted)'
+                            : 'transparent',
+                        boxShadow: isHighlighted ? 'inset 3px 0 0 var(--color-primary)' : undefined,
                         transition: 'background 0.15s ease',
                       }}
                     >
@@ -377,7 +440,7 @@ export const SchemaAssetLedgerTable: React.FC<SchemaAssetLedgerTableProps> = ({
                       )}
 
                       <td style={{ padding: '10px 12px' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                           <span
                             style={{
                               fontWeight: 600,
@@ -399,6 +462,7 @@ export const SchemaAssetLedgerTable: React.FC<SchemaAssetLedgerTableProps> = ({
                           >
                             v{s.version}
                           </span>
+                          {renderSourceTypeBadge(s.source_type)}
                           {s.version_count > 1 && (
                             <span
                               style={{

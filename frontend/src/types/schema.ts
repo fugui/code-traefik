@@ -20,12 +20,20 @@ export interface ProtoPoolSummaryDTO {
   unresolved_dep_count: number;
 }
 
+export type ProtoSourceType = 'UPLOAD_PB' | 'ONLINE_COMPILE' | 'GIT_SYNC' | 'GIT_MR_AUTO';
+
 export interface ProtoSchemaLedgerItemDTO {
   id: string | number;
   name: string;
   version: number;
   version_tag?: string;
   category: ProtoCategory;
+  source_type?: ProtoSourceType;
+  git_repo_id?: number;
+  source_bundle_id?: number;
+  source_commit_sha?: string;
+  source_mr_iid?: number | null;
+  service_name?: string;
   file_name: string;
   file_sha256?: string;
   file_size: number;
@@ -114,6 +122,54 @@ export interface AffectedDependent {
   owner_name: string;
 }
 
+export interface CompileProtoFileItem {
+  path: string;
+  content: string;
+}
+
+export interface CompileProtoSchemaPayload {
+  name: string;
+  version_tag?: string;
+  category: ProtoCategory;
+  include_dirs?: string[];
+  files: CompileProtoFileItem[];
+  auto_activate?: boolean;
+  allow_breaking?: boolean;
+  breaking_reason?: string;
+  description?: string;
+}
+
+export interface CompileDiagnosticDTO {
+  file: string;
+  line: number;
+  col: number;
+  message: string;
+}
+
+export interface ProtoDependencyNodeDTO {
+  id: number | string;
+  name: string;
+  version: number;
+  category: ProtoCategory;
+  source_type?: ProtoSourceType;
+  proto_file_count: number;
+  service_count: number;
+  operation_count: number;
+  is_active: boolean;
+}
+
+export interface ProtoDependencyEdgeDTO {
+  from_schema_id: number | string;
+  to_schema_id: number | string;
+  matched_protos: string[];
+}
+
+export interface ProtoDependenciesGraphDTO {
+  pool_summary?: ProtoPoolSummaryDTO;
+  nodes: ProtoDependencyNodeDTO[];
+  edges: ProtoDependencyEdgeDTO[];
+}
+
 export interface ConflictOrBrokenResponse {
   error: string;
   code?: string;
@@ -121,6 +177,9 @@ export interface ConflictOrBrokenResponse {
   broken_dependents?: BrokenDependentItemDTO[];
   breaking_rules?: BreakingRuleViolation[];
   affected_dependents?: AffectedDependent[];
+  diagnostics?: CompileDiagnosticDTO[];
+  missing_imports?: string[];
+  service_name?: string;
 }
 
 export interface ClaimedModuleDTO {

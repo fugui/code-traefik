@@ -10,6 +10,8 @@ import (
 	"code-traefik/models"
 
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/descriptorpb"
 	"gorm.io/gorm"
 )
@@ -666,18 +668,165 @@ func ExtractOwnFilesFromSchema(schema *models.ProtoSchema) ([]*descriptorpb.File
 	return own, nil
 }
 
+// resolveReverseImportServices 针对无 Service 声明的文件（例如 BASE_LIB 公共结构），沿着 CompiledRegistry.Files
+// 及活跃 Schema 描述集的反向 import 闭包递归穿透，定位所有受影响的下游对外 Service 全名
+func resolveReverseImportServices(
+	db *gorm.DB,
+	regFiles *protoregistry.Files,
+	startFiles []string,
+) map[string]struct{} {
+	reverseDeps := make(map[string]map[string]struct{})
+	fileServices := make(map[string]map[string]struct{})
+
+	addRevEdge := func(importedFile, importingFile string) {
+		if importedFile == "" || importingFile == "" {
+			return
+		}
+		if reverseDeps[importedFile] == nil {
+			reverseDeps[importedFile] = make(map[string]struct{})
+		}
+		reverseDeps[importedFile][importingFile] = struct{}{}
+	}
+	addFileSvc := func(filePath, fullSvc string) {
+		if filePath == "" || fullSvc == "" {
+			return
+		}
+		if fileServices[filePath] == nil {
+			fileServices[filePath] = make(map[string]struct{})
+		}
+		fileServices[filePath][fullSvc] = struct{}{}
+	}
+
+	if regFiles != nil {
+		regFiles.RangeFiles(func(fd protoreflect.FileDescriptor) bool {
+			fp := fd.Path()
+			imports := fd.Imports()
+			for i := 0; i < imports.Len(); i++ {
+				addRevEdge(imports.Get(i).Path(), fp)
+			}
+			svcs := fd.Services()
+			for i := 0; i < svcs.Len(); i++ {
+				addFileSvc(fp, string(svcs.Get(i).FullName()))
+			}
+			return true
+		})
+	}
+
+	if db != nil {
+		var activeSchemas []models.ProtoSchema
+		if err := db.Where("is_active = true").Find(&activeSchemas).Error; err == nil {
+			for _, s := range activeSchemas {
+				if len(s.DescriptorBytes) == 0 {
+					continue
+				}
+				var ownNames []string
+				if len(s.ProtoFiles) > 0 {
+					if err := json.Unmarshal(s.ProtoFiles, &ownNames); err != nil {
+						ownNames = nil
+					}
+				}
+				ownSet := make(map[string]struct{}, len(ownNames))
+				for _, on := range ownNames {
+					ownSet[on] = struct{}{}
+				}
+
+				var fds descriptorpb.FileDescriptorSet
+				if err := proto.Unmarshal(s.DescriptorBytes, &fds); err != nil {
+					continue
+				}
+				for _, f := range fds.File {
+					fp := f.GetName()
+					if len(ownSet) > 0 {
+						if _, isOwn := ownSet[fp]; !isOwn {
+							continue
+						}
+					}
+					for _, dep := range f.Dependency {
+						addRevEdge(dep, fp)
+					}
+					pkg := f.GetPackage()
+					for _, svc := range f.Service {
+						fullSvc := svc.GetName()
+						if pkg != "" {
+							fullSvc = pkg + "." + svc.GetName()
+						}
+						addFileSvc(fp, fullSvc)
+					}
+				}
+			}
+		}
+	}
+
+	visited := make(map[string]struct{}, len(startFiles))
+	queue := make([]string, 0, len(startFiles))
+	for _, sf := range startFiles {
+		if sf == "" {
+			continue
+		}
+		if _, seen := visited[sf]; !seen {
+			visited[sf] = struct{}{}
+			queue = append(queue, sf)
+		}
+	}
+
+	result := make(map[string]struct{})
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+
+		for svc := range fileServices[cur] {
+			result[svc] = struct{}{}
+		}
+		for importer := range reverseDeps[cur] {
+			for svc := range fileServices[importer] {
+				result[svc] = struct{}{}
+			}
+			if _, seen := visited[importer]; !seen {
+				visited[importer] = struct{}{}
+				queue = append(queue, importer)
+			}
+		}
+	}
+	return result
+}
+
 // FindAffectedDependents 联合查询 traefik_module_services, traefik_service_contracts 与 traefik_module_dependencies 提取下游受影响模块血缘
-func FindAffectedDependents(db *gorm.DB, violations []BreakingRuleViolation) []AffectedDependent {
+// 当违例来自无 Service 的公共库 (Violation.ServiceName == "") 时，自动沿反向 import 闭包穿透定位下游关联服务与消费模块
+func FindAffectedDependents(db *gorm.DB, violations []BreakingRuleViolation, regFiles ...*protoregistry.Files) []AffectedDependent {
 	if db == nil || len(violations) == 0 {
 		return []AffectedDependent{}
 	}
 
 	svcSet := make(map[string]struct{})
+	zeroSvcFileSet := make(map[string]struct{})
 	for _, v := range violations {
 		if v.ServiceName != "" {
 			svcSet[v.ServiceName] = struct{}{}
+		} else if v.ProtoFile != "" {
+			zeroSvcFileSet[v.ProtoFile] = struct{}{}
 		}
 	}
+
+	var suppliedFiles *protoregistry.Files
+	for _, rf := range regFiles {
+		if rf != nil {
+			suppliedFiles = rf
+			break
+		}
+	}
+
+	closureSvcSet := make(map[string]struct{})
+	if len(zeroSvcFileSet) > 0 {
+		startFiles := make([]string, 0, len(zeroSvcFileSet))
+		for fp := range zeroSvcFileSet {
+			startFiles = append(startFiles, fp)
+		}
+		closureSvcSet = resolveReverseImportServices(db, suppliedFiles, startFiles)
+		for svc := range closureSvcSet {
+			svcSet[svc] = struct{}{}
+		}
+	}
+
 	if len(svcSet) == 0 {
 		return []AffectedDependent{}
 	}
@@ -716,7 +865,15 @@ func FindAffectedDependents(db *gorm.DB, violations []BreakingRuleViolation) []A
 
 	// 1. 查找服务列表对应的 ModuleService 与 ServiceContract
 	var modSvcs []models.ModuleService
-	_ = db.Where("service_name IN ?", services).Find(&modSvcs).Error
+	_ = db.Preload("Module.ArchProcess").Preload("Module.Owner").
+		Where("service_name IN ?", services).Find(&modSvcs).Error
+
+	// 若由 0-Service (如 BASE_LIB) 反向 import 闭包穿透而来，其服务提供方模块亦直接受影响
+	for _, ms := range modSvcs {
+		if _, fromClosure := closureSvcSet[ms.ServiceName]; fromClosure && ms.Module != nil {
+			addModuleToDedup(ms.Module)
+		}
+	}
 
 	var contracts []models.ServiceContract
 	_ = db.Where("service_name IN ?", services).Find(&contracts).Error

@@ -53,7 +53,11 @@ import {
   clearTopologyDraft,
   DRAFT_DEBOUNCE_MS,
 } from '../../components/ArchCanvas/layout/layoutPersistence';
-import { ArchCanvas } from '../../components/ArchCanvas/ArchCanvas';
+import { ArchCanvas, type ArchCanvasExportHandle } from '../../components/ArchCanvas/ArchCanvas';
+import {
+  exportTopologyAsPng,
+  exportTopologyAsSvg,
+} from '../../components/ArchCanvas/export/exportTopology';
 import {
   ArchCanvasToolbar,
   type FocusBreadcrumbItem,
@@ -284,6 +288,7 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
 }) => {
   const [searchParams, setSearchParams] = useSearchParams();
   const toast = useToast();
+  const exportHandleRef = useRef<ArchCanvasExportHandle | null>(null);
   const { user } = useModuleUser();
   const currentUserId = user?.id ?? 'default';
   const isAdmin = Boolean(
@@ -1383,6 +1388,38 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
           setIsEdgeDrawerOpen(false);
           setIsPendingDrawerOpen(false);
         }}
+        onExportSvg={() => {
+          const snapshot = exportHandleRef.current?.getSnapshot();
+          if (!snapshot || snapshot.nodes.length === 0) {
+            toast.warning('当前画布暂无可导出的拓扑节点');
+            return;
+          }
+          try {
+            exportTopologyAsSvg(snapshot.nodes, snapshot.edges, {
+              fileNamePrefix: `arch-${view.toLowerCase()}`,
+            });
+            toast.success('已导出纯矢量 SVG 拓扑图');
+          } catch (err) {
+            toast.error(err instanceof Error ? err.message : '导出 SVG 拓扑图失败');
+          }
+        }}
+        onExportPng={() => {
+          const snapshot = exportHandleRef.current?.getSnapshot();
+          if (!snapshot || snapshot.nodes.length === 0) {
+            toast.warning('当前画布暂无可导出的拓扑节点');
+            return;
+          }
+          void exportTopologyAsPng(snapshot.nodes, snapshot.edges, {
+            fileNamePrefix: `arch-${view.toLowerCase()}`,
+            scale: 2,
+          })
+            .then(() => {
+              toast.success('已导出高清 2x PNG 拓扑图');
+            })
+            .catch((err) => {
+              toast.error(err instanceof Error ? err.message : '导出 PNG 拓扑图失败');
+            });
+        }}
       />
 
       {/* 软阈值 (46..120) 黄色降噪建议横幅 */}
@@ -1494,6 +1531,9 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
           containerSearchMatchCounts={searchDecision.containerMatchCounts}
           onVisibleRollupEdgesChange={setVisibleRollupEdges}
           panToNodeRequest={panToNodeRequest}
+          onExportHandleReady={(handle) => {
+            exportHandleRef.current = handle;
+          }}
           className="code-arch-canvas--full"
         />
       </div>

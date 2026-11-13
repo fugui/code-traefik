@@ -8,6 +8,7 @@ import {
   Server,
   Bookmark,
   SlidersHorizontal,
+  Download,
 } from 'lucide-react';
 import type { RecordingSession, Agent } from '../../../types';
 import type {
@@ -96,6 +97,8 @@ export interface ArchCanvasToolbarProps {
   hasUnsavedDraft?: boolean;
   bookmarkQuotaText?: string;
   onOpenBookmarkDrawer?: () => void;
+  onExportSvg?: () => void;
+  onExportPng?: () => void;
 }
 
 const NODE_TYPE_SHORT_LABEL: Record<string, string> = {
@@ -155,10 +158,14 @@ export const ArchCanvasToolbar: React.FC<ArchCanvasToolbarProps> = ({
   hasUnsavedDraft = false,
   bookmarkQuotaText,
   onOpenBookmarkDrawer,
+  onExportSvg,
+  onExportPng,
 }) => {
   const [isFilterPopoverOpen, setIsFilterPopoverOpen] = useState(false);
+  const [isExportMenuOpen, setIsExportMenuOpen] = useState(false);
   const [isSearchFocused, setIsSearchFocused] = useState(false);
   const filterPopoverRef = useRef<HTMLDivElement | null>(null);
+  const exportMenuRef = useRef<HTMLDivElement | null>(null);
   const searchWrapRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -166,6 +173,9 @@ export const ArchCanvasToolbar: React.FC<ArchCanvasToolbarProps> = ({
       const target = event.target as Node | null;
       if (filterPopoverRef.current && target && !filterPopoverRef.current.contains(target)) {
         setIsFilterPopoverOpen(false);
+      }
+      if (exportMenuRef.current && target && !exportMenuRef.current.contains(target)) {
+        setIsExportMenuOpen(false);
       }
       if (searchWrapRef.current && target && !searchWrapRef.current.contains(target)) {
         setIsSearchFocused(false);
@@ -700,6 +710,58 @@ export const ArchCanvasToolbar: React.FC<ArchCanvasToolbarProps> = ({
                 <span className="code-arch-badge code-arch-badge--warning">草稿</span>
               )}
             </button>
+          )}
+          {(onExportSvg || onExportPng) && (
+            <div className="code-arch-filter-popover-wrap" ref={exportMenuRef}>
+              <button
+                type="button"
+                className="code-btn code-btn--secondary code-btn--sm"
+                onClick={() => setIsExportMenuOpen((prev) => !prev)}
+                title="离线纯前端导出高保真矢量 SVG 或 2x PNG 拓扑图"
+                data-testid="export-topology-btn"
+              >
+                <Download size={13} />
+                <span>导出拓扑图</span>
+              </button>
+              {isExportMenuOpen && (
+                <div
+                  className="code-arch-filter-popover"
+                  style={{ minWidth: '180px', right: 0, left: 'auto', padding: '8px' }}
+                  data-testid="export-topology-menu"
+                >
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    {onExportSvg && (
+                      <button
+                        type="button"
+                        className="code-btn code-btn--secondary code-btn--sm"
+                        style={{ justifyContent: 'flex-start', width: '100%' }}
+                        onClick={() => {
+                          setIsExportMenuOpen(false);
+                          onExportSvg();
+                        }}
+                        data-testid="export-topology-svg-btn"
+                      >
+                        导出纯矢量 SVG
+                      </button>
+                    )}
+                    {onExportPng && (
+                      <button
+                        type="button"
+                        className="code-btn code-btn--secondary code-btn--sm"
+                        style={{ justifyContent: 'flex-start', width: '100%' }}
+                        onClick={() => {
+                          setIsExportMenuOpen(false);
+                          onExportPng();
+                        }}
+                        data-testid="export-topology-png-btn"
+                      >
+                        导出高清 PNG (2x)
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
           )}
         </div>
       </div>

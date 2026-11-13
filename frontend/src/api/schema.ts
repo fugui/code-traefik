@@ -14,6 +14,7 @@ import type {
 export async function listProtoSchemas(params?: {
   name?: string;
   category?: string;
+  source_type?: string;
   latest_only?: boolean;
   active_only?: boolean;
   search?: string;
@@ -25,6 +26,7 @@ export async function listProtoSchemas(params?: {
   const query = new URLSearchParams();
   if (params?.name) query.set('name', params.name);
   if (params?.category) query.set('category', params.category);
+  if (params?.source_type) query.set('source_type', params.source_type);
   if (params?.latest_only !== undefined) query.set('latest_only', String(params.latest_only));
   if (params?.active_only !== undefined) query.set('active_only', String(params.active_only));
   if (params?.search) query.set('search', params.search);
@@ -116,24 +118,30 @@ export async function deleteProtoSchema(id: string | number) {
   });
 }
 
-export async function getProtoDependenciesGraph() {
+export async function compileProtoSchema(payload: import('../types').CompileProtoSchemaPayload) {
   return apiRequest<{
-    nodes: Array<{
-      id: string;
-      name: string;
-      category: string;
-      version: number;
-      is_active: boolean;
-      proto_files: string[];
-      external_imports: string[];
-    }>;
-    edges: Array<{
-      source: string;
-      target: string;
-      imported_proto: string;
-      status: string;
-    }>;
-  }>('/proto-schemas/dependencies-graph');
+    schema: import('../types').ProtoSchemaLedgerItemDTO;
+    operations: import('../types').ProtoOperation[];
+    proto_files: string[];
+    external_imports: string[];
+    resolved_dependencies?: import('../types').ResolvedSchemaDependencyDTO[];
+    inherited_ignore_op_count?: number;
+    forced_breaking?: boolean;
+  }>('/proto-schemas/compile', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function getProtoDependenciesGraph(params?: { active_only?: boolean }) {
+  const query = new URLSearchParams();
+  if (params?.active_only !== undefined) {
+    query.set('active_only', String(params.active_only));
+  }
+  const qs = query.toString();
+  return apiRequest<import('../types').ProtoDependenciesGraphDTO>(
+    `/proto-schemas/dependencies-graph${qs ? `?${qs}` : ''}`
+  );
 }
 
 export async function listProtoServices(params?: {

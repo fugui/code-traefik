@@ -61,6 +61,7 @@ type SubsystemInput struct {
 	Code        string
 	Name        string
 	OwnerID     *uint
+	LayerLevel  *int // 0~99; nil 表示更新时保留原值（创建时默认 0）
 	Description string
 	OperatorID  uint
 }
@@ -102,6 +103,7 @@ type ModuleInput struct {
 	ProcessID        *uint64 // 向后兼容
 	HasProcessID     bool    // 向后兼容
 	ModuleKind       string  // BUSINESS | CONTRACT_LIB (ADR-16)
+	LayerLevel       *int    // 0~99; nil 表示更新时保留原值（创建时默认 0）
 	Description      string
 	OperatorID       uint
 }
@@ -114,6 +116,13 @@ func CreateSubsystem(db *gorm.DB, in SubsystemInput) (*models.Subsystem, error) 
 	}
 	if err := validateName(in.Name); err != nil {
 		return nil, err
+	}
+	if err := ValidateLayerLevelPtr(in.LayerLevel); err != nil {
+		return nil, err
+	}
+	layerLevel := 0
+	if in.LayerLevel != nil {
+		layerLevel = *in.LayerLevel
 	}
 
 	var count int64
@@ -128,6 +137,7 @@ func CreateSubsystem(db *gorm.DB, in SubsystemInput) (*models.Subsystem, error) 
 		Code:        code,
 		Name:        strings.TrimSpace(in.Name),
 		OwnerID:     in.OwnerID,
+		LayerLevel:  layerLevel,
 		Description: in.Description,
 		CreatedBy:   in.OperatorID,
 		UpdatedBy:   in.OperatorID,
@@ -143,6 +153,10 @@ func CreateSubsystem(db *gorm.DB, in SubsystemInput) (*models.Subsystem, error) 
 
 // UpdateSubsystem 更新子系统
 func UpdateSubsystem(db *gorm.DB, id uint64, in SubsystemInput) (*models.Subsystem, *models.Subsystem, error) {
+	if err := ValidateLayerLevelPtr(in.LayerLevel); err != nil {
+		return nil, nil, err
+	}
+
 	var before models.Subsystem
 	if err := db.First(&before, id).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -177,23 +191,41 @@ func UpdateSubsystem(db *gorm.DB, id uint64, in SubsystemInput) (*models.Subsyst
 		name = strings.TrimSpace(in.Name)
 	}
 
+	layerLevel := before.LayerLevel
+	if in.LayerLevel != nil {
+		layerLevel = *in.LayerLevel
+	}
+
 	after := before
 	after.Code = code
 	after.Name = name
 	after.OwnerID = in.OwnerID
+	after.LayerLevel = layerLevel
 	after.Description = in.Description
 	after.UpdatedBy = in.OperatorID
 
-	if err := db.Model(&models.Subsystem{}).Where("id = ?", id).Updates(map[string]interface{}{
-		"code":        code,
-		"name":        name,
-		"owner_id":    in.OwnerID,
-		"description": in.Description,
-		"updated_by":  in.OperatorID,
-	}).Error; err != nil {
-		if strings.Contains(err.Error(), "duplicate") || strings.Contains(err.Error(), "23505") {
-			return nil, nil, ErrDuplicateCode
+	err := db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&models.Subsystem{}).Where("id = ?", id).Updates(map[string]interface{}{
+			"code":        code,
+			"name":        name,
+			"owner_id":    in.OwnerID,
+			"layer_level": layerLevel,
+			"description": in.Description,
+			"updated_by":  in.OperatorID,
+		}).Error; err != nil {
+			if strings.Contains(err.Error(), "duplicate") || strings.Contains(err.Error(), "23505") {
+				return ErrDuplicateCode
+			}
+			return err
 		}
+		if layerLevel != before.LayerLevel {
+			if err := ValidateAllTopologyLayerAndCycleConstraints(tx); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
 		return nil, nil, err
 	}
 
@@ -647,6 +679,14 @@ func CreateModule(db *gorm.DB, in ModuleInput) (*models.Module, error) {
 		}
 	}
 
+	if err := ValidateLayerLevelPtr(in.LayerLevel); err != nil {
+		return nil, err
+	}
+	layerLevel := 0
+	if in.LayerLevel != nil {
+		layerLevel = *in.LayerLevel
+	}
+
 	mod := &models.Module{
 		SubsystemID:   group.SubsystemID,
 		GroupID:       in.GroupID,
@@ -655,6 +695,7 @@ func CreateModule(db *gorm.DB, in ModuleInput) (*models.Module, error) {
 		OwnerID:       in.OwnerID,
 		ArchProcessID: archProcessID,
 		ModuleKind:    kind,
+		LayerLevel:    layerLevel,
 		Description:   in.Description,
 		CreatedBy:     in.OperatorID,
 		UpdatedBy:     in.OperatorID,
@@ -790,6 +831,14 @@ func UpdateModule(db *gorm.DB, id uint64, in ModuleInput) (*models.Module, *mode
 		}
 	}
 
+	if err := ValidateLayerLevelPtr(in.LayerLevel); err != nil {
+		return nil, nil, err
+	}
+	layerLevel := before.LayerLevel
+	if in.LayerLevel != nil {
+		layerLevel = *in.LayerLevel
+	}
+
 	after := before
 	after.GroupID = groupID
 	after.SubsystemID = subsystemID
@@ -798,6 +847,7 @@ func UpdateModule(db *gorm.DB, id uint64, in ModuleInput) (*models.Module, *mode
 	after.OwnerID = in.OwnerID
 	after.ArchProcessID = archProcessID
 	after.ModuleKind = effectiveKind
+	after.LayerLevel = layerLevel
 	after.Description = in.Description
 	after.UpdatedBy = in.OperatorID
 
@@ -810,6 +860,7 @@ func UpdateModule(db *gorm.DB, id uint64, in ModuleInput) (*models.Module, *mode
 			"owner_id":        in.OwnerID,
 			"arch_process_id": archProcessID,
 			"module_kind":     effectiveKind,
+			"layer_level":     layerLevel,
 			"description":     in.Description,
 			"updated_by":      in.OperatorID,
 		}).Error; err != nil {
@@ -817,6 +868,11 @@ func UpdateModule(db *gorm.DB, id uint64, in ModuleInput) (*models.Module, *mode
 				return ErrDuplicateCode
 			}
 			return err
+		}
+		if layerLevel != before.LayerLevel || subsystemID != before.SubsystemID {
+			if err := ValidateAllTopologyLayerAndCycleConstraints(tx); err != nil {
+				return err
+			}
 		}
 		return nil
 	})

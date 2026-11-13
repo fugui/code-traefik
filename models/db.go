@@ -127,6 +127,24 @@ BEGIN
     END IF;
     ALTER TABLE traefik_proto_schemas ADD CONSTRAINT chk_traefik_proto_category CHECK (category IN ('BASE_LIB', 'BUSINESS', 'GATEWAY'));
 
+    -- traefik_proto_schemas 资产来源类型检查约束 (M22 ADR-18)
+    UPDATE traefik_proto_schemas SET source_type = 'UPLOAD_PB' WHERE source_type = '' OR source_type IS NULL;
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_traefik_proto_source_type') THEN
+        ALTER TABLE traefik_proto_schemas DROP CONSTRAINT chk_traefik_proto_source_type;
+    END IF;
+    ALTER TABLE traefik_proto_schemas ADD CONSTRAINT chk_traefik_proto_source_type CHECK (source_type IN ('UPLOAD_PB', 'ONLINE_COMPILE', 'GIT_SYNC', 'GIT_MR_AUTO'));
+
+    -- traefik_subsystems / traefik_modules 架构分层约束 (M22 ADR-18)
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_traefik_subsystems_layer') THEN
+        ALTER TABLE traefik_subsystems DROP CONSTRAINT chk_traefik_subsystems_layer;
+    END IF;
+    ALTER TABLE traefik_subsystems ADD CONSTRAINT chk_traefik_subsystems_layer CHECK (layer_level >= 0 AND layer_level <= 99);
+
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_traefik_modules_layer') THEN
+        ALTER TABLE traefik_modules DROP CONSTRAINT chk_traefik_modules_layer;
+    END IF;
+    ALTER TABLE traefik_modules ADD CONSTRAINT chk_traefik_modules_layer CHECK (layer_level >= 0 AND layer_level <= 99);
+
     -- traefik_golden_suites 状态检查约束 (F-25, ADR-14)
     IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_traefik_golden_suite_status') THEN
         ALTER TABLE traefik_golden_suites DROP CONSTRAINT chk_traefik_golden_suite_status;

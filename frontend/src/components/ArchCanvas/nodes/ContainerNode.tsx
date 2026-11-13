@@ -86,6 +86,10 @@ export const ContainerNode: React.FC<NodeProps<ContainerNodeType>> = ({ id, data
   const endpoint = graphNode.meta?.endpoint ? String(graphNode.meta.endpoint) : undefined;
   const internalEdges = badgeCounts?.internalEdgeCount ?? 0;
   const intraCalls = badgeCounts?.intraProcessCallCount ?? 0;
+  const effLayer =
+    graphNode.type === 'SUBSYSTEM'
+      ? Number(graphNode.meta?.effective_layer_level ?? graphNode.meta?.layer_level ?? 0)
+      : 0;
   const isUnmounted = graphNode.type === 'PROCESS' && graphNode.meta?.is_mounted === false;
   const probeStatus =
     graphNode.type === 'PROCESS' && graphNode.meta?.probe_status
@@ -164,6 +168,11 @@ export const ContainerNode: React.FC<NodeProps<ContainerNodeType>> = ({ id, data
         )}
 
         <div className="code-arch-container__badges">
+          {effLayer > 0 && (
+            <span className="code-arch-badge code-arch-badge--counter" title={`子系统分层约束 L${effLayer}`}>
+              L{effLayer}
+            </span>
+          )}
           {childCount > 0 && (
             <span className="code-arch-badge code-arch-badge--counter" title={`包含 ${childCount} 个${childUnit}`}>
               {childCount} {childUnit}

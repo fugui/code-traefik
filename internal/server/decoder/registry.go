@@ -136,18 +136,25 @@ type CompiledRegistry struct {
 	ServiceIgnores map[string][]string           // 运行期发布服务名 -> DiffIgnorePaths 列表
 }
 
-// UploadSchemaInput 上传 .pb 描述集参数
+// UploadSchemaInput 上传或在线直编 .pb 描述集参数
 type UploadSchemaInput struct {
-	Name           string
-	Category       string // BASE_LIB | BUSINESS | GATEWAY
-	VersionTag     string
-	FileName       string
-	Description    string
-	RawBytes       []byte
-	AutoActivate   bool
-	AllowBreaking  bool
-	BreakingReason string
-	OperatorID     uint
+	Name                       string
+	Category                   string // BASE_LIB | BUSINESS | GATEWAY
+	VersionTag                 string
+	FileName                   string
+	Description                string
+	RawBytes                   []byte
+	AutoActivate               bool
+	AllowBreaking              bool
+	BreakingReason             string
+	OperatorID                 uint
+	SourceType                 string  // UPLOAD_PB | ONLINE_COMPILE | GIT_SYNC | GIT_MR_AUTO
+	GitRepoID                  *uint64 // M25 Git 仓外键
+	SourceBundleID             *uint64 // M25 Monorepo Bundle 外键
+	SourceCommitSHA            string
+	SourceMRIID                *int
+	ExplicitOwnFiles           []string // M22: 非空时仅对该集合自有文件抽取 Operation，跳过全部 external_imports
+	AllowSelfContainedExternal bool     // M22: 草稿模式下允许从当前链接产物自带的外部描述符补全静态闭合验证
 }
 
 // DecodeResult 单次 Payload 动态反序列化结果
@@ -302,6 +309,15 @@ func extractOperationsFromDescriptor(
 	category string,
 	existingBaseLibProtos []string,
 ) (*descriptorpb.FileDescriptorSet, []*descriptorpb.FileDescriptorProto, []models.ProtoOperation, []string, []string, error) {
+	return extractOperationsFromDescriptorWithOwn(rawBytes, category, existingBaseLibProtos, nil)
+}
+
+func extractOperationsFromDescriptorWithOwn(
+	rawBytes []byte,
+	category string,
+	existingBaseLibProtos []string,
+	explicitOwnFiles []string,
+) (*descriptorpb.FileDescriptorSet, []*descriptorpb.FileDescriptorProto, []models.ProtoOperation, []string, []string, error) {
 	if len(rawBytes) == 0 {
 		return nil, nil, nil, nil, nil, ErrDescriptorEmpty
 	}
@@ -321,11 +337,23 @@ func extractOperationsFromDescriptor(
 	for _, p := range existingBaseLibProtos {
 		baseLibSet[p] = struct{}{}
 	}
+	explicitOwnSet := make(map[string]struct{}, len(explicitOwnFiles))
+	for _, p := range explicitOwnFiles {
+		explicitOwnSet[p] = struct{}{}
+	}
 
-	// 区分自有文件 (own_proto_files) 与借用已生效 BASE_LIB 文件
+	// 区分自有文件 (own_proto_files) 与外部导入文件：
+	// 若传入 explicitOwnFiles（例如 protocompile 产物），严格仅提取自有文件，跳过全部 external_imports（不限于 BASE_LIB）
 	var ownFiles []*descriptorpb.FileDescriptorProto
 	for _, file := range fds.File {
 		fileName := file.GetName()
+		if len(explicitOwnSet) > 0 {
+			if _, isOwn := explicitOwnSet[fileName]; !isOwn {
+				continue
+			}
+			ownFiles = append(ownFiles, file)
+			continue
+		}
 		if category != models.ProtoCategoryBaseLib {
 			if _, isBase := baseLibSet[fileName]; isBase {
 				// 已由生效 BASE_LIB 托管，不属于本包自有定义
@@ -335,6 +363,9 @@ func extractOperationsFromDescriptor(
 		ownFiles = append(ownFiles, file)
 	}
 	if len(ownFiles) == 0 {
+		if len(explicitOwnSet) > 0 {
+			return nil, nil, nil, nil, nil, errors.New("编译描述集中未包含任何归属当前包的自有 .proto 文件")
+		}
 		ownFiles = fds.File
 	}
 
@@ -817,7 +848,12 @@ func (r *Registry) UploadSchema(in UploadSchemaInput) (*models.ProtoSchema, []mo
 			existingBaseProtos = r.fetchBaseLibProtoFiles(tx, false)
 		}
 
-		_, ownFiles, ops, protoFiles, externalImports, err := extractOperationsFromDescriptor(in.RawBytes, category, existingBaseProtos)
+		fdsParsed, ownFiles, ops, protoFiles, externalImports, err := extractOperationsFromDescriptorWithOwn(
+			in.RawBytes,
+			category,
+			existingBaseProtos,
+			in.ExplicitOwnFiles,
+		)
 		if err != nil {
 			return err
 		}
@@ -849,16 +885,41 @@ func (r *Registry) UploadSchema(in UploadSchemaInput) (*models.ProtoSchema, []mo
 			}
 			_ = q.Find(&availSchemas).Error
 
-			for _, as := range availSchemas {
-				if len(as.DescriptorBytes) == 0 {
-					continue
+			// 修复多跳外部传递依赖顺序问题 (e.g. A <- B <- C): 迭代收敛直至全部 needed 闭包解析完毕
+			for progress := true; progress; {
+				progress = false
+				for _, as := range availSchemas {
+					if len(as.DescriptorBytes) == 0 {
+						continue
+					}
+					var fds descriptorpb.FileDescriptorSet
+					if err := proto.Unmarshal(as.DescriptorBytes, &fds); err == nil {
+						for _, f := range fds.File {
+							if _, isNeeded := needed[f.GetName()]; isNeeded {
+								if _, ok := filesMap[f.GetName()]; !ok {
+									filesMap[f.GetName()] = f
+									progress = true
+									for _, dep := range f.Dependency {
+										if _, inMap := filesMap[dep]; !inMap && !strings.HasPrefix(dep, "google/protobuf/") {
+											needed[dep] = struct{}{}
+										}
+									}
+								}
+							}
+						}
+					}
 				}
-				var fds descriptorpb.FileDescriptorSet
-				if err := proto.Unmarshal(as.DescriptorBytes, &fds); err == nil {
-					for _, f := range fds.File {
+			}
+
+			// 若允许自包含外部描述（如 Tier 2 ProtoSourceProvider 预供源的草稿模式），补全仍未命中的依赖描述符
+			if in.AllowSelfContainedExternal && fdsParsed != nil {
+				for progress := true; progress; {
+					progress = false
+					for _, f := range fdsParsed.File {
 						if _, isNeeded := needed[f.GetName()]; isNeeded {
 							if _, ok := filesMap[f.GetName()]; !ok {
 								filesMap[f.GetName()] = f
+								progress = true
 								for _, dep := range f.Dependency {
 									if _, inMap := filesMap[dep]; !inMap && !strings.HasPrefix(dep, "google/protobuf/") {
 										needed[dep] = struct{}{}
@@ -913,11 +974,21 @@ func (r *Registry) UploadSchema(in UploadSchemaInput) (*models.ProtoSchema, []mo
 			svcSet[op.ServiceName] = struct{}{}
 		}
 
+		sourceType := in.SourceType
+		if sourceType == "" {
+			sourceType = models.ProtoSourceUploadPB
+		}
+
 		schema = models.ProtoSchema{
 			Name:            name,
 			Version:         nextVer,
 			VersionTag:      in.VersionTag,
 			Category:        category,
+			SourceType:      sourceType,
+			GitRepoID:       in.GitRepoID,
+			SourceBundleID:  in.SourceBundleID,
+			SourceCommitSHA: in.SourceCommitSHA,
+			SourceMRIID:     in.SourceMRIID,
 			FileName:        cleanFileName,
 			FileSHA256:      fileSHA256,
 			FileSize:        len(in.RawBytes),
@@ -959,7 +1030,7 @@ func (r *Registry) UploadSchema(in UploadSchemaInput) (*models.ProtoSchema, []mo
 					violations := DetectBreakingChanges(activeOwn, ownFiles)
 					if len(violations) > 0 {
 						if !in.AllowBreaking {
-							affected := FindAffectedDependents(tx, violations)
+							affected := FindAffectedDependents(tx, violations, r.compiledFiles())
 							return &SchemaBreakingError{
 								BreakingRules:      violations,
 								AffectedDependents: affected,
@@ -1096,7 +1167,7 @@ func (r *Registry) BatchActivate(schemaIDs []uint64, opts ...BatchActivateOption
 
 		if len(allViolations) > 0 {
 			if !allowBreaking {
-				affected := FindAffectedDependents(tx, allViolations)
+				affected := FindAffectedDependents(tx, allViolations, r.compiledFiles())
 				return &SchemaBreakingError{
 					BreakingRules:      allViolations,
 					AffectedDependents: affected,

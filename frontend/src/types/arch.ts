@@ -6,6 +6,7 @@ export interface Subsystem {
   name: string;
   owner_id?: string;
   owner_name?: string;
+  layer_level?: number;
   description?: string;
   module_count?: number;
   created_at?: string;
@@ -177,6 +178,7 @@ export interface Module {
   code: string;
   name: string;
   module_kind?: ModuleKind;
+  layer_level?: number;
   owner_id?: string;
   owner_name?: string;
   process_id?: string | null;

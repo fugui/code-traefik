@@ -1,13 +1,13 @@
 # M22 实施任务卡：纯 Go `protocompile` 编译底座、架构分层逆向依赖校验与依赖图谱 (`F-32`)
 
-> **文档版本**：`v1.1.0`
+> **文档版本**：`v1.2.0`
 > **创建日期**：`2026-11-13`
-> **最后更新**：`2026-11-13`
+> **最后更新**：`2026-11-14`
 > **所属阶段**：阶段四 — 研发实施与 TDD 门禁 (Implementation & TDD Gate)
 > **里程碑编号**：`M22 — 纯 Go protocompile 编译底座、架构分层校验与契约/拓扑依赖可视化导出`
 > **覆盖需求范围**：`F-02.1`（`REALIZATION` 层级约束与 `DISPATCH` 消费方校核）、`F-03`（描述集编译入池与跨包边界隔离）、`F-04`（拓扑图程序化矢量导出与层级元数据）、`F-21`（Git-Only `.proto` 编译底座）、`F-26`（`BASE_LIB` 传递闭包影响分析与编译联动）、`F-30`（架构分层方向校验）、`F-32`（`/schemas?tab=graph` 挂载与 `/topology` 纯矢量 SVG/Canvas PNG 导出）、`SC-13`
 > **前置依赖**：`M1~M21`（✅ 已交付）、[`../05-adr/18-proto-full-lifecycle-and-git-mr-governance-adr.md`](../05-adr/18-proto-full-lifecycle-and-git-mr-governance-adr.md) (`v1.2.0`)
-> **当前状态**：📋 **已定稿待实施 (Planned)**
+> **当前状态**：✅ **已交付 (Delivered)**
 
 ### 修订记录
 
@@ -15,6 +15,7 @@
 | :--- | :--- | :--- | :--- |
 | `v1.0.0` | `2026-11-13` | Architecture Team | 初版发布：依据 ADR-18 (`v1.1.0`) 拆解 M22 三个递进子阶段（P1~P3）、全栈交付清单、安全边界、`testdb` 隔离 TDD 测试矩阵与自动化准出门禁 |
 | `v1.1.0` | `2026-11-13` | Architecture Team | 依据 ADR-18 (`v1.2.0`) 检视修订：1. 新增 `decoder.ProtoSourceProvider` 抽象隔离 M22 与 M25 DB 源码依赖；2. 强制跨包编译跳过全部 `external_imports` 操作抽取且剥离外部导入文件 `SourceCodeInfo` 防 16MB 膨胀；3. `breaking.go` (`FindAffectedDependents`) 补齐 `BASE_LIB` 0-Service 变更的反向 `import` 闭包追踪；4. 明确 `layer_level` 更新 DTO 采用 `*int` 区分未传与显式 `0`、绑定 `ContractID` 反向校验 `DISPATCH` 消费方与 DIP 语义；5. `F-32` 导出禁用 `<foreignObject>` 改用纯矢量 `<svg>` + 离屏 Canvas |
+| `v1.2.0` | `2026-11-14` | Engineering Team | **M22 全栈交付完成**：P1（`protocompile` 四级虚拟 Resolver、`ProtoSourceProvider`、跳过外部依赖与剥离外部 `SourceCodeInfo`、`POST /api/proto-schemas/compile`）、P2（`*int layer_level` 守卫、`DEPEND`/`REALIZATION`/`DISPATCH` 反向校核与环路 409 拦截、`BASE_LIB` 反向 `import` 闭包破坏性雷达、`TopologyGraphDTO` 层级透传）与 P3（`/schemas?tab=graph` 依赖图、在线 `.proto` 编译弹窗、`source_type` 过滤高亮、F-32 纯矢量 SVG/2x 离屏 Canvas PNG 导出与 `SC-13` 集成闭环）全部通过 TDD 门禁并合入交付 |
 
 ---
 

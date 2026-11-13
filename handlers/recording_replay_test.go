@@ -464,14 +464,19 @@ func TestSC05_SC07_SC08_EndToEndRecordingAndReplayPipeline(t *testing.T) {
 	glbAssembler.Feed(agent1.ID, makeEnv(agentproto.DirectionIngress, len(reqPkt2)), reqPkt2)
 	glbAssembler.Feed(agent1.ID, makeEnv(agentproto.DirectionIngress, len(rspPkt2)), rspPkt2)
 
-	// 强制落盘
-	glbAssembler.Flush()
-	time.Sleep(50 * time.Millisecond)
-
-	// 验证 traefik_traffic_records 表中同行落盘记录
+	// 强制落盘（轮询等待 Worker 完成 DB 解析与刷盘）
 	var savedRecords []models.TrafficRecord
-	if err := db.Where("session_id = ?", sessionResp.ID).Order("sno ASC").Find(&savedRecords).Error; err != nil {
-		t.Fatalf("查询流量记录失败: %v", err)
+	saveDeadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(saveDeadline) {
+		glbAssembler.Flush()
+		savedRecords = nil
+		if err := db.Where("session_id = ?", sessionResp.ID).Order("sno ASC").Find(&savedRecords).Error; err != nil {
+			t.Fatalf("查询流量记录失败: %v", err)
+		}
+		if len(savedRecords) >= 2 {
+			break
+		}
+		time.Sleep(30 * time.Millisecond)
 	}
 	if len(savedRecords) < 2 {
 		t.Fatalf("期望至少落盘 2 条往返记录，实际落盘 %d", len(savedRecords))
@@ -1055,13 +1060,19 @@ func TestSingleProcessZeroTopology_BidirectionalCapture_StopRelease_AndZeroLeakR
 	glbAssembler.Feed(agent7.ID, egEnv(3001, len(egReq)), egReq)
 	glbAssembler.Feed(agent7.ID, egEnv(3001, len(egRsp)), egRsp)
 
-	glbAssembler.Flush()
-	time.Sleep(100 * time.Millisecond)
-
-	// 5. 校验数据库落盘数据：包含 INGRESS 和 EGRESS 记录，且 AgentID 均为 7
+	// 等待异步 Worker 完成 ResolveDestination 并同步刷盘（-race 下 DB 查询可能超过 150ms）
 	var records []models.TrafficRecord
-	if err := db.Where("session_id = ?", sessionResp.ID).Order("id ASC").Find(&records).Error; err != nil {
-		t.Fatalf("查询流量记录失败: %v", err)
+	flushDeadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(flushDeadline) {
+		glbAssembler.Flush()
+		records = nil
+		if err := db.Where("session_id = ?", sessionResp.ID).Order("id ASC").Find(&records).Error; err != nil {
+			t.Fatalf("查询流量记录失败: %v", err)
+		}
+		if len(records) == 2 {
+			break
+		}
+		time.Sleep(30 * time.Millisecond)
 	}
 	if len(records) != 2 {
 		t.Fatalf("预期落盘 2 条往返记录 (INGRESS+EGRESS)，实际: %d", len(records))

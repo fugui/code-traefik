@@ -20,6 +20,7 @@ type SubsystemReq struct {
 	Code        string `json:"code"`
 	Name        string `json:"name"`
 	OwnerID     *uint  `json:"owner_id"`
+	LayerLevel  *int   `json:"layer_level"`
 	Description string `json:"description"`
 }
 
@@ -48,6 +49,7 @@ type ModuleReq struct {
 	ArchProcessID *FlexUint64 `json:"arch_process_id"`
 	ProcessID     *FlexUint64 `json:"process_id"`
 	ModuleKind    string      `json:"module_kind"` // BUSINESS | CONTRACT_LIB (ADR-16)
+	LayerLevel    *int        `json:"layer_level"`
 	Description   string      `json:"description"`
 }
 
@@ -124,6 +126,39 @@ func reloadDecoderRegistryQuietly() {
 type ProcessBindingReq struct {
 	ArchProcessID *FlexUint64 `json:"arch_process_id"`
 	ProcessID     *FlexUint64 `json:"process_id"`
+}
+
+// writeArchLayerOrCycleError 统一映射架构层级校验、越权 409 与内部防环 409 响应
+func writeArchLayerOrCycleError(c *gin.Context, err error) bool {
+	if errors.Is(err, topology.ErrInvalidLayerLevel) {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": err.Error(),
+			"code":  topology.ErrCodeInvalidLayerLevel,
+		})
+		return true
+	}
+	var layerErr *topology.LayerViolationError
+	if errors.As(err, &layerErr) {
+		c.JSON(http.StatusConflict, gin.H{
+			"error":              layerErr.Message,
+			"code":               layerErr.Code,
+			"consumer_module_id": layerErr.ConsumerID,
+			"consumer_layer":     layerErr.ConsumerLayer,
+			"provider_module_id": layerErr.ProviderID,
+			"provider_layer":     layerErr.ProviderLayer,
+		})
+		return true
+	}
+	var cycErr *topology.CyclicDependencyError
+	if errors.As(err, &cycErr) {
+		c.JSON(http.StatusConflict, gin.H{
+			"error":      cycErr.Message,
+			"code":       cycErr.Code,
+			"cycle_path": cycErr.CyclePath,
+		})
+		return true
+	}
+	return false
 }
 
 // normalizePageSize 通用分页归一化 (15/25/50/100，下拉/批量最大支持 1000，默认 25)
@@ -210,10 +245,14 @@ func CreateSubsystem(c *gin.Context) {
 		Code:        req.Code,
 		Name:        req.Name,
 		OwnerID:     req.OwnerID,
+		LayerLevel:  req.LayerLevel,
 		Description: req.Description,
 		OperatorID:  uc.UserID,
 	})
 	if err != nil {
+		if writeArchLayerOrCycleError(c, err) {
+			return
+		}
 		if errors.Is(err, topology.ErrDuplicateCode) {
 			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 			return
@@ -249,10 +288,14 @@ func UpdateSubsystem(c *gin.Context) {
 		Code:        req.Code,
 		Name:        req.Name,
 		OwnerID:     req.OwnerID,
+		LayerLevel:  req.LayerLevel,
 		Description: req.Description,
 		OperatorID:  uc.UserID,
 	})
 	if err != nil {
+		if writeArchLayerOrCycleError(c, err) {
+			return
+		}
 		if errors.Is(err, topology.ErrSubsystemNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 			return
@@ -601,10 +644,14 @@ func CreateModule(c *gin.Context) {
 		ArchProcessID:    archProcID,
 		HasArchProcessID: archProcID != nil,
 		ModuleKind:       req.ModuleKind,
+		LayerLevel:       req.LayerLevel,
 		Description:      req.Description,
 		OperatorID:       uc.UserID,
 	})
 	if err != nil {
+		if writeArchLayerOrCycleError(c, err) {
+			return
+		}
 		if errors.Is(err, topology.ErrDuplicateCode) {
 			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 			return
@@ -656,10 +703,14 @@ func UpdateModule(c *gin.Context) {
 		ArchProcessID:    archProcID,
 		HasArchProcessID: hasArch,
 		ModuleKind:       req.ModuleKind,
+		LayerLevel:       req.LayerLevel,
 		Description:      req.Description,
 		OperatorID:       uc.UserID,
 	})
 	if err != nil {
+		if writeArchLayerOrCycleError(c, err) {
+			return
+		}
 		if errors.Is(err, topology.ErrModuleNotFound) || errors.Is(err, topology.ErrGroupNotFound) || errors.Is(err, topology.ErrProcessNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 			return
@@ -831,6 +882,9 @@ func CreateModuleService(c *gin.Context) {
 		OperatorID:      uc.UserID,
 	})
 	if err != nil {
+		if writeArchLayerOrCycleError(c, err) {
+			return
+		}
 		var conflictErr *topology.ProvideConflictError
 		if errors.As(err, &conflictErr) {
 			c.JSON(http.StatusConflict, gin.H{
@@ -887,6 +941,9 @@ func UpdateModuleService(c *gin.Context) {
 		Description:     req.Description,
 	})
 	if err != nil {
+		if writeArchLayerOrCycleError(c, err) {
+			return
+		}
 		var conflictErr *topology.ProvideConflictError
 		if errors.As(err, &conflictErr) {
 			c.JSON(http.StatusConflict, gin.H{
@@ -995,6 +1052,9 @@ func CreateModuleDependency(c *gin.Context) {
 		OperatorID:       uc.UserID,
 	})
 	if err != nil {
+		if writeArchLayerOrCycleError(c, err) {
+			return
+		}
 		if errors.Is(err, topology.ErrDuplicateDependency) || errors.Is(err, topology.ErrDuplicateContractDependency) {
 			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 			return
@@ -1234,6 +1294,9 @@ func ConvertExclusiveToMultiImplContract(c *gin.Context) {
 		OperatorID:                  uc.UserID,
 	})
 	if err != nil {
+		if writeArchLayerOrCycleError(c, err) {
+			return
+		}
 		if errors.Is(err, topology.ErrModuleNotFound) || errors.Is(err, topology.ErrModuleServiceNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 			return
@@ -1282,6 +1345,9 @@ func AttachExclusiveToMultiImplContract(c *gin.Context) {
 		OperatorID:                  uc.UserID,
 	})
 	if err != nil {
+		if writeArchLayerOrCycleError(c, err) {
+			return
+		}
 		if errors.Is(err, topology.ErrServiceContractNotFound) || errors.Is(err, topology.ErrModuleServiceNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 			return

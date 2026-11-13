@@ -12,6 +12,11 @@ const (
 	ProtoCategoryBusiness = "BUSINESS" // 业务微服务契约
 	ProtoCategoryGateway  = "GATEWAY"  // 接入网关/边缘代理契约
 
+	ProtoSourceUploadPB      = "UPLOAD_PB"      // 手工上传 .pb 描述集二进制（M1~M21 默认模式）
+	ProtoSourceOnlineCompile = "ONLINE_COMPILE" // 在线源码树直编 (M22 protocompile)
+	ProtoSourceGitSync       = "GIT_SYNC"       // Git 仓库同步直编 (M25)
+	ProtoSourceGitMRAuto     = "GIT_MR_AUTO"    // Git MR 合入自动编译同步 (M25)
+
 	MaxDescriptorFileSize = 16 * 1024 * 1024 // 16MB (16,777,216 Bytes)
 )
 
@@ -22,7 +27,12 @@ type ProtoSchema struct {
 	Version         int            `gorm:"not null;uniqueIndex:uk_traefik_proto_name_ver,priority:2" json:"version"` // 同名递增版本号 1, 2, 3...
 	VersionTag      string         `gorm:"size:64;not null;default:''" json:"version_tag"`
 	Category        string         `gorm:"size:32;not null;default:'BUSINESS';index:idx_traefik_proto_category" json:"category"` // BASE_LIB | BUSINESS | GATEWAY
-	FileName        string         `gorm:"size:255;not null" json:"file_name"`                                                   // 经 filepath.Base 净化的展示文件名
+	SourceType      string         `gorm:"size:24;not null;default:'UPLOAD_PB';index:idx_traefik_proto_source_type;check:chk_traefik_proto_source_type,source_type IN ('UPLOAD_PB','ONLINE_COMPILE','GIT_SYNC','GIT_MR_AUTO')" json:"source_type"`
+	GitRepoID       *uint64        `gorm:"index:idx_traefik_proto_git_repo" json:"git_repo_id,omitempty"`
+	SourceBundleID  *uint64        `gorm:"index:idx_traefik_proto_source_bundle" json:"source_bundle_id,omitempty"`
+	SourceCommitSHA string         `gorm:"size:64;not null;default:''" json:"source_commit_sha"`
+	SourceMRIID     *int           `gorm:"column:source_mr_iid;default:null" json:"source_mr_iid,omitempty"`
+	FileName        string         `gorm:"size:255;not null" json:"file_name"` // 经 filepath.Base 净化的展示文件名
 	FileSHA256      string         `gorm:"size:64;not null;index:idx_traefik_proto_sha" json:"file_sha256"`
 	FileSize        int            `gorm:"not null;check:chk_traefik_proto_size,file_size > 0 AND file_size <= 16777216" json:"file_size"` // <= 16MB
 	DescriptorBytes []byte         `gorm:"type:bytea;not null" json:"-"`                                                                   // 二进制仅入库

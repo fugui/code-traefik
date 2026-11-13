@@ -239,7 +239,9 @@ func buildLogicalTopologyGraph(db *gorm.DB, dto *TopologyGraphDTO) error {
 	}
 
 	// 1. 构建顶层 Subsystem 节点 (depth=0)
+	subLayerMap := make(map[uint64]int, len(subsystems))
 	for idx, sub := range subsystems {
+		subLayerMap[sub.ID] = sub.LayerLevel
 		dto.Nodes = append(dto.Nodes, GraphNode{
 			ID:        fmt.Sprintf("sub_%d", sub.ID),
 			Type:      NodeTypeSubsystem,
@@ -251,8 +253,10 @@ func buildLogicalTopologyGraph(db *gorm.DB, dto *TopologyGraphDTO) error {
 			Name:      sub.Name,
 			SortOrder: idx + 1,
 			Meta: map[string]any{
-				"description": sub.Description,
-				"owner_id":    sub.OwnerID,
+				"description":           sub.Description,
+				"owner_id":              sub.OwnerID,
+				"layer_level":           sub.LayerLevel,
+				"effective_layer_level": sub.LayerLevel,
 			},
 		})
 	}
@@ -332,13 +336,16 @@ func buildLogicalTopologyGraph(db *gorm.DB, dto *TopologyGraphDTO) error {
 		}
 
 		isDeployed := m.ArchProcessID != nil && *m.ArchProcessID > 0
+		effLayer := EffectiveLayerLevel(subLayerMap[m.SubsystemID], m.LayerLevel)
 		meta := map[string]any{
-			"is_deployed":   isDeployed,
-			"module_kind":   m.ModuleKind,
-			"provide_count": provideCountMap[m.ID],
-			"description":   m.Description,
-			"subsystem_id":  m.SubsystemID,
-			"group_id":      m.GroupID,
+			"is_deployed":           isDeployed,
+			"module_kind":           m.ModuleKind,
+			"layer_level":           m.LayerLevel,
+			"effective_layer_level": effLayer,
+			"provide_count":         provideCountMap[m.ID],
+			"description":           m.Description,
+			"subsystem_id":          m.SubsystemID,
+			"group_id":              m.GroupID,
 		}
 		if m.ModuleKind == models.ModuleKindContractLib {
 			meta["contract_count"] = contractCountMap[m.ID]
@@ -636,7 +643,16 @@ func buildPhysicalTopologyGraph(db *gorm.DB, dto *TopologyGraphDTO, envAgentID u
 		return err
 	}
 
-	// 2. 查询全部功能模块
+	// 2. 查询全部功能模块及所属子系统层级
+	var physSubsystems []models.Subsystem
+	if err := db.Select("id, layer_level").Find(&physSubsystems).Error; err != nil {
+		return err
+	}
+	physSubLayerMap := make(map[uint64]int, len(physSubsystems))
+	for _, s := range physSubsystems {
+		physSubLayerMap[s.ID] = s.LayerLevel
+	}
+
 	var allModules []models.Module
 	if err := db.Order("id ASC").Find(&allModules).Error; err != nil {
 		return err
@@ -870,10 +886,12 @@ func buildPhysicalTopologyGraph(db *gorm.DB, dto *TopologyGraphDTO, envAgentID u
 			for idx, mod := range mountedMods {
 				deployedModuleIDs[mod.ID] = true
 				modMeta := map[string]any{
-					"is_deployed":     true,
-					"arch_process_id": ap.ID,
-					"provide_count":   provideCountMap[mod.ID],
-					"description":     mod.Description,
+					"is_deployed":           true,
+					"arch_process_id":       ap.ID,
+					"layer_level":           mod.LayerLevel,
+					"effective_layer_level": EffectiveLayerLevel(physSubLayerMap[mod.SubsystemID], mod.LayerLevel),
+					"provide_count":         provideCountMap[mod.ID],
+					"description":           mod.Description,
 				}
 				if mod.OwnerID != nil {
 					modMeta["owner_id"] = *mod.OwnerID
@@ -921,9 +939,11 @@ func buildPhysicalTopologyGraph(db *gorm.DB, dto *TopologyGraphDTO, envAgentID u
 
 		for idx, m := range undeployedMods {
 			modMeta := map[string]any{
-				"is_deployed":   false,
-				"provide_count": provideCountMap[m.ID],
-				"description":   m.Description,
+				"is_deployed":           false,
+				"layer_level":           m.LayerLevel,
+				"effective_layer_level": EffectiveLayerLevel(physSubLayerMap[m.SubsystemID], m.LayerLevel),
+				"provide_count":         provideCountMap[m.ID],
+				"description":           m.Description,
 			}
 			if m.OwnerID != nil {
 				modMeta["owner_id"] = *m.OwnerID

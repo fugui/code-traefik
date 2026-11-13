@@ -38,14 +38,26 @@ export async function listSubsystems(params?: { search?: string; page?: number; 
   return apiRequest<PaginatedResponse<Subsystem>>(`/arch/subsystems${qs ? `?${qs}` : ''}`);
 }
 
-export async function createSubsystem(data: { code: string; name: string; owner_id?: string; description?: string }) {
+export async function createSubsystem(data: {
+  code: string;
+  name: string;
+  owner_id?: string;
+  layer_level?: number;
+  description?: string;
+}) {
   return apiRequest<Subsystem>('/arch/subsystems', {
     method: 'POST',
     body: JSON.stringify(data),
   });
 }
 
-export async function updateSubsystem(id: string, data: { code?: string; name: string; owner_id?: string; description?: string }) {
+export async function updateSubsystem(id: string, data: {
+  code?: string;
+  name: string;
+  owner_id?: string;
+  layer_level?: number;
+  description?: string;
+}) {
   return apiRequest<Subsystem>(`/arch/subsystems/${id}`, {
     method: 'PUT',
     body: JSON.stringify(data),
@@ -141,6 +153,7 @@ export async function createModule(data: {
   code: string;
   name: string;
   module_kind?: ModuleKind;
+  layer_level?: number;
   owner_id?: string;
   process_id?: string | null;
   description?: string;
@@ -161,6 +174,7 @@ export async function updateModule(id: string, data: {
   code?: string;
   name: string;
   module_kind?: ModuleKind;
+  layer_level?: number;
   owner_id?: string;
   process_id?: string | null;
   description?: string;

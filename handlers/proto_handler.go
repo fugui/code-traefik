@@ -71,6 +71,11 @@ type ProtoSchemaLedgerItemDTO struct {
 	Version              int                           `json:"version"`
 	VersionTag           string                        `json:"version_tag"`
 	Category             string                        `json:"category"`
+	SourceType           string                        `json:"source_type"`
+	GitRepoID            *uint64                       `json:"git_repo_id,omitempty"`
+	SourceBundleID       *uint64                       `json:"source_bundle_id,omitempty"`
+	SourceCommitSHA      string                        `json:"source_commit_sha,omitempty"`
+	SourceMRIID          *int                          `json:"source_mr_iid,omitempty"`
 	FileName             string                        `json:"file_name"`
 	FileSHA256           string                        `json:"file_sha256"`
 	FileSize             int                           `json:"file_size"`
@@ -181,6 +186,9 @@ func ListProtoSchemas(c *gin.Context) {
 	latestOnly := c.Query("latest_only") != "false"
 	name := strings.TrimSpace(c.Query("name"))
 	category := strings.TrimSpace(c.Query("category"))
+	sourceType := strings.TrimSpace(c.Query("source_type"))
+	gitRepoIDStr := strings.TrimSpace(c.Query("git_repo_id"))
+	sourceBundleIDStr := strings.TrimSpace(c.Query("source_bundle_id"))
 	activeOnlyStr := c.Query("active_only")
 	search := strings.TrimSpace(c.Query("search"))
 	sortBy := strings.TrimSpace(c.Query("sort_by"))
@@ -189,6 +197,32 @@ func ListProtoSchemas(c *gin.Context) {
 	if category != "" && category != models.ProtoCategoryBaseLib && category != models.ProtoCategoryBusiness && category != models.ProtoCategoryGateway {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "非法的 category 分类"})
 		return
+	}
+	if sourceType != "" &&
+		sourceType != models.ProtoSourceUploadPB &&
+		sourceType != models.ProtoSourceOnlineCompile &&
+		sourceType != models.ProtoSourceGitSync &&
+		sourceType != models.ProtoSourceGitMRAuto {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "非法的 source_type 来源类型"})
+		return
+	}
+
+	var gitRepoIDFilter, sourceBundleIDFilter *uint64
+	if gitRepoIDStr != "" {
+		v, parseErr := strconv.ParseUint(gitRepoIDStr, 10, 64)
+		if parseErr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "非法的 git_repo_id 参数"})
+			return
+		}
+		gitRepoIDFilter = &v
+	}
+	if sourceBundleIDStr != "" {
+		v, parseErr := strconv.ParseUint(sourceBundleIDStr, 10, 64)
+		if parseErr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "非法的 source_bundle_id 参数"})
+			return
+		}
+		sourceBundleIDFilter = &v
 	}
 
 	// 排序字段白名单校验防 SQL 注入
@@ -224,12 +258,24 @@ func ListProtoSchemas(c *gin.Context) {
 		if category != "" {
 			tx = tx.Where("category = ?", category)
 		}
+		if sourceType != "" {
+			tx = tx.Where("source_type = ?", sourceType)
+		}
+		if gitRepoIDFilter != nil {
+			tx = tx.Where("git_repo_id = ?", *gitRepoIDFilter)
+		}
+		if sourceBundleIDFilter != nil {
+			tx = tx.Where("source_bundle_id = ?", *sourceBundleIDFilter)
+		}
 		if activeOnlyStr == "true" {
 			tx = tx.Where("is_active = true")
 		}
 		if search != "" {
 			s := "%" + search + "%"
-			tx = tx.Where("name ILIKE ? OR version_tag ILIKE ? OR file_name ILIKE ? OR proto_files::text ILIKE ?", s, s, s, s)
+			tx = tx.Where(
+				"name ILIKE ? OR version_tag ILIKE ? OR file_name ILIKE ? OR source_commit_sha ILIKE ? OR proto_files::text ILIKE ? OR EXISTS (SELECT 1 FROM traefik_proto_operations po WHERE po.schema_id = traefik_proto_schemas.id AND po.service_name ILIKE ?)",
+				s, s, s, s, s, s,
+			)
 		}
 		return tx
 	}
@@ -406,36 +452,15 @@ func ListProtoSchemas(c *gin.Context) {
 	}
 
 	// 4. 批量解析依赖状态 (resolved_dependencies)
-	var allActiveSchemas []models.ProtoSchema
-	_ = models.DB.Where("is_active = true").Find(&allActiveSchemas).Error
-
-	type activeProtoInfo struct {
-		schemaID   uint64
-		schemaName string
-		version    int
-		category   string
-	}
-	activeProtosLookup := make(map[string]activeProtoInfo)
-	for _, as := range allActiveSchemas {
-		var apList []string
-		if len(as.ProtoFiles) > 0 {
-			_ = json.Unmarshal(as.ProtoFiles, &apList)
-			for _, p := range apList {
-				activeProtosLookup[p] = activeProtoInfo{
-					schemaID:   as.ID,
-					schemaName: as.Name,
-					version:    as.Version,
-					category:   as.Category,
-				}
-			}
-		}
-	}
+	activeProtosLookup := buildActiveProtoLookup(models.DB)
 
 	items := make([]ProtoSchemaLedgerItemDTO, 0, len(schemas))
 	for _, s := range schemas {
 		var protoFiles []string
 		if len(s.ProtoFiles) > 0 {
-			_ = json.Unmarshal(s.ProtoFiles, &protoFiles)
+			if err := json.Unmarshal(s.ProtoFiles, &protoFiles); err != nil {
+				protoFiles = []string{}
+			}
 		}
 		if protoFiles == nil {
 			protoFiles = []string{}
@@ -443,41 +468,23 @@ func ListProtoSchemas(c *gin.Context) {
 
 		var externalImports []string
 		if len(s.ExternalImports) > 0 {
-			_ = json.Unmarshal(s.ExternalImports, &externalImports)
+			if err := json.Unmarshal(s.ExternalImports, &externalImports); err != nil {
+				externalImports = []string{}
+			}
 		}
 		if externalImports == nil {
 			externalImports = []string{}
 		}
 
-		// 解析 resolved_dependencies
-		resolvedDeps := make([]ResolvedSchemaDependencyDTO, 0)
-		for _, imp := range externalImports {
-			if strings.HasPrefix(imp, "google/protobuf/") {
-				continue
-			}
-			if match, ok := activeProtosLookup[imp]; ok {
-				sid := match.schemaID
-				ver := match.version
-				resolvedDeps = append(resolvedDeps, ResolvedSchemaDependencyDTO{
-					SchemaID:      &sid,
-					SchemaName:    match.schemaName,
-					Version:       &ver,
-					Category:      match.category,
-					MatchedProtos: []string{imp},
-					Status:        "READY",
-				})
-			} else {
-				resolvedDeps = append(resolvedDeps, ResolvedSchemaDependencyDTO{
-					SchemaName:    imp,
-					MatchedProtos: []string{imp},
-					Status:        "MISSING",
-				})
-			}
-		}
+		resolvedDeps := resolveDependenciesWithLookup(externalImports, activeProtosLookup)
 
 		st := nameStatsMap[s.Name]
 		claimedCount := claimedCountMap[s.ID]
 		claimedRatio := claimedRatioMap[s.ID]
+		srcType := s.SourceType
+		if srcType == "" {
+			srcType = models.ProtoSourceUploadPB
+		}
 
 		items = append(items, ProtoSchemaLedgerItemDTO{
 			ID:                   s.ID,
@@ -485,6 +492,11 @@ func ListProtoSchemas(c *gin.Context) {
 			Version:              s.Version,
 			VersionTag:           s.VersionTag,
 			Category:             s.Category,
+			SourceType:           srcType,
+			GitRepoID:            s.GitRepoID,
+			SourceBundleID:       s.SourceBundleID,
+			SourceCommitSHA:      s.SourceCommitSHA,
+			SourceMRIID:          s.SourceMRIID,
 			FileName:             s.FileName,
 			FileSHA256:           s.FileSHA256,
 			FileSize:             s.FileSize,
@@ -515,6 +527,126 @@ func ListProtoSchemas(c *gin.Context) {
 		"page_size":    pageSize,
 		"pool_summary": poolSummary,
 	})
+}
+
+type activeProtoLookupEntry struct {
+	schemaID   uint64
+	schemaName string
+	version    int
+	category   string
+}
+
+func buildActiveProtoLookup(db *gorm.DB) map[string]activeProtoLookupEntry {
+	var allActiveSchemas []models.ProtoSchema
+	_ = db.Where("is_active = true").Find(&allActiveSchemas).Error
+
+	activeProtosLookup := make(map[string]activeProtoLookupEntry)
+	for _, as := range allActiveSchemas {
+		var apList []string
+		if len(as.ProtoFiles) > 0 {
+			if err := json.Unmarshal(as.ProtoFiles, &apList); err == nil {
+				for _, p := range apList {
+					activeProtosLookup[p] = activeProtoLookupEntry{
+						schemaID:   as.ID,
+						schemaName: as.Name,
+						version:    as.Version,
+						category:   as.Category,
+					}
+				}
+			}
+		}
+	}
+	return activeProtosLookup
+}
+
+func resolveDependenciesWithLookup(externalImports []string, activeProtosLookup map[string]activeProtoLookupEntry) []ResolvedSchemaDependencyDTO {
+	resolvedDeps := make([]ResolvedSchemaDependencyDTO, 0)
+	for _, imp := range externalImports {
+		if strings.HasPrefix(imp, "google/protobuf/") {
+			continue
+		}
+		if match, ok := activeProtosLookup[imp]; ok {
+			sid := match.schemaID
+			ver := match.version
+			resolvedDeps = append(resolvedDeps, ResolvedSchemaDependencyDTO{
+				SchemaID:      &sid,
+				SchemaName:    match.schemaName,
+				Version:       &ver,
+				Category:      match.category,
+				MatchedProtos: []string{imp},
+				Status:        "READY",
+			})
+		} else {
+			resolvedDeps = append(resolvedDeps, ResolvedSchemaDependencyDTO{
+				SchemaName:    imp,
+				MatchedProtos: []string{imp},
+				Status:        "MISSING",
+			})
+		}
+	}
+	return resolvedDeps
+}
+
+func writeProtoMutationError(c *gin.Context, err error) {
+	var compileErr *decoder.CompileError
+	if errors.As(err, &compileErr) {
+		status := compileErr.HTTPStatus
+		if status == 0 {
+			status = http.StatusBadRequest
+		}
+		resp := gin.H{
+			"code":  compileErr.Code,
+			"error": compileErr.Error(),
+		}
+		if len(compileErr.Diagnostics) > 0 {
+			resp["diagnostics"] = compileErr.Diagnostics
+		}
+		if len(compileErr.MissingImports) > 0 {
+			resp["missing_imports"] = compileErr.MissingImports
+		}
+		c.JSON(status, resp)
+		return
+	}
+	var breakingErr *decoder.SchemaBreakingError
+	if errors.As(err, &breakingErr) {
+		c.JSON(http.StatusConflict, gin.H{
+			"error":               breakingErr.Error(),
+			"code":                "BREAKING_CHANGE_DETECTED",
+			"breaking_rules":      breakingErr.BreakingRules,
+			"affected_dependents": breakingErr.AffectedDependents,
+		})
+		return
+	}
+	var conflictErr *decoder.SchemaConflictError
+	if errors.As(err, &conflictErr) {
+		c.JSON(http.StatusConflict, gin.H{
+			"error":     conflictErr.Error(),
+			"conflicts": conflictErr.Conflicts,
+		})
+		return
+	}
+	var brokenErr *decoder.SchemaBrokenDependentsError
+	if errors.As(err, &brokenErr) {
+		c.JSON(http.StatusConflict, gin.H{
+			"error":             brokenErr.Error(),
+			"broken_dependents": brokenErr.BrokenDependents,
+		})
+		return
+	}
+	if errors.Is(err, decoder.ErrPathTraversalDenied) {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":  "PATH_TRAVERSAL_DENIED",
+			"error": err.Error(),
+		})
+		return
+	}
+	if errors.Is(err, decoder.ErrDescriptorEmpty) || errors.Is(err, decoder.ErrDescriptorTooLarge) ||
+		errors.Is(err, decoder.ErrInvalidDescriptorProto) || errors.Is(err, decoder.ErrInvalidSchemaName) ||
+		strings.Contains(err.Error(), "缺失") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 }
 
 // UploadProtoSchema POST /api/proto-schemas (AdminOnly)
@@ -590,39 +722,7 @@ func UploadProtoSchema(c *gin.Context) {
 		OperatorID:     uc.UserID,
 	})
 	if err != nil {
-		var breakingErr *decoder.SchemaBreakingError
-		if errors.As(err, &breakingErr) {
-			c.JSON(http.StatusConflict, gin.H{
-				"error":               breakingErr.Error(),
-				"code":                "BREAKING_CHANGE_DETECTED",
-				"breaking_rules":      breakingErr.BreakingRules,
-				"affected_dependents": breakingErr.AffectedDependents,
-			})
-			return
-		}
-		var conflictErr *decoder.SchemaConflictError
-		if errors.As(err, &conflictErr) {
-			c.JSON(http.StatusConflict, gin.H{
-				"error":     conflictErr.Error(),
-				"conflicts": conflictErr.Conflicts,
-			})
-			return
-		}
-		var brokenErr *decoder.SchemaBrokenDependentsError
-		if errors.As(err, &brokenErr) {
-			c.JSON(http.StatusConflict, gin.H{
-				"error":             brokenErr.Error(),
-				"broken_dependents": brokenErr.BrokenDependents,
-			})
-			return
-		}
-		if errors.Is(err, decoder.ErrDescriptorEmpty) || errors.Is(err, decoder.ErrDescriptorTooLarge) ||
-			errors.Is(err, decoder.ErrInvalidDescriptorProto) || errors.Is(err, decoder.ErrInvalidSchemaName) ||
-			strings.Contains(err.Error(), "缺失") {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		writeProtoMutationError(c, err)
 		return
 	}
 
@@ -646,6 +746,171 @@ func UploadProtoSchema(c *gin.Context) {
 		respData["breaking_warnings"] = breakingWarnings
 	}
 	if autoActivate && allowBreaking {
+		respData["forced_breaking"] = true
+	}
+	c.JSON(http.StatusCreated, respData)
+}
+
+type compileProtoFileRequest struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
+}
+
+// CompileProtoSchema POST /api/proto-schemas/compile (AdminOnly)
+// 纯 Go protocompile 在线编译 .proto 源码树并直接汇入描述集生命周期与破坏性检查闭环
+func CompileProtoSchema(c *gin.Context) {
+	uc := commonAuth.GetUserContext(c)
+
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, int64(models.MaxDescriptorFileSize)+262144)
+
+	var req struct {
+		Name           string                    `json:"name"`
+		Category       string                    `json:"category"`
+		VersionTag     string                    `json:"version_tag"`
+		Description    string                    `json:"description"`
+		IncludeDirs    []string                  `json:"include_dirs"`
+		EntryFiles     []string                  `json:"entry_files"`
+		Files          []compileProtoFileRequest `json:"files"`
+		AutoActivate   bool                      `json:"auto_activate"`
+		AllowBreaking  bool                      `json:"allow_breaking"`
+		BreakingReason string                    `json:"breaking_reason"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		if strings.Contains(err.Error(), "request body too large") || strings.Contains(err.Error(), "http: request body too large") {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":  "PAYLOAD_TOO_LARGE",
+				"error": "提交的在线编译源码请求体超过 16MB 上限",
+			})
+			return
+		}
+		c.JSON(http.StatusBadRequest, gin.H{"error": "非法的 JSON 请求体"})
+		return
+	}
+
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "描述集标识 name 不能为空"})
+		return
+	}
+
+	category := strings.TrimSpace(req.Category)
+	if category == "" {
+		category = models.ProtoCategoryBusiness
+	}
+	if category != models.ProtoCategoryBaseLib && category != models.ProtoCategoryBusiness && category != models.ProtoCategoryGateway {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "非法的 category 分类，仅支持 BASE_LIB, BUSINESS, GATEWAY"})
+		return
+	}
+
+	breakingReason := strings.TrimSpace(req.BreakingReason)
+	if req.AllowBreaking && len(breakingReason) < 8 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "强制放行破坏性变更必须填写不少于 8 个字符的原因 (breaking_reason)"})
+		return
+	}
+
+	if len(req.Files) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":  "COMPILE_SYNTAX_ERROR",
+			"error": "files 源码列表不能为空",
+		})
+		return
+	}
+
+	filesMap := make(map[string]string, len(req.Files))
+	for _, f := range req.Files {
+		cleaned, sanErr := decoder.SanitizeProtoRelPath(f.Path, true)
+		if sanErr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":  "PATH_TRAVERSAL_DENIED",
+				"error": sanErr.Error(),
+			})
+			return
+		}
+		if _, dup := filesMap[cleaned]; dup {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":  "COMPILE_SYNTAX_ERROR",
+				"error": fmt.Sprintf("存在重复的 .proto 文件路径: %s", cleaned),
+			})
+			return
+		}
+		filesMap[cleaned] = f.Content
+	}
+
+	reg, err := GetDecoderRegistry()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	schema, ops, inheritedCount, err := reg.CompileAndSaveSchema(c.Request.Context(), decoder.CompileProtoBundleInput{
+		Name:             name,
+		Category:         category,
+		VersionTag:       strings.TrimSpace(req.VersionTag),
+		Description:      strings.TrimSpace(req.Description),
+		ProtoIncludeDirs: req.IncludeDirs,
+		EntryPoints:      req.EntryFiles,
+		Files:            filesMap,
+		AutoActivate:     req.AutoActivate,
+		AllowBreaking:    req.AllowBreaking,
+		BreakingReason:   breakingReason,
+		SourceType:       models.ProtoSourceOnlineCompile,
+		OperatorID:       uc.UserID,
+	})
+	if err != nil {
+		writeProtoMutationError(c, err)
+		return
+	}
+
+	var breakingWarnings []decoder.BreakingRuleViolation
+	if !req.AutoActivate {
+		var detectErr error
+		breakingWarnings, detectErr = reg.DetectBreakingChangesAgainstActive(schema.Name, schema.DescriptorBytes)
+		if detectErr != nil {
+			breakingWarnings = nil
+		}
+	}
+
+	var compiledFiles []string
+	if len(schema.ProtoFiles) > 0 {
+		if unmarshalErr := json.Unmarshal(schema.ProtoFiles, &compiledFiles); unmarshalErr != nil {
+			compiledFiles = []string{}
+		}
+	}
+	if compiledFiles == nil {
+		compiledFiles = []string{}
+	}
+
+	var externalImports []string
+	if len(schema.ExternalImports) > 0 {
+		if unmarshalErr := json.Unmarshal(schema.ExternalImports, &externalImports); unmarshalErr != nil {
+			externalImports = []string{}
+		}
+	}
+	if externalImports == nil {
+		externalImports = []string{}
+	}
+	resolvedDeps := resolveDependenciesWithLookup(externalImports, buildActiveProtoLookup(models.DB))
+
+	auditSummary := fmt.Sprintf("在线编译描述集 [%s] 版本 %d (来源: ONLINE_COMPILE)", schema.Name, schema.Version)
+	if req.AutoActivate && req.AllowBreaking {
+		auditSummary = fmt.Sprintf("强制在线编译并激活破坏性描述集 [%s] 版本 %d (授权原因: %s)", schema.Name, schema.Version, breakingReason)
+	}
+	recordAudit(c, "compile", commonModels.AuditLevelP1, auditSummary, "proto_schema", schema.ID, schema.Name, nil, schema)
+
+	respData := gin.H{
+		"schema":                    schema,
+		"operations":                ops,
+		"proto_files":               compiledFiles,
+		"compiled_files":            compiledFiles,
+		"external_imports":          externalImports,
+		"resolved_dependencies":     resolvedDeps,
+		"doc_symbol_count":          0,
+		"inherited_ignore_op_count": inheritedCount,
+	}
+	if len(breakingWarnings) > 0 {
+		respData["breaking_warnings"] = breakingWarnings
+	}
+	if req.AutoActivate && req.AllowBreaking {
 		respData["forced_breaking"] = true
 	}
 	c.JSON(http.StatusCreated, respData)
@@ -945,6 +1210,7 @@ func GetProtoDependenciesGraph(c *gin.Context) {
 		Name           string `json:"name"`
 		Version        int    `json:"version"`
 		Category       string `json:"category"`
+		SourceType     string `json:"source_type"`
 		ProtoFileCount int    `json:"proto_file_count"`
 		ServiceCount   int    `json:"service_count"`
 		OperationCount int    `json:"operation_count"`
@@ -960,11 +1226,16 @@ func GetProtoDependenciesGraph(c *gin.Context) {
 	nodes := make([]NodeDTO, 0, len(schemas))
 	protoToSchemaID := make(map[string]uint64)
 	for _, s := range schemas {
+		srcType := s.SourceType
+		if srcType == "" {
+			srcType = models.ProtoSourceUploadPB
+		}
 		nodes = append(nodes, NodeDTO{
 			ID:             s.ID,
 			Name:           s.Name,
 			Version:        s.Version,
 			Category:       s.Category,
+			SourceType:     srcType,
 			ProtoFileCount: s.ProtoFileCount,
 			ServiceCount:   s.ServiceCount,
 			OperationCount: s.OperationCount,

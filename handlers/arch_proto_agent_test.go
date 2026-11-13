@@ -243,6 +243,7 @@ func RegisterRoutesForTest(r *gin.Engine) {
 		protected.POST("/proto-schemas/batch-activate", requireAdmin, handlers.BatchActivateProtoSchemas)
 		protected.GET("/proto-schemas/:id/download", handlers.DownloadProtoSchema)
 		protected.GET("/proto-schemas/:id/summary", handlers.GetProtoSchemaSummary)
+		protected.POST("/proto-schemas/compile", requireAdmin, handlers.CompileProtoSchema)
 		protected.POST("/proto-schemas", requireAdmin, handlers.UploadProtoSchema)
 		protected.PATCH("/proto-schemas/:id", requireAdmin, handlers.UpdateProtoSchema)
 		protected.POST("/proto-schemas/:id/activate", requireAdmin, handlers.ActivateProtoSchema)

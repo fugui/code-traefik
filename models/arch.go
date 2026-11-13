@@ -14,6 +14,7 @@ type Subsystem struct {
 	Name        string    `gorm:"size:128;not null;index:idx_traefik_subsystems_name" json:"name"`
 	OwnerID     *uint     `gorm:"index:idx_traefik_subsystems_owner" json:"owner_id"`
 	Owner       *User     `gorm:"foreignKey:OwnerID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"owner,omitempty"`
+	LayerLevel  int       `gorm:"not null;default:0;index:idx_traefik_subsystems_layer;check:chk_traefik_subsystems_layer,layer_level >= 0 AND layer_level <= 99" json:"layer_level"` // 架构层级 (0=不限/豁免; 1=底层基础设施 -> N=顶层接入网关; M22 ADR-18)
 	Description string    `gorm:"type:text" json:"description"`
 	CreatedBy   uint      `gorm:"not null;default:0" json:"created_by"`
 	UpdatedBy   uint      `gorm:"not null;default:0" json:"updated_by"`
@@ -96,8 +97,9 @@ type Module struct {
 	Group         *FunctionalGroup `gorm:"foreignKey:GroupID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"group,omitempty"`
 	ArchProcessID *uint64          `gorm:"index:idx_traefik_modules_arch_proc" json:"arch_process_id"` // 指向全局架构标准进程蓝图 (A-03 单模块至多归属 1 个标准进程)
 	ArchProcess   *ArchProcess     `gorm:"foreignKey:ArchProcessID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"arch_process,omitempty"`
-	ModuleKind    string           `gorm:"size:16;not null;default:'BUSINESS';index:idx_traefik_modules_kind" json:"module_kind"` // BUSINESS | CONTRACT_LIB (ADR-16)
-	Code          string           `gorm:"size:64;not null;uniqueIndex:uk_traefik_modules_code" json:"code"`                      // 全局唯一编码
+	ModuleKind    string           `gorm:"size:16;not null;default:'BUSINESS';index:idx_traefik_modules_kind" json:"module_kind"`                                                        // BUSINESS | CONTRACT_LIB (ADR-16)
+	LayerLevel    int              `gorm:"not null;default:0;index:idx_traefik_modules_layer;check:chk_traefik_modules_layer,layer_level >= 0 AND layer_level <= 99" json:"layer_level"` // 0=继承所属子系统层级，1~99 显式覆盖层级 (M22 ADR-18)
+	Code          string           `gorm:"size:64;not null;uniqueIndex:uk_traefik_modules_code" json:"code"`                                                                             // 全局唯一编码
 	Name          string           `gorm:"size:128;not null;index:idx_traefik_modules_name" json:"name"`
 	OwnerID       *uint            `gorm:"index:idx_traefik_modules_owner" json:"owner_id"`
 	Owner         *User            `gorm:"foreignKey:OwnerID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"owner,omitempty"`

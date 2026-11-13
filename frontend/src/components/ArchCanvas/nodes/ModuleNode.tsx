@@ -11,6 +11,8 @@ export const ModuleNode: React.FC<NodeProps<ModuleNodeType>> = ({ id, data }) =>
   const provideCount = Number(graphNode.meta?.provide_count || 0);
   const contractCount = Number(graphNode.meta?.contract_count || 0);
   const implCount = Number(graphNode.meta?.impl_count || 0);
+  const effLayer = Number(graphNode.meta?.effective_layer_level ?? graphNode.meta?.layer_level ?? 0);
+  const ownLayer = Number(graphNode.meta?.layer_level ?? 0);
   const ownerName = graphNode.meta?.owner_name ? String(graphNode.meta.owner_name) : undefined;
 
   const handlePinClick = (e: React.MouseEvent) => {
@@ -73,6 +75,15 @@ export const ModuleNode: React.FC<NodeProps<ModuleNodeType>> = ({ id, data }) =>
 
       {lodMode !== 'COMPACT' && (
         <div className="code-arch-module__footer">
+          {effLayer > 0 && (
+            <span
+              className="code-arch-badge code-arch-badge--counter"
+              title={ownLayer > 0 ? `显式层级 L${ownLayer}` : `继承所属子系统层级 L${effLayer}`}
+              data-testid={`module-layer-badge-${id}`}
+            >
+              L{effLayer}
+            </span>
+          )}
           {ownerName && (
             <span className="code-arch-badge code-arch-badge--counter" title={`负责人: ${ownerName}`}>
               {ownerName}
