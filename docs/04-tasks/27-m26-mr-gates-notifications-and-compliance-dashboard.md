@@ -99,7 +99,7 @@ flowchart LR
 ```bash
 # 1. 表数量(30核心+1设置)、无悲观锁字段与依赖隔离静态断言
 go list -deps ./cmd/agent | grep -E 'gorm\.io|dynamicpb|protocompile|go-git|go-billy|sqlite' && exit 1 || echo "OK: cmd/agent isolated"
-go list -deps ./cmd/server | grep -iE 'sqlite|protohub' && exit 1 || echo "OK: cmd/server zero SQLite"
+go list -deps ./cmd/server | grep -iE 'sqlite' && exit 1 || echo "OK: cmd/server zero SQLite"
 
 # 2. 全量后端隔离数据库 + 竞争检测测试（30 张业务表 + traefik_settings）
 TEST_DB_DSN="host=127.0.0.1 port=5432 user=postgres password=CodeShield618! dbname=postgres sslmode=disable" \

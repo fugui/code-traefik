@@ -1,10 +1,10 @@
 # 架构与活体契约治理 (`code-traefik`) 特性清单与需求范围界定规范 (Feature Matrix & Scope)
 
 - **文档编号**：`01-feature-matrix.md`
-- **文档版本**：v2.19.0
+- **文档版本**：v2.20.0
 - **更新日期**：2026-11-13
 - **当前阶段**：阶段一：特性清单与边界明确（同步阶段二/三/四 SDD 定稿）
-- **状态**：已批准待实施 (M1~M21 已交付；M22~M26 已完成 SDD 检视定稿与任务拆解，详见 ADR-18)
+- **状态**：已批准待实施 (M1~M21 已交付；M22~M26 已完成 SDD 检视定稿与任务拆解，详见 ADR-18 v1.3.0)
 - **协议依据**：详见项目内置参考文档 [`docs/07-references/01-cros-rpc-protocol-spec.md`](../07-references/01-cros-rpc-protocol-spec.md)（文档编号：`01-cros-rpc-protocol-spec.md` v1.0.0，基于 DOPHI 平台 `cros_rpccore.ph` / `cros_rpctcp` 规范，本文所有字段名、偏移与取值均以该规范原文为准）
 
 ### 修订记录
@@ -37,6 +37,7 @@
 | v2.17.0 | 2026-11-13 | **Proto 全生命周期治理收口与 Git-Only 参考文档/MR 协同边界修订 (ADR-18 v1.1.0 / M22~M25 Proposed)**：鉴于外部兄弟项目 `code-proto` 与原型项目 `protohub` 已正式废弃，依据 [`ADR-18`](../05-adr/18-proto-full-lifecycle-and-git-mr-governance-adr.md) 修订边界：1. 撤销 `Non-Goal 4` 中“接口变更 MR 追踪与 `.proto` 源码管理归属 `code-proto`”旧约束，更新 §2.3 SSOT 说明、`F-18`（升维为全注释驱动的「活体接口参考文档中心 (Reference Docs)」）与 `Non-Goal 7`；2. 将 `F-21` 由“已取消”重定义为“Git-Only `.proto` 源码全生命周期、Git/MR 门禁与统一编译入池”；3. 规划新增 `F-28`~`F-32`（确立 Git-Only 唯一写入口并取消 Web 在线编辑与悲观锁，涵盖纯 Go `protocompile` 编译底座、轻量只读 `.proto` 源码与 Commit Diff 视图、Git 无状态 API 同步与 MR 四合一静态门禁、可配置命名/词汇/带护栏重复消息抽取/分层校验、豁免审批与持久化通知及依赖图前端挂载/导出） |
 | v2.18.0 | 2026-11-13 | **ADR-18 端到端验收场景与 NFR 安全基线补全**：新增 **4 个端到端验收场景（`SC-13` ~ `SC-16`）** 分别对应 M22~M25（纯 Go `protocompile` + `layer_level` 分层依赖拦截 + `F-32` 依赖图/导出、`F-18` 活体接口参考文档 + 只读源码溯源与 Markdown 导出、多段命名/词库迁移/带护栏 AST 重复消息 + LLM 3s 超时降级、无状态 Git 同步 + 含删减文件的 MR 四合一虚拟树门禁 + `Approve with Override` + `traefik_notifications`/`code-notifier` 通知及 `F-24` 静态合标卡片），并补齐 Git SSRF/AES-256-GCM/前端增量红线 |
 | v2.19.0 | 2026-11-13 | **ADR-18 v1.2.0 检视修订与跨机 `code-notifier` / Monorepo 边界校准**：1. M25 拆分为 `M25`（Git 仓库 `1:N` `GitProtoBundle` 多包无状态同步与只读历史）与 `M26`（MR 四合一门禁、`uk_traefik_mr_dedup` Fast-Forward 修复、`SSEBroker(userID)` 定向推送与持久/邮件通知、大盘合标卡片）；2. 明确 `code-notifier` 部署在同内网另一台主机上的邮件服务角色，`SafeDialer` 在永久硬阻断云元数据（`169.254.169.254` 等）及默认拦截未授权内网/回环的前提下，支持管理员配置 `outbound_trusted_cidrs` 受信任白名单放行内网 GitLab/LLM 及跨机 `code-notifier`；3. 统一前端 M22~M26 增量 Chunk 预算 **`<= 150KB gzip`（`<= 500KB` raw）**（基于 M21 实测基线）与 `F-32` 程序化矢量 SVG/离屏 Canvas 导出方案 |
+| v2.20.0 | 2026-11-13 | **依据 ADR-18 v1.3.0 清除无用的外部历史数据迁移设计**：明确 `code-proto` 与 `protohub` 均未开发完成且从未真正运行过，因此**不存在任何 SQLite/旧系统数据迁移需求**；彻底移除 `scripts/migrate_protohub_vocab` 与 `PROTOHUB_IMPORT` 设计，将 `SC-15` 与 `M24` 收敛为 `code-traefik` 原生 `BUILTIN_SEED` 规则/词根幂等初始化、Web CRUD 维护与全仓零 SQLite 红线 |
 
 
 ---
@@ -154,7 +155,7 @@ flowchart TB
 
 ### 2.3 架构元素与运行映射数据模型
 
-**SSOT 选型依据**：原外部系统 `code-proto` 与原型 `protohub` 均已正式废弃；`code-bench` 只管理用户、组织与审计，没有「子系统-功能组-功能模块-标准业务进程」与运行态进程挂载。因此，由 `code-traefik` 在自己的 `traefik_*` 表中闭环维护架构元素 SSOT，并依据 [`ADR-18`](../05-adr/18-proto-full-lifecycle-and-git-mr-governance-adr.md) 统筹 `.proto` 源码到 `.pb` 运行态契约的全生命周期。
+**SSOT 选型依据**：原外部系统 `code-proto` 与原型 `protohub` 均未开发完成、从未投入运行并已正式废弃（零历史数据需迁移）；`code-bench` 只管理用户、组织与审计，没有「子系统-功能组-功能模块-标准业务进程」与运行态进程挂载。因此，由 `code-traefik` 在自己的 `traefik_*` 表中原生闭环维护架构元素 SSOT，并依据 [`ADR-18`](../05-adr/18-proto-full-lifecycle-and-git-mr-governance-adr.md) 统筹 `.proto` 源码到 `.pb` 运行态契约的全生命周期。
 
 下图只描述实体关系与关键约束，完整物理建模见阶段二 [`05-database-schema.md`](../02-design/05-database-schema.md)：
 
@@ -352,7 +353,7 @@ erDiagram
 | **SC-12** | **多实现契约端到端验收**（`ADR-16 / M20`） | 管理员创建 `CONTRACT_LIB` 接口库模块 `A` 并登记多实现契约 `pkg.IfaceSvc`，在分属不同标准进程 `PB / PC / PD` 的模块 `B / C / D` 上分别以 `impl_key = b / c / d` 声明实现，在调度中心模块 `X`（进程 `PX`）声明对契约的分发依赖：① 尝试将 `B` 与 `C` 绑到同一进程；② 录制 `PX` 与 `PB / PD`（`PC` 不纳入监控），触发 `X` 分发调用 `B`、`C`（地址在 `endpoint_snapshots` 内），不触发 `D`，并构造 1 条 `X` 向地址不匹配端点发起的 `pkg.IfaceSvc` 调用；③ 重放 `PX`（单笔入口事务内顺序调用 `B` 与 `C` 且各自返回不同业务应答） | ① 违反 `A-09` 进程互斥返回 `409 Conflict`；② 录制后三条实现边分别判定为 `X ➔ B [b]` `VERIFIED`、`X ➔ C [c]` `OUTBOUND_VERIFIED`、`X ➔ D [d]` `UNCOVERED`，地址不匹配调用产生第八类一致性状态 `IMPL_UNRESOLVED`（`dst_contract_id` 非空、`dst_module_id = NULL`，不计入 `UNCOVERED` 分母）；逻辑视图默认按接口聚合展示 `X ➔ A (×3 实现)` 并支持 `topo_contract_mode=EXPAND` 展开，物理视图按实现展开且不渲染库 `A`；③ 重放 `PX` 时 Agent 按 `service:operation@dst_tag` 匹配对应实现进程，`B` 与 `C` 的 Mock 应答精确隔离不串用，回归结果为 `PASS` |
 | **SC-13** | **纯 Go `protocompile` 编译、分层架构拦截与依赖图导出**（`ADR-18 / M22`） | ① 通过 `POST /api/proto-schemas/compile` 提交带多层 `import`（引用已生效 `BASE_LIB` + WKT `google/protobuf/*` + 同包相对路径）与完整注释的虚拟 `.proto` 源文件包（含外部依赖 `SourceCodeInfo` 裁剪与跳过全部外部服务提取），随后与 `CompileTrialPool` / `F-26` 含 `BASE_LIB` 传递扩散雷达联动；② 配置 `SubSys_Infra (layer_level=10)`、`SubSys_Biz (layer_level=20)` 与 `CONTRACT_LIB (10)`，验证下层向上、`DISPATCH` 消费方反向契约接入及循环依赖 `409`；③ 在 `/schemas?tab=graph` 与 `/topology` 执行依赖图定位与程序化矢量 PNG/SVG 导出 | ① 纯 Go `protocompile` 产出自有保留 `SourceCodeInfo` 的 `FileDescriptorSet`（外部导入裁剪体积且零外部伪操作）；`BASE_LIB` 改动准确穿透计算下游受影响服务；② 下层调上层、`DISPATCH` 层级倒挂与成环均被 `409` 拦截，未传 `layer_level` 更新不覆盖原值；③ `/schemas?tab=graph` 跳转 `?tab=assets&schema_id=`，`/topology` 纯前端生成矢量 SVG/PNG 下载 |
 | **SC-14** | **活体接口参考文档中心与 Git 只读源码溯源**（`ADR-18 / M23`） | 同步或编译含完整注释与标签（`@deprecated`、`@owner`、`@error_code`）的 `dophi.order.v1` 服务 `.proto` 并绑定黄金用例（`F-25`）及多实现契约（`ADR-16`）：① 访问 `/schemas?tab=docs` 检索服务与方法并查看参考文档、枚举全量字典、结构化错误码表与黄金样本 / 缺省 JSON 样例；② 点击 `order.proto#L42` 行号锚点跳转；③ 导出服务级/版本级 Markdown 文档并核对前端包体增量 | ① 参考文档中心精确聚合服务/方法元信息、请求/响应递归嵌套字段注释与行号、`@deprecated` 废弃横幅、Enum 字典与「定义方 + 全部实现方」关联链接；② 跳链直达轻量只读代码页对应高亮行及双栏只读 Diff（Web 全栈零编辑器与 `file_lock` 控件）；③ 导出自包含 Markdown API 说明书且前端 **`M22~M26` 新增 JS 打包增量严格 `<= 150KB gzip`（`<= 500KB` raw）** |
-| **SC-15** | **可配置静态检查、词汇标准化迁移与带护栏重复结构检测**（`ADR-18 / M24`） | ① 从 `protohub` SQLite / 导出 JSON 迁移 `vocabulary_terms`（含 `aliases`/`description_en`/`similar_terms`）至 `traefik_vocabulary_terms` 并校验幂等重跑；② 对包含多段包名 `dophi.order.v1`、缺注释 Enum、`amnt` 等未标准化字段名及多处结构雷同消息（含 `< 3` 字段短包装、`BASE_LIB` 公共库、同包 `v1/v2` 演进版本与真跨服务重复结构体）的文件集执行扫描；③ 模拟外部大模型接口 3s 超时/不可用 | ① 迁移脚本幂等无报错，既支持多段包名规则可配置又正确切分复合字段词根；② `COMMENT_REQUIRED` 默认 `WARNING`（不误杀 MR），`< 3` 字段/`BASE_LIB`/同包多版本严格豁免，跨服务真重复 Message 经倒排桶预筛选与 **`Jaccard >= 0.85`** 精确聚簇提醒；③ LLM 超时（> 3s）或未配置时自动降级为纯确定性词库+规则报告（零阻塞）并命中相同词根本地缓存 |
+| **SC-15** | **可配置静态检查、原生词库校验与带护栏重复结构检测**（`ADR-18 / M24`） | ① 初始化内置规则与 `BUILTIN_SEED` 基础词根（校验重复启动幂等），并通过 Web / API 在 `traefik_vocabulary_terms` 维护 `amnt -> amt` 等 `aliases`/`description_en`/`similar_terms`；② 对包含多段包名 `dophi.order.v1`、缺注释 Enum、`amnt` 等未标准化字段名及多处结构雷同消息（含 `< 3` 字段短包装、`BASE_LIB` 公共库、同包 `v1/v2` 演进版本与真跨服务重复结构体）的文件集执行扫描；③ 模拟外部大模型接口 3s 超时/不可用 | ① 内置规则与 `BUILTIN_SEED` 重复启动幂等无报错，Web 词库 CRUD 正常生效，既支持多段包名规则可配置又正确切分复合字段词根；② `COMMENT_REQUIRED` 默认 `WARNING`（不误杀 MR），`< 3` 字段/`BASE_LIB`/同包多版本严格豁免，跨服务真重复 Message 经倒排桶预筛选与 **`Jaccard >= 0.85`** 精确聚簇提醒；③ LLM 超时（> 3s）或未配置时自动降级为纯确定性词库+规则报告（零阻塞）并命中相同词根本地缓存 |
 | **SC-16** | **无状态 Git 多包同步、MR 四合一静态门禁、`Override` 审计与跨机通知触达**（`ADR-18 / M25~M26`） | ① 管理员配置采用私有 Tokens 的 `GitRepo`（含 `1:N` `GitProtoBundle` 映射与 `outbound_trusted_cidrs` 信任白名单）与 SSRF 校验单测；② 先触发全量只读同步与历史 Commit Diff，随后推送含「修改 A + 新增 B + 彻底删除既有被依赖 `.proto`」及 Fast-Forward 合并后同 SHA MR Webhook；③ 对失败且仅含破坏性冲突的重构 MR，管理员执行 `Approve with Override`；④ 模拟跨机部署的 `code-notifier` 在线投递与离线降级 | ① 凭据以 **`TRAEFIK_CRYPTO_KEY`** AES-256-GCM 加密且 `/admin/settings` / `git-repos` API 与 `commonAudit` Diff 全程脱敏，`SafeDialer` 永久硬阻断 `169.254.*` 并允许信任白名单放行内网 GitLab/LLM/跨机 `code-notifier`，Webhook 恒定时间验签与 `uk_traefik_mr_dedup` 幂等不遗漏 Fast-Forward；② 基线+补丁虚拟树精确移除被删文件，按 `remote_comment_id` 原位更新 MR 评论，`SSEBroker(userID)` 不跨用户推送，向跨机 `code-notifier` 发送含非空 `markdown_content` 与真实邮箱的载荷且离线时仅标 `FAILED` 不阻断门禁；③ `Override` 生成 `P1` 审计；④ `/dashboard` 合标扩展卡片不掺入旧 `40+30+30` 健康分 |
 
 ---

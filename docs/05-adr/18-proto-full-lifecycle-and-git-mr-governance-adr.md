@@ -1,7 +1,7 @@
 # ADR-18：废弃外部 Proto 系统，在 Code-Traefik 内构建 Git-Only Proto 全生命周期、接口参考文档与 MR 协同治理架构决策
 
 - **文档编号**：`18-proto-full-lifecycle-and-git-mr-governance-adr.md`
-- **文档版本**：v1.2.0（依据架构与可实施性深度检视及跨机 `code-notifier` 澄清修订：1. `GitRepo (1) -> GitProtoBundle (N)` Monorepo 多包模型 + `uk_traefik_mr_dedup` 修复 Fast-Forward 同 SHA 漏检 + Bot `remote_comment_id` 原位评论更新；2. 明确统一四级 `LayeredVirtualResolver`、`ExternalImports` 全跳过与 `SourceCodeInfo` 剥离边界、`BASE_LIB` 传递影响扩散 (`breaking.go`) 与 `layer_level` `*int` / `DISPATCH` 反向校核；3. `SafeDialer` 在硬阻断云元数据前提下支持 `outbound_trusted_cidrs` 信任白名单放行内网 GitLab/LLM 与独立主机部署的 `code-notifier`，规范 `code-notifier` 必填 `markdown_content` 与邮箱解析；4. 统一 `TRAEFIK_CRYPTO_KEY`、`Jaccard >= 0.85`、`SSEBroker(userID)`、程序化矢量 SVG/Canvas 导出与 `<= 150KB gzip` 增量红线；5. 拆分过载 M25 为 M25 + M26）
+- **文档版本**：v1.3.0（依据「`code-proto` 与 `protohub` 均未开发完成且从未真正投入运行，不存在历史数据迁移需求」的明确事实收敛修订：彻底移除 `scripts/migrate_protohub_vocab` SQLite/JSON 迁移工具、`modernc.org/sqlite` 依赖与 `PROTOHUB_IMPORT` 枚举，保留零 SQLite 红线并将领域词汇表与静态检查规则全面收敛为 `code-traefik` 原生 `BUILTIN_SEED` 初始化 + Web CRUD + LLM 辅助审核；前置 v1.2.0 检视确立 `GitRepo (1) -> GitProtoBundle (N)`、`uk_traefik_mr_dedup`、`LayeredVirtualResolver`、`SafeDialer` `outbound_trusted_cidrs` 信任白名单放行内网 GitLab/LLM 与跨机 `code-notifier`、统一 `TRAEFIK_CRYPTO_KEY`、`Jaccard >= 0.85`、`SSEBroker(userID)`、`<= 150KB gzip` 增量红线及 M25/M26 拆分）
 - **日期**：2026-11-13
 - **状态**：已检视定稿待排期 (Accepted for M22~M26)
 - **关联特性**：升维兑现 `F-18`（活体接口参考文档中心 Reference Docs），重定义 `F-21`（`.proto` 源码全生命周期、Git/MR 门禁与统一编译入池），扩展 `F-03`~`F-03.7`、`F-24`、`F-26`；规划新增 `F-28`~`F-32`
@@ -14,11 +14,11 @@
 ## 1. 背景与问题陈述 (Context & Problem Statement)
 
 在此前的工作区演进规划中，Proto 治理职责被切分在多个系统中：
-- **`protohub`**（Node.js + SQLite 独立原型）：承担 `.proto` 文本文件 CRUD、悲观编辑锁、版本历史 Diff、Git 仓库导入与一致性检查、命名规范/术语词汇表/LLM 智能检查、重复消息抽取建议、审核流与通知，以及依赖架构图；
-- **`code-proto`**（规划中的独立兄弟模块）：原计划承担企业级 `.proto` 仓库管理与 MR 接口变更追踪（因此 `code-traefik` 在 [`ADR-10`](./10-enhanced-proto-schema-file-management-adr.md) 中取消了 `F-21`，并在 `Non-Goal 4` 中回避了源码与 MR 管理）；
+- **`protohub`**（Node.js + SQLite 独立原型，**未开发完成且从未实际投入运行**）：曾规划 `.proto` 文本文件 CRUD、悲观编辑锁、版本历史 Diff、Git 仓库导入与一致性检查、命名规范/术语词汇表/LLM 智能检查、重复消息抽取建议、审核流与通知，以及依赖架构图；
+- **`code-proto`**（规划中的独立兄弟模块，**同样未开发完成且从未实际投入运行**）：原计划承担企业级 `.proto` 仓库管理与 MR 接口变更追踪（因此 `code-traefik` 在 [`ADR-10`](./10-enhanced-proto-schema-file-management-adr.md) 中取消了 `F-21`，并在 `Non-Goal 4` 中回避了源码与 MR 管理）；
 - **`code-traefik`**（当前主平台）：已建成基于 `.pb`（`FileDescriptorSet`）的跨集闭包编译、字段字典树、AST 破坏性变更拦截（`F-26`）、多实现服务契约（`ADR-16`）、黄金契约套件（`F-25`）与 CI 质量门禁（`F-27`）。
 
-随着 **`code-proto` 与 `protohub` 正式全面废弃**，以及对团队实际研发工作流的深度复盘，原规划及 v1.0.0 初稿暴露出 **4 个核心治理断层与架构隐患**：
+随着 **`code-proto` 与 `protohub` 正式全面废弃**（**由于两套旧系统均未完成开发且从未上线运行，不存在任何历史数据或运行库迁移需求**），以及对团队实际研发工作流的深度复盘，原规划及 v1.0.0 初稿暴露出 **4 个核心治理断层与架构隐患**：
 
 1. **全量 `.proto` 注释价值沉睡，缺少权威的「接口参考文档中心 (Reference Docs)」**：
    - 团队 `.proto` 源文件中沉淀了大量 File / Package / Service / Method / Message / Field / Oneof / Enum 及枚举值注释；但以往手工使用 `protoc` 编译 `.pb` 时常遗漏 `--include_source_info`，且现有 `F-03.2` 字段字典树仅面向单个 RPC 操作的 Diff 忽略勾选，**缺少按子系统/服务/消息/枚举全景浏览、支持文档标签（`@deprecated`、`@owner`、`@error_code`）渲染、融合架构认领血缘与黄金样本 JSON、并可直跳源码行号的接口参考文档（`F-18`）**；
@@ -26,8 +26,8 @@
    - 研发日常已在 Git 仓库中修改 `.proto` 并提 MR，若再在 Web 端保留在线编辑器与悲观文件锁（`fileLock`），不仅制造“Git 托管 vs Web 托管”双源分裂，若由平台机器人代提 MR 还会造成 Commit Author 审计失真与 Webhook 回环；**应当确立 Git-Only 唯一写入口（SSOT），Web 端专注只读源码浏览、历史 Diff、MR 门禁审计与参考文档展示**；
 3. **缺少从单文件 `.proto` 到逻辑制品包 `ProtoSchema (.pb)` 的聚合契约与 MR 合成边界**：
    - `code-traefik` 的生效池、Diff 继承与 `F-26` 比对以多文件打包的 `ProtoSchema.name`（如 `dophi_order`）为粒度，单靠孤立的 `.proto` 单文件表无法自动聚合成包；同时 MR 只返回增量 `CodeChanges`（含删除/重命名），若不基于目标分支全量基线合成虚拟文件树，会导致 `F-26` 误报大量缺失服务；
-4. **`protohub` 静态质量防线尚待去债承接**：
-   - `protohub` 已验证有效的命名规范、领域词汇表、重复消息抽取、LLM 语义辅助、分层依赖方向（`layer_level`）与站内/邮件通知需要在去除技术债（正则解析不准、本地磁盘状态、明文 Git 密码、硬编码二段式包名正则、重型前端编辑器、内存通知易丢、小结构体重复检测误报）后高质量融入 `code-traefik`。
+4. **原型设想中的静态质量防线尚待在 `code-traefik` 内原生重建与去债落地**：
+   - `protohub` 原先构想的命名规范、领域词汇表、重复消息抽取、LLM 语义辅助、分层依赖方向（`layer_level`）与站内/邮件通知需要在剔除其技术债（正则解析不准、本地磁盘状态、SQLite、明文 Git 密码、硬编码二段式包名正则、重型前端编辑器、内存通知易丢、小结构体重复检测误报）后，**全部直接在 `code-traefik` 内原生建模与零历史包袱初始化**。
 
 ---
 
@@ -137,7 +137,7 @@ sequenceDiagram
 | **3. 全注释接口参考文档 (`Reference Docs`)** | **新增升维 (`F-18`)** | • 基于 `protocompile` 全层级注释与标签构建文档中心，整合枚举字典、架构认领血缘（含 `ADR-16` 多实现）、黄金用例真实 JSON 样本、源码行号直跳与 Markdown 离线导出。 |
 | **4. Git 仓库导入与一致性检查** | **吸收并无状态加固** | • **安全红线**：替换明文密码/SSH Key 为 **`TRAEFIK_CRYPTO_KEY` AES-256-GCM 加密存储**，API 与 `commonAudit` 双脱敏，统一挂载 `SafeDialer`（硬阻断元数据、默认阻断私网，支持管理员配置 `outbound_trusted_cidrs` 信任白名单放行内网 GitLab）；<br>• 放弃宿主机磁盘 `git-cache`，改用 **Git REST API / 内存 FS** 拉取与基于 **Git Blob SHA / SHA256** 的精准对账（补齐原 `TODO`），支持 **`GitRepo (1) -> GitProtoBundle (N)`** Monorepo 多包聚合。 |
 | **5. 命名规范静态检查 (`namingRules`)** | **吸收并可配置化** | • 修正 `protohub` 硬编码二段式正则 `/^[a-z0-9]+\.[a-z0-9]+$/` 拒绝 `dophi.order.v1` 的缺陷；<br>• 改为 `traefik_check_rules` 可配置规则引擎与豁免白名单，默认兼容 `{org}.{domain}.{version}` 与 `{subsystem}.{module}`。 |
-| **6. 领域词汇表与 LLM 智能检查** | **吸收并异步隔离** | • 迁移 `vocabulary_terms` 至 `traefik_vocabulary_terms`；<br>• **LLM 旁路异步 + 3s 超时熔断 + `(term, vocabulary_hash)` 缓存**：绝不阻塞 Webhook 响应，仅作 `WARNING/SUGGESTION` 提示。 |
+| **6. 领域词汇表与 LLM 智能检查** | **原生重建并异步隔离** | • 在 `code-traefik` 原生建立 `traefik_vocabulary_terms` 并于启动时幂等预置通用基础词根（`BUILTIN_SEED`），结合控制台 CRUD 与别名维护（因 `protohub`/`code-proto` 未开发完成且从未运行，**无需任何历史库数据迁移，彻底零 SQLite 依赖**）；<br>• **LLM 旁路异步 + 3s 超时熔断 + `(term, vocabulary_hash)` 缓存**：绝不阻塞 Webhook 响应，仅作 `WARNING/SUGGESTION` 提示。 |
 | **7. 重复消息检测 / 公共接口抽取** | **吸收并加防误报护栏** | • 修正原正则把所有字段类型解析为 `'unknown'` 导致的虚高误报；改用 AST 真实类型 + 字段名结构指纹；<br>• **防误报护栏**：限定 `field_count >= 3`（过滤 `Empty`/`IdReq`/`PageReq`）、豁免同包跨版本演进（如 `v1`/`v2`）与已入 `BASE_LIB` 消息，先经字段签名倒排桶预筛再算相似度（避免全量 $O(N^2)$）。 |
 | **8. 审核工作台与通知通道** | **转向 MR 门禁与可靠通知** | • 审核流与 Git MR 预检记录收口，支持对 `F-26` / 规则拦截执行带原因审计的 `Approve with Override`；<br>• 放弃重启即丢的内存 `Map` 通知，改用 PostgreSQL 持久化 `traefik_notifications` + 按 **`userID` 定向 `SSEBroker` 推送**为主渠道；外部邮件对接**部署在同内网另一台主机上的 `code-notifier`**（`POST /api/notify/email` 必填非空 `markdown_content` 并解析真实收件邮箱，经 `SafeDialer` 信任白名单放行）或可选 SMTP 异步降级通道，离线不阻塞主流程。 |
 | **9. 架构层级方向校验 (`architecture_layers`)** | **吸收并对齐 `ADR-16`** | • 为 `traefik_subsystems` / `traefik_modules` 增加可选 `*int` `layer_level`（`0` 豁免，`1=基础底座 ...`）；<br>• 校验 `DEPEND` 禁止底层逆向依赖上层，要求 `REALIZATION`（实现模块）层级 $\ge$ `CONTRACT_LIB`（DIP 可选将接口库置下层或 `0` 豁免），并在绑定 `ContractID` 时同步反向校核既有 `DISPATCH` 消费方 (`consumer >= impl`)。 |
@@ -228,7 +228,7 @@ erDiagram
 | :---: | :--- | :--- | :--- |
 | **M22** | **编译底座、分层约束与依赖图谱** | 1. 引入 `protocompile`（`SourceInfoStandard`，跨 Bundle 跳过全外部 `Service` 并剥离外部 `SourceCodeInfo`）与基于 `ProtoSourceProvider` 抽象的统一四级虚拟 `Resolver`；<br>2. 架构元素引入 `*int` `layer_level` 分层校验（`DEPEND`、`REALIZATION` $\ge$ `CONTRACT_LIB` 及绑定契约时 `DISPATCH` 消费方反向校核）与 `breaking.go` `BASE_LIB` 反向 `import` 传播扩散；<br>3. `/schemas?tab=graph` 挂载 `.pb` 依赖图；`/topology` 支持程序化矢量 SVG / 离屏 Canvas 导出（`F-32`）。 | 四级虚拟 `Resolver` & 外部跳过/剥离单测；分层正反向/成环 `409` 单测；`BASE_LIB` 传递影响单测；矢量 SVG/PNG 导出单测。 |
 | **M23** | **活体接口参考文档中心与轻量只读源码视图** | 1. 基于 `SourceCodeInfo` 构建文档提取引擎（`traefik_proto_doc_symbols`、`@deprecated/@owner/@error_code`、Enum 字典、`<=12` 深度 JSON、行号锚点）；<br>2. `/schemas?tab=docs` 融合架构血缘、`ADR-16` 多实现矩阵、黄金用例真实 JSON 样本及 Markdown 导出（`F-18`）；<br>3. 轻量只读源码浏览组件与 schema-backed `/api/proto-files*` 预览/Diff（零重型 Worker，M25 接入 Git 历史库）。 | 全层级注释与 Enum 枚举值提取单测；黄金用例样本匹配单测；Markdown 导出格式单测；Vite 增量 JS 体积断言（**`<= 150KB gzip`**）。 |
-| **M24** | **安全底座、静态规范引擎、词汇表与 AST 重复抽取** | 1. `internal/server/security`（`TRAEFIK_CRYPTO_KEY` AES-256-GCM、`SafeDialer` 硬阻断元数据 + 默认截停私网并支持 `outbound_trusted_cidrs` 信任白名单）与 `settings.go` 敏感字段及审计脱敏；<br>2. 可配置规范引擎（多段包名、`COMMENT_REQUIRED=WARNING`）与 `scripts/migrate_protohub_vocab` SQLite/JSON（含 `aliases`/`description_en`）幂等独立 CLI；<br>3. AST 跨文件重复 Message 检测（3 重护栏 + 倒排预筛 + **`Jaccard >= 0.85`**）与 3s 超时旁路 LLM。 | AES-GCM/`SafeDialer` 白名单/审计脱敏单测；`protohub` SQLite/JSON 幂等迁移单测；`Empty`/`IdReq`/同包版本零误报及 `3s` LLM 降级单测；`cmd/server` 零 SQLite 断言。 |
+| **M24** | **安全底座、静态规范引擎、原生词汇表与 AST 重复抽取** | 1. `internal/server/security`（`TRAEFIK_CRYPTO_KEY` AES-256-GCM、`SafeDialer` 硬阻断元数据 + 默认截停私网并支持 `outbound_trusted_cidrs` 信任白名单）与 `settings.go` 敏感字段及审计脱敏；<br>2. 可配置规范引擎（多段包名、`COMMENT_REQUIRED=WARNING`）与原生 `traefik_vocabulary_terms` / 内置默认规则与通用基础词根 `BUILTIN_SEED` 幂等初始化（全仓零 SQLite、零历史迁移工具）；<br>3. AST 跨文件重复 Message 检测（3 重护栏 + 倒排预筛 + **`Jaccard >= 0.85`**）与 3s 超时旁路 LLM。 | AES-GCM/`SafeDialer` 白名单/审计脱敏单测；内置规则与 `BUILTIN_SEED` 词根幂等初始化及词库 CRUD 单测；`Empty`/`IdReq`/同包版本零误报及 `3s` LLM 降级单测；全仓（`cmd/server` & `cmd/agent`）零 SQLite 断言。 |
 | **M25** | **Git 无状态同步与 Monorepo `1:N` Bundle 源码库** | 1. `traefik_git_repos` + **`traefik_git_proto_bundles` (`1:N`)** CRUD（支持单仓内联快捷建默认 Bundle）与 REST API / `go-git memfs` 无状态增量同步及 SHA256 对账；<br>2. `traefik_proto_files` / `versions` 只读快照入库、完整历史 Commit Diff，并将 Tier-2 `DBProtoSourceProvider` 接入四级虚拟 `Resolver`；<br>3. 前端 `/schemas?tab=sources` Git 仓与多 Bundle 配置及真实 Git 历史浏览器。 | `1:N` Bundle 同步与 SHA256 对账单测；Commit Diff 与 Tier-2 DB `.proto` 闭环编译单测；凭据只写不显测试；前端 Sources 工作区测试。 |
 | **M26** | **MR 四合一门禁、定向通知与合标大盘扩展** | 1. MR Webhook（`:repoId` 路由与 `uk_traefik_mr_dedup` 修复 FF 合并）、虚拟文件树合并（处理删/改）、四合一静态预检（含 `BASE_LIB` 传播）、`remote_comment_id` 原位更新、`Approve with Override` (`P1` 审计) 与 Merge 自动 `GIT_MR_AUTO` 编译入池；<br>2. `SSEBroker(userID)` 定向推送、`traefik_notifications` 站内通知 + **同内网跨机部署的 `code-notifier`**（`POST /api/notify/email` 必填非空 `markdown_content` 与真实收件邮箱，经 `outbound_trusted_cidrs` 放行）/ SMTP 降级外发；<br>3. `/schemas?tab=mr-gates`、双模 `NotificationBell`（`WorkspaceUtilityHeader` + `StandaloneShell`）及 `F-24` 合标扩展卡片（`40+30+30` 不变）。 | FF 合并去重与 Mock Git MR（增删改文件）四合一拦截/原位更新/`Override` P1 审计 E2E；`SSEBroker(userID)` 不跨用户推送 & 跨机 `code-notifier` 离线降级单测；`F-24` `40+30+30` 零回归；`make test && make lint && make build` 全绿。 |
 
@@ -242,5 +242,5 @@ erDiagram
    - **缓解措施**：Webhook 验签后立即返回 `202 Accepted` 并按 **`uk_traefik_mr_dedup` (`git_repo_id, COALESCE(bundle_id, 0), event_phase, head_commit_sha, target_head_sha`)** 去重与区分 `MR_GATE` vs `MAIN_MERGE`，兼顾重放防呆与 Fast-Forward 同 SHA 合并；通过 Git REST API / `go-git memfs` 仅按 Bundle `proto_root_dir` 与 `proto_include_dirs` 过滤拉取，宿主机零落盘；MR 评论通过 `remote_comment_id` 原位更新避免刷屏。
 3. **风险三：外部 LLM 与跨机 `code-notifier` 不可用，或 `SafeDialer` 误拦合法内网基础设施**
    - **缓解措施**：`SafeDialer` 永久硬阻断 `169.254.*` 云元数据及未授权私网/回环，同时支持管理员通过 `outbound_trusted_cidrs` 白名单显式放行内网 GitLab、内网 LLM 与**同内网独立主机部署的 `code-notifier`**（Dial 时二次校验真实 IP 防 DNS 重绑定）；LLM 强制 3s 超时熔断；站内通知强落库 `traefik_notifications` + `SSEBroker(userID)`，跨机 `code-notifier` 严格校验非空 `markdown_content` 与邮箱解析，离线仅标 `FAILED` 绝不阻塞核心流程。
-4. **风险四：`protohub` 存量资产平滑退场**
-   - **缓解措施**：在 `M24` 提供一次性 CLI 导入工具（支持真实 `protohub/storage/database/protohub.db`、`--sqlite-path` 自定义路径以及导出 JSON / 内置 Seed，覆盖 `aliases` / `description_en` / `similar_terms` / `domain`），避免旧 `0B` 占位文件阻塞迁移；对于尚未接入 Git 的零散 `.proto` 文件，先完成建仓初始化提交再接入 `traefik_git_repos` 统一纳管。
+4. **风险四：冷启动静态规范误报噪音与团队 Git 仓接入**
+   - **缓解措施**：因 `code-proto` 与 `protohub` 均未开发完成且未真正投入运行，**系统零历史数据迁移负担**，所有能力直接原生建表初始化；默认将 `COMMENT_REQUIRED` 与 `DUPLICATE_MESSAGE` 设为 `WARNING`（不直接阻断日常 MR）、按 `BUILTIN_SEED` 预置通用基础词根并在上线后由团队按需完善领域专有词典；团队 `.proto` 源码直接以 Git 仓库为单位通过 `traefik_git_repos` / `traefik_git_proto_bundles` 一次性同步纳管。

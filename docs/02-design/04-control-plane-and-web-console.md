@@ -1,11 +1,11 @@
 # 架构与活体契约治理 (`code-traefik`) 管理面服务、微前端控制台与回归断言设计
 
 - **文档编号**：`04-control-plane-and-web-console.md`
-- **文档版本**：v1.11.0
+- **文档版本**：v1.11.1
 - **更新日期**：2026-11-13
 - **归属阶段**：阶段二：系统架构与数据模型设计 (`02-design`)
 - **状态**：M1~M21 已交付；M22~M26 已完成设计待实施 (Approved for M22~M26)
-- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.19.0)、[`01-system-architecture.md`](./01-system-architecture.md) (v1.8.0)、[`02-data-plane-and-cros-rpc-engine.md`](./02-data-plane-and-cros-rpc-engine.md)、[`03-architecture-elements-and-topology.md`](./03-architecture-elements-and-topology.md) (v1.9.0)、[`07-console-ia-restructuring-and-workflow-workbench-adr.md`](../05-adr/07-console-ia-restructuring-and-workflow-workbench-adr.md) (ADR-07)、[`08-recording-drawer-and-process-tree-selection-adr.md`](../05-adr/08-recording-drawer-and-process-tree-selection-adr.md) (ADR-08)、[`09-arch-process-ssot-and-ebpf-premount-standby-adr.md`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md) (ADR-09 v1.1.0)、[`10-enhanced-proto-schema-file-management-adr.md`](../05-adr/10-enhanced-proto-schema-file-management-adr.md) (ADR-10 v1.1.0)、[`11-single-process-bidirectional-capture-and-recording-ux-adr.md`](../05-adr/11-single-process-bidirectional-capture-and-recording-ux-adr.md) (ADR-11 v1.0.0)、[`12-packet-causality-call-tree-and-sequence-ux-adr.md`](../05-adr/12-packet-causality-call-tree-and-sequence-ux-adr.md) (ADR-12 v1.0.0)、[`15-scalable-topology-focus-and-layout-persistence-adr.md`](../05-adr/15-scalable-topology-focus-and-layout-persistence-adr.md) (ADR-15 v1.3.0)、[`16-multi-implementation-service-contract-adr.md`](../05-adr/16-multi-implementation-service-contract-adr.md) (ADR-16 v2.0.0)、[`17-topology-single-layer-drilldown-and-layout-ux-adr.md`](../05-adr/17-topology-single-layer-drilldown-and-layout-ux-adr.md) (ADR-17 v1.1.0)、[`18-proto-full-lifecycle-and-git-mr-governance-adr.md`](../05-adr/18-proto-full-lifecycle-and-git-mr-governance-adr.md) (ADR-18 v1.2.0)
+- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.20.0)、[`01-system-architecture.md`](./01-system-architecture.md) (v1.8.1)、[`02-data-plane-and-cros-rpc-engine.md`](./02-data-plane-and-cros-rpc-engine.md)、[`03-architecture-elements-and-topology.md`](./03-architecture-elements-and-topology.md) (v1.9.0)、[`07-console-ia-restructuring-and-workflow-workbench-adr.md`](../05-adr/07-console-ia-restructuring-and-workflow-workbench-adr.md) (ADR-07)、[`08-recording-drawer-and-process-tree-selection-adr.md`](../05-adr/08-recording-drawer-and-process-tree-selection-adr.md) (ADR-08)、[`09-arch-process-ssot-and-ebpf-premount-standby-adr.md`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md) (ADR-09 v1.1.0)、[`10-enhanced-proto-schema-file-management-adr.md`](../05-adr/10-enhanced-proto-schema-file-management-adr.md) (ADR-10 v1.1.0)、[`11-single-process-bidirectional-capture-and-recording-ux-adr.md`](../05-adr/11-single-process-bidirectional-capture-and-recording-ux-adr.md) (ADR-11 v1.0.0)、[`12-packet-causality-call-tree-and-sequence-ux-adr.md`](../05-adr/12-packet-causality-call-tree-and-sequence-ux-adr.md) (ADR-12 v1.0.0)、[`15-scalable-topology-focus-and-layout-persistence-adr.md`](../05-adr/15-scalable-topology-focus-and-layout-persistence-adr.md) (ADR-15 v1.3.0)、[`16-multi-implementation-service-contract-adr.md`](../05-adr/16-multi-implementation-service-contract-adr.md) (ADR-16 v2.0.0)、[`17-topology-single-layer-drilldown-and-layout-ux-adr.md`](../05-adr/17-topology-single-layer-drilldown-and-layout-ux-adr.md) (ADR-17 v1.1.0)、[`18-proto-full-lifecycle-and-git-mr-governance-adr.md`](../05-adr/18-proto-full-lifecycle-and-git-mr-governance-adr.md) (ADR-18 v1.3.0)
 
 ### 修订记录
 
@@ -204,14 +204,14 @@ flowchart LR
      - 管理员对 `FAILED` 记录执行 `POST /api/mr-check-runs/:id/override` 时，**强制校验 `compile_passed == true`**，生成 **`AuditLevelP1`** 审计日志、原位刷新状态并发送 `MR_GATE_OVERRIDDEN` 通知；
      - 当 Webhook 携带 `MAIN_MERGE` / `merge` 事件时，按配置执行 `GIT_MR_AUTO` 编译（含 `source_bundle_id`）及可选无 Breaking 安全激活。
 
-### 1.7 可配置静态规范检查、多段包名规则、词库迁移与带护栏重复结构引擎 (`internal/server/linter`, `F-30` / M24)
+### 1.7 可配置静态规范检查、多段包名规则、原生词库与带护栏重复结构引擎 (`internal/server/linter`, `F-30` / M24)
 
 1. **可配置规则引擎与合理默认值 (`traefik_check_rules`)**：
    - 按 `RuleType`（`NAMING | COMMENT | VOCABULARY | STRUCTURE | DUPLICATE`）逐文件扫描 AST 与 `SourceCodeInfo`；支持基于 `ExemptionRule` 剔除 `google/protobuf/*`、`third_party/*` 或指定 `BASE_LIB` 路径；
-   - **多段包名兼容规则 (`PACKAGE_NAMING`)**：默认正则 `^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*(\.v[0-9]+((alpha|beta|rc)[0-9]*)?)?$` 完整兼容 `dophi.order.v1` 多段语义版本包名与单段包名（彻底纠正原 `protohub` 硬编码只支持单段包名的历史缺陷）；
+   - **多段包名兼容规则 (`PACKAGE_NAMING`)**：默认正则 `^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*(\.v[0-9]+((alpha|beta|rc)[0-9]*)?)?$` 完整兼容 `dophi.order.v1` 多段语义版本包名与单段包名（避免早期原型硬编码只支持单段包名的设计缺陷）；
    - **`COMMENT_REQUIRED` 默认 `WARNING`**：缺失 Service/RPC/Message/Enum 注释默认记录 `WARNING` 并在合规报告统计，**不直接阻断 MR**，管理员可在规则配置中显式切换级别或豁免旧目录。
-2. **复合词根切分、`protohub` 迁移词典与 3s 熔断可选 LLM 建议器**：
-   - 将字段名（如 `cust_ord_amnt` / `tradeTsMs`）拆分为规范小写词元切片 `[cust, ord, amnt]`；首先查 `traefik_vocabulary_terms` 标准词 `term` 与 `aliases` 映射表（若命中 `amnt -> amt`，立即生成精确规范化替换建议）；
+2. **复合词根切分、原生标准词典 (`BUILTIN_SEED`) 与 3s 熔断可选 LLM 建议器**：
+   - 将字段名（如 `cust_ord_amnt` / `tradeTsMs`）拆分为规范小写词元切片 `[cust, ord, amnt]`；首先查原生 `traefik_vocabulary_terms` 标准词 `term` 与 `aliases` 映射表（启动时由 `BUILTIN_SEED` 幂等预置高频通用词根并支持 Web CRUD 维护，若命中 `amnt -> amt`，立即生成精确规范化替换建议）；
    - 未命中的生僻缩写词元先查询本地进程内 TTL 缓存（避免同仓跨文件重复调用）；若系统设置启用了 `llm_enabled=true` 且配置有效，通过受 `SafeDialer` 保护的 HTTP 客户端发起 **3 秒硬超时**（`context.WithTimeout(ctx, 3*time.Second)`）异步或有限并发批请求获取英文词根释义建议，将结果写入本地缓存并可选写回 `traefik_vocabulary_terms(is_approved=false, source='LLM_SUGGESTED')` 供架构师审核；**超时、HTTP 错误或未配置 LLM 时 100% 静默降级为纯确定性报告（`LLMStatus=TIMEOUT_FALLBACK|ERROR_FALLBACK|SKIPPED`），绝不拖垮或失败静态检查任务**。
 3. **带三重护栏与倒排桶预筛选的跨文件 AST 重复结构体探测 (`DetectDuplicateMessages`)**：
    - **护栏 ① 短包装豁免**：统计有效非保留字段数，凡 **`effective_field_count < 3`** 的小型消息（如仅含 `{id, name}`、`PageReq`、`Empty`）直接跳过不参与重复比对；

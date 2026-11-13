@@ -52,7 +52,7 @@ docs/
 │   ├── 22-m21-topology-single-layer-drilldown-and-layout-ux.md       # 【M21 作战卡】架构拓扑单层平铺逐级下钻重构、ELK 正交布局校准与全链路易用性升级
 │   ├── 23-m22-protocompile-layering-and-dependency-graph.md          # 【M22 作战卡 | 待实施】纯 Go protocompile 四级虚拟解析器、layer_level 正反向拦截与 BASE_LIB 影响及依赖图/矢量导出 (F-32)
 │   ├── 24-m23-living-proto-docs-and-readonly-sources.md              # 【M23 作战卡 | 待实施】全注释活体参考文档中心 (F-18) 与轻量无锁只读源码视图 (增量 <=150KB gzip)
-│   ├── 25-m24-static-lint-vocabulary-and-duplicate-ast.md            # 【M24 作战卡 | 待实施】安全底座 (TRAEFIK_CRYPTO_KEY / SafeDialer 信任白名单)、设置脱敏、规范引擎、protohub 迁移、3s LLM 与 Jaccard>=0.85 三护栏重复检测
+│   ├── 25-m24-static-lint-vocabulary-and-duplicate-ast.md            # 【M24 作战卡 | 待实施】安全底座 (TRAEFIK_CRYPTO_KEY / SafeDialer 信任白名单)、设置脱敏、规范引擎、原生词库 Seed/CRUD、3s LLM 与 Jaccard>=0.85 三护栏重复检测
 │   ├── 26-m25-git-sync-and-monorepo-bundles.md                       # 【M25 作战卡 | 待实施】Git 无状态同步、GitRepo 1:N GitProtoBundle 多包对账、Tier-2 DB Resolver 与只读历史 Diff
 │   └── 27-m26-mr-gates-notifications-and-compliance-dashboard.md     # 【M26 作战卡 | 待实施】MR 四合一门禁 (FF 去重/原位评论/Override P1)、SSE 按 userID 定向、持久化通知 (LAN code-notifier/SMTP) 与 F-24 合标卡片
 ├── 05-adr/          # 架构决策记录 (ADR)：重大技术选型与权衡记录 (Architecture Decision Records)
@@ -73,7 +73,7 @@ docs/
 │   ├── 15-scalable-topology-focus-and-layout-persistence-adr.md       # ADR-15：大规模架构拓扑渐进式下钻聚焦、多维降噪与双层混合布局持久化架构决策
 │   ├── 16-multi-implementation-service-contract-adr.md               # ADR-16：多实现服务契约（接口库定义 + 多进程实现 + 调度中心分发）建模与表达架构决策
 │   ├── 17-topology-single-layer-drilldown-and-layout-ux-adr.md       # ADR-17：架构拓扑单层平铺逐级下钻、ELK 正交布局校准与全链路易用性升级设计
-│   └── 18-proto-full-lifecycle-and-git-mr-governance-adr.md            # ADR-18：废弃 code-proto 与 protohub 后，Proto 全生命周期与 Git/MR 协同治理架构决策
+│   └── 18-proto-full-lifecycle-and-git-mr-governance-adr.md            # ADR-18：废弃未落地的 code-proto 与 protohub 后，Proto 全生命周期与 Git/MR 协同治理架构决策
 ├── 06-ops/          # 交付与验证：双模联调、物理隔离数据库测试与生产环境单二进制部署手册
 │   └── 01-verification-and-deployment-guide.md    # 联调验证、自动化回归测试与生产部署操作指南
 └── 07-references/   # 外部参考与上位契约基准：协议包规范、字节字典与领域标准文档

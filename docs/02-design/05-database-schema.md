@@ -1,11 +1,11 @@
 # 架构与活体契约治理 (`code-traefik`) 数据库物理模型与 GORM 建模字典
 
 - **文档编号**：`05-database-schema.md`
-- **文档版本**：v1.8.0
+- **文档版本**：v1.9.0
 - **更新日期**：2026-11-13
 - **归属阶段**：阶段二：系统架构与数据模型设计 (`02-design`)
 - **状态**：M1~M21 已交付；M22~M26 已批准待实施 (Approved for M22~M26)
-- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.19.0)、[`01-system-architecture.md`](./01-system-architecture.md) (v1.8.0)、[`04-traffic-storage-partitioning-and-relational-normalization.md`](../05-adr/04-traffic-storage-partitioning-and-relational-normalization.md)、[`09-arch-process-ssot-and-ebpf-premount-standby-adr.md`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md) (ADR-09 v1.1.0)、[`12-packet-causality-call-tree-and-sequence-ux-adr.md`](../05-adr/12-packet-causality-call-tree-and-sequence-ux-adr.md) (ADR-12 v1.0.0)、[`14-governance-dashboard-golden-suite-and-ci-gate-adr.md`](../05-adr/14-governance-dashboard-golden-suite-and-ci-gate-adr.md) (ADR-14 v1.1.0)、[`15-scalable-topology-focus-and-layout-persistence-adr.md`](../05-adr/15-scalable-topology-focus-and-layout-persistence-adr.md) (ADR-15 v1.3.0)、[`16-multi-implementation-service-contract-adr.md`](../05-adr/16-multi-implementation-service-contract-adr.md) (ADR-16 v2.0.0)、[`17-topology-single-layer-drilldown-and-layout-ux-adr.md`](../05-adr/17-topology-single-layer-drilldown-and-layout-ux-adr.md) (ADR-17 v1.1.0)、[`18-proto-full-lifecycle-and-git-mr-governance-adr.md`](../05-adr/18-proto-full-lifecycle-and-git-mr-governance-adr.md) (ADR-18 v1.2.0)
+- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.20.0)、[`01-system-architecture.md`](./01-system-architecture.md) (v1.8.1)、[`04-traffic-storage-partitioning-and-relational-normalization.md`](../05-adr/04-traffic-storage-partitioning-and-relational-normalization.md)、[`09-arch-process-ssot-and-ebpf-premount-standby-adr.md`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md) (ADR-09 v1.1.0)、[`12-packet-causality-call-tree-and-sequence-ux-adr.md`](../05-adr/12-packet-causality-call-tree-and-sequence-ux-adr.md) (ADR-12 v1.0.0)、[`14-governance-dashboard-golden-suite-and-ci-gate-adr.md`](../05-adr/14-governance-dashboard-golden-suite-and-ci-gate-adr.md) (ADR-14 v1.1.0)、[`15-scalable-topology-focus-and-layout-persistence-adr.md`](../05-adr/15-scalable-topology-focus-and-layout-persistence-adr.md) (ADR-15 v1.3.0)、[`16-multi-implementation-service-contract-adr.md`](../05-adr/16-multi-implementation-service-contract-adr.md) (ADR-16 v2.0.0)、[`17-topology-single-layer-drilldown-and-layout-ux-adr.md`](../05-adr/17-topology-single-layer-drilldown-and-layout-ux-adr.md) (ADR-17 v1.1.0)、[`18-proto-full-lifecycle-and-git-mr-governance-adr.md`](../05-adr/18-proto-full-lifecycle-and-git-mr-governance-adr.md) (ADR-18 v1.3.0)
 
 ### 修订记录
 
@@ -15,7 +15,8 @@
 | v1.6.0 | 2026-11-11 | 依据 ADR-16 (v1.0.0) 同步多实现服务契约与接口库建模（`F-02.1` / `F-04.4` / `F-05.1` / `SC-12` / `M20`，核心业务表扩充为 19 张）：1. 新增 `traefik_service_contracts` 多实现服务契约表；2. `traefik_modules` 新增 `module_kind` 与库模块禁绑进程 `CHECK`；3. `traefik_module_services` 新增 `contract_id`、`impl_key`，将 `uk_traefik_mod_svc_name` 平滑替换为部分唯一索引 `uk_traefik_mod_svc_name_excl`、`uk_traefik_mod_svc_contract_impl`、`uk_traefik_mod_svc_contract_mod`（修订 `A-05`、守护 `A-09`）；4. `traefik_module_dependencies` 新增 `contract_id` 分发依赖与三选一 `CHECK`；5. `traefik_recording_sessions` 新增 `endpoint_snapshots`、`traefik_traffic_records` 新增 `dst_contract_id` 及存量平滑迁移规范 |
 | v1.6.1 | 2026-11-13 | 同步 [`ADR-17`](../05-adr/17-topology-single-layer-drilldown-and-layout-ux-adr.md) (`M21`) 零 DDL 布局持久化兼容约定：保持 `traefik_topology_layouts` 既有表结构与约束不变，明确单层平铺模式下内部子节点直接复用原节点 ID 存储各聚焦域平铺坐标，外部传送门卡跨聚焦域差量坐标采用 `${focusScope}::${extNodeId}` 复合键名（满足 `len <= 128` 校验），`expand_state` 保持向后兼容反序列化 |
 | v1.7.0 | 2026-11-13 | 依据 [`ADR-18`](../05-adr/18-proto-full-lifecycle-and-git-mr-governance-adr.md) (v1.1.0, `M22~M25`) 扩充 Proto 全生命周期、Git 同步、MR 门禁与通知实体 |
-| v1.8.0 | 2026-11-13 | 依据 [`ADR-18`](../05-adr/18-proto-full-lifecycle-and-git-mr-governance-adr.md) (v1.2.0, `M22~M26`) 检视修订：全库扩充为 **30 张核心 `traefik_*` 业务表 + `traefik_settings` 运行配置表（共 31 张物理表）**：1. 将 `GitRepo` 拆分为 **Git 仓连接 (`traefik_git_repos`, #20) `1:N` 编译单元 (`traefik_git_proto_bundles`, #21)** 原生支持 Monorepo 多子目录包，对应为 `ProtoSchema` 增补 `source_bundle_id`，`ProtoFile` (#22) 增补 `bundle_id`/`target_schema_name`/`latest_version_id`/`is_deleted`（零写锁）；2. `MRCheckRun` (#29) 增补 `bundle_id`/`mr_url`/`target_head_sha`/`remote_comment_id`/`event_phase`，去重索引升级为 `uk_traefik_mr_dedup (git_repo_id, COALESCE(bundle_id, 0), event_phase, head_commit_sha, target_head_sha)` 防 Fast-Forward 同 SHA 误丢；3. `CheckRule` (#25) 增补 `suggestion_template`，`VocabularyTerm` (#26) 补齐 `aliases`/`description_en`/`similar_terms`/`domain`，`protohub` 迁移 CLI 默认指向 `protohub/storage/database/protohub.db`（支持 `--json-path` / 内置 seed）；4. `Notification` (#30) 规范为 `email_status`/`external_channel`/`email_error`，`traefik_settings` 增补 `outbound_trusted_cidrs`、`code_notifier_enabled`、`code_notifier_url`、`code_notifier_token_enc` 支持跨机 LAN 部署的 `code-notifier`（AES 主密钥统一为 `TRAEFIK_CRYPTO_KEY`） |
+| v1.8.0 | 2026-11-13 | 依据 [`ADR-18`](../05-adr/18-proto-full-lifecycle-and-git-mr-governance-adr.md) (v1.2.0, `M22~M26`) 检视修订：全库扩充为 **30 张核心 `traefik_*` 业务表 + `traefik_settings` 运行配置表（共 31 张物理表）**：1. 将 `GitRepo` 拆分为 **Git 仓连接 (`traefik_git_repos`, #20) `1:N` 编译单元 (`traefik_git_proto_bundles`, #21)** 原生支持 Monorepo 多子目录包，对应为 `ProtoSchema` 增补 `source_bundle_id`，`ProtoFile` (#22) 增补 `bundle_id`/`target_schema_name`/`latest_version_id`/`is_deleted`（零写锁）；2. `MRCheckRun` (#29) 增补 `bundle_id`/`mr_url`/`target_head_sha`/`remote_comment_id`/`event_phase`，去重索引升级为 `uk_traefik_mr_dedup (git_repo_id, COALESCE(bundle_id, 0), event_phase, head_commit_sha, target_head_sha)` 防 Fast-Forward 同 SHA 误丢；3. `CheckRule` (#25) 增补 `suggestion_template`，`VocabularyTerm` (#26) 补齐 `aliases`/`description_en`/`similar_terms`/`domain`；4. `Notification` (#30) 规范为 `email_status`/`external_channel`/`email_error`，`traefik_settings` 增补 `outbound_trusted_cidrs`、`code_notifier_enabled`、`code_notifier_url`、`code_notifier_token_enc` 支持跨机 LAN 部署的 `code-notifier`（AES 主密钥统一为 `TRAEFIK_CRYPTO_KEY`） |
+| v1.9.0 | 2026-11-13 | 依据 [`ADR-18`](../05-adr/18-proto-full-lifecycle-and-git-mr-governance-adr.md) (v1.3.0) 清除无用的外部旧库迁移设计：鉴于 `code-proto` 与 `protohub` 均未开发完成且从未运行，正式移除 `scripts/migrate_protohub_vocab` SQLite/JSON 迁移清单、`PROTOHUB_IMPORT` 枚举值与 SQLite 列对照表；`VocabularyTerm.Source` 收敛为 `MANUAL \| BUILTIN_SEED \| LLM_SUGGESTED`，并在 `SetupWithDB` 内直接完成通用基础词根与默认规则的幂等 Seed 初始化 |
 
 ---
 
@@ -37,11 +38,10 @@
      2. **流量分区母表幂等扩列**：在 `PartitionManager.EnsureParentTable` 中执行 `ALTER TABLE traefik_traffic_records ADD COLUMN IF NOT EXISTS dst_contract_id BIGINT;` 与 `CREATE INDEX IF NOT EXISTS idx_traefik_tr_dst_contract ON traefik_traffic_records (dst_contract_id);`，PostgreSQL 自动将该可空列与索引传播至全部既有及新建按日分区子表，无需重写分区数据；
      3. **旧唯一索引 `uk_traefik_mod_svc_name` 平滑替换与部分唯一索引创建**：在 `DO $$ ... END $$` 块中幂等移除旧的无条件唯一索引/约束（`ALTER TABLE traefik_module_services DROP CONSTRAINT IF EXISTS uk_traefik_mod_svc_name; DROP INDEX IF EXISTS uk_traefik_mod_svc_name;`；同时对 `traefik_module_dependencies` 执行 `ALTER TABLE traefik_module_dependencies DROP CONSTRAINT IF EXISTS uk_traefik_dep_tuple; DROP INDEX IF EXISTS uk_traefik_dep_tuple;`），随后通过 `CREATE UNIQUE INDEX IF NOT EXISTS` 创建部分唯一索引 `uk_traefik_mod_svc_name_excl`、`uk_traefik_mod_svc_contract_impl`、`uk_traefik_mod_svc_contract_mod`、`uk_traefik_dep_tuple (consumer_module_id, service_id) WHERE service_id IS NOT NULL` 与 `uk_traefik_dep_consumer_contract (consumer_module_id, contract_id) WHERE contract_id IS NOT NULL`；
      4. **`CHECK` 约束与外键幂等刷新**：先 `DROP CONSTRAINT IF EXISTS` 再 `ADD CONSTRAINT` 刷新 `chk_traefik_modules_kind`、`chk_traefik_modules_lib_no_proc`、`chk_traefik_svc_contract_mode`、`chk_traefik_mod_svc_impl_key`、`chk_traefik_dep_target_xor` 及外键 `fk_traefik_svc_contract_definer`、`fk_traefik_mod_svc_contract`、`fk_traefik_dep_contract`，重复启动 100% 幂等。
-   - **M22~M26 Proto 全生命周期增量迁移与 `protohub` 一次性词汇迁入（`ADR-18` v1.2.0）**：
+   - **M22~M26 Proto 全生命周期原生扩展与内置规则/词根幂等初始化（`ADR-18` v1.3.0，零历史库迁移）**：
      1. **GORM `AutoMigrate` 与默认列升级**：在 `SetupWithDB` 中按里程碑扩充 **11 张新表**：`&ProtoDocSymbol{}` (M23)、`&CheckRule{}`/`&VocabularyTerm{}`/`&CheckReport{}`/`&CheckViolation{}` (M24)、`&GitRepo{}`/`&GitProtoBundle{}`/`&ProtoFile{}`/`&ProtoFileVersion{}` (M25)、`&MRCheckRun{}`/`&Notification{}` (M26)；为存量 `traefik_subsystems` 与 `traefik_modules` 幂等追加 `layer_level INT NOT NULL DEFAULT 0`（默认 `0` = 不限制分层，零破坏存量依赖）；为 `traefik_proto_schemas` 幂等追加 `source_type VARCHAR(16) NOT NULL DEFAULT 'UPLOAD_PB'`、`git_repo_id BIGINT NULL`、`source_bundle_id BIGINT NULL`、`source_commit_sha VARCHAR(64) NOT NULL DEFAULT ''` 与 `source_mr_iid INT NULL`；
      2. **部分唯一索引、表达式去重索引与约束**：在 `DO $$ ... END $$` 中创建部分唯一索引 `uk_traefik_pfile_bundle_path UNIQUE (bundle_id, file_path) WHERE is_deleted = false`、`uk_traefik_mr_dedup UNIQUE (git_repo_id, COALESCE(bundle_id, 0), event_phase, head_commit_sha, target_head_sha)` 与通知覆盖索引 `idx_traefik_notif_user_read (recipient_user_id, is_read, created_at DESC)`，幂等刷新新域表全部 `CHECK` 约束；
-     3. **内置静态规则与标准词根幂等初始化**：首次迁移采用 `INSERT ... ON CONFLICT (rule_code) DO NOTHING` 预置 ADR-18 默认静态规则矩阵（含多段包名规则与默认 `WARNING` 的 `COMMENT_REQUIRED`、`DUPLICATE_MESSAGE_AST` 及模板字段 `suggestion_template`）及高频通用缩写基础词根；
-     4. **`protohub` 历史词库一次性迁入**：提供独立纯 Go CLI 工具 `scripts/migrate_protohub_vocab`（仅在该独立 CLI 内引入无 CGO 的 `modernc.org/sqlite`，严禁污染 `cmd/server` / `cmd/agent` 运行时），同时支持 `--sqlite-path`（默认指向遗留运维库 `../protohub/storage/database/protohub.db`，因 `../protohub/storage/protohub.db` 为 `0B` 空文件）与 `--json-path` / 内置 seed，读取 `vocabulary_terms(term, description, description_en, aliases, similar_terms, domain, category, created_at)` 并按 `ON CONFLICT (term) DO NOTHING` 幂等写入 `traefik_vocabulary_terms`（标记 `source = 'PROTOHUB_IMPORT'`、`is_approved = true`）。
+     3. **内置静态规则与通用基础词根幂等初始化（零 SQLite）**：因 `code-proto` 与 `protohub` 均未开发完成且未真正运行过，无历史数据库需要迁入；`SetupWithDB` 启动时通过 `EnsureBuiltinCheckRules`（`INSERT ... ON CONFLICT (rule_code) DO NOTHING` 预置 `ADR-18` 默认静态规则，含多段包名、默认 `WARNING` 的 `COMMENT_REQUIRED`/`DUPLICATE_MESSAGE_AST` 与 `suggestion_template`）及 `EnsureBuiltinVocabularyTerms`（`INSERT ... ON CONFLICT (term) DO NOTHING` 预置高频通用基础缩写词根，`source = 'BUILTIN_SEED'`、`is_approved = true`），全仓严禁引入任何 SQLite 驱动。
 4. **海量流量时间范围物理分区 (`Range Partitioning`)**：
    - 核心流量往返表 **`traefik_traffic_records`** 采用 PostgreSQL 原生 **`PARTITION BY RANGE (created_at)`** 按日（或按周）自动建表；
    - 30 天保留期清理流水线采用轻量级 **`DROP TABLE traefik_traffic_records_yYYYYmMMdDD`**，实现磁盘空间毫秒级无锁释放。
@@ -1077,20 +1077,20 @@ type CheckRule struct {
 
 func (CheckRule) TableName() string { return config.TablePrefix + "check_rules" }
 
-// 26. VocabularyTerm 标准业务词根词典表 (traefik_vocabulary_terms, M24，承接原 protohub vocabulary_terms)
+// 26. VocabularyTerm 标准业务词根词典表 (traefik_vocabulary_terms, M24)
 type VocabularyTerm struct {
 	ID               uint64         `gorm:"primaryKey;autoIncrement" json:"id"`
 	Term             string         `gorm:"size:64;not null;uniqueIndex:uk_traefik_vocab_term" json:"term"` // 标准小写词根，如 "order", "amt", "ts"
 	StandardFullName string         `gorm:"size:128;not null;default:''" json:"standard_full_name"`
 	ChineseName      string         `gorm:"size:128;not null;default:''" json:"chinese_name"`
-	Domain           string         `gorm:"size:64;not null;default:'COMMON';index:idx_traefik_vocab_domain" json:"domain"`       // 所属业务域，承接 protohub domain 列
+	Domain           string         `gorm:"size:64;not null;default:'COMMON';index:idx_traefik_vocab_domain" json:"domain"`       // 所属业务域，如 COMMON / ORDER / TRADE
 	Category         string         `gorm:"size:64;not null;default:'COMMON';index:idx_traefik_vocab_category" json:"category"`   // COMMON | DOMAIN_TRADE | TYPE_SUFFIX | ABBREVIATION 等
 	Aliases          datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"aliases"`                                     // 常见不规范别名列表 ["amnt", "mony"]
 	SimilarTerms     datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"similar_terms"`                               // 相似可比词根/相近词推荐 []string
-	DescriptionEn    string         `gorm:"type:text;not null;default:''" json:"description_en"`                                 // 英文标准释义（承接 protohub description_en）
+	DescriptionEn    string         `gorm:"type:text;not null;default:''" json:"description_en"`                                 // 英文标准释义
 	Description      string         `gorm:"type:text;not null;default:''" json:"description"`
 	IsApproved       bool           `gorm:"not null;default:true;index:idx_traefik_vocab_approved" json:"is_approved"`           // true=已审核标准词根；false=LLM 建议待审词根
-	Source           string         `gorm:"size:32;not null;default:'MANUAL'" json:"source"`                                     // MANUAL | BUILTIN_SEED | PROTOHUB_IMPORT | LLM_SUGGESTED
+	Source           string         `gorm:"size:32;not null;default:'MANUAL'" json:"source"`                                     // MANUAL | BUILTIN_SEED | LLM_SUGGESTED
 	CreatedBy        uint           `gorm:"not null;default:0" json:"created_by"`
 	UpdatedBy        uint           `gorm:"not null;default:0" json:"updated_by"`
 	CreatedAt        time.Time      `json:"created_at"`
@@ -1222,19 +1222,6 @@ type Notification struct {
 func (Notification) TableName() string { return config.TablePrefix + "notifications" }
 ```
 
-> **附：`protohub` `vocabulary_terms` 一次性迁移字段对照表 (`scripts/migrate_protohub_vocab`)**：
-> - 默认源库路径优先指向运维实际 SQLite 文件 **`../protohub/storage/database/protohub.db`**（仓库根目录遗留 `protohub/storage/protohub.db` 为 `0B` 空占位文件），同时支持 `--json-path` 离线词库 JSON 与内置 seed 导入：
-> | 原 `protohub.vocabulary_terms` 列 | 目标 `traefik_vocabulary_terms` 列 | 转换规则 |
-> | :--- | :--- | :--- |
-> | `term` (`TEXT UNIQUE`) | `term` (`VARCHAR(64) UNIQUE`) | `strings.ToLower(strings.TrimSpace(term))`；幂等冲突策略 `ON CONFLICT (term) DO NOTHING` |
-> | `aliases` (`TEXT / JSON`) | `aliases` (`JSONB`) | 解析 JSON 数组或逗号分隔字符串；归一化小写去重写入 |
-> | `similar_terms` (`TEXT / JSON`) | `similar_terms` (`JSONB`) | 解析相似推荐词列表；空值存 `'[]'` |
-> | `description` (`TEXT`) | `description` (`TEXT`) + 辅助拆解 `standard_full_name` | 原样保留；未超出 128 字符时同步摘要写入 |
-> | `description_en` (`TEXT`) | `description_en` (`TEXT`) | 原样保留英文释义 |
-> | `domain` (`TEXT`) | `domain` (`VARCHAR(64)`) | 空值回退 `'COMMON'` |
-> | `category` (`TEXT`) | `category` (`VARCHAR(64)`) | 空值回退 `'COMMON'`，其余保留 |
-> | `created_at` (`TEXT`) | `created_at` (`TIMESTAMPTZ`), `is_approved=true`, `source='PROTOHUB_IMPORT'` | ISO8601 解析；解析失败回退迁移执行时间 |
-
 > **附：治理配置表与自定义 GIN 索引迁移说明**：
 > 1. 工程初始化模板自带的 `TraefikSetting`（`traefik_settings`）保留用于持久化管理员可调模块治理参数：
 >    - 既有运维参数：`traffic_retention_days`、`default_max_frames`、`default_max_duration_sec`、新挂载进程默认预挂策略 `default_probe_desired_state_shared='ARMED'` / `default_probe_desired_state_private='ARMED'`、以及 `F-27` CI 门禁机器凭据摘要 `ci_gate_token_sha256`（**仅存 SHA-256 哈希，永不存明文且不在通用配置列表中回显**）；
@@ -1341,7 +1328,7 @@ func (Notification) TableName() string { return config.TablePrefix + "notificati
 | `traefik_proto_file_versions` | `uk_traefik_pfver_file_ver` | `UNIQUE (proto_file_id, version)` | **F-28 (ADR-18 / M25)**：同源文件历史版本严格递增不冲突 |
 | `traefik_proto_doc_symbols` | `uk_traefik_pdoc_schema_kind_full` | `UNIQUE (schema_id, symbol_kind, full_name)` | **F-18 (ADR-18 / M23)**：同一编译版描述集内每类文档符号唯一，支撑毫秒级服务文档与枚举字典检索 |
 | `traefik_check_rules` | `uk_traefik_check_rule_code` | `UNIQUE (rule_code)` | **F-30 (ADR-18 / M24)**：静态规范规则编码全局唯一，支持内置规则幂等初始化 |
-| `traefik_vocabulary_terms` | `uk_traefik_vocab_term` | `UNIQUE (term)` | **F-30 (ADR-18 / M24)**：标准小写词根全局唯一，保证 `protohub` 迁移 `ON CONFLICT DO NOTHING` 幂等 |
+| `traefik_vocabulary_terms` | `uk_traefik_vocab_term` | `UNIQUE (term)` | **F-30 (ADR-18 / M24)**：标准小写词根全局唯一，保证内置 `BUILTIN_SEED` 与词库写入 `ON CONFLICT DO NOTHING` 幂等 |
 | `traefik_notifications` | `idx_traefik_notif_user_read` | `BTREE (recipient_user_id, is_read, created_at DESC)` | **F-31 / M26 (ADR-18)**：支撑全站未读通知角标与用户分页收件箱毫秒级覆盖扫描 |
 
 ---

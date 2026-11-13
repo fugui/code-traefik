@@ -104,20 +104,13 @@ go run ./scripts/seed-large-topology \
 ## 5. Proto 全生命周期与 Git/MR 治理运维与验证基线 (`SC-13`~`SC-16`, `M22~M26` / [`ADR-18`](../05-adr/18-proto-full-lifecycle-and-git-mr-governance-adr.md))
 
 > [!NOTE]
-> 本节参数与命令行指引随 M22~M26 推进分阶段启用；其中 `protohub` 词汇表一次性迁移严格通过独立 CLI 执行（优先使用真实运维库 `protohub/storage/database/protohub.db` 或导出的 JSON 词库/内置 seed，因仓库遗留 `protohub/storage/protohub.db` 为 `0B` 空文件），严禁向 `code-traefik-server` 主进程引入 SQLite 运行时依赖。
+> 本节参数与命令行指引随 M22~M26 推进分阶段启用；因 `code-proto` 与 `protohub` 均未开发完成且未实际投入运行，**系统无任何历史 SQLite 或外部旧系统数据需要迁移**；`code-traefik-server` 与 `code-traefik-agent` 全仓严禁引入任何 SQLite 运行时依赖。
 
 ### 5.1 关键环境变量与安全配置
 1. **`TRAEFIK_CRYPTO_KEY`（32 字节 Base64 / Hex AES-256-GCM 主密钥）**：用于加密持久化 Git 访问令牌、Webhook Secret、LLM API Key、SMTP 密码及 `code-notifier` 调用令牌；生产环境由 KMS/环境变量注入，严禁硬编码于 `config.yaml` 或源码中；
-2. **`protohub` 词汇表一次性无损迁移 (`M24`)**：
-   ```bash
-   # 先 --dry-run 预检 SQLite vocabulary_terms（或导出的 JSON / 内置 seed）解析，覆盖 aliases / description_en / similar_terms / domain 后幂等写入 PG 库（ON CONFLICT (term) DO NOTHING）
-   go run ./scripts/migrate_protohub_vocab --sqlite-path ../protohub/storage/database/protohub.db --dry-run
-   go run ./scripts/migrate_protohub_vocab \
-     --sqlite-path ../protohub/storage/database/protohub.db \
-     --pg-dsn "host=127.0.0.1 port=5432 user=postgres password=CodeShield618! dbname=code_traefik_dev sslmode=disable"
-   # 若仅以导出 JSON 或仓库内预置 vocab_seed.json 迁移：
-   go run ./scripts/migrate_protohub_vocab --json-path ./scripts/migrate_protohub_vocab/vocab_seed.json --pg-dsn "..."
-   ```
+2. **内置标准规则与通用词根幂等初始化 (`M24`)**：
+   - 无需运行任何外部迁移脚本，服务启动 `models.SetupWithDB` 时自动通过 `INSERT ... ON CONFLICT DO NOTHING` 幂等初始化默认静态规范规则（含 `dophi.order.v1` 多段式包名合规、`COMMENT_REQUIRED=WARNING` 等）及 `traefik_vocabulary_terms` 通用基础词根（`source='BUILTIN_SEED'`、`is_approved=true`）；
+   - 团队业务域专有标准词根与常见不规范别名（`aliases` / `description_en` / `similar_terms`）直接在上线后通过 `/schemas` 规则/词库工作台按需增删维护。
 3. **跨机 / 内网外部通道与信任白名单（`M24~M26` 管理后台 `/admin/settings` 配置）**：
    - **出站信任白名单 (`outbound_trusted_cidrs`)**：`SafeDialer` 永久硬阻断云元数据段（`169.254.0.0/16`、`100.100.100.200/32`）并默认拦截回环与 RFC1918 私网；当 GitLab/CodeHub、内网 LLM 网关或 **`code-notifier` 部署在同内网其他主机** 时，管理员必须在 `/admin/settings` 显式配置受信任 CIDR/精确主机（如 `192.168.56.20/32,gitlab.internal.corp:443`）；
    - **外部 LLM 词根建议服务 (`M24`)**：通过 `llm_enabled`、`llm_base_url`、`llm_api_key`（经 `TRAEFIK_CRYPTO_KEY` AES-256-GCM 密文落库且不返显原文）控制，强制 3s 超时熔断降级且受 `SafeDialer` 校验；
