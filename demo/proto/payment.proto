@@ -1,0 +1,45 @@
+syntax = "proto3";
+
+package demo.payment;
+option go_package = "code-traefik/demo/pkg/proto/paymentpb";
+
+// 统一支付通道接口契约 (LIB 多实现契约名: demo.payment.PaymentService)
+// 各业务实例可发布自定义运行期服务名（如 demo.payment.ALIPAY_PaymentService / demo.payment.WECHAT_PaymentService），
+// 或通过共享同名模式运行，并共用同一份契约解码定义。
+service PaymentService {
+  // 渠道支付授权扣款
+  rpc AuthorizePay(AuthorizePayReq) returns (AuthorizePayRsp);
+  // 渠道原路退款补偿
+  rpc RefundPay(RefundPayReq) returns (RefundPayRsp);
+}
+
+message AuthorizePayReq {
+  string order_id = 1;
+  string user_id = 2;
+  int64 amount_cents = 3;
+  string channel = 4; // ALIPAY, WECHAT
+}
+
+message AuthorizePayRsp {
+  int32 code = 1;           // 0=成功, 4101=支付参数非法, 4103=渠道拒绝
+  string message = 2;
+  string order_id = 3;
+  string channel = 4;
+  string channel_tx_no = 5; // 渠道支付流水号 (如 ALIPAY-TX-... / WECHAT-TX-...)
+  int64 paid_at_unix = 6;
+}
+
+message RefundPayReq {
+  string order_id = 1;
+  string channel_tx_no = 2;
+  int64 amount_cents = 3;
+  string reason = 4;
+}
+
+message RefundPayRsp {
+  int32 code = 1; // 0=成功, 4102=原支付记录不存在
+  string message = 2;
+  string order_id = 3;
+  string channel = 4;
+  string refund_tx_no = 5;
+}

@@ -179,6 +179,7 @@ type CreateOrderReq struct {
 	SkuId          string                 `protobuf:"bytes,2,opt,name=sku_id,json=skuId,proto3" json:"sku_id,omitempty"`
 	Quantity       int32                  `protobuf:"varint,3,opt,name=quantity,proto3" json:"quantity,omitempty"`                                    // 购买数量
 	ClientOrderRef string                 `protobuf:"bytes,4,opt,name=client_order_ref,json=clientOrderRef,proto3" json:"client_order_ref,omitempty"` // 客户端防重幂等号
+	PaymentChannel string                 `protobuf:"bytes,5,opt,name=payment_channel,json=paymentChannel,proto3" json:"payment_channel,omitempty"`   // 可选支付渠道: ALIPAY(默认) / WECHAT
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -241,14 +242,23 @@ func (x *CreateOrderReq) GetClientOrderRef() string {
 	return ""
 }
 
+func (x *CreateOrderReq) GetPaymentChannel() string {
+	if x != nil {
+		return x.PaymentChannel
+	}
+	return ""
+}
+
 type CreateOrderRsp struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
 	Code             int32                  `protobuf:"varint,1,opt,name=code,proto3" json:"code,omitempty"`
 	Message          string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
 	OrderId          string                 `protobuf:"bytes,3,opt,name=order_id,json=orderId,proto3" json:"order_id,omitempty"`
 	TotalAmountCents int64                  `protobuf:"varint,4,opt,name=total_amount_cents,json=totalAmountCents,proto3" json:"total_amount_cents,omitempty"`
-	Status           string                 `protobuf:"bytes,5,opt,name=status,proto3" json:"status,omitempty"` // SUCCESS, FAILED_STOCK, FAILED_BALANCE
+	Status           string                 `protobuf:"bytes,5,opt,name=status,proto3" json:"status,omitempty"` // SUCCESS, FAILED_STOCK, FAILED_BALANCE, FAILED_PAYMENT
 	CreatedAtUnix    int64                  `protobuf:"varint,6,opt,name=created_at_unix,json=createdAtUnix,proto3" json:"created_at_unix,omitempty"`
+	PaymentChannel   string                 `protobuf:"bytes,7,opt,name=payment_channel,json=paymentChannel,proto3" json:"payment_channel,omitempty"` // 实际路由处理的支付渠道
+	PaymentTxNo      string                 `protobuf:"bytes,8,opt,name=payment_tx_no,json=paymentTxNo,proto3" json:"payment_tx_no,omitempty"`        // 支付渠道返回流水号
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -325,6 +335,20 @@ func (x *CreateOrderRsp) GetCreatedAtUnix() int64 {
 	return 0
 }
 
+func (x *CreateOrderRsp) GetPaymentChannel() string {
+	if x != nil {
+		return x.PaymentChannel
+	}
+	return ""
+}
+
+func (x *CreateOrderRsp) GetPaymentTxNo() string {
+	if x != nil {
+		return x.PaymentTxNo
+	}
+	return ""
+}
+
 type OrderDetailReq struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	OrderId       string                 `protobuf:"bytes,1,opt,name=order_id,json=orderId,proto3" json:"order_id,omitempty"`
@@ -380,6 +404,8 @@ type OrderDetailRsp struct {
 	TotalAmountCents int64                  `protobuf:"varint,7,opt,name=total_amount_cents,json=totalAmountCents,proto3" json:"total_amount_cents,omitempty"`
 	Status           string                 `protobuf:"bytes,8,opt,name=status,proto3" json:"status,omitempty"`
 	CreatedAtUnix    int64                  `protobuf:"varint,9,opt,name=created_at_unix,json=createdAtUnix,proto3" json:"created_at_unix,omitempty"`
+	PaymentChannel   string                 `protobuf:"bytes,10,opt,name=payment_channel,json=paymentChannel,proto3" json:"payment_channel,omitempty"`
+	PaymentTxNo      string                 `protobuf:"bytes,11,opt,name=payment_tx_no,json=paymentTxNo,proto3" json:"payment_tx_no,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -475,6 +501,20 @@ func (x *OrderDetailRsp) GetCreatedAtUnix() int64 {
 		return x.CreatedAtUnix
 	}
 	return 0
+}
+
+func (x *OrderDetailRsp) GetPaymentChannel() string {
+	if x != nil {
+		return x.PaymentChannel
+	}
+	return ""
+}
+
+func (x *OrderDetailRsp) GetPaymentTxNo() string {
+	if x != nil {
+		return x.PaymentTxNo
+	}
+	return ""
 }
 
 type CancelOrderReq struct {
@@ -622,21 +662,24 @@ const file_demo_proto_order_proto_rawDesc = "" +
 	"\x06sku_id\x18\x05 \x01(\tR\x05skuId\x12\x19\n" +
 	"\bsku_name\x18\x06 \x01(\tR\askuName\x12(\n" +
 	"\x10unit_price_cents\x18\a \x01(\x03R\x0eunitPriceCents\x12'\n" +
-	"\x0favailable_stock\x18\b \x01(\x05R\x0eavailableStock\"\x86\x01\n" +
+	"\x0favailable_stock\x18\b \x01(\x05R\x0eavailableStock\"\xaf\x01\n" +
 	"\x0eCreateOrderReq\x12\x17\n" +
 	"\auser_id\x18\x01 \x01(\tR\x06userId\x12\x15\n" +
 	"\x06sku_id\x18\x02 \x01(\tR\x05skuId\x12\x1a\n" +
 	"\bquantity\x18\x03 \x01(\x05R\bquantity\x12(\n" +
-	"\x10client_order_ref\x18\x04 \x01(\tR\x0eclientOrderRef\"\xc7\x01\n" +
+	"\x10client_order_ref\x18\x04 \x01(\tR\x0eclientOrderRef\x12'\n" +
+	"\x0fpayment_channel\x18\x05 \x01(\tR\x0epaymentChannel\"\x94\x02\n" +
 	"\x0eCreateOrderRsp\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\x05R\x04code\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\x12\x19\n" +
 	"\border_id\x18\x03 \x01(\tR\aorderId\x12,\n" +
 	"\x12total_amount_cents\x18\x04 \x01(\x03R\x10totalAmountCents\x12\x16\n" +
 	"\x06status\x18\x05 \x01(\tR\x06status\x12&\n" +
-	"\x0fcreated_at_unix\x18\x06 \x01(\x03R\rcreatedAtUnix\"+\n" +
+	"\x0fcreated_at_unix\x18\x06 \x01(\x03R\rcreatedAtUnix\x12'\n" +
+	"\x0fpayment_channel\x18\a \x01(\tR\x0epaymentChannel\x12\"\n" +
+	"\rpayment_tx_no\x18\b \x01(\tR\vpaymentTxNo\"+\n" +
 	"\x0eOrderDetailReq\x12\x19\n" +
-	"\border_id\x18\x01 \x01(\tR\aorderId\"\x93\x02\n" +
+	"\border_id\x18\x01 \x01(\tR\aorderId\"\xe0\x02\n" +
 	"\x0eOrderDetailRsp\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\x05R\x04code\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\x12\x19\n" +
@@ -646,7 +689,10 @@ const file_demo_proto_order_proto_rawDesc = "" +
 	"\bquantity\x18\x06 \x01(\x05R\bquantity\x12,\n" +
 	"\x12total_amount_cents\x18\a \x01(\x03R\x10totalAmountCents\x12\x16\n" +
 	"\x06status\x18\b \x01(\tR\x06status\x12&\n" +
-	"\x0fcreated_at_unix\x18\t \x01(\x03R\rcreatedAtUnix\"C\n" +
+	"\x0fcreated_at_unix\x18\t \x01(\x03R\rcreatedAtUnix\x12'\n" +
+	"\x0fpayment_channel\x18\n" +
+	" \x01(\tR\x0epaymentChannel\x12\"\n" +
+	"\rpayment_tx_no\x18\v \x01(\tR\vpaymentTxNo\"C\n" +
 	"\x0eCancelOrderReq\x12\x19\n" +
 	"\border_id\x18\x01 \x01(\tR\aorderId\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\"\xb4\x01\n" +

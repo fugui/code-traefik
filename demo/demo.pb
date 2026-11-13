@@ -1,5 +1,5 @@
 
-í
+°
 demo/proto/order.proto
 demo.order"C
 CompositeQuoteReq
@@ -13,21 +13,24 @@ demo.order"C
 sku_id (	RskuId
 sku_name (	RskuName(
 unit_price_cents (RunitPriceCents'
-available_stock (RavailableStock"†
+available_stock (RavailableStock"¯
 CreateOrderReq
 user_id (	RuserId
 sku_id (	RskuId
 quantity (Rquantity(
-client_order_ref (	RclientOrderRef"Ç
+client_order_ref (	RclientOrderRef'
+payment_channel (	RpaymentChannel"”
 CreateOrderRsp
 code (Rcode
 message (	Rmessage
 order_id (	RorderId,
 total_amount_cents (RtotalAmountCents
 status (	Rstatus&
-created_at_unix (RcreatedAtUnix"+
+created_at_unix (RcreatedAtUnix'
+payment_channel (	RpaymentChannel"
+payment_tx_no (	RpaymentTxNo"+
 OrderDetailReq
-order_id (	RorderId"“
+order_id (	RorderId"à
 OrderDetailRsp
 code (Rcode
 message (	Rmessage
@@ -37,7 +40,10 @@ demo.order"C
 quantity (Rquantity,
 total_amount_cents (RtotalAmountCents
 status (	Rstatus&
-created_at_unix	 (RcreatedAtUnix"C
+created_at_unix	 (RcreatedAtUnix'
+payment_channel
+ (	RpaymentChannel"
+payment_tx_no (	RpaymentTxNo"C
 CancelOrderReq
 order_id (	RorderId
 reason (	Rreason"´
@@ -144,3 +150,33 @@ bizOrderId"h
 	LockStock.demo.inventory.LockStockReq.demo.inventory.LockStockRspP
 ConfirmStock.demo.inventory.ConfirmStockReq.demo.inventory.ConfirmStockRspP
 ReleaseStock.demo.inventory.ReleaseStockReq.demo.inventory.ReleaseStockRspB)Z'code-traefik/demo/pkg/proto/inventorypbbproto3
+â
+demo/proto/payment.protodemo.payment"‚
+AuthorizePayReq
+order_id (	RorderId
+user_id (	RuserId!
+amount_cents (RamountCents
+channel (	Rchannel"º
+AuthorizePayRsp
+code (Rcode
+message (	Rmessage
+order_id (	RorderId
+channel (	Rchannel"
+channel_tx_no (	RchannelTxNo 
+paid_at_unix (R
+paidAtUnix"ˆ
+RefundPayReq
+order_id (	RorderId"
+channel_tx_no (	RchannelTxNo!
+amount_cents (RamountCents
+reason (	Rreason"“
+RefundPayRsp
+code (Rcode
+message (	Rmessage
+order_id (	RorderId
+channel (	Rchannel 
+refund_tx_no (	R
+refundTxNo2£
+PaymentServiceL
+AuthorizePay.demo.payment.AuthorizePayReq.demo.payment.AuthorizePayRspC
+	RefundPay.demo.payment.RefundPayReq.demo.payment.RefundPayRspB'Z%code-traefik/demo/pkg/proto/paymentpbbproto3

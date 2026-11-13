@@ -85,8 +85,9 @@ func (t *TUIClient) drawMenu() {
 	fmt.Printf("   %s[4]%s 购买触发余额不足并回滚补偿  (Bob 尝试购买 1件机械键盘 ￥299.00)\n", colorMagenta, colorReset)
 	fmt.Printf("   %s[5]%s 查询上一笔订单履约状态      (Query Order Detail)\n", colorCyan, colorReset)
 	fmt.Printf("   %s[6]%s 取消上一笔订单并全额退款    (Cancel & Refund Order)\n", colorRed, colorReset)
-	fmt.Printf("   %s[7]%s 自定义参数提交订单          (Custom User, SKU & Quantity)\n", colorBlue, colorReset)
-	fmt.Printf("   %s[8]%s 并发压力录制流量注入 (Burst) (连续发送 10 笔并发请求生成录制数据)\n", colorYellow, colorReset)
+	fmt.Printf("   %s[7]%s 自定义参数提交订单          (Custom User, SKU, Qty & Payment Channel)\n", colorBlue, colorReset)
+	fmt.Printf("   %s[8]%s 并发压力录制流量注入 (Burst) (连续发送 10 笔 ALIPAY/WECHAT 混合订单)\n", colorYellow, colorReset)
+	fmt.Printf("   %s[9]%s 双渠道支付分发验证 (LIB)    (依次走 ALIPAY 与 WECHAT 实例下单对比)\n", colorGreen, colorReset)
 	fmt.Printf("   %s[q]%s 退出客户端                  (Quit)\n", colorGray, colorReset)
 	fmt.Printf("%s──────────────────────────────────────────────────────────────────────────────────────────%s\n", colorCyan, colorReset)
 }
@@ -167,7 +168,7 @@ func (t *TUIClient) Run() {
 			fmt.Printf("%s──────────────────────────────────────────────────────────────────────────────────────────%s\n", colorCyan, colorReset)
 		}
 
-		fmt.Print(colorBold + " 请输入指令序号 [1-8 / q]: " + colorReset)
+		fmt.Print(colorBold + " 请输入指令序号 [1-9 / q]: " + colorReset)
 		if !scanner.Scan() {
 			break
 		}
@@ -202,8 +203,13 @@ func (t *TUIClient) Run() {
 			}
 
 		case "2":
-			// 正向下单
-			reqBytes, _ := proto.Marshal(&orderpb.CreateOrderReq{UserId: "Alice", SkuId: "SKU-101", Quantity: 1})
+			// 正向下单 (默认 ALIPAY 渠道)
+			reqBytes, _ := proto.Marshal(&orderpb.CreateOrderReq{
+				UserId:         "Alice",
+				SkuId:          "SKU-101",
+				Quantity:       1,
+				PaymentChannel: "ALIPAY",
+			})
 			pkt, rspBytes, err := t.client.Invoke(ctx, "demo.order.OrderService", "CreateOrder", t.nextTrace(), reqBytes)
 			lastLatency = time.Since(start)
 			lastPkt = pkt
@@ -215,8 +221,8 @@ func (t *TUIClient) Run() {
 				_ = proto.Unmarshal(rspBytes, &rsp)
 				if rsp.Code == 0 {
 					t.lastOrder = rsp.OrderId
-					lastMsg = fmt.Sprintf("  %s✓ 下单成功 (Happy Path)%s:\n  订单号: %s\n  支付总额: ￥%.2f  状态: %s%s%s  消息: %s",
-						colorGreen, colorReset, rsp.OrderId, float64(rsp.TotalAmountCents)/100.0,
+					lastMsg = fmt.Sprintf("  %s✓ 下单成功 (Happy Path)%s:\n  订单号: %s  支付通道: %s  流水: %s\n  支付总额: ￥%.2f  状态: %s%s%s  消息: %s",
+						colorGreen, colorReset, rsp.OrderId, rsp.PaymentChannel, rsp.PaymentTxNo, float64(rsp.TotalAmountCents)/100.0,
 						colorGreen, rsp.Status, colorReset, rsp.Message)
 				} else {
 					lastMsg = fmt.Sprintf("  %s✗ 下单失败%s (Code %d): %s (状态: %s)", colorRed, colorReset, rsp.Code, rsp.Message, rsp.Status)
@@ -331,10 +337,21 @@ func (t *TUIClient) Run() {
 				qty = 1
 			}
 
+			fmt.Print("  请选择支付渠道 (ALIPAY / WECHAT，默认 ALIPAY): ")
+			if !scanner.Scan() {
+				cancel()
+				break
+			}
+			payChannel := strings.ToUpper(strings.TrimSpace(scanner.Text()))
+			if payChannel == "" {
+				payChannel = "ALIPAY"
+			}
+
 			reqBytes, _ := proto.Marshal(&orderpb.CreateOrderReq{
-				UserId:   userID,
-				SkuId:    skuID,
-				Quantity: int32(qty),
+				UserId:         userID,
+				SkuId:          skuID,
+				Quantity:       int32(qty),
+				PaymentChannel: payChannel,
 			})
 			pkt, rspBytes, err := t.client.Invoke(ctx, "demo.order.OrderService", "CreateOrder", t.nextTrace(), reqBytes)
 			lastLatency = time.Since(start)
@@ -347,16 +364,16 @@ func (t *TUIClient) Run() {
 				_ = proto.Unmarshal(rspBytes, &rsp)
 				if rsp.Code == 0 {
 					t.lastOrder = rsp.OrderId
-					lastMsg = fmt.Sprintf("  %s✓ 自定义下单成功%s: 订单: %s | 金额: ￥%.2f | 状态: %s",
-						colorGreen, colorReset, rsp.OrderId, float64(rsp.TotalAmountCents)/100.0, rsp.Status)
+					lastMsg = fmt.Sprintf("  %s✓ 自定义下单成功%s: 订单: %s | 渠道: %s (%s) | 金额: ￥%.2f | 状态: %s",
+						colorGreen, colorReset, rsp.OrderId, rsp.PaymentChannel, rsp.PaymentTxNo, float64(rsp.TotalAmountCents)/100.0, rsp.Status)
 				} else {
 					lastMsg = fmt.Sprintf("  %s✗ 下单失败%s: %s (Code: %d, Status: %s)", colorRed, colorReset, rsp.Message, rsp.Code, rsp.Status)
 				}
 			}
 
 		case "8":
-			// 并发流量压测
-			fmt.Println("\n  正在启动并发录制流（10 笔混合订单注入）...")
+			// 并发流量压测 (交替注入 ALIPAY / WECHAT 覆盖双实例)
+			fmt.Println("\n  正在启动并发录制流（10 笔 ALIPAY/WECHAT 混合订单注入）...")
 			var wg sync.WaitGroup
 			var successCount, failCount int64
 			var mu sync.Mutex
@@ -372,10 +389,15 @@ func (t *TUIClient) Run() {
 					if idx%3 == 0 {
 						user = "Bob"
 					}
+					ch := "ALIPAY"
+					if idx%2 == 1 {
+						ch = "WECHAT"
+					}
 					reqB, _ := proto.Marshal(&orderpb.CreateOrderReq{
-						UserId:   user,
-						SkuId:    "SKU-101",
-						Quantity: 1,
+						UserId:         user,
+						SkuId:          "SKU-101",
+						Quantity:       1,
+						PaymentChannel: ch,
 					})
 					_, rBytes, err := t.client.Invoke(subCtx, "demo.order.OrderService", "CreateOrder", t.nextTrace(), reqB)
 					mu.Lock()
@@ -397,11 +419,41 @@ func (t *TUIClient) Run() {
 			lastLatency = time.Since(start)
 			lastPkt = nil
 			lastPayload = nil
-			lastMsg = fmt.Sprintf("  %s✓ 批量注入完成 (耗时 %.2f ms)%s: 成功 %d 笔, 失败/熔断 %d 笔",
+			lastMsg = fmt.Sprintf("  %s✓ 批量注入完成 (耗时 %.2f ms)%s: 成功 %d 笔, 失败/熔断 %d 笔 (已覆盖 ALIPAY & WECHAT 双实例)",
 				colorGreen, float64(lastLatency.Microseconds())/1000.0, colorReset, successCount, failCount)
 
+		case "9":
+			// 双渠道对比下单 (ALIPAY + WECHAT)
+			channels := []string{"ALIPAY", "WECHAT"}
+			var sb strings.Builder
+			sb.WriteString(fmt.Sprintf("  %s✓ 双渠道分发对比下单完成 (LIB: demo.payment.PaymentService)%s:\n", colorGreen, colorReset))
+			for _, ch := range channels {
+				reqB, _ := proto.Marshal(&orderpb.CreateOrderReq{
+					UserId:         "Alice",
+					SkuId:          "SKU-101",
+					Quantity:       1,
+					PaymentChannel: ch,
+				})
+				pkt, rBytes, err := t.client.Invoke(ctx, "demo.order.OrderService", "CreateOrder", t.nextTrace(), reqB)
+				if err != nil {
+					sb.WriteString(fmt.Sprintf("  • [%s] 调用失败: %v\n", ch, err))
+					continue
+				}
+				lastPkt = pkt
+				lastPayload = rBytes
+				var r orderpb.CreateOrderRsp
+				_ = proto.Unmarshal(rBytes, &r)
+				if r.Code == 0 {
+					t.lastOrder = r.OrderId
+				}
+				sb.WriteString(fmt.Sprintf("  • [%s] -> Order=%s Status=%s ChannelTx=%s\n",
+					ch, r.OrderId, r.Status, r.PaymentTxNo))
+			}
+			lastLatency = time.Since(start)
+			lastMsg = strings.TrimRight(sb.String(), "\n")
+
 		default:
-			lastMsg = colorRed + "未知指令序号，请输入 1-8 或 q 退出！" + colorReset
+			lastMsg = colorRed + "未知指令序号，请输入 1-9 或 q 退出！" + colorReset
 			lastPkt = nil
 		}
 		cancel()

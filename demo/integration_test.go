@@ -8,9 +8,11 @@ import (
 	"time"
 
 	"code-traefik/demo/pkg/crosframe"
+	"code-traefik/demo/pkg/payment"
 	"code-traefik/demo/pkg/proto/accountpb"
 	"code-traefik/demo/pkg/proto/inventorypb"
 	"code-traefik/demo/pkg/proto/orderpb"
+	"code-traefik/demo/pkg/proto/paymentpb"
 	"code-traefik/pkg/crosrpc"
 	"google.golang.org/protobuf/proto"
 )
@@ -30,6 +32,8 @@ func TestDemoFourProcessClusterEndToEnd(t *testing.T) {
 
 	accAddr := getFreeAddr()
 	invAddr := getFreeAddr()
+	payAlipayAddr := getFreeAddr()
+	payWechatAddr := getFreeAddr()
 	sutAddr := getFreeAddr()
 
 	// 2. 启动 Backend 1: Account
@@ -50,8 +54,28 @@ func TestDemoFourProcessClusterEndToEnd(t *testing.T) {
 	}
 	defer func() { _ = invSrv.Stop() }()
 
+	// 3.5 启动同一 LIB 契约 (demo.payment.PaymentService) 的两个自定义发布名实例
+	payAlipayGW := payment.NewPaymentGateway(payment.ChannelAlipay, "")
+	payAlipaySrv := crosframe.NewServer(payAlipayAddr, "TestPaymentAlipay")
+	payAlipayGW.RegisterHandlers(payAlipaySrv)
+	if err := payAlipaySrv.Start(); err != nil {
+		t.Fatalf("Start payAlipaySrv failed: %v", err)
+	}
+	defer func() { _ = payAlipaySrv.Stop() }()
+
+	payWechatGW := payment.NewPaymentGateway(payment.ChannelWechat, "")
+	payWechatSrv := crosframe.NewServer(payWechatAddr, "TestPaymentWechat")
+	payWechatGW.RegisterHandlers(payWechatSrv)
+	if err := payWechatSrv.Start(); err != nil {
+		t.Fatalf("Start payWechatSrv failed: %v", err)
+	}
+	defer func() { _ = payWechatSrv.Stop() }()
+
 	// 4. 启动 SUT: Order Gateway
-	sutOrchestrator := newOrderTestOrchestrator(accAddr, invAddr)
+	sutOrchestrator := newOrderTestOrchestrator(accAddr, invAddr, map[string]paymentRouteTest{
+		payment.ChannelAlipay: {Addr: payAlipayAddr, ServiceName: payAlipayGW.ServiceName()},
+		payment.ChannelWechat: {Addr: payWechatAddr, ServiceName: payWechatGW.ServiceName()},
+	})
 	sutSrv := crosframe.NewServer(sutAddr, "TestSUT")
 	sutOrchestrator.Register(sutSrv)
 	if err := sutSrv.Start(); err != nil {
@@ -61,6 +85,9 @@ func TestDemoFourProcessClusterEndToEnd(t *testing.T) {
 		_ = sutSrv.Stop()
 		_ = sutOrchestrator.accountCli.Close()
 		_ = sutOrchestrator.inventoryCli.Close()
+		for _, cli := range sutOrchestrator.paymentClis {
+			_ = cli.Close()
+		}
 	}()
 
 	// 5. 模拟 Client 发起调用
@@ -212,7 +239,131 @@ func TestDemoFourProcessClusterEndToEnd(t *testing.T) {
 		if accStore.accounts["Alice"].BalanceCents != 100000 {
 			t.Fatalf("Balance not restored after refund: %d", accStore.accounts["Alice"].BalanceCents)
 		}
+		// 校验 Scenario 2 默认路由到 ALIPAY，取消后触发了 1 次 ALIPAY 退款且未误触发 WECHAT
+		aliAuth, aliRef := payAlipayGW.Stats()
+		wxAuth, wxRef := payWechatGW.Stats()
+		if aliAuth != 1 || aliRef != 1 || wxAuth != 0 || wxRef != 0 {
+			t.Fatalf("Unexpected payment stats after Scenario 5: alipay=(%d,%d), wechat=(%d,%d)", aliAuth, aliRef, wxAuth, wxRef)
+		}
 	})
+
+	// 场景 6: 多实现 LIB 契约路由分发 — ALIPAY 与 WECHAT 双自定义发布服务名实例隔离验证
+	t.Run("Scenario6_PaymentLibTwoInstances_CustomServiceNames", func(t *testing.T) {
+		var wechatOrderID string
+
+		// 6.1 显式选择 WECHAT 渠道下单 -> 命中 demo.payment.WECHAT_PaymentService
+		wxReqBytes, _ := proto.Marshal(&orderpb.CreateOrderReq{
+			UserId:         "Alice",
+			SkuId:          "SKU-101",
+			Quantity:       1,
+			PaymentChannel: "WECHAT",
+		})
+		_, wxRspBytes, err := client.Invoke(ctx, "demo.order.OrderService", "CreateOrder", trace, wxReqBytes)
+		if err != nil {
+			t.Fatalf("CreateOrder (WECHAT) failed: %v", err)
+		}
+		var wxRsp orderpb.CreateOrderRsp
+		_ = proto.Unmarshal(wxRspBytes, &wxRsp)
+		if wxRsp.Code != 0 || wxRsp.Status != "SUCCESS" || wxRsp.PaymentChannel != "WECHAT" {
+			t.Fatalf("Expected WECHAT order success, got: %+v", &wxRsp)
+		}
+		if len(wxRsp.PaymentTxNo) < 9 || wxRsp.PaymentTxNo[:9] != "WECHAT-TX" {
+			t.Fatalf("Expected WECHAT-TX prefix, got: %s", wxRsp.PaymentTxNo)
+		}
+		wechatOrderID = wxRsp.OrderId
+
+		// 6.2 校验 WECHAT 受理 +1，ALIPAY 未增加
+		aliAuth, aliRef := payAlipayGW.Stats()
+		wxAuth, wxRef := payWechatGW.Stats()
+		if aliAuth != 1 || aliRef != 1 || wxAuth != 1 || wxRef != 0 {
+			t.Fatalf("Expected WECHAT auth=1, got alipay=(%d,%d), wechat=(%d,%d)", aliAuth, aliRef, wxAuth, wxRef)
+		}
+
+		// 6.3 取消 WECHAT 订单 -> 退款精确路由到 WECHAT 实例
+		cancelReq, _ := proto.Marshal(&orderpb.CancelOrderReq{OrderId: wechatOrderID, Reason: "渠道路由退款验证"})
+		_, cancelRspB, err := client.Invoke(ctx, "demo.order.OrderService", "CancelOrder", trace, cancelReq)
+		if err != nil {
+			t.Fatalf("CancelOrder (WECHAT) failed: %v", err)
+		}
+		var cancelRsp orderpb.CancelOrderRsp
+		_ = proto.Unmarshal(cancelRspB, &cancelRsp)
+		if cancelRsp.Code != 0 {
+			t.Fatalf("CancelOrder (WECHAT) error: %+v", &cancelRsp)
+		}
+
+		aliAuth, aliRef = payAlipayGW.Stats()
+		wxAuth, wxRef = payWechatGW.Stats()
+		if aliAuth != 1 || aliRef != 1 || wxAuth != 1 || wxRef != 1 {
+			t.Fatalf("Expected WECHAT refund=1 and ALIPAY untouched, got alipay=(%d,%d), wechat=(%d,%d)", aliAuth, aliRef, wxAuth, wxRef)
+		}
+	})
+}
+
+// TestDemoPaymentLib_SharedContractNameMode 验证同一份 PaymentGateway 代码亦可通过共享契约名模式部署双实例
+func TestDemoPaymentLib_SharedContractNameMode(t *testing.T) {
+	getFreeAddr := func() string {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("Listen free addr failed: %v", err)
+		}
+		addr := ln.Addr().String()
+		_ = ln.Close()
+		return addr
+	}
+
+	addrA := getFreeAddr()
+	addrB := getFreeAddr()
+
+	// 两个独立进程均以 LIB 原始契约名 demo.payment.PaymentService 注册对外服务
+	gwA := payment.NewPaymentGateway("ALIPAY", payment.ContractServiceName)
+	srvA := crosframe.NewServer(addrA, "SharedPayA")
+	gwA.RegisterHandlers(srvA)
+	if err := srvA.Start(); err != nil {
+		t.Fatalf("Start srvA failed: %v", err)
+	}
+	defer func() { _ = srvA.Stop() }()
+
+	gwB := payment.NewPaymentGateway("WECHAT", payment.ContractServiceName)
+	srvB := crosframe.NewServer(addrB, "SharedPayB")
+	gwB.RegisterHandlers(srvB)
+	if err := srvB.Start(); err != nil {
+		t.Fatalf("Start srvB failed: %v", err)
+	}
+	defer func() { _ = srvB.Stop() }()
+
+	if gwA.ServiceName() != payment.ContractServiceName || gwB.ServiceName() != payment.ContractServiceName {
+		t.Fatalf("Expected shared contract service name %s", payment.ContractServiceName)
+	}
+
+	cliA := crosframe.NewClient(addrA, 2*time.Second)
+	defer func() { _ = cliA.Close() }()
+	cliB := crosframe.NewClient(addrB, 2*time.Second)
+	defer func() { _ = cliB.Close() }()
+
+	ctx := context.Background()
+	trace := &crosrpc.TraceKeyExt{TraceID: 0x9999, SpanID: 1, RecordSwitch: 1}
+
+	reqA, _ := proto.Marshal(&paymentpb.AuthorizePayReq{OrderId: "ORD-SHARED-1", UserId: "Alice", AmountCents: 1000, Channel: "ALIPAY"})
+	_, rspABytes, err := cliA.Invoke(ctx, payment.ContractServiceName, "AuthorizePay", trace, reqA)
+	if err != nil {
+		t.Fatalf("cliA Invoke failed: %v", err)
+	}
+	var rspA paymentpb.AuthorizePayRsp
+	_ = proto.Unmarshal(rspABytes, &rspA)
+	if rspA.Code != 0 || rspA.Channel != "ALIPAY" {
+		t.Fatalf("Unexpected shared mode rspA: %+v", &rspA)
+	}
+
+	reqB, _ := proto.Marshal(&paymentpb.AuthorizePayReq{OrderId: "ORD-SHARED-2", UserId: "Alice", AmountCents: 2000, Channel: "WECHAT"})
+	_, rspBBytes, err := cliB.Invoke(ctx, payment.ContractServiceName, "AuthorizePay", trace, reqB)
+	if err != nil {
+		t.Fatalf("cliB Invoke failed: %v", err)
+	}
+	var rspB paymentpb.AuthorizePayRsp
+	_ = proto.Unmarshal(rspBBytes, &rspB)
+	if rspB.Code != 0 || rspB.Channel != "WECHAT" {
+		t.Fatalf("Unexpected shared mode rspB: %+v", &rspB)
+	}
 }
 
 // 辅助适配器
@@ -365,17 +516,38 @@ func (s *inventoryTestStore) Register(server *crosframe.Server) {
 	})
 }
 
-type orderTestOrchestrator struct {
-	accountCli   *crosframe.Client
-	inventoryCli *crosframe.Client
-	orders       map[string]*orderpb.OrderDetailRsp
+type paymentRouteTest struct {
+	Addr        string
+	ServiceName string
 }
 
-func newOrderTestOrchestrator(accAddr, invAddr string) *orderTestOrchestrator {
+type orderTestRecord struct {
+	detail         *orderpb.OrderDetailRsp
+	paymentChannel string
+	paymentTxNo    string
+}
+
+type orderTestOrchestrator struct {
+	accountCli     *crosframe.Client
+	inventoryCli   *crosframe.Client
+	paymentClis    map[string]*crosframe.Client
+	paymentSvcName map[string]string
+	orders         map[string]*orderTestRecord
+}
+
+func newOrderTestOrchestrator(accAddr, invAddr string, payRoutes map[string]paymentRouteTest) *orderTestOrchestrator {
+	pClis := make(map[string]*crosframe.Client, len(payRoutes))
+	pSvcs := make(map[string]string, len(payRoutes))
+	for ch, r := range payRoutes {
+		pClis[ch] = crosframe.NewClient(r.Addr, 2*time.Second)
+		pSvcs[ch] = r.ServiceName
+	}
 	return &orderTestOrchestrator{
-		accountCli:   crosframe.NewClient(accAddr, 2*time.Second),
-		inventoryCli: crosframe.NewClient(invAddr, 2*time.Second),
-		orders:       make(map[string]*orderpb.OrderDetailRsp),
+		accountCli:     crosframe.NewClient(accAddr, 2*time.Second),
+		inventoryCli:   crosframe.NewClient(invAddr, 2*time.Second),
+		paymentClis:    pClis,
+		paymentSvcName: pSvcs,
+		orders:         make(map[string]*orderTestRecord),
 	}
 }
 
@@ -411,6 +583,14 @@ func (o *orderTestOrchestrator) Register(server *crosframe.Server) {
 		var req orderpb.CreateOrderReq
 		_ = proto.Unmarshal(payload, &req)
 
+		payCh := payment.NormalizeChannel(req.PaymentChannel)
+		pCli, ok := o.paymentClis[payCh]
+		if !ok {
+			out, _ := proto.Marshal(&orderpb.CreateOrderRsp{Code: 4003, Status: "FAILED_PAYMENT", Message: "不支持的支付渠道"})
+			return 0, out, nil
+		}
+		pSvc := o.paymentSvcName[payCh]
+
 		// 查价
 		invReq, _ := proto.Marshal(&inventorypb.GetItemStockReq{SkuId: req.SkuId})
 		_, invRspB, _ := o.inventoryCli.Invoke(ctx, "demo.inventory.InventoryService", "GetItemStock", pkt.Trace, invReq)
@@ -443,19 +623,38 @@ func (o *orderTestOrchestrator) Register(server *crosframe.Server) {
 			return 0, out, nil
 		}
 
+		// 2.5 调用 LIB 多实现支付实例 AuthorizePay
+		payReq, _ := proto.Marshal(&paymentpb.AuthorizePayReq{OrderId: orderID, UserId: req.UserId, AmountCents: total, Channel: payCh})
+		_, payRspB, payErr := pCli.Invoke(ctx, pSvc, "AuthorizePay", pkt.Trace, payReq)
+		var payRsp paymentpb.AuthorizePayRsp
+		if payErr != nil || proto.Unmarshal(payRspB, &payRsp) != nil || payRsp.Code != 0 {
+			refReq, _ := proto.Marshal(&accountpb.RefundBalanceReq{UserId: req.UserId, AmountCents: total, BizOrderId: orderID, Reason: "PAY_FAIL"})
+			_, _, _ = o.accountCli.Invoke(ctx, "demo.account.AccountService", "RefundBalance", pkt.Trace, refReq)
+			relReq, _ := proto.Marshal(&inventorypb.ReleaseStockReq{LockId: lockRsp.LockId, Reason: "PAY_FAIL"})
+			_, _, _ = o.inventoryCli.Invoke(ctx, "demo.inventory.InventoryService", "ReleaseStock", pkt.Trace, relReq)
+			out, _ := proto.Marshal(&orderpb.CreateOrderRsp{Code: 5003, Status: "FAILED_PAYMENT", Message: payRsp.Message})
+			return 0, out, nil
+		}
+
 		// 3. 确认库存
 		confReq, _ := proto.Marshal(&inventorypb.ConfirmStockReq{LockId: lockRsp.LockId, BizOrderId: orderID})
 		_, _, _ = o.inventoryCli.Invoke(ctx, "demo.inventory.InventoryService", "ConfirmStock", pkt.Trace, confReq)
 
 		// 4. 落单
-		o.orders[orderID] = &orderpb.OrderDetailRsp{
-			Code:             0,
-			OrderId:          orderID,
-			UserId:           req.UserId,
-			SkuId:            req.SkuId,
-			Quantity:         req.Quantity,
-			TotalAmountCents: total,
-			Status:           "SUCCESS",
+		o.orders[orderID] = &orderTestRecord{
+			paymentChannel: payCh,
+			paymentTxNo:    payRsp.ChannelTxNo,
+			detail: &orderpb.OrderDetailRsp{
+				Code:             0,
+				OrderId:          orderID,
+				UserId:           req.UserId,
+				SkuId:            req.SkuId,
+				Quantity:         req.Quantity,
+				TotalAmountCents: total,
+				Status:           "SUCCESS",
+				PaymentChannel:   payCh,
+				PaymentTxNo:      payRsp.ChannelTxNo,
+			},
 		}
 
 		out, _ := proto.Marshal(&orderpb.CreateOrderRsp{
@@ -464,6 +663,8 @@ func (o *orderTestOrchestrator) Register(server *crosframe.Server) {
 			TotalAmountCents: total,
 			Status:           "SUCCESS",
 			Message:          "OK",
+			PaymentChannel:   payCh,
+			PaymentTxNo:      payRsp.ChannelTxNo,
 		})
 		return 0, out, nil
 	})
@@ -475,7 +676,7 @@ func (o *orderTestOrchestrator) Register(server *crosframe.Server) {
 			out, _ := proto.Marshal(&orderpb.OrderDetailRsp{Code: 4001, Message: "不存在"})
 			return 0, out, nil
 		}
-		out, _ := proto.Marshal(ord)
+		out, _ := proto.Marshal(ord.detail)
 		return 0, out, nil
 	})
 	server.Register(serviceName, "CancelOrder", func(ctx context.Context, pkt *crosrpc.ParsedPacket, payload []byte) (uint32, []byte, error) {
@@ -486,15 +687,20 @@ func (o *orderTestOrchestrator) Register(server *crosframe.Server) {
 			out, _ := proto.Marshal(&orderpb.CancelOrderRsp{Code: 4001, Message: "不存在"})
 			return 0, out, nil
 		}
-		ord.Status = "CANCELLED"
-		refReq, _ := proto.Marshal(&accountpb.RefundBalanceReq{UserId: ord.UserId, AmountCents: ord.TotalAmountCents, BizOrderId: req.OrderId})
+		ord.detail.Status = "CANCELLED"
+		refReq, _ := proto.Marshal(&accountpb.RefundBalanceReq{UserId: ord.detail.UserId, AmountCents: ord.detail.TotalAmountCents, BizOrderId: req.OrderId})
 		_, _, _ = o.accountCli.Invoke(ctx, "demo.account.AccountService", "RefundBalance", pkt.Trace, refReq)
+
+		if pCli, ok := o.paymentClis[ord.paymentChannel]; ok && ord.paymentTxNo != "" {
+			payRefReq, _ := proto.Marshal(&paymentpb.RefundPayReq{OrderId: req.OrderId, ChannelTxNo: ord.paymentTxNo, AmountCents: ord.detail.TotalAmountCents, Reason: req.Reason})
+			_, _, _ = pCli.Invoke(ctx, o.paymentSvcName[ord.paymentChannel], "RefundPay", pkt.Trace, payRefReq)
+		}
 
 		out, _ := proto.Marshal(&orderpb.CancelOrderRsp{
 			Code:                0,
 			OrderId:             req.OrderId,
-			RefundedAmountCents: ord.TotalAmountCents,
-			ReleasedStock:       ord.Quantity,
+			RefundedAmountCents: ord.detail.TotalAmountCents,
+			ReleasedStock:       ord.detail.Quantity,
 		})
 		return 0, out, nil
 	})

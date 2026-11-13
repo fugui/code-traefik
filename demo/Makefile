@@ -11,7 +11,7 @@ proto:
 	@echo "Compiling Protobuf definitions and descriptor set..."
 	cd .. && protoc --go_out=. --go_opt=module=code-traefik \
 		--descriptor_set_out=demo/demo.pb --include_imports \
-		demo/proto/order.proto demo/proto/account.proto demo/proto/inventory.proto
+		demo/proto/order.proto demo/proto/account.proto demo/proto/inventory.proto demo/proto/payment.proto
 
 # 编译微服务组件与 Agent 二进制产物
 build: proto
@@ -19,6 +19,7 @@ build: proto
 	@mkdir -p $(BIN_DIR)
 	go build -o $(BIN_DIR)/backend-account ./cmd/backend-account
 	go build -o $(BIN_DIR)/backend-inventory ./cmd/backend-inventory
+	go build -o $(BIN_DIR)/backend-payment ./cmd/backend-payment
 	go build -o $(BIN_DIR)/sut-order ./cmd/sut-order
 	go build -o $(BIN_DIR)/client ./cmd/client
 	$(MAKE) -C .. agent

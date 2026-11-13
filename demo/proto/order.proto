@@ -36,6 +36,7 @@ message CreateOrderReq {
   string sku_id = 2;
   int32 quantity = 3;          // 购买数量
   string client_order_ref = 4; // 客户端防重幂等号
+  string payment_channel = 5;  // 可选支付渠道: ALIPAY(默认) / WECHAT
 }
 
 message CreateOrderRsp {
@@ -43,8 +44,10 @@ message CreateOrderRsp {
   string message = 2;
   string order_id = 3;
   int64 total_amount_cents = 4;
-  string status = 5;           // SUCCESS, FAILED_STOCK, FAILED_BALANCE
+  string status = 5;           // SUCCESS, FAILED_STOCK, FAILED_BALANCE, FAILED_PAYMENT
   int64 created_at_unix = 6;
+  string payment_channel = 7;  // 实际路由处理的支付渠道
+  string payment_tx_no = 8;    // 支付渠道返回流水号
 }
 
 message OrderDetailReq {
@@ -61,6 +64,8 @@ message OrderDetailRsp {
   int64 total_amount_cents = 7;
   string status = 8;
   int64 created_at_unix = 9;
+  string payment_channel = 10;
+  string payment_tx_no = 11;
 }
 
 message CancelOrderReq {

@@ -17,7 +17,7 @@ if [ -f "${PID_FILE}" ]; then
 fi
 
 # 确保端口彻底释放
-for port in 9001 9002 9003; do
+for port in 9001 9002 9003 9004 9005; do
     fuser -k -n tcp "${port}" 2>/dev/null || true
 done
 

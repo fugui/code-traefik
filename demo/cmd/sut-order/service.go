@@ -4,16 +4,29 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
 	"code-traefik/demo/pkg/crosframe"
+	"code-traefik/demo/pkg/payment"
 	"code-traefik/demo/pkg/proto/accountpb"
 	"code-traefik/demo/pkg/proto/inventorypb"
 	"code-traefik/demo/pkg/proto/orderpb"
+	"code-traefik/demo/pkg/proto/paymentpb"
 	"code-traefik/pkg/crosrpc"
 	"google.golang.org/protobuf/proto"
 )
+
+type PaymentRoute struct {
+	Addr        string
+	ServiceName string
+}
+
+type paymentTarget struct {
+	cli         *crosframe.Client
+	serviceName string
+}
 
 type OrderRecord struct {
 	OrderID          string
@@ -23,20 +36,54 @@ type OrderRecord struct {
 	TotalAmountCents int64
 	Status           string
 	CreatedAtUnix    int64
+	PaymentChannel   string
+	PaymentTxNo      string
 }
 
 type OrderOrchestrator struct {
-	mu           sync.RWMutex
-	orders       map[string]*OrderRecord
-	accountCli   *crosframe.Client
-	inventoryCli *crosframe.Client
+	mu             sync.RWMutex
+	orders         map[string]*OrderRecord
+	accountCli     *crosframe.Client
+	inventoryCli   *crosframe.Client
+	paymentTargets map[string]*paymentTarget
 }
 
-func NewOrderOrchestrator(accountAddr, inventoryAddr string) *OrderOrchestrator {
+func NewOrderOrchestrator(accountAddr, inventoryAddr string, paymentRoutes map[string]PaymentRoute) *OrderOrchestrator {
+	targets := make(map[string]*paymentTarget, len(paymentRoutes))
+	for ch, route := range paymentRoutes {
+		normCh := payment.NormalizeChannel(ch)
+		addr := strings.TrimSpace(route.Addr)
+		if addr == "" {
+			continue
+		}
+		svcName := strings.TrimSpace(route.ServiceName)
+		if svcName == "" {
+			svcName = payment.DefaultPublishedServiceName(normCh)
+		}
+		targets[normCh] = &paymentTarget{
+			cli:         crosframe.NewClient(addr, 3*time.Second),
+			serviceName: svcName,
+		}
+	}
 	return &OrderOrchestrator{
-		orders:       make(map[string]*OrderRecord),
-		accountCli:   crosframe.NewClient(accountAddr, 3*time.Second),
-		inventoryCli: crosframe.NewClient(inventoryAddr, 3*time.Second),
+		orders:         make(map[string]*OrderRecord),
+		accountCli:     crosframe.NewClient(accountAddr, 3*time.Second),
+		inventoryCli:   crosframe.NewClient(inventoryAddr, 3*time.Second),
+		paymentTargets: targets,
+	}
+}
+
+func (s *OrderOrchestrator) Close() {
+	if s.accountCli != nil {
+		_ = s.accountCli.Close()
+	}
+	if s.inventoryCli != nil {
+		_ = s.inventoryCli.Close()
+	}
+	for _, tgt := range s.paymentTargets {
+		if tgt != nil && tgt.cli != nil {
+			_ = tgt.cli.Close()
+		}
 	}
 }
 
@@ -130,10 +177,25 @@ func (s *OrderOrchestrator) handleCreateOrder(ctx context.Context, pkt *crosrpc.
 		return 400, nil, fmt.Errorf("unmarshal CreateOrderReq failed: %w", err)
 	}
 
+	payChannel := payment.NormalizeChannel(req.PaymentChannel)
 	orderID := fmt.Sprintf("ORD-%s-%d", req.UserId, time.Now().UnixNano()/1e6)
 	rsp := &orderpb.CreateOrderRsp{
-		OrderId:       orderID,
-		CreatedAtUnix: time.Now().Unix(),
+		OrderId:        orderID,
+		CreatedAtUnix:  time.Now().Unix(),
+		PaymentChannel: payChannel,
+	}
+
+	var payTarget *paymentTarget
+	if len(s.paymentTargets) > 0 {
+		tgt, ok := s.paymentTargets[payChannel]
+		if !ok || tgt == nil {
+			rsp.Code = 4003
+			rsp.Status = "FAILED_PAYMENT"
+			rsp.Message = fmt.Sprintf("不支持的支付渠道: %s", payChannel)
+			out, _ := proto.Marshal(rsp)
+			return 0, out, nil
+		}
+		payTarget = tgt
 	}
 
 	// 0. 查验商品行情单价
@@ -212,14 +274,48 @@ func (s *OrderOrchestrator) handleCreateOrder(ctx context.Context, pkt *crosrpc.
 		return 0, out, nil
 	}
 
-	// 3. 确认实物扣除 (ConfirmStock)
+	// 3. 按支付渠道分发调用多实现 LIB 契约实例 (AuthorizePay)
+	var paymentTxNo string
+	if payTarget != nil {
+		payReqBytes, _ := proto.Marshal(&paymentpb.AuthorizePayReq{
+			OrderId:     orderID,
+			UserId:      req.UserId,
+			AmountCents: totalAmount,
+			Channel:     payChannel,
+		})
+		_, payRspBytes, err := payTarget.cli.Invoke(ctx, payTarget.serviceName, "AuthorizePay", subTrace(pkt.Trace, 0x204), payReqBytes)
+		if err != nil {
+			s.compensatePaymentFailure(ctx, pkt.Trace, req.UserId, orderID, totalAmount, lockID, "PAY_TIMEOUT")
+			rsp.Code = 5003
+			rsp.Status = "FAILED_PAYMENT"
+			rsp.Message = fmt.Sprintf("支付通道 [%s] 不可用，已回滚余额与库存: %v", payChannel, err)
+			out, _ := proto.Marshal(rsp)
+			return 0, out, nil
+		}
+		var payRsp paymentpb.AuthorizePayRsp
+		if err := proto.Unmarshal(payRspBytes, &payRsp); err != nil || payRsp.Code != 0 {
+			s.compensatePaymentFailure(ctx, pkt.Trace, req.UserId, orderID, totalAmount, lockID, "PAY_REJECTED")
+			rsp.Code = payRsp.Code
+			if rsp.Code == 0 {
+				rsp.Code = 5003
+			}
+			rsp.Status = "FAILED_PAYMENT"
+			rsp.Message = fmt.Sprintf("支付授权失败 [%s]: %s (已回滚余额与库存)", payChannel, payRsp.Message)
+			out, _ := proto.Marshal(rsp)
+			return 0, out, nil
+		}
+		paymentTxNo = payRsp.ChannelTxNo
+		rsp.PaymentTxNo = paymentTxNo
+	}
+
+	// 4. 确认实物扣除 (ConfirmStock)
 	confirmReqBytes, _ := proto.Marshal(&inventorypb.ConfirmStockReq{
 		LockId:     lockID,
 		BizOrderId: orderID,
 	})
-	_, _, _ = s.inventoryCli.Invoke(ctx, "demo.inventory.InventoryService", "ConfirmStock", subTrace(pkt.Trace, 0x204), confirmReqBytes)
+	_, _, _ = s.inventoryCli.Invoke(ctx, "demo.inventory.InventoryService", "ConfirmStock", subTrace(pkt.Trace, 0x205), confirmReqBytes)
 
-	// 4. 落单成功
+	// 5. 落单成功
 	s.mu.Lock()
 	s.orders[orderID] = &OrderRecord{
 		OrderID:          orderID,
@@ -229,15 +325,28 @@ func (s *OrderOrchestrator) handleCreateOrder(ctx context.Context, pkt *crosrpc.
 		TotalAmountCents: totalAmount,
 		Status:           "SUCCESS",
 		CreatedAtUnix:    rsp.CreatedAtUnix,
+		PaymentChannel:   payChannel,
+		PaymentTxNo:      paymentTxNo,
 	}
 	s.mu.Unlock()
 
 	rsp.Code = 0
 	rsp.Status = "SUCCESS"
-	rsp.Message = "订单创建成功，库存已扣除，款项已结清"
+	rsp.Message = fmt.Sprintf("订单创建成功，库存已扣除，已通过 [%s] 通道完成支付", payChannel)
 
 	out, err := proto.Marshal(rsp)
 	return 0, out, err
+}
+
+func (s *OrderOrchestrator) compensatePaymentFailure(ctx context.Context, parentTrace *crosrpc.TraceKeyExt, userID, orderID string, amountCents int64, lockID, reason string) {
+	refReqBytes, _ := proto.Marshal(&accountpb.RefundBalanceReq{
+		UserId:      userID,
+		AmountCents: amountCents,
+		BizOrderId:  orderID,
+		Reason:      reason,
+	})
+	_, _, _ = s.accountCli.Invoke(ctx, "demo.account.AccountService", "RefundBalance", subTrace(parentTrace, 0x298), refReqBytes)
+	s.compensateRelease(ctx, parentTrace, lockID, reason)
 }
 
 func (s *OrderOrchestrator) compensateRelease(ctx context.Context, parentTrace *crosrpc.TraceKeyExt, lockID, reason string) {
@@ -273,6 +382,8 @@ func (s *OrderOrchestrator) handleGetOrderDetail(ctx context.Context, pkt *crosr
 		rsp.TotalAmountCents = ord.TotalAmountCents
 		rsp.Status = ord.Status
 		rsp.CreatedAtUnix = ord.CreatedAtUnix
+		rsp.PaymentChannel = ord.PaymentChannel
+		rsp.PaymentTxNo = ord.PaymentTxNo
 	}
 
 	out, err := proto.Marshal(rsp)
@@ -311,6 +422,8 @@ func (s *OrderOrchestrator) handleCancelOrder(ctx context.Context, pkt *crosrpc.
 	refundAmount := ord.TotalAmountCents
 	releasedQty := ord.Quantity
 	userID := ord.UserID
+	payChannel := ord.PaymentChannel
+	payTxNo := ord.PaymentTxNo
 	s.mu.Unlock()
 
 	// 1. 调用 Account 退款
@@ -321,6 +434,17 @@ func (s *OrderOrchestrator) handleCancelOrder(ctx context.Context, pkt *crosrpc.
 		Reason:      req.Reason,
 	})
 	_, _, _ = s.accountCli.Invoke(ctx, "demo.account.AccountService", "RefundBalance", subTrace(pkt.Trace, 0x301), refReqBytes)
+
+	// 2. 路由调用原支付渠道实例原路退款
+	if tgt, ok := s.paymentTargets[payChannel]; ok && tgt != nil && payTxNo != "" {
+		payRefBytes, _ := proto.Marshal(&paymentpb.RefundPayReq{
+			OrderId:     req.OrderId,
+			ChannelTxNo: payTxNo,
+			AmountCents: refundAmount,
+			Reason:      req.Reason,
+		})
+		_, _, _ = tgt.cli.Invoke(ctx, tgt.serviceName, "RefundPay", subTrace(pkt.Trace, 0x302), payRefBytes)
+	}
 
 	rsp := &orderpb.CancelOrderRsp{
 		Code:                0,

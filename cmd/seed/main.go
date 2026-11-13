@@ -46,6 +46,7 @@ func main() {
 			traefik_processes,
 			traefik_module_dependencies,
 			traefik_module_services,
+			traefik_service_contracts,
 			traefik_modules,
 			traefik_functional_groups,
 			traefik_subsystems,
@@ -138,6 +139,18 @@ func main() {
 	fgInventory.Path = fmt.Sprintf("/%d/", fgInventory.ID)
 	db.Model(&fgInventory).Update("path", fgInventory.Path)
 
+	fgPayment := models.FunctionalGroup{
+		SubsystemID: subsysEcommerce.ID,
+		Code:        "PAYMENT_GROUP",
+		Name:        "支付通道与接口契约组",
+		Description: "包含统一支付 LIB 契约库以及支付宝/微信等多渠道独立实现实例",
+		Level:       1,
+		CreatedBy:   1,
+	}
+	db.Create(&fgPayment)
+	fgPayment.Path = fmt.Sprintf("/%d/", fgPayment.ID)
+	db.Model(&fgPayment).Update("path", fgPayment.Path)
+
 	fgCli := models.FunctionalGroup{
 		SubsystemID: subsysClient.ID,
 		Code:        "CLI_TOOLS",
@@ -150,7 +163,7 @@ func main() {
 	fgCli.Path = fmt.Sprintf("/%d/", fgCli.ID)
 	db.Model(&fgCli).Update("path", fgCli.Path)
 
-	log.Printf("  • 已创建 2 个子系统与 4 个功能组")
+	log.Printf("  • 已创建 2 个子系统与 5 个功能组")
 
 	// 6. 重建标准架构物理进程组与蓝图 (ArchProcessGroups & ArchProcesses)
 	log.Println("[4/7] 重建标准架构物理进程组与进程蓝图 (ADR-09, M10)...")
@@ -220,6 +233,32 @@ func main() {
 	}
 	db.Create(&apBackendInventory)
 
+	apBackendPayAlipay := models.ArchProcess{
+		GroupID:                 apgDownstream.ID,
+		Code:                    "PROC_BACKEND_PAYMENT_ALIPAY",
+		Name:                    "backend-payment-alipay (支付宝支付实例)",
+		DefaultListenPort:       9004,
+		DefaultCmdPattern:       "channel=ALIPAY",
+		DefaultExtraDownstreams: datatypes.JSON([]byte("[]")),
+		SortOrder:               4,
+		Description:             "支付 LIB 契约的支付宝实现实例，监听 9004 端口",
+		CreatedBy:               1,
+	}
+	db.Create(&apBackendPayAlipay)
+
+	apBackendPayWechat := models.ArchProcess{
+		GroupID:                 apgDownstream.ID,
+		Code:                    "PROC_BACKEND_PAYMENT_WECHAT",
+		Name:                    "backend-payment-wechat (微信支付实例)",
+		DefaultListenPort:       9005,
+		DefaultCmdPattern:       "channel=WECHAT",
+		DefaultExtraDownstreams: datatypes.JSON([]byte("[]")),
+		SortOrder:               5,
+		Description:             "支付 LIB 契约的微信支付实现实例，监听 9005 端口",
+		CreatedBy:               1,
+	}
+	db.Create(&apBackendPayWechat)
+
 	apClientTui := models.ArchProcess{
 		GroupID:                 apgClient.ID,
 		Code:                    "PROC_CLIENT_TUI",
@@ -227,13 +266,13 @@ func main() {
 		DefaultListenPort:       0,
 		DefaultCmdPattern:       "client",
 		DefaultExtraDownstreams: datatypes.JSON([]byte("[]")),
-		SortOrder:               4,
+		SortOrder:               6,
 		Description:             "TUI 终端交互客户端，发压与交易触发器",
 		CreatedBy:               1,
 	}
 	db.Create(&apClientTui)
 
-	log.Printf("  • 已创建 3 个架构物理进程组与 4 个标准架构进程蓝图")
+	log.Printf("  • 已创建 3 个架构物理进程组与 6 个标准架构进程蓝图")
 
 	// 7. 重建功能模块并绑定至标准架构进程 (Modules with ArchProcessID)
 	log.Println("[5/7] 重建功能模块并绑定所属架构进程...")
@@ -281,6 +320,54 @@ func main() {
 	}
 	db.Create(&modClient)
 
+	modLibPayment := models.Module{
+		SubsystemID: subsysEcommerce.ID,
+		GroupID:     fgPayment.ID,
+		ModuleKind:  models.ModuleKindContractLib,
+		Code:        "LIB_PAYMENT_CONTRACT",
+		Name:        "统一支付通道接口契约库",
+		Description: "ADR-16 v2.0 示例接口模块（CONTRACT_LIB，不绑定宿主进程，仅承载统一 .pb 服务契约）",
+		CreatedBy:   1,
+	}
+	db.Create(&modLibPayment)
+
+	modPayAlipay := models.Module{
+		SubsystemID:   subsysEcommerce.ID,
+		GroupID:       fgPayment.ID,
+		ArchProcessID: &apBackendPayAlipay.ID,
+		ModuleKind:    models.ModuleKindBusiness,
+		Code:          "PAYMENT_ALIPAY",
+		Name:          "支付宝渠道支付模块",
+		Description:   "支付 LIB 契约的支付宝业务实现（发布自定义服务名 demo.payment.ALIPAY_PaymentService）",
+		CreatedBy:     1,
+	}
+	db.Create(&modPayAlipay)
+
+	modPayWechat := models.Module{
+		SubsystemID:   subsysEcommerce.ID,
+		GroupID:       fgPayment.ID,
+		ArchProcessID: &apBackendPayWechat.ID,
+		ModuleKind:    models.ModuleKindBusiness,
+		Code:          "PAYMENT_WECHAT",
+		Name:          "微信渠道支付模块",
+		Description:   "支付 LIB 契约的微信支付业务实现（发布自定义服务名 demo.payment.WECHAT_PaymentService）",
+		CreatedBy:     1,
+	}
+	db.Create(&modPayWechat)
+
+	// 7.0 多实现接口契约定义 (ServiceContract)
+	payContract := models.ServiceContract{
+		DefinerModuleID: modLibPayment.ID,
+		ServiceName:     "demo.payment.PaymentService",
+		ProvideMode:     models.ContractProvideModeMultiImpl,
+		ImplKeyLabel:    "支付渠道编码 (channel)",
+		Description:     "统一支付渠道接口 LIB 契约，各实现实例可自定义运行期服务名并共用 .pb 解码",
+		CreatedBy:       1,
+	}
+	if err := db.Create(&payContract).Error; err != nil {
+		log.Fatalf("创建支付多实现契约失败: %v", err)
+	}
+
 	// 7.1 服务契约 (ModuleServices)
 	svcOrder := models.ModuleService{
 		ModuleID:        modOrder.ID,
@@ -309,6 +396,30 @@ func main() {
 	}
 	db.Create(&svcInventory)
 
+	svcPayAlipay := models.ModuleService{
+		ModuleID:            modPayAlipay.ID,
+		ServiceName:         "demo.payment.ALIPAY_PaymentService",
+		ContractID:          &payContract.ID,
+		ImplKey:             "ALIPAY",
+		IsCustomServiceName: true,
+		DiffIgnorePaths:     datatypes.JSON([]byte("[]")),
+		Description:         "支付宝渠道运行期自定义服务名实现",
+		CreatedBy:           1,
+	}
+	db.Create(&svcPayAlipay)
+
+	svcPayWechat := models.ModuleService{
+		ModuleID:            modPayWechat.ID,
+		ServiceName:         "demo.payment.WECHAT_PaymentService",
+		ContractID:          &payContract.ID,
+		ImplKey:             "WECHAT",
+		IsCustomServiceName: true,
+		DiffIgnorePaths:     datatypes.JSON([]byte("[]")),
+		Description:         "微信渠道运行期自定义服务名实现",
+		CreatedBy:           1,
+	}
+	db.Create(&svcPayWechat)
+
 	// 7.2 模块间依赖 (ModuleDependencies)
 	depOrderAccount := models.ModuleDependency{
 		ConsumerModuleID: modOrder.ID,
@@ -330,6 +441,15 @@ func main() {
 	}
 	db.Create(&depOrderInventory)
 
+	depOrderPayDispatch := models.ModuleDependency{
+		ConsumerModuleID: modOrder.ID,
+		IsExternal:       false,
+		ContractID:       &payContract.ID,
+		Description:      "DISPATCH 泛化契约依赖：按支付渠道路由调用 ALIPAY 或 WECHAT 实例",
+		CreatedBy:        1,
+	}
+	db.Create(&depOrderPayDispatch)
+
 	depOrderUnionPay := models.ModuleDependency{
 		ConsumerModuleID: modOrder.ID,
 		IsExternal:       true,
@@ -350,7 +470,7 @@ func main() {
 	}
 	db.Create(&depClientOrder)
 
-	log.Printf("  • 已创建 4 个功能模块、3 个服务供给契约及 4 项服务调用依赖")
+	log.Printf("  • 已创建 7 个功能模块（含 1 个 CONTRACT_LIB + 2 个自定义实现实例）、1 个多实现契约、5 个服务供给契约及 5 项服务调用依赖")
 
 	// 8. 导入并激活 Protobuf 描述集 (demo.pb)
 	log.Println("[6/7] 导入并激活 Protobuf 描述集 (demo.pb)...")
@@ -380,8 +500,8 @@ func main() {
 	log.Printf("  • 已导入描述集 [%s] v%d (已激活，共解析生成 %d 个 ProtoOperation 接口契约)",
 		schema.Name, schema.Version, len(ops))
 
-	// 9. 为本地 Agent 挂载全部 4 个物理业务进程 (traefik_processes)
-	log.Println("[7/7] 为本地 Agent 挂载 4 个 Demo 物理业务进程 (traefik_processes)...")
+	// 9. 为本地 Agent 挂载全部 6 个物理业务进程 (traefik_processes)
+	log.Println("[7/7] 为本地 Agent 挂载 6 个 Demo 物理业务进程 (traefik_processes)...")
 	procs := []models.Process{
 		{
 			AgentID:             agent.ID,
@@ -421,6 +541,30 @@ func main() {
 		},
 		{
 			AgentID:             agent.ID,
+			ArchProcessID:       apBackendPayAlipay.ID,
+			EffectiveListenPort: 9004,
+			OverrideCmdPattern:  "channel=ALIPAY",
+			AdvertiseIP:         "127.0.0.1",
+			ExtraDownstreams:    datatypes.JSON([]byte("[]")),
+			ProbeDesiredState:   models.ProbeDesiredStateArmed,
+			ProbeStatus:         models.ProbeStatusArmed,
+			Description:         "backend-payment ALIPAY 渠道实例 (:9004)",
+			CreatedBy:           1,
+		},
+		{
+			AgentID:             agent.ID,
+			ArchProcessID:       apBackendPayWechat.ID,
+			EffectiveListenPort: 9005,
+			OverrideCmdPattern:  "channel=WECHAT",
+			AdvertiseIP:         "127.0.0.1",
+			ExtraDownstreams:    datatypes.JSON([]byte("[]")),
+			ProbeDesiredState:   models.ProbeDesiredStateArmed,
+			ProbeStatus:         models.ProbeStatusArmed,
+			Description:         "backend-payment WECHAT 渠道实例 (:9005)",
+			CreatedBy:           1,
+		},
+		{
+			AgentID:             agent.ID,
 			ArchProcessID:       apClientTui.ID,
 			EffectiveListenPort: 0,
 			OverrideCmdPattern:  "client",
@@ -439,7 +583,7 @@ func main() {
 		}
 	}
 	db.Model(&agent).Update("mounts_revision", 1)
-	log.Printf("  • 已为 Agent [%s] 成功挂载 4 个业务物理进程实例", agent.Name)
+	log.Printf("  • 已为 Agent [%s] 成功挂载 %d 个业务物理进程实例", agent.Name, len(procs))
 
 	log.Println("==========================================================")
 	log.Println(" 全部 Demo 进程与架构数据重构完成！")

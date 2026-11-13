@@ -95,8 +95,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 cleanup_ports() {
-    log_info "检查并释放占用端口 (9001, 9002, 9003, 9091)..."
-    for port in 9001 9002 9003 9091; do
+    log_info "检查并释放占用端口 (9001, 9002, 9003, 9004, 9005, 9091)..."
+    for port in 9001 9002 9003 9004 9005 9091; do
         if command -v fuser &>/dev/null; then
             fuser -k -n tcp "${port}" 2>/dev/null || true
         elif command -v lsof &>/dev/null; then
@@ -132,6 +132,7 @@ done
 BIN_TARGETS=(
     "$BIN_DIR/backend-account"
     "$BIN_DIR/backend-inventory"
+    "$BIN_DIR/backend-payment"
     "$BIN_DIR/sut-order"
     "$BIN_DIR/client"
     "$BIN_DIR/code-traefik-agent"
@@ -195,44 +196,46 @@ fi
 # 2. 从左侧向右水平切分 (对半左右开窗)，创建【右侧上框】: sut-order
 PANE_R_TOP=$(tmux split-window -h -P -F '#{pane_id}' -t "$PANE_L_TOP" -c "$DEMO_DIR")
 
-# 3. 将右侧上下对半切分，创建【右侧下框】: client
-PANE_R_BOT=$(tmux split-window -v -P -F '#{pane_id}' -t "$PANE_R_TOP" -c "$DEMO_DIR")
+# 3. 将右侧垂直切分为 3 框: sut-order / code-traefik-agent / client
+PANE_R_MID=$(tmux split-window -v -l '70%' -P -F '#{pane_id}' -t "$PANE_R_TOP" -c "$DEMO_DIR")
+PANE_R_BOT=$(tmux split-window -v -l '62%' -P -F '#{pane_id}' -t "$PANE_R_MID" -c "$DEMO_DIR")
 
-# 4. 将左侧垂直切分为 3 框:
-#    首先从左上向下垂直切分保留 1/3，切出下部 2/3 作为【左侧中框】: backend-inventory
-PANE_L_MID=$(tmux split-window -v -l '66%' -P -F '#{pane_id}' -t "$PANE_L_TOP" -c "$DEMO_DIR")
-#    再从中框向下垂直对半切分，切出【左侧下框】: code-traefik-agent
-PANE_L_BOT=$(tmux split-window -v -l '50%' -P -F '#{pane_id}' -t "$PANE_L_MID" -c "$DEMO_DIR")
+# 4. 将左侧垂直切分为 4 框: account / inventory / payment-alipay / payment-wechat
+PANE_L_MID1=$(tmux split-window -v -l '75%' -P -F '#{pane_id}' -t "$PANE_L_TOP" -c "$DEMO_DIR")
+PANE_L_MID2=$(tmux split-window -v -l '66%' -P -F '#{pane_id}' -t "$PANE_L_MID1" -c "$DEMO_DIR")
+PANE_L_BOT=$(tmux split-window -v -l '50%' -P -F '#{pane_id}' -t "$PANE_L_MID2" -c "$DEMO_DIR")
 
 # 5. 配置鼠标支持与窗格边框标题
 tmux set-option -t "$SESSION_NAME" mouse on
 tmux set-option -t "$SESSION_NAME" pane-border-status top
 tmux set-option -t "$SESSION_NAME" pane-border-format " [ #{pane_title} ] "
 
-tmux select-pane -t "$PANE_L_TOP" -T "左上: backend-account (资产服务 :9002)"
-tmux select-pane -t "$PANE_L_MID" -T "左中: backend-inventory (库存服务 :9003)"
-tmux select-pane -t "$PANE_L_BOT" -T "左下: code-traefik-agent (治理 Agent :9091)"
-tmux select-pane -t "$PANE_R_TOP" -T "右上: sut-order (订单核心网关 :9001)"
-tmux select-pane -t "$PANE_R_BOT" -T "右下: client (TUI 交互控制台)"
+tmux select-pane -t "$PANE_L_TOP"  -T "左上1: backend-account (资产服务 :9002)"
+tmux select-pane -t "$PANE_L_MID1" -T "左上2: backend-inventory (库存服务 :9003)"
+tmux select-pane -t "$PANE_L_MID2" -T "左下1: backend-payment ALIPAY (:9004)"
+tmux select-pane -t "$PANE_L_BOT"  -T "左下2: backend-payment WECHAT (:9005)"
+tmux select-pane -t "$PANE_R_TOP"  -T "右上: sut-order (订单核心网关 :9001)"
+tmux select-pane -t "$PANE_R_MID"  -T "右中: code-traefik-agent (治理 Agent :9091)"
+tmux select-pane -t "$PANE_R_BOT"  -T "右下: client (TUI 交互控制台)"
 
 # ==============================================================================
 # 第三步: 向各窗格分发启动指令
 # ==============================================================================
 log_info "正在向各窗格分发启动指令..."
 
-# 1. 启动左上: 资产服务 (:9002)
-tmux send-keys -t "$PANE_L_TOP" "./bin/backend-account --addr=127.0.0.1:9002" C-m
+# 1. 启动账户、库存及双渠道支付实例 (:9002/:9003/:9004/:9005)
+tmux send-keys -t "$PANE_L_TOP"  "./bin/backend-account --addr=127.0.0.1:9002" C-m
+tmux send-keys -t "$PANE_L_MID1" "./bin/backend-inventory --addr=127.0.0.1:9003" C-m
+tmux send-keys -t "$PANE_L_MID2" "./bin/backend-payment --addr=127.0.0.1:9004 --channel=ALIPAY" C-m
+tmux send-keys -t "$PANE_L_BOT"  "./bin/backend-payment --addr=127.0.0.1:9005 --channel=WECHAT" C-m
 
-# 2. 启动左中: 库存服务 (:9003)
-tmux send-keys -t "$PANE_L_MID" "./bin/backend-inventory --addr=127.0.0.1:9003" C-m
+# 2. 启动数据面 code-traefik-agent (:9091) - 使用提权启动器确保具备 eBPF 内核特权
+tmux send-keys -t "$PANE_R_MID" "./start-agent.sh --listen=127.0.0.1:9091" C-m
 
-# 3. 启动左下: 数据面 code-traefik-agent (:9091) - 使用提权启动器确保具备 eBPF 内核特权
-tmux send-keys -t "$PANE_L_BOT" "./start-agent.sh --listen=127.0.0.1:9091" C-m
+# 3. 启动订单网关核心 (:9001) - 稍候 0.2 秒确保下游端口已就绪
+tmux send-keys -t "$PANE_R_TOP" "sleep 0.2 && ./bin/sut-order --addr=127.0.0.1:9001 --account-addr=127.0.0.1:9002 --inventory-addr=127.0.0.1:9003 --payment-alipay-addr=127.0.0.1:9004 --payment-wechat-addr=127.0.0.1:9005" C-m
 
-# 4. 启动右上: 订单网关核心 (:9001) - 稍候 0.2 秒确保下游端口已就绪
-tmux send-keys -t "$PANE_R_TOP" "sleep 0.2 && ./bin/sut-order --addr=127.0.0.1:9001 --account-addr=127.0.0.1:9002 --inventory-addr=127.0.0.1:9003" C-m
-
-# 5. 启动右下: 交互客户端 (如果开启)
+# 4. 启动交互客户端 (如果开启)
 if [ "$LAUNCH_CLIENT" = true ]; then
     tmux send-keys -t "$PANE_R_BOT" "sleep 0.6 && ./bin/client --addr=127.0.0.1:9001" C-m
 fi
