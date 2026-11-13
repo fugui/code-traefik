@@ -5,7 +5,7 @@
 - **日期**：2026-11-02
 - **状态**：已批准待实施 (Approved for M11) — **局部深化与修订 [`ADR-06`](./06-proto-schema-repository-and-field-inspection-adr.md) 及 [`ADR-07`](./07-console-ia-restructuring-and-workflow-workbench-adr.md) `/schemas` 工作台规范**
 - **关联特性**：`F-03`（Protobuf 描述集注册与接口映射）、`F-03.5`（多描述集制品资产台账、按制品聚合与双模宽表工作台）、`F-03.6`（跨 `.pb` 描述集依赖闭包解析、联合编译与 `BASE_LIB` 公共基础库底座）、`F-03.7`（全局单一生效池、`CompileTrialPool` 预编译演练、停用反向依赖门禁与批量激活仲裁）、`F-21`（早期取消与 `code-proto` 联动，后由 `ADR-18` 升维纳入本体全生命周期）
-- **演进说明**：2026-11-13 起因 `code-proto` 与 `protohub` 正式废弃，[`ADR-18`](./18-proto-full-lifecycle-and-git-mr-governance-adr.md) 在本 ADR 确立的 `.pb` 描述集生效池与联合编译底座之上，向 `.proto` 源码托管、Git/MR 门禁集成及在线治理全生命周期延伸。
+- **演进说明**：2026-11-13 起因 `code-proto` 与 `protohub` 正式废弃，[`ADR-18`](./18-proto-full-lifecycle-and-git-mr-governance-adr.md) 在本 ADR 确立的 `.pb` 描述集生效池与联合编译底座之上，向 Git-Only `.proto` 源码只读同步、全注释驱动的活体接口参考文档中心（Reference Docs）、`protocompile` 自动编译入池及 MR 静态门禁全生命周期延伸。
 - **关联设计**：[`01-system-architecture.md` §3.1 & §6](../02-design/01-system-architecture.md)、[`04-control-plane-and-web-console.md` §2.1~§2.4, §4.1~§4.2 & §4.4](../02-design/04-control-plane-and-web-console.md)、[`05-database-schema.md` §3.4 & §4~§5](../02-design/05-database-schema.md)
 - **关联契约与作战卡**：[`01-http-api-contract.md` §2.3](../03-api/01-http-api-contract.md)、[`12-m11-enhanced-proto-schema-asset-management.md`](../04-tasks/12-m11-enhanced-proto-schema-asset-management.md) (M11)
 
