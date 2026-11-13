@@ -52,17 +52,21 @@ export interface OverlayEdgeMeta {
   edgeSampleRecordMap?: Map<string, number>;
   dynamicNodes?: GraphNode[];
   unattributedPendingList?: ConsistencyEdge[];
+  repOverrides?: ReadonlyMap<string, string>;
 }
 
 /**
- * M19 Stage-3: 纯代表节点上卷与容器徽章聚合
+ * M19/M21 Stage-3: 纯代表节点上卷与容器徽章聚合
+ * 支持单层平铺 repOverrides 映射，将所有深层后代边精确上卷至当前层直接子代表元或统计入容器内部角标。
  */
 export function aggregateRollup(
   nodes: GraphNode[],
   workingEdges: GraphEdge[],
   expandState: ExpandStateMap,
-  overlayMeta?: OverlayEdgeMeta
+  overlayMeta?: OverlayEdgeMeta,
+  repOverridesArg?: ReadonlyMap<string, string>
 ): Pick<RollupResult, 'rollupEdges' | 'badgeCounts'> {
+  const repOverrides = repOverridesArg ?? overlayMeta?.repOverrides;
   const nodeMap = new Map<string, GraphNode>();
   const nodeIdxMap = new Map<string, number>();
   const badgeCounts: Record<string, ContainerBadgeCounts> = {};
@@ -74,7 +78,8 @@ export function aggregateRollup(
       n.type !== 'MODULE' &&
       n.type !== 'EXTERNAL_SYSTEM' &&
       n.type !== 'EXTERNAL_ENDPOINT' &&
-      n.type !== 'UNREGISTERED_INTERFACE'
+      n.type !== 'UNREGISTERED_INTERFACE' &&
+      n.type !== 'EXTERNAL_CONTEXT'
     ) {
       badgeCounts[n.id] = { internalEdgeCount: 0, intraProcessCallCount: 0 };
     }
@@ -92,7 +97,8 @@ export function aggregateRollup(
   const resolveRepCached = (nodeId: string): string => {
     const cached = repCache.get(nodeId);
     if (cached !== undefined) return cached;
-    const resolved = rep(nodeId, expandState, nodeMap);
+    const overridden = repOverrides?.get(nodeId);
+    const resolved = overridden !== undefined ? overridden : rep(nodeId, expandState, nodeMap);
     repCache.set(nodeId, resolved);
     if (!nodeIdxMap.has(resolved)) {
       nodeIdxMap.set(resolved, dynSeq++);
@@ -101,18 +107,23 @@ export function aggregateRollup(
   };
 
   for (const edge of workingEdges) {
+    if (repOverrides && (!repOverrides.has(edge.source_node_id) || !repOverrides.has(edge.target_node_id))) {
+      continue;
+    }
     const sRep = resolveRepCached(edge.source_node_id);
     const tRep = resolveRepCached(edge.target_node_id);
 
     if (sRep === tRep) {
-      let badge = badgeCounts[sRep];
-      if (!badge) {
-        badge = { internalEdgeCount: 0, intraProcessCallCount: 0 };
-        badgeCounts[sRep] = badge;
-      }
-      badge.internalEdgeCount += 1;
-      if (edge.kind === 'INTRA_PROCESS') {
-        badge.intraProcessCallCount += 1;
+      if (edge.source_node_id !== edge.target_node_id) {
+        let badge = badgeCounts[sRep];
+        if (!badge) {
+          badge = { internalEdgeCount: 0, intraProcessCallCount: 0 };
+          badgeCounts[sRep] = badge;
+        }
+        badge.internalEdgeCount += 1;
+        if (edge.kind === 'INTRA_PROCESS') {
+          badge.intraProcessCallCount += 1;
+        }
       }
     } else {
       const sIdx = nodeIdxMap.get(sRep)!;

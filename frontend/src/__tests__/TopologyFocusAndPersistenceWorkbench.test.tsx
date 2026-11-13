@@ -18,6 +18,8 @@ import { ModuleNode } from '../components/ArchCanvas/nodes/ModuleNode';
 import { VisibilityGuardDialog } from '../components/ArchCanvas/panels/VisibilityGuardDialog';
 import { TopologyBookmarkDrawer } from '../components/ArchCanvas/panels/TopologyBookmarkDrawer';
 import { ArchCanvasToolbar } from '../components/ArchCanvas/panels/ArchCanvasToolbar';
+import { TopologyBreadcrumbBar } from '../components/ArchCanvas/panels/TopologyBreadcrumbBar';
+import { EdgeDetailDrawer } from '../components/ArchCanvas/panels/EdgeDetailDrawer';
 import { NodeInspectDrawer } from '../components/ArchCanvas/panels/NodeInspectDrawer';
 import {
    evaluateVisibilityGuard,
@@ -167,22 +169,17 @@ describe('M19-P5 & M19-P6: TopologyFocusAndPersistenceWorkbench Suite', () => {
     expect(cardHtml).toContain('风控子系统');
     expect(cardHtml).toContain('3');
     expect(cardHtml).toContain('4');
-    expect(cardHtml).toContain('切换聚焦至此');
+    expect(cardHtml).toContain('跳转至该域');
 
     extNodeProps.data.onFocusScope('sub_2');
     expect(switchedFocusId).toBe('sub_2');
 
-    // 验证工具栏聚焦面包屑导航条渲染 (全局 > 交易子系统 > 订单组)
+    // 验证工具栏顶置单层面包屑导航条渲染 (L0 全局 > L1 交易子系统 > L2 订单组)
     const toolbarHtml = renderToString(
       <MemoryRouter>
         <ArchCanvasToolbar
           view="LOGICAL"
           onViewChange={() => {}}
-          depthLevel={1}
-          maxDepth={2}
-          onDepthLevelChange={() => {}}
-          wheelAutoExpand={false}
-          onToggleWheelAutoExpand={() => {}}
           onResetLayout={() => {}}
           searchKeyword=""
           onSearchChange={() => {}}
@@ -199,10 +196,11 @@ describe('M19-P5 & M19-P6: TopologyFocusAndPersistenceWorkbench Suite', () => {
         />
       </MemoryRouter>
     );
-    expect(toolbarHtml).toContain('code-arch-focus-bar');
+    expect(toolbarHtml).toContain('code-arch-breadcrumb');
+    expect(toolbarHtml).toContain('返回上一级');
     expect(toolbarHtml).toContain('交易子系统');
     expect(toolbarHtml).toContain('订单组');
-    expect(toolbarHtml).toContain('退出聚焦');
+    expect(toolbarHtml).toContain('返回全局');
   });
 
   // §3.5.2: testUnifiedVisibilityGuard_SoftBannerAt46_HardInterceptAt121_AllFiveEntryPaths
@@ -211,7 +209,7 @@ describe('M19-P5 & M19-P6: TopologyFocusAndPersistenceWorkbench Suite', () => {
       { id: 'sub_1', type: 'SUBSYSTEM', depth: 0, ancestors: [], name: 'S1', sort_order: 1 },
       { id: 'sub_2', type: 'SUBSYSTEM', depth: 0, ancestors: [], name: 'S2', sort_order: 2 },
     ];
-    for (let i = 1; i <= 45; i++) {
+    for (let i = 1; i <= 46; i++) {
       manyNodes.push({
         id: `mod_1_${i}`,
         type: 'MODULE',
@@ -222,7 +220,7 @@ describe('M19-P5 & M19-P6: TopologyFocusAndPersistenceWorkbench Suite', () => {
         sort_order: i,
       });
     }
-    for (let i = 1; i <= 90; i++) {
+    for (let i = 1; i <= 125; i++) {
       manyNodes.push({
         id: `mod_2_${i}`,
         type: 'MODULE',
@@ -237,24 +235,22 @@ describe('M19-P5 & M19-P6: TopologyFocusAndPersistenceWorkbench Suite', () => {
       { id: 'e1', kind: 'CROSS_PROCESS', source_node_id: 'mod_1_1', target_node_id: 'mod_2_1', services: [] },
     ];
 
-    // 路径 1: 单节点展开 sub_1 -> 可见节点数 = 2 (sub_1, sub_2) + 45 = 47 (处于 46..120 软警告区间)
-    const softDecision = evaluateVisibilityGuard(manyNodes, edges, { sub_1: true }, { focusScope: 'GLOBAL' });
+    // M21 单层下钻守卫：聚焦 sub_1 时直接子节点 46 + 外部摘要卡 1 = 47 (处于 46..120 软警告区间)
+    const softDecision = evaluateVisibilityGuard(manyNodes, edges, {}, { focusScope: 'sub_1' });
     expect(softDecision.level).toBe('SOFT_WARNING');
     expect(softDecision.estimatedCount).toBe(47);
     expect(softDecision.blocked).toBe(false);
 
-    // 路径 2 ~ 5: 全展滑杆 / 搜索展开 / 退出聚焦 / 书签恢复 -> 可见节点数 = 2 + 45 + 90 = 137 (> 120 硬上限拦截)
+    // 聚焦超大型容器 sub_2 (125 直接子节点 + 1 外部摘要卡 = 126 > 120 硬上限拦截)
     const hardPaths = [
-      { reason: 'SLIDER_CHANGE', expand: { sub_1: true, sub_2: true }, focusScope: 'GLOBAL' },
-      { reason: 'SINGLE_EXPAND', expand: { sub_1: true, sub_2: true }, focusScope: 'GLOBAL' },
-      { reason: 'SEARCH_EXPAND', expand: { sub_1: true, sub_2: true }, focusScope: 'GLOBAL' },
-      { reason: 'EXIT_FOCUS', expand: { sub_1: true, sub_2: true }, focusScope: 'GLOBAL' },
-      { reason: 'BOOKMARK_RESTORE', expand: { sub_1: true, sub_2: true }, focusScope: 'GLOBAL' },
+      { reason: 'DRILL_IN', expand: {}, focusScope: 'sub_2' },
+      { reason: 'SEARCH_JUMP', expand: {}, focusScope: 'sub_2' },
+      { reason: 'BOOKMARK_RESTORE', expand: {}, focusScope: 'sub_2' },
     ];
     for (const p of hardPaths) {
       const hard = evaluateVisibilityGuard(manyNodes, edges, p.expand, { focusScope: p.focusScope });
       expect(hard.level).toBe('HARD_CAP');
-      expect(hard.estimatedCount).toBe(137);
+      expect(hard.estimatedCount).toBe(126);
       expect(hard.blocked).toBe(true);
     }
 
@@ -262,7 +258,7 @@ describe('M19-P5 & M19-P6: TopologyFocusAndPersistenceWorkbench Suite', () => {
     const dlgHtml = renderToString(
       <VisibilityGuardDialog
         open={true}
-        estimatedCount={137}
+        estimatedCount={126}
         hardCap={120}
         recommendedFocusNode={{ id: 'sub_2', name: 'S2' }}
         onFocusRecommended={() => {}}
@@ -271,10 +267,10 @@ describe('M19-P5 & M19-P6: TopologyFocusAndPersistenceWorkbench Suite', () => {
         onCancel={() => {}}
       />
     );
-    expect(dlgHtml).toContain('137');
+    expect(dlgHtml).toContain('126');
     expect(dlgHtml).toContain('下钻聚焦');
     expect(dlgHtml).toContain('隐藏孤立节点');
-    expect(dlgHtml).toContain('仍强制展开');
+    expect(dlgHtml).toContain('仍强制渲染');
   });
 
   // §3.5.3: testSearchCap30_HighlightsContainerBadges_WithoutFullAutoExpand
@@ -325,6 +321,7 @@ describe('M19-P5 & M19-P6: TopologyFocusAndPersistenceWorkbench Suite', () => {
       topo_dir: 'UPSTREAM',
       topo_owner_id: '18',
       topo_consistency_only: 'true',
+      topo_status: 'ABNORMAL',
       topo_hide_isolated: 'true',
       topo_layout_id: '5',
     });
@@ -337,11 +334,34 @@ describe('M19-P5 & M19-P6: TopologyFocusAndPersistenceWorkbench Suite', () => {
       neighborhoodDirection: 'UPSTREAM',
       ownerId: 18,
       consistencyOnly: true,
+      statusFilter: 'ABNORMAL',
       hideIsolated: true,
       layoutId: 5,
       showRealization: true,
       contractMode: 'AGG',
+      subsystemIds: [],
+      onlyMyScope: false,
+      foldHubEdges: true,
     });
+
+    const m21Params = buildTopoUrlParams({
+      statusFilter: 'VIOLATION_ONLY',
+      subsystemIds: ['sub_1', 'sub_2'],
+      onlyMyScope: true,
+      foldHubEdges: false,
+    });
+    expect(m21Params).toEqual({
+      topo_status: 'VIOLATION_ONLY',
+      topo_consistency_only: 'true',
+      topo_subsystems: 'sub_1,sub_2',
+      topo_my: 'true',
+      topo_hub_fold: '0',
+    });
+    const m21Parsed = parseTopoUrlParams(new URLSearchParams(m21Params as Record<string, string>));
+    expect(m21Parsed.statusFilter).toBe('VIOLATION_ONLY');
+    expect(m21Parsed.subsystemIds).toEqual(['sub_1', 'sub_2']);
+    expect(m21Parsed.onlyMyScope).toBe(true);
+    expect(m21Parsed.foldHubEdges).toBe(false);
   });
 
   // §3.5.5 & §3.5.6: testBookmarkDrawer_PersonalCRUD_Quota20Disable_AndRevision409Prompt & testCanonicalPublish_AdminVisible_MemberHidden
@@ -506,10 +526,10 @@ describe('M19-P5 & M19-P6: TopologyFocusAndPersistenceWorkbench Suite', () => {
     expect(nodeInspectContent).toContain('mask={false}');
     expect(edgeDetailContent).toContain('mask={false}');
 
-    // 2. 容器节点遵循单向渐进下钻语义（严禁再残留反直觉的 title="双击折叠容器"）
+    // 2. 容器节点遵循 M21 单层平铺逐级下钻语义（不再使用原地展开/折叠）
     expect(containerNodeContent).not.toContain('title="双击折叠容器"');
-    expect(containerNodeContent).toContain('双击下钻聚焦至此容器');
-    expect(containerNodeContent).toContain('双击展开容器查看内部节点');
+    expect(containerNodeContent).not.toContain('双击展开容器查看内部节点');
+    expect(containerNodeContent).toContain('双击或点击「进入」下钻至此域');
 
     // 3. 画布核心挂载 onNodeDoubleClick，且已移除 220ms 单击延迟计时器，拆分 hoverId 与 selectedId
     expect(archCanvasContent).toContain('onNodeDoubleClick={handleNodeDoubleClick}');
@@ -669,7 +689,7 @@ describe('M19-P5 & M19-P6: TopologyFocusAndPersistenceWorkbench Suite', () => {
 
     // 2. 验证 ArchCanvas 与 useElkLayout 拥有就地响应 pinnedNodeIds 变更更新 isPinned 的轻量同步机制
     expect(archCanvasContent).toContain('pinnedNodeIds?.has(node.id)');
-    expect(useElkContent).toContain('pinnedNodeIds?.has(n.id)');
+    expect(useElkContent).toContain('pinnedNodeIds?.has(');
 
     // 3. 验证 CSS 中激活按钮具有醒目的主题色背景和白色文字，节点外框具有发光轮廓
     expect(cssContent).toContain('.code-arch-container__action-btn--active');
@@ -741,6 +761,140 @@ describe('M19-P5 & M19-P6: TopologyFocusAndPersistenceWorkbench Suite', () => {
       </ReactFlowProvider>
     );
     expect(unpinnedHtml).not.toContain('code-arch-container__action-btn--active');
-    expect(unpinnedHtml).toContain('固定容器位置');
+    expect(unpinnedHtml).toContain('固定位置');
+  });
+
+  // M21-P4-1: 工具栏 4 组结构、状态三态切换、Filter Popover 与 Filter Chips
+  it('testToolbarGroups_StatusSegmented_FilterPopover_AndFilterChips', () => {
+    const html = renderToString(
+      <MemoryRouter>
+        <ArchCanvasToolbar
+          view="LOGICAL"
+          onViewChange={() => {}}
+          onResetLayout={() => {}}
+          searchKeyword=""
+          onSearchChange={() => {}}
+          sessions={[]}
+          selectedSessionId={null}
+          onSelectSession={() => {}}
+          statusFilter="VIOLATION_ONLY"
+          onStatusFilterChange={() => {}}
+          subsystemOptions={[
+            { id: 'sub_1', name: '交易核心域' },
+            { id: 'sub_2', name: '风控决策域' },
+          ]}
+          subsystemIds={['sub_1']}
+          onSubsystemIdsChange={() => {}}
+          onlyMyScope={true}
+          onToggleOnlyMyScope={() => {}}
+          hideIsolated={true}
+          onToggleHideIsolated={() => {}}
+          showRealization={false}
+          onToggleShowRealization={() => {}}
+          contractMode="EXPAND"
+          onContractModeChange={() => {}}
+        />
+      </MemoryRouter>
+    );
+
+    expect(html).toContain('data-testid="toolbar-group-view"');
+    expect(html).toContain('data-testid="toolbar-group-search"');
+    expect(html).toContain('data-testid="toolbar-group-filter"');
+    expect(html).toContain('data-testid="toolbar-group-layout"');
+    expect(html).toContain('data-testid="topo-status-segmented"');
+    expect(html).toContain('筛选与图层 (5)');
+    expect(html).toContain('data-testid="topo-filter-chips"');
+    expect(html).toContain('状态: 仅违规');
+    expect(html).toContain('关注域: 交易核心域');
+    expect(html).toContain('仅看与我相关');
+    expect(html).not.toContain('滚轮展开');
+    expect(html).not.toContain('全展');
+  });
+
+  // M21-P4-2: 边详情抽屉人类可读名称解析与源域/目标域跳转按钮
+  it('testEdgeDetailDrawer_ResolvesChineseNamesAndDomainJumpButtons', () => {
+    const nodeMap = new Map<string, GraphNode>([
+      [
+        'mod_101',
+        {
+          id: 'mod_101',
+          type: 'MODULE',
+          parent_id: 'grp_11',
+          depth: 2,
+          ancestors: ['sub_1', 'grp_11'],
+          code: 'ORDER_CORE',
+          name: '订单交易服务',
+          sort_order: 1,
+        },
+      ],
+      [
+        'ext_ctx_DOWNSTREAM_sub_2',
+        {
+          id: 'ext_ctx_DOWNSTREAM_sub_2',
+          type: 'EXTERNAL_CONTEXT',
+          depth: 0,
+          ancestors: [],
+          code: 'RISK_DOMAIN',
+          name: '风控决策子系统',
+          sort_order: 2,
+          meta: { peer_root_id: 'sub_2', peer_root_name: '风控决策子系统' },
+        },
+      ],
+    ]);
+
+    const html = renderToString(
+      <EdgeDetailDrawer
+        open={true}
+        onClose={() => {}}
+        nodeMap={nodeMap}
+        onFocusScope={() => {}}
+        edge={{
+          id: 'rollup_1',
+          source: 'mod_101',
+          target: 'ext_ctx_DOWNSTREAM_sub_2',
+          kind: 'CROSS_PROCESS',
+          status: 'VIOLATION',
+          totalCalls: 66,
+          services: [{ service_name: 'risk.v1.Evaluate', description: '风控评估' }],
+          rawEdges: [],
+        }}
+      />
+    );
+
+    expect(html).toContain('订单交易服务');
+    expect(html).toContain('ORDER_CORE');
+    expect(html).toContain('微服务模块');
+    expect(html).toContain('风控决策子系统');
+    expect(html).toContain('data-testid="edge-jump-source-btn"');
+    expect(html).toContain('data-testid="edge-jump-target-btn"');
+    expect(html).not.toContain('>mod_101<');
+    expect(html).not.toContain('>ext_ctx_DOWNSTREAM_sub_2<');
+  });
+
+  // M21-P4-3: TopologyBreadcrumbBar 渲染上一级按钮、层级标签、单层计数胶囊与返回全局入口
+  it('testBreadcrumbBar_RenderLayerTagsAndStatsPill', () => {
+    const html = renderToString(
+      <TopologyBreadcrumbBar
+        focusScope="grp_11"
+        breadcrumbs={[
+          { id: 'GLOBAL', name: '全局全景' },
+          { id: 'sub_1', name: '交易子系统' },
+          { id: 'grp_11', name: '订单组' },
+        ]}
+        onNavigateScope={() => {}}
+        containerCount={2}
+        moduleCount={4}
+        externalCount={1}
+        edgeCount={5}
+      />
+    );
+
+    expect(html).toContain('data-testid="arch-breadcrumb-bar"');
+    expect(html).toContain('data-testid="breadcrumb-back-btn"');
+    expect(html).toContain('L0');
+    expect(html).toContain('L1');
+    expect(html).toContain('L2');
+    expect(html).toContain('当前层：2 容器 · 4 模块 · 1 外部摘要 · 5 依赖边');
+    expect(html).toContain('data-testid="exit-focus-scope-btn"');
   });
 });

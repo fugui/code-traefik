@@ -124,7 +124,12 @@ export interface RollupEdgeModel {
   hubDirection?: 'OUTBOUND' | 'INBOUND';
   hubPeerIds?: string[];
   foldedPeerCount?: number;
+  sourceHandle?: string;
+  targetHandle?: string;
+  siblingOffset?: number;
 }
+
+export type TopologyStatusFilter = 'ALL' | 'ABNORMAL' | 'VIOLATION_ONLY';
 
 export type ExpandStateMap = Record<string, boolean>;
 
@@ -144,18 +149,57 @@ export interface SavedNodePosition {
 }
 
 export interface SavedExpandState {
-  depth_level: number;
-  expanded_node_ids: string[];
+  level?: number;
+  overrides?: Record<string, boolean>;
+  // 向后兼容历史书签字段
+  depth_level?: number;
+  expanded_node_ids?: string[];
   collapsed_node_ids?: string[];
 }
 
 export interface SavedFilterState {
-  neighborhood_hop: number;
-  neighborhood_direction: NeighborhoodDirection;
-  owner_id?: number | null;
-  consistency_only: boolean;
+  subsystem_ids?: string[];
+  only_my_scope?: boolean;
+  status?: TopologyStatusFilter;
+  ego_node_id?: string;
+  ego_hops?: number;
   hide_isolated: boolean;
-  fold_hub_edges: boolean;
+  hub_fold?: boolean;
+  // 向后兼容历史书签与单测字段
+  neighborhood_hop?: number;
+  neighborhood_direction?: NeighborhoodDirection;
+  owner_id?: number | null;
+  consistency_only?: boolean;
+  fold_hub_edges?: boolean;
+}
+
+/**
+ * 规范化聚焦作用域键：空值统一映射为 'GLOBAL'
+ */
+export function normalizeScopeKey(focusScope?: string | null): string {
+  return focusScope && focusScope !== 'GLOBAL' ? focusScope : 'GLOBAL';
+}
+
+/**
+ * 构造作用域隔离的位置记忆复合键：`${focusScope}::${nodeId}`
+ */
+export function toScopedPositionKey(focusScope: string | null | undefined, nodeId: string): string {
+  if (nodeId.includes('::')) return nodeId;
+  return `${normalizeScopeKey(focusScope)}::${nodeId}`;
+}
+
+/**
+ * 拆分作用域隔离位置键，返回 [scope, rawNodeId]
+ */
+export function parseScopedPositionKey(key: string): { scope: string | null; rawId: string } {
+  const sepIdx = key.indexOf('::');
+  if (sepIdx < 0) {
+    return { scope: null, rawId: key };
+  }
+  return {
+    scope: key.slice(0, sepIdx),
+    rawId: key.slice(sepIdx + 2),
+  };
 }
 
 export interface SavedViewport {

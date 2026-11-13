@@ -1,7 +1,8 @@
 import React from 'react';
-import { Handle, Position, type NodeProps } from '@xyflow/react';
+import { type NodeProps } from '@xyflow/react';
 import { ArrowUpRight, Compass, AlertTriangle } from 'lucide-react';
 import type { ExternalContextNodeType } from '../layout/layoutProcessor';
+import { FourWayHandles } from './FourWayHandles';
 
 export const ExternalContextNode: React.FC<NodeProps<ExternalContextNodeType>> = ({ data }) => {
   const { graphNode, onFocusScope } = data;
@@ -25,12 +26,12 @@ export const ExternalContextNode: React.FC<NodeProps<ExternalContextNodeType>> =
       data-testid={`ext-ctx-card-${graphNode.id}`}
       title={`外部关联容器: ${peerName}`}
     >
-      <Handle type="target" position={Position.Left} className="code-arch-handle" />
+      <FourWayHandles />
 
       <div className="code-arch-ext-ctx__header">
         <Compass size={13} className="code-arch-ext-ctx__icon" />
         <span className="code-arch-ext-ctx__dir-badge">
-          {direction === 'UPSTREAM' ? '上游外部域' : '下游外部域'}
+          {direction === 'UPSTREAM' ? '⬅️ 上游调用方' : '➡️ 下游依赖方'}
         </span>
         {violations > 0 && (
           <span className="code-arch-badge code-arch-badge--danger" title={`检出 ${violations} 条越权违规调用`}>
@@ -50,21 +51,17 @@ export const ExternalContextNode: React.FC<NodeProps<ExternalContextNodeType>> =
         <span className="code-arch-badge code-arch-badge--internal">
           跨边界边: <strong>{crossEdges}</strong>
         </span>
-      </div>
-
-      <div className="code-arch-ext-ctx__actions">
         <button
           type="button"
           className="code-arch-ext-ctx__focus-btn"
           onClick={handleFocusClick}
           data-testid={`ext-ctx-focus-btn-${peerRootId}`}
+          title={`切换聚焦至 ${peerName}`}
         >
-          <span>切换聚焦至此</span>
+          <span>跳转至该域</span>
           <ArrowUpRight size={11} />
         </button>
       </div>
-
-      <Handle type="source" position={Position.Right} className="code-arch-handle" />
     </div>
   );
 };

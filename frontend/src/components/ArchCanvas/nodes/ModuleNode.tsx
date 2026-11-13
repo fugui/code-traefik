@@ -1,10 +1,11 @@
 import React from 'react';
-import { Handle, Position, type NodeProps } from '@xyflow/react';
+import { type NodeProps } from '@xyflow/react';
 import type { ModuleNodeType } from '../layout/layoutProcessor';
+import { FourWayHandles } from './FourWayHandles';
 import { Cpu, AlertTriangle, Pin } from 'lucide-react';
 
 export const ModuleNode: React.FC<NodeProps<ModuleNodeType>> = ({ id, data }) => {
-  const { graphNode, isPinned, onTogglePin, lodMode = 'STANDARD' } = data;
+  const { graphNode, isPinned, onTogglePin, lodMode = 'STANDARD', isSearchHighlighted = false } = data;
   const isContractLib = graphNode.meta?.module_kind === 'CONTRACT_LIB';
   const isDeployed = isContractLib || graphNode.meta?.is_deployed !== false;
   const provideCount = Number(graphNode.meta?.provide_count || 0);
@@ -19,21 +20,26 @@ export const ModuleNode: React.FC<NodeProps<ModuleNodeType>> = ({ id, data }) =>
     }
   };
 
+  const fullTitle = graphNode.code ? `${graphNode.code} · ${graphNode.name}` : graphNode.name;
+
   return (
     <div
       className={`code-arch-module ${isContractLib ? 'code-arch-module--contract-lib' : ''} ${
         !isDeployed ? 'code-arch-module--undeployed' : ''
       } ${isPinned ? 'code-arch-node--pinned' : ''} ${
         lodMode === 'COMPACT' ? 'code-arch-node--lod-compact' : ''
-      }`}
+      } ${isSearchHighlighted ? 'code-arch-node--pulse-highlight' : ''}`}
       style={isContractLib ? { borderStyle: 'dashed' } : undefined}
-      title={graphNode.name}
+      title={fullTitle}
+      data-testid={`arch-module-node-${id}`}
     >
-      <Handle type="target" position={Position.Left} className="code-arch-handle" />
+      <FourWayHandles />
 
       <div className="code-arch-module__header">
         <Cpu size={13} className="code-arch-module__icon" />
-        <span className="code-arch-module__code">{graphNode.code || graphNode.id}</span>
+        <span className="code-arch-module__code" title={graphNode.code || graphNode.id}>
+          {graphNode.code || graphNode.id}
+        </span>
         {isContractLib && (
           <span className="code-arch-badge code-arch-badge--interface" data-testid="interface-badge">
             «interface»
@@ -47,7 +53,9 @@ export const ModuleNode: React.FC<NodeProps<ModuleNodeType>> = ({ id, data }) =>
         {onTogglePin && (
           <button
             type="button"
-            className={`code-arch-container__action-btn ${isPinned ? 'code-arch-container__action-btn--active' : ''}`}
+            className={`code-arch-container__action-btn ${
+              isPinned ? 'code-arch-container__action-btn--active' : ''
+            }`}
             onClick={handlePinClick}
             title={isPinned ? '取消固定位置' : '固定模块位置'}
             data-testid={`pin-node-btn-${id}`}
@@ -58,12 +66,14 @@ export const ModuleNode: React.FC<NodeProps<ModuleNodeType>> = ({ id, data }) =>
       </div>
 
       <div className="code-arch-module__body">
-        <span className="code-arch-module__name">{graphNode.name}</span>
+        <span className="code-arch-module__name" title={graphNode.name}>
+          {graphNode.name}
+        </span>
       </div>
 
       {lodMode !== 'COMPACT' && (
         <div className="code-arch-module__footer">
-          {lodMode === 'DETAIL' && ownerName && (
+          {ownerName && (
             <span className="code-arch-badge code-arch-badge--counter" title={`负责人: ${ownerName}`}>
               {ownerName}
             </span>
@@ -77,15 +87,16 @@ export const ModuleNode: React.FC<NodeProps<ModuleNodeType>> = ({ id, data }) =>
             </span>
           ) : (
             provideCount > 0 && (
-              <span className="code-arch-badge code-arch-badge--provide" title={`对外提供 ${provideCount} 个服务契约`}>
+              <span
+                className="code-arch-badge code-arch-badge--provide"
+                title={`对外提供 ${provideCount} 个服务契约`}
+              >
                 供给: {provideCount}
               </span>
             )
           )}
         </div>
       )}
-
-      <Handle type="source" position={Position.Right} className="code-arch-handle" />
     </div>
   );
 };

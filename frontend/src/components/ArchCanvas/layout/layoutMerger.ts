@@ -1,10 +1,13 @@
-import type {
-  GraphNode,
-  GraphEdge,
-  ExpandStateMap,
-  RollupEdgeModel,
-  SavedNodePosition,
-  SavedViewport,
+import {
+  normalizeScopeKey,
+  parseScopedPositionKey,
+  toScopedPositionKey,
+  type GraphNode,
+  type GraphEdge,
+  type ExpandStateMap,
+  type RollupEdgeModel,
+  type SavedNodePosition,
+  type SavedViewport,
 } from '../../../types/topology_graph';
 
 export type LayoutPlanMode = 'NONE' | 'ELK_SUBTREE' | 'ELK_FULL' | 'SAVED_POSITIONS';
@@ -411,8 +414,45 @@ export interface LayoutGraphDiffResult {
 }
 
 /**
+ * M21-P3: 点击 [✨ 自动整理] 时清除当前作用域内所有非 pinned 的临时位置，
+ * 严密保留当前作用域下 pinned=true 的节点以及其它聚焦作用域的持久化位置。
+ */
+export function clearUnpinnedInScope(
+  savedPositions: Record<string, SavedNodePosition>,
+  focusScope: string | null | undefined,
+  pinnedNodeIds?: ReadonlySet<string>
+): Record<string, SavedNodePosition> {
+  const scopeKey = normalizeScopeKey(focusScope);
+  const scopePrefix = `${scopeKey}::`;
+  const next: Record<string, SavedNodePosition> = {};
+
+  for (const [key, pos] of Object.entries(savedPositions)) {
+    const parsed = parseScopedPositionKey(key);
+    const belongsToCurrentScope =
+      parsed.scope === scopeKey || (parsed.scope === null && scopeKey === 'GLOBAL');
+    const isExplicitlyPinned = Boolean(
+      pos.pinned ||
+        pinnedNodeIds?.has(key) ||
+        pinnedNodeIds?.has(parsed.rawId) ||
+        pinnedNodeIds?.has(toScopedPositionKey(scopeKey, parsed.rawId))
+    );
+
+    if (!belongsToCurrentScope || isExplicitlyPinned) {
+      if (key.startsWith(scopePrefix) || parsed.scope !== null) {
+        next[key] = { ...pos };
+      } else {
+        next[key] = { ...pos };
+      }
+    }
+  }
+
+  return next;
+}
+
+/**
  * 拓扑结构演进对比与增量位置调和：
  * - 自动清理已删除的失效节点 (staleIds)
+ * - 兼容 `${focusScope}::${id}` 与 `${focusScope}::ext_ctx_*` 作用域隔离键
  * - 检测跨容器迁移节点 (reparentedIds) 并使其旧相对坐标失效重算
  * - 为新增节点 (newIds) 与迁移节点执行质心/兄弟邻接增量放置
  */
@@ -426,28 +466,38 @@ export function diffLayoutAgainstGraph(
   const reparentedIds: string[] = [];
   const newIds: string[] = [];
   const validSaved: Record<string, SavedNodePosition> = {};
+  const coveredRawIds = new Set<string>();
 
-  for (const [id, pos] of Object.entries(savedPositions)) {
-    const gn = nodeMap.get(id);
+  for (const [key, pos] of Object.entries(savedPositions)) {
+    const { scope, rawId } = parseScopedPositionKey(key);
+    if (scope && rawId.startsWith('ext_ctx_')) {
+      validSaved[key] = { ...pos };
+      coveredRawIds.add(rawId);
+      continue;
+    }
+
+    const gn = nodeMap.get(rawId);
     if (!gn) {
-      staleIds.push(id);
+      staleIds.push(key);
       continue;
     }
     const currParent = gn.parent_id ?? null;
-    if (pos.parent_id !== undefined && (pos.parent_id ?? null) !== currParent) {
-      reparentedIds.push(id);
+    if (!scope && pos.parent_id !== undefined && (pos.parent_id ?? null) !== currParent) {
+      reparentedIds.push(rawId);
       continue;
     }
-    validSaved[id] = {
+    validSaved[key] = {
       ...pos,
-      parent_id: currParent,
+      parent_id: scope ? pos.parent_id ?? currParent : currParent,
     };
+    coveredRawIds.add(rawId);
   }
 
   const activeParentIds = new Set<string>();
-  for (const [id, pos] of Object.entries(validSaved)) {
+  for (const [key, pos] of Object.entries(validSaved)) {
+    const { rawId } = parseScopedPositionKey(key);
     if (pos.is_expanded) {
-      activeParentIds.add(id);
+      activeParentIds.add(rawId);
     }
     if (pos.parent_id) {
       activeParentIds.add(pos.parent_id);
@@ -455,7 +505,7 @@ export function diffLayoutAgainstGraph(
   }
 
   for (const n of nodes) {
-    if (!validSaved[n.id] && !reparentedIds.includes(n.id)) {
+    if (!coveredRawIds.has(n.id) && !reparentedIds.includes(n.id)) {
       if (!n.parent_id || activeParentIds.has(n.parent_id)) {
         newIds.push(n.id);
       }

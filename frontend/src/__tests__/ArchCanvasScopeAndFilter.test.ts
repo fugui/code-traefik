@@ -2,6 +2,12 @@ import { describe, it, expect } from 'vitest';
 import type { GraphNode, GraphEdge, ExpandStateMap } from '../types/topology_graph';
 import type { ConsistencyReportDTO } from '../types/traffic';
 import { synthesizeOverlay } from '../components/ArchCanvas/model/overlay';
+import {
+  computeVisibleNodeIds,
+  resolveDirectChildRep,
+  findTopRoot,
+  getFullAncestry,
+} from '../components/ArchCanvas/model/hierarchy';
 import { aggregateRollup, rollupEdges } from '../components/ArchCanvas/model/rollup';
 import {
   scopeAndFilter,
@@ -15,6 +21,7 @@ import {
   HUB_FANOUT_THRESHOLD,
   HUB_TOP_K_EDGES,
 } from '../components/ArchCanvas/model/noiseReduction';
+import { detectCycles } from '../components/ArchCanvas/model/metrics';
 
 describe('M19-P2 & M19-P3: ArchCanvasScopeAndFilter Suite', () => {
   const baseNodes: GraphNode[] = [
@@ -53,9 +60,12 @@ describe('M19-P2 & M19-P3: ArchCanvasScopeAndFilter Suite', () => {
       edgeStatusMap,
     });
 
-    // 仅保留 sub_1 子树节点 + 1 张下游外部上下文摘要卡
+    // M21 单层平铺：聚焦 sub_1 时，scopedNodes 不再包含 sub_1 自身，visibleNodes 仅含直接子容器 grp_11 + 外部传送门卡
     const nonContextNodes = res.scopedNodes.filter((n) => n.type !== 'EXTERNAL_CONTEXT');
-    expect(nonContextNodes.map((n) => n.id).sort()).toEqual(['grp_11', 'mod_101', 'mod_102', 'sub_1']);
+    expect(nonContextNodes.map((n) => n.id).sort()).toEqual(['grp_11', 'mod_101', 'mod_102']);
+    expect(res.visibleNodes.map((n) => n.id).sort()).toEqual(['ext_ctx_DOWNSTREAM_sub_2', 'grp_11']);
+    expect(res.visibleIds.has('sub_1')).toBe(false);
+    expect(res.visibleIds.has('mod_101')).toBe(false);
 
     const extCard = res.scopedNodes.find((n) => n.id === 'ext_ctx_DOWNSTREAM_sub_2');
     expect(extCard).toBeDefined();
@@ -595,5 +605,203 @@ describe('M19-P2 & M19-P3: ArchCanvasScopeAndFilter Suite', () => {
     expect(rel.downstream).toHaveLength(1);
     expect(rel.downstream[0].peerNode.id).toBe('mod_201');
     expect(rel.downstream[0].contractCount).toBe(2);
+  });
+
+  // 12. M21-P1: 全局仅显示 L0 顶层节点，下钻聚焦仅显示直接子节点（不含聚焦根也不含孙子）
+  it('testSingleLayerScope_GlobalShowsOnlyL0_FocusShowsOnlyDirectChildren', () => {
+    const deepNodes: GraphNode[] = [
+      ...baseNodes,
+      { id: 'grp_12', type: 'FUNCTIONAL_GROUP', parent_id: 'sub_1', depth: 1, ancestors: ['sub_1'], name: '支付网关组', sort_order: 2 },
+      { id: 'mod_103', type: 'MODULE', parent_id: 'grp_12', depth: 2, ancestors: ['sub_1', 'grp_12'], entity_id: 103, code: 'MOD_103', name: '渠道网关', sort_order: 1 },
+    ];
+    const edges: GraphEdge[] = [
+      { id: 'e_intra', kind: 'INTRA_PROCESS', source_node_id: 'mod_101', target_node_id: 'mod_102', services: [{ service_name: 'order.v1.Inner' }] },
+      { id: 'e_inter_grp', kind: 'CROSS_PROCESS', source_node_id: 'mod_102', target_node_id: 'mod_103', services: [{ service_name: 'pay.v1.Gateway' }] },
+    ];
+
+    // 全局视图下无论 expandState 如何传入，仅渲染 L0 顶层子系统
+    const globalRes = scopeAndFilter(deepNodes, edges, { sub_1: true, grp_11: true }, { focusScope: 'GLOBAL' });
+    expect(globalRes.visibleNodes.map((n) => n.id).sort()).toEqual(['sub_1', 'sub_2', 'sub_3']);
+
+    // 下钻 sub_1 后仅平铺直接子节点 grp_11 和 grp_12，不包含 sub_1 自身，也不包含 mod_101/102/103
+    const sub1Res = scopeAndFilter(deepNodes, edges, {}, { focusScope: 'sub_1' });
+    expect(sub1Res.visibleNodes.map((n) => n.id).sort()).toEqual(['grp_11', 'grp_12']);
+    expect(sub1Res.visibleIds.has('sub_1')).toBe(false);
+    expect(sub1Res.visibleIds.has('mod_101')).toBe(false);
+
+    // 继续下钻 grp_11 后仅平铺 mod_101、mod_102 + 下游关联卡片 ext_ctx_DOWNSTREAM_sub_1/grp_12
+    const grp11Res = scopeAndFilter(deepNodes, edges, {}, { focusScope: 'grp_11' });
+    expect(grp11Res.visibleIds.has('mod_101')).toBe(true);
+    expect(grp11Res.visibleIds.has('mod_102')).toBe(true);
+    expect(grp11Res.visibleIds.has('grp_11')).toBe(false);
+    expect(grp11Res.visibleIds.has('sub_1')).toBe(false);
+  });
+
+  // 13. M21-P1: 深层后代边通过 repOverrides 精准上卷至直接子容器或累计内部徽章
+  it('testSingleLayerRollup_DeepEdgesAggregatedToDirectChildContainer', () => {
+    const deepNodes: GraphNode[] = [
+      ...baseNodes,
+      { id: 'grp_12', type: 'FUNCTIONAL_GROUP', parent_id: 'sub_1', depth: 1, ancestors: ['sub_1'], name: '支付网关组', sort_order: 2 },
+      { id: 'mod_103', type: 'MODULE', parent_id: 'grp_12', depth: 2, ancestors: ['sub_1', 'grp_12'], entity_id: 103, code: 'MOD_103', name: '渠道网关', sort_order: 1 },
+    ];
+    const edges: GraphEdge[] = [
+      { id: 'e_in', kind: 'INTRA_PROCESS', source_node_id: 'mod_101', target_node_id: 'mod_102', services: [{ service_name: 'inner.v1.Call' }] },
+      { id: 'e_cross_grp', kind: 'CROSS_PROCESS', source_node_id: 'mod_102', target_node_id: 'mod_103', services: [{ service_name: 'gw.v1.Invoke' }] },
+      { id: 'e_cross_sub', kind: 'CROSS_PROCESS', source_node_id: 'mod_103', target_node_id: 'mod_201', services: [{ service_name: 'risk.v1.Guard' }] },
+    ];
+
+    const scoped = scopeAndFilter(deepNodes, edges, {}, { focusScope: 'sub_1' });
+    const agg = aggregateRollup(scoped.visibleNodes, scoped.scopedEdges, {}, { repOverrides: scoped.repOverrides });
+
+    // grp_11 内部边不生成自环，精确累加内部徽章
+    expect(agg.badgeCounts['grp_11'].internalEdgeCount).toBe(1);
+    expect(agg.badgeCounts['grp_11'].intraProcessCallCount).toBe(1);
+    // grp_11 -> grp_12 与 grp_12 -> ext_ctx_DOWNSTREAM_sub_2 两跳跨卡片连线清晰保留
+    expect(agg.rollupEdges.some((e) => e.source === 'grp_11' && e.target === 'grp_12')).toBe(true);
+    expect(agg.rollupEdges.some((e) => e.source === 'grp_12' && e.target === 'ext_ctx_DOWNSTREAM_sub_2')).toBe(true);
+    expect(agg.rollupEdges.some((e) => e.source === e.target)).toBe(false);
+  });
+
+  // 14. M21-P1: hideIsolated 阶段保留有内部后代调用边（但无跨容器外连边）的容器
+  it('testPruneIsolated_RetainsContainerWithInternalEdges', () => {
+    const nodes: GraphNode[] = [
+      { id: 'sub_internal', type: 'SUBSYSTEM', depth: 0, ancestors: [], name: '纯内部协同域', sort_order: 1 },
+      { id: 'mod_a', type: 'MODULE', parent_id: 'sub_internal', depth: 1, ancestors: ['sub_internal'], name: 'A', sort_order: 1 },
+      { id: 'mod_b', type: 'MODULE', parent_id: 'sub_internal', depth: 1, ancestors: ['sub_internal'], name: 'B', sort_order: 2 },
+      { id: 'sub_empty', type: 'SUBSYSTEM', depth: 0, ancestors: [], name: '真正孤立域', sort_order: 2 },
+      { id: 'mod_c', type: 'MODULE', parent_id: 'sub_empty', depth: 1, ancestors: ['sub_empty'], name: 'C', sort_order: 1 },
+    ];
+    const edges: GraphEdge[] = [
+      { id: 'e_inner_ab', kind: 'INTRA_PROCESS', source_node_id: 'mod_a', target_node_id: 'mod_b', services: [{ service_name: 'inner.Svc' }] },
+    ];
+
+    const res = scopeAndFilter(nodes, edges, {}, { focusScope: 'GLOBAL', hideIsolated: true });
+    expect(res.visibleIds.has('sub_internal')).toBe(true);
+    expect(res.visibleIds.has('sub_empty')).toBe(false);
+  });
+
+  // 15. M21-P1: N-Hop + 属性切片 + 孤立延迟裁剪组合流水线
+  it('testFilterPipeline_HopAndSliceOrder_ConsistentWithSingleLayer', () => {
+    const edges: GraphEdge[] = [
+      { id: 'e_12', kind: 'CROSS_PROCESS', source_node_id: 'mod_101', target_node_id: 'mod_201', services: [{ service_name: 's1' }] },
+      { id: 'e_13', kind: 'CROSS_PROCESS', source_node_id: 'mod_102', target_node_id: 'mod_301', services: [{ service_name: 's2' }] },
+    ];
+    const edgeStatusMap = new Map<string, 'VERIFIED' | 'VIOLATION'>([
+      ['e_12', 'VIOLATION'],
+      ['e_13', 'VERIFIED'],
+    ]);
+
+    // 在聚焦 sub_1 下先按 1 跳命中所有出边外卡，再叠加 VIOLATION_ONLY，只应保留连接到 mod_101 和 VIOLATION 外卡 sub_2
+    const res = scopeAndFilter(baseNodes, edges, {}, {
+      focusScope: 'sub_1',
+      seedNodeId: 'mod_101',
+      neighborhoodHop: 1,
+      statusFilter: 'VIOLATION_ONLY',
+      hideIsolated: true,
+      edgeStatusMap,
+    });
+
+    expect(res.visibleNodes.map((n) => n.id).sort()).toEqual(['ext_ctx_DOWNSTREAM_sub_2', 'grp_11']);
+    expect(res.visibleIds.has('ext_ctx_DOWNSTREAM_sub_3')).toBe(false);
+  });
+
+  // 16. M21-P1: foldHubEdges 保留 IMPL_UNRESOLVED 异常边，Tarjan 排除跨界外部传送门防误报环路
+  it('testNoiseReduction_PreservesImplUnresolvedAndExcludesExtCtxFromCycles', () => {
+    const visibleNodes: GraphNode[] = [
+      { id: 'mod_hub', type: 'MODULE', depth: 0, ancestors: [], name: 'Hub', sort_order: 0 },
+      { id: 'grp_inner', type: 'FUNCTIONAL_GROUP', depth: 0, ancestors: [], name: '内部组', sort_order: 1 },
+      { id: 'ext_ctx_UPSTREAM_sub_2', type: 'EXTERNAL_CONTEXT', depth: 0, ancestors: [], name: '上游域', sort_order: 2 },
+    ];
+    const rollupEdgesList = [];
+    for (let i = 1; i <= 10; i++) {
+      const targetId = `mod_t_${i}`;
+      visibleNodes.push({ id: targetId, type: 'MODULE', depth: 0, ancestors: [], name: targetId, sort_order: i + 10 });
+      rollupEdgesList.push({
+        id: `e_${i}`,
+        source: 'mod_hub',
+        target: targetId,
+        kind: 'CROSS_PROCESS',
+        services: [{ service_name: `svc_${i}` }],
+        rawEdges: [],
+        status: i === 1 ? ('IMPL_UNRESOLVED' as const) : ('VERIFIED' as const),
+        totalCalls: i === 1 ? 1 : i * 100, // IMPL_UNRESOLVED 调用量最小，但绝不可被折叠
+      });
+    }
+
+    const folded = foldHubEdges(rollupEdgesList, visibleNodes, { foldHubEdges: true });
+    expect(folded.some((e) => e.id === 'e_1' && e.status === 'IMPL_UNRESOLVED')).toBe(true);
+
+    // 双向连接同一个外部传送门（语义等价于双向跨界）不应被标记为拓扑循环红告警
+    const crossEdges = [
+      { id: 'e_in', source: 'ext_ctx_UPSTREAM_sub_2', target: 'grp_inner', kind: 'CROSS_PROCESS', services: [], rawEdges: [] },
+      { id: 'e_out', source: 'grp_inner', target: 'ext_ctx_UPSTREAM_sub_2', kind: 'CROSS_PROCESS', services: [], rawEdges: [] },
+    ];
+    const cycles = detectCycles(['grp_inner', 'ext_ctx_UPSTREAM_sub_2'], crossEdges);
+    expect(cycles.cycleNodeIds.size).toBe(0);
+    expect(cycles.edges.every((e) => e.isCycle === false)).toBe(true);
+  });
+
+  // 17. M21-P1 覆盖率补齐：hierarchy 单层平铺可见集合、代表祖先溯源及 overlay 多类一致性合成
+  it('testHierarchySingleLayerHelpers_AndOverlayCategories', () => {
+    const nodeMap = new Map(baseNodes.map((n) => [n.id, n]));
+    const globalIds = computeVisibleNodeIds(baseNodes, 'GLOBAL');
+    expect(Array.from(globalIds).sort()).toEqual(['sub_1', 'sub_2', 'sub_3']);
+
+    const sub1Ids = computeVisibleNodeIds(baseNodes, 'sub_1');
+    expect(Array.from(sub1Ids)).toEqual(['grp_11']);
+
+    const grp11Ids = computeVisibleNodeIds(baseNodes, 'grp_11');
+    expect(Array.from(grp11Ids).sort()).toEqual(['mod_101', 'mod_102']);
+
+    expect(findTopRoot('mod_101', nodeMap)?.id).toBe('sub_1');
+    expect(findTopRoot('sub_2', nodeMap)?.id).toBe('sub_2');
+    expect(resolveDirectChildRep('mod_101', 'GLOBAL', nodeMap)).toBe('sub_1');
+    expect(resolveDirectChildRep('mod_101', 'sub_1', nodeMap)).toBe('grp_11');
+    expect(resolveDirectChildRep('mod_101', 'grp_11', nodeMap)).toBe('mod_101');
+    expect(resolveDirectChildRep('sub_1', 'sub_1', nodeMap)).toBeNull();
+    expect(getFullAncestry('mod_101', nodeMap)).toEqual(['sub_1', 'grp_11', 'mod_101']);
+
+    const edgesWithExt: GraphEdge[] = [
+      { id: 'e_impl', kind: 'CROSS_PROCESS', source_node_id: 'mod_101', target_node_id: 'mod_202', src_module_id: 101, dst_module_id: 202, services: [{ service_name: 'pay.Callback' }] },
+      { id: 'e_unreg', kind: 'CROSS_PROCESS', source_node_id: 'mod_101', target_node_id: 'mod_201', src_module_id: 101, dst_module_id: 201, services: [{ service_name: 'risk.Eval' }] },
+    ];
+    const extReport: ConsistencyReportDTO = {
+      session_id: 'cov-1',
+      edges: [
+        {
+          src_module_id: 101,
+          dst_module_id: 202,
+          service_name: 'pay.Callback',
+          operation: 'DoCallback',
+          status: 'IMPL_UNRESOLVED',
+          category: 'IMPL_UNRESOLVED',
+          call_count: 15,
+          sample_traffic_record_id: 321,
+        },
+        {
+          src_module_id: 101,
+          dst_module_id: 201,
+          service_name: 'risk.Eval',
+          operation: 'Check',
+          status: 'OUTBOUND_VERIFIED',
+          category: 'OUTBOUND_VERIFIED',
+          call_count: 8,
+        },
+        {
+          src_module_id: 102,
+          service_name: 'unknown.ExternalSvc',
+          operation: 'Invoke',
+          status: 'VIOLATION',
+          category: 'VIOLATION',
+          call_count: 3,
+        },
+      ],
+    };
+
+    const ov = synthesizeOverlay(baseNodes, edgesWithExt, extReport, 'LOGICAL');
+    expect(ov.edgeStatusMap.get('e_impl')).toBe('IMPL_UNRESOLVED');
+    expect(ov.edgeSampleRecordMap.get('e_impl')).toBe(321);
+    expect(ov.edgeStatusMap.get('e_unreg')).toBe('OUTBOUND_VERIFIED');
+    expect(ov.dynamicNodes.some((n) => n.id === 'VIRTUAL_UNREGISTERED_INTERFACE')).toBe(true);
   });
 });

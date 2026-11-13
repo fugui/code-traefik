@@ -1,11 +1,13 @@
-import type {
-  GraphNode,
-  ExpandStateMap,
-  SavedNodePosition,
-  SavedExpandState,
-  SavedFilterState,
-  SavedViewport,
-  TopologyLayoutDetailDTO,
+import {
+  parseScopedPositionKey,
+  type GraphNode,
+  type ExpandStateMap,
+  type SavedNodePosition,
+  type SavedExpandState,
+  type SavedFilterState,
+  type SavedViewport,
+  type TopologyLayoutDetailDTO,
+  type TopologyStatusFilter,
 } from '../../../types/topology_graph';
 
 export const DRAFT_KEY_PREFIX = 'traefik_topo_draft_v2_';
@@ -112,36 +114,67 @@ export function diffOverrides(
   return diff;
 }
 
-/**
- * 判定节点 ID 是否为运行期动态合成或外部上下文临时节点（严禁写入持久化）
- */
-export function isEphemeralNodeId(nodeId: string): boolean {
+function isVolatileVirtualNodeId(rawId: string): boolean {
   return (
-    nodeId === 'VIRTUAL_UNREGISTERED_INTERFACE' ||
-    nodeId === 'UNATTRIBUTED_ROOT' ||
-    nodeId.startsWith('ext_ctx_') ||
-    nodeId.startsWith('dyn_viol_') ||
-    nodeId.startsWith('dyn_unattr_')
+    rawId === 'VIRTUAL_UNREGISTERED_INTERFACE' ||
+    rawId === 'UNATTRIBUTED_ROOT' ||
+    rawId.startsWith('VIRTUAL_IMPL_UNRESOLVED') ||
+    rawId.startsWith('dyn_viol_') ||
+    rawId.startsWith('dyn_unattr_') ||
+    rawId.startsWith('dyn_impl_unres_')
   );
 }
 
 /**
- * 剥离动态告警虚拟节点与外部上下文摘要卡，提取纯静态可持久化坐标字典
+ * 判定裸节点 ID 是否为运行期动态合成或外部上下文临时节点（无作用域前缀时剥离）
+ */
+export function isEphemeralNodeId(nodeId: string): boolean {
+  const { scope, rawId } = parseScopedPositionKey(nodeId);
+  if (isVolatileVirtualNodeId(rawId)) {
+    return true;
+  }
+  if (rawId.startsWith('ext_ctx_')) {
+    return scope === null;
+  }
+  return false;
+}
+
+export interface ExtractPositionsOptions {
+  validNodeIds?: ReadonlySet<string>;
+  onlyPinned?: boolean;
+}
+
+/**
+ * 剥离动态告警虚拟节点与裸外部上下文摘要卡，提取可持久化坐标字典：
+ * - 允许 `${focusScope}::${rawId}` 及 `${focusScope}::ext_ctx_*` 作用域隔离复合键持久化；
+ * - 若传入 validNodeIds，校验静态节点存在于当前架构图（带作用域的 ext_ctx_* 豁免）；
+ * - 若传入 onlyPinned，则仅保留显式锁定 (pinned === true) 的坐标。
  */
 export function extractPersistablePositions(
-  positions: Record<string, SavedNodePosition>
+  positions: Record<string, SavedNodePosition>,
+  options?: ExtractPositionsOptions
 ): Record<string, SavedNodePosition> {
+  const validNodeIds = options?.validNodeIds;
+  const onlyPinned = Boolean(options?.onlyPinned);
   const cleaned: Record<string, SavedNodePosition> = {};
   for (const [id, pos] of Object.entries(positions)) {
     if (isEphemeralNodeId(id)) continue;
     if (!Number.isFinite(pos.x) || !Number.isFinite(pos.y)) continue;
+    if (onlyPinned && !pos.pinned) continue;
+    if (validNodeIds) {
+      const { scope, rawId } = parseScopedPositionKey(id);
+      const isScopedExtCtx = Boolean(scope && rawId.startsWith('ext_ctx_'));
+      if (!isScopedExtCtx && !validNodeIds.has(rawId)) {
+        continue;
+      }
+    }
     cleaned[id] = { ...pos };
   }
   return cleaned;
 }
 
 /**
- * 从保存的 SavedExpandState 精确恢复展开字典（仅触碰保存的可见展开集，严禁全量展开）
+ * 从保存的 SavedExpandState 精确恢复展开字典（兼容 M21 level/overrides 与历史 depth_level/expanded_node_ids）
  */
 export function restoreExpandStateFromSaved(
   saved: SavedExpandState | null | undefined,
@@ -152,6 +185,14 @@ export function restoreExpandStateFromSaved(
   const collapsedSet = new Set(saved.collapsed_node_ids || []);
   const expandState: ExpandStateMap = {};
 
+  if (saved.overrides) {
+    for (const [id, val] of Object.entries(saved.overrides)) {
+      if (nodeIdSet.has(id) && val) {
+        expandState[id] = true;
+      }
+    }
+  }
+
   for (const id of saved.expanded_node_ids || []) {
     if (nodeIdSet.has(id) && !collapsedSet.has(id)) {
       expandState[id] = true;
@@ -161,7 +202,7 @@ export function restoreExpandStateFromSaved(
 }
 
 /**
- * 将当前运行期 ExpandStateMap 序列化为可持久化结构
+ * 将当前运行期 ExpandStateMap 序列化为前后端兼容的持久化结构
  */
 export function serializeExpandState(
   expandState: ExpandStateMap,
@@ -169,17 +210,92 @@ export function serializeExpandState(
 ): SavedExpandState {
   const expandedIds: string[] = [];
   const collapsedIds: string[] = [];
+  const overrides: Record<string, boolean> = {};
   for (const [id, val] of Object.entries(expandState)) {
     if (isEphemeralNodeId(id)) continue;
+    overrides[id] = Boolean(val);
     if (val) expandedIds.push(id);
     else collapsedIds.push(id);
   }
   expandedIds.sort();
   collapsedIds.sort();
   return {
+    level: depthLevel,
+    overrides,
     depth_level: depthLevel,
     expanded_node_ids: expandedIds,
     collapsed_node_ids: collapsedIds,
+  };
+}
+
+/**
+ * M21-P3 前后端 SavedFilterState 双向归一化：
+ * 同时识别后端 Go 字段 (subsystem_ids, only_my_scope, status, ego_node_id, ego_hops, hide_isolated, hub_fold)
+ * 与旧版书签字段 (neighborhood_hop, neighborhood_direction, owner_id, consistency_only, fold_hub_edges)
+ */
+export function normalizeSavedFilterState(
+  raw?: Partial<SavedFilterState> | null
+): {
+  subsystemIds: string[];
+  onlyMyScope: boolean;
+  statusFilter: TopologyStatusFilter;
+  egoNodeId?: string;
+  neighborhoodHop: number;
+  neighborhoodDirection: 'BOTH' | 'UPSTREAM' | 'DOWNSTREAM';
+  consistencyOnly: boolean;
+  hideIsolated: boolean;
+  foldHubEdges: boolean;
+} {
+  const hop = raw?.ego_hops ?? raw?.neighborhood_hop ?? 0;
+  const consistencyOnly = Boolean(
+    raw?.consistency_only || raw?.status === 'ABNORMAL' || raw?.status === 'VIOLATION_ONLY'
+  );
+  const statusFilter: TopologyStatusFilter =
+    raw?.status ?? (raw?.consistency_only ? 'ABNORMAL' : 'ALL');
+
+  return {
+    subsystemIds: Array.isArray(raw?.subsystem_ids) ? raw!.subsystem_ids : [],
+    onlyMyScope: Boolean(raw?.only_my_scope || raw?.owner_id != null),
+    statusFilter,
+    egoNodeId: raw?.ego_node_id,
+    neighborhoodHop: hop === 1 || hop === 2 ? hop : 0,
+    neighborhoodDirection: raw?.neighborhood_direction ?? 'BOTH',
+    consistencyOnly,
+    hideIsolated: Boolean(raw?.hide_isolated),
+    foldHubEdges: raw?.hub_fold ?? raw?.fold_hub_edges ?? true,
+  };
+}
+
+/**
+ * 序列化为严格符合 Go 后端 models.SavedFilterState 校验规则的 JSON 对象
+ */
+export function serializeBackendFilterState(input: {
+  subsystemIds?: string[];
+  onlyMyScope?: boolean;
+  statusFilter?: TopologyStatusFilter;
+  egoNodeId?: string | null;
+  neighborhoodHop?: number;
+  neighborhoodDirection?: 'BOTH' | 'UPSTREAM' | 'DOWNSTREAM';
+  ownerId?: number | null;
+  hideIsolated?: boolean;
+  foldHubEdges?: boolean;
+}): SavedFilterState {
+  const status: TopologyStatusFilter = input.statusFilter ?? 'ALL';
+  const hop = input.neighborhoodHop === 1 || input.neighborhoodHop === 2 ? input.neighborhoodHop : 0;
+  return {
+    subsystem_ids: input.subsystemIds && input.subsystemIds.length > 0 ? input.subsystemIds : undefined,
+    only_my_scope: Boolean(input.onlyMyScope || input.ownerId != null),
+    status,
+    ego_node_id: input.egoNodeId || undefined,
+    ego_hops: hop,
+    hide_isolated: Boolean(input.hideIsolated),
+    hub_fold: input.foldHubEdges ?? true,
+    // 保留前端可选兼容字段
+    neighborhood_hop: hop,
+    neighborhood_direction: input.neighborhoodDirection ?? 'BOTH',
+    owner_id: input.ownerId ?? null,
+    consistency_only: status !== 'ALL',
+    fold_hub_edges: input.foldHubEdges ?? true,
   };
 }
 

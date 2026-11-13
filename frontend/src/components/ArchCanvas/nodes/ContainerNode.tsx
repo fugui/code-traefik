@@ -1,40 +1,31 @@
 import React from 'react';
-import { Handle, Position, type NodeProps } from '@xyflow/react';
+import { type NodeProps } from '@xyflow/react';
 import type { ContainerNodeType } from '../layout/layoutProcessor';
+import { FourWayHandles } from './FourWayHandles';
 import {
   ChevronRight,
-  ChevronDown,
   Layers,
   Server,
   Box,
   LayoutGrid,
   Globe,
   Radio,
-  Crosshair,
   Pin,
 } from 'lucide-react';
 
 export const ContainerNode: React.FC<NodeProps<ContainerNodeType>> = ({ id, data }) => {
   const {
     graphNode,
-    isExpanded,
-    onToggleExpand,
     onFocusScope,
     onTogglePin,
     isPinned,
     badgeCounts,
     childCount = 0,
     searchMatchCount = 0,
+    isSearchHighlighted = false,
   } = data;
 
-  const handleToggleClick = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (onToggleExpand) {
-      onToggleExpand(id);
-    }
-  };
-
-  const handleFocusClick = (e: React.MouseEvent) => {
+  const handleEnterScopeClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (onFocusScope) {
       onFocusScope(id);
@@ -51,7 +42,7 @@ export const ContainerNode: React.FC<NodeProps<ContainerNodeType>> = ({ id, data
   let icon = <Layers size={14} className="code-arch-container__icon" />;
   let typeTagText = '容器';
   let typeTagClass = 'code-arch-tag--default';
-  let childUnit = '节点';
+  let childUnit = '子项';
 
   switch (graphNode.type) {
     case 'PROCESS_GROUP':
@@ -70,7 +61,7 @@ export const ContainerNode: React.FC<NodeProps<ContainerNodeType>> = ({ id, data
       icon = <LayoutGrid size={14} className="code-arch-container__icon" />;
       typeTagText = '子系统';
       typeTagClass = 'code-arch-tag--subsystem';
-      childUnit = '组/模块';
+      childUnit = '子项';
       break;
     case 'FUNCTIONAL_GROUP':
       icon = <Layers size={14} className="code-arch-container__icon" />;
@@ -86,7 +77,7 @@ export const ContainerNode: React.FC<NodeProps<ContainerNodeType>> = ({ id, data
       break;
     case 'EXTERNAL_CONTAINER':
       icon = <Globe size={14} className="code-arch-container__icon" />;
-      typeTagText = '外部网络';
+      typeTagText = '外部域';
       typeTagClass = 'code-arch-tag--external';
       childUnit = '端点';
       break;
@@ -108,152 +99,58 @@ export const ContainerNode: React.FC<NodeProps<ContainerNodeType>> = ({ id, data
       ? 'code-arch-badge--probe-reconnect'
       : 'code-arch-badge--probe-default';
 
-  const containerActions = (
-    <div className="code-arch-container__actions">
-      {onFocusScope && (
-        <button
-          type="button"
-          className="code-arch-container__action-btn"
-          onClick={handleFocusClick}
-          title="下钻聚焦至此容器"
-          data-testid={`focus-container-btn-${id}`}
-        >
-          <Crosshair size={12} />
-        </button>
-      )}
-      {onTogglePin && (
-        <button
-          type="button"
-          className={`code-arch-container__action-btn ${isPinned ? 'code-arch-container__action-btn--active' : ''}`}
-          onClick={handlePinClick}
-          title={isPinned ? '取消固定位置' : '固定容器位置（局部推挤中锁定）'}
-          data-testid={`pin-node-btn-${id}`}
-        >
-          <Pin size={12} />
-        </button>
-      )}
-    </div>
-  );
+  const fullTitle = graphNode.code ? `${graphNode.code} · ${graphNode.name}` : graphNode.name;
 
-  // 展开态渲染：大框容器（Container Box）
-  if (isExpanded) {
-    return (
-      <div
-        className={`code-arch-container code-arch-container--expanded code-arch-container--${graphNode.type.toLowerCase()} ${
-          isUnmounted ? 'code-arch-container--unmounted' : ''
-        } ${isPinned ? 'code-arch-node--pinned' : ''}`}
-      >
-        <Handle type="target" position={Position.Left} className="code-arch-handle" />
-
-        <div
-          className="code-arch-container__header"
-          title="单击选中 · 双击下钻聚焦至此容器"
-        >
-          <button
-            type="button"
-            className="code-arch-container__toggle"
-            onClick={handleToggleClick}
-            title="点击折叠容器"
-          >
-            <ChevronDown size={14} />
-          </button>
-
-          {icon}
-
-          <span className={`code-arch-tag ${typeTagClass}`}>{typeTagText}</span>
-
-          <div className="code-arch-container__title-wrap">
-            {graphNode.code && (
-              <span className="code-arch-container__code">{graphNode.code}</span>
-            )}
-            <span className="code-arch-container__name" title={graphNode.name}>
-              {graphNode.name}
-            </span>
-            {endpoint && (
-              <span className="code-arch-container__endpoint" title={`监听端点: ${endpoint}`}>
-                {endpoint}
-              </span>
-            )}
-          </div>
-
-          <div className="code-arch-container__badges">
-            {searchMatchCount > 0 && (
-              <span className="code-arch-badge code-arch-badge--provide" title={`内部命中 ${searchMatchCount} 个搜索节点`}>
-                命中: {searchMatchCount}
-              </span>
-            )}
-            {childCount > 0 && (
-              <span className="code-arch-badge code-arch-badge--counter" title={`包含 ${childCount} 个${childUnit}`}>
-                {childCount} {childUnit}
-              </span>
-            )}
-            {internalEdges > 0 && (
-              <span className="code-arch-badge code-arch-badge--internal" title="内部依赖契约">
-                内部: {internalEdges}
-              </span>
-            )}
-            {intraCalls > 0 && (
-              <span className="code-arch-badge code-arch-badge--intra" title="进程内函数调用">
-                进程内: {intraCalls}
-              </span>
-            )}
-          </div>
-
-          {containerActions}
-        </div>
-
-        <div className="code-arch-container__body" />
-
-        <Handle type="source" position={Position.Right} className="code-arch-handle" />
-      </div>
-    );
-  }
-
-  // 折叠态渲染：实体卡片（Collapsed Card）
   return (
     <div
-      className={`code-arch-container code-arch-container--collapsed code-arch-container--${graphNode.type.toLowerCase()} ${
+      className={`code-arch-container code-arch-container--${graphNode.type.toLowerCase()} ${
         isUnmounted ? 'code-arch-container--unmounted' : ''
-      } ${isPinned ? 'code-arch-node--pinned' : ''}`}
-      title="单击选中 · 双击展开容器查看内部节点"
+      } ${isPinned ? 'code-arch-node--pinned' : ''} ${
+        isSearchHighlighted ? 'code-arch-node--pulse-highlight' : ''
+      }`}
+      title={`${fullTitle} · 双击或点击「进入」下钻至此域`}
+      data-testid={`arch-container-node-${id}`}
     >
-      <Handle type="target" position={Position.Left} className="code-arch-handle" />
+      <FourWayHandles />
 
       <div className="code-arch-container__header">
-        <button
-          type="button"
-          className="code-arch-container__toggle"
-          onClick={handleToggleClick}
-          title="点击展开容器"
-        >
-          <ChevronRight size={14} />
-        </button>
-
         {icon}
-
         <span className={`code-arch-tag ${typeTagClass}`}>{typeTagText}</span>
 
-        <div className="code-arch-container__title-wrap">
+        <div className="code-arch-container__title-wrap" title={fullTitle}>
           {graphNode.code && (
             <span className="code-arch-container__code">{graphNode.code}</span>
           )}
-          <span className="code-arch-container__name" title={graphNode.name}>
-            {graphNode.name}
-          </span>
+          <span className="code-arch-container__name">{graphNode.name}</span>
         </div>
 
-        {searchMatchCount > 0 && (
-          <span className="code-arch-badge code-arch-badge--provide" title={`容器内命中 ${searchMatchCount} 个搜索节点`}>
-            命中: {searchMatchCount}
-          </span>
-        )}
-        {childCount > 0 && (
-          <span className="code-arch-badge code-arch-badge--counter" title={`包含 ${childCount} 个${childUnit}`}>
-            {childCount} {childUnit}
-          </span>
-        )}
-
-        {containerActions}
+        <div className="code-arch-container__actions">
+          {onTogglePin && (
+            <button
+              type="button"
+              className={`code-arch-container__action-btn ${
+                isPinned ? 'code-arch-container__action-btn--active' : ''
+              }`}
+              onClick={handlePinClick}
+              title={isPinned ? '取消固定位置' : '固定位置（自动整理保持锁定）'}
+              data-testid={`pin-node-btn-${id}`}
+            >
+              <Pin size={11} />
+            </button>
+          )}
+          {onFocusScope && (
+            <button
+              type="button"
+              className="code-arch-container__enter-btn"
+              onClick={handleEnterScopeClick}
+              title="下钻进入此容器作用域"
+              data-testid={`focus-container-btn-${id}`}
+            >
+              <span>进入</span>
+              <ChevronRight size={11} />
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="code-arch-container__collapsed-content">
@@ -267,38 +164,38 @@ export const ContainerNode: React.FC<NodeProps<ContainerNodeType>> = ({ id, data
         )}
 
         <div className="code-arch-container__badges">
+          {childCount > 0 && (
+            <span className="code-arch-badge code-arch-badge--counter" title={`包含 ${childCount} 个${childUnit}`}>
+              {childCount} {childUnit}
+            </span>
+          )}
+          {internalEdges > 0 && (
+            <span className="code-arch-badge code-arch-badge--internal" title={`内部已聚合 ${internalEdges} 条依赖调用`}>
+              内部: {internalEdges}
+            </span>
+          )}
+          {intraCalls > 0 && (
+            <span className="code-arch-badge code-arch-badge--intra" title="进程内函数调用">
+              进程内: {intraCalls}
+            </span>
+          )}
+          {searchMatchCount > 0 && (
+            <span className="code-arch-badge code-arch-badge--provide" title={`内部命中 ${searchMatchCount} 个搜索节点`}>
+              命中: {searchMatchCount}
+            </span>
+          )}
           {isUnmounted && (
             <span className="code-arch-badge code-arch-badge--warning" title="该进程在选定环境尚未挂载">
               未挂载
             </span>
           )}
           {probeStatus && (
-            <span
-              className={`code-arch-badge ${probeBadgeClass}`}
-              title={`探针状态: ${probeStatus}`}
-            >
+            <span className={`code-arch-badge ${probeBadgeClass}`} title={`探针状态: ${probeStatus}`}>
               {probeStatus}
-            </span>
-          )}
-          {graphNode.type === 'UNDEPLOYED_CONTAINER' && graphNode.meta?.module_count != null && (
-            <span className="code-arch-badge code-arch-badge--warning">
-              孤立模块: {String(graphNode.meta.module_count)}
-            </span>
-          )}
-          {internalEdges > 0 && (
-            <span className="code-arch-badge code-arch-badge--internal" title="同容器内部依赖契约">
-              内部依赖: {internalEdges}
-            </span>
-          )}
-          {intraCalls > 0 && (
-            <span className="code-arch-badge code-arch-badge--intra" title="进程内函数调用（不经网络栈）">
-              进程内: {intraCalls}
             </span>
           )}
         </div>
       </div>
-
-      <Handle type="source" position={Position.Right} className="code-arch-handle" />
     </div>
   );
 };

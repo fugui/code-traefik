@@ -20,6 +20,7 @@ export function detectCycles(
 
   for (const e of rollupEdges) {
     if (e.kind === 'REALIZATION') continue; // 实现关系边不参与循环依赖检测
+    if (e.source.startsWith('ext_ctx_') || e.target.startsWith('ext_ctx_')) continue; // 跨界外部传送门不参与局部环路检测
     if (adj.has(e.source) && adj.has(e.target)) {
       adj.get(e.source)?.push(e.target);
     }
@@ -84,7 +85,11 @@ export function detectCycles(
   });
 
   const updatedEdges = rollupEdges.map((e) => {
-    if (e.kind === 'REALIZATION') {
+    if (
+      e.kind === 'REALIZATION' ||
+      e.source.startsWith('ext_ctx_') ||
+      e.target.startsWith('ext_ctx_')
+    ) {
       return {
         ...e,
         isCycle: false,

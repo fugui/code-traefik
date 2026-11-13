@@ -1,12 +1,15 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import type { ElkNode } from 'elkjs';
-import type {
-  GraphNode,
-  GraphEdge,
-  ExpandStateMap,
-  ContainerBadgeCounts,
-  SavedNodePosition,
-  NeighborhoodDirection,
+import {
+  normalizeScopeKey,
+  toScopedPositionKey,
+  type GraphNode,
+  type GraphEdge,
+  type ExpandStateMap,
+  type ContainerBadgeCounts,
+  type SavedNodePosition,
+  type NeighborhoodDirection,
+  type TopologyStatusFilter,
 } from '../../../types/topology_graph';
 import type { ConsistencyReportDTO, ConsistencyEdge } from '../../../types/traffic';
 import { synthesizeOverlay } from '../model/overlay';
@@ -15,13 +18,13 @@ import { aggregateRollup } from '../model/rollup';
 import { foldHubEdges } from '../model/noiseReduction';
 import { detectCycles } from '../model/metrics';
 import {
+  getNodeDimensions,
   processLayoutCoordinates,
-  extractNodeCoordinates,
   type ArchCanvasNode,
   type ArchCanvasEdge,
   type LodMode,
 } from './layoutProcessor';
-import { mergeLocalLayout, resolveOverlapsBottomUp, type NodeBox } from './layoutMerger';
+import { resolveOverlapsBottomUp, type NodeBox } from './layoutMerger';
 
 // 内联 Web Worker 引用 (Vite ?worker&inline 模式，微前端安全，无跨域脚本加载异常)
 import ElkWorker from './elk.worker?worker&inline';
@@ -38,7 +41,10 @@ export interface UseElkLayoutOptions {
   seedNodeId?: string | null;
   neighborhoodHop?: number;
   neighborhoodDirection?: NeighborhoodDirection;
+  subsystemIds?: string[];
+  onlyMyScope?: boolean;
   ownerId?: number | null;
+  statusFilter?: TopologyStatusFilter;
   consistencyOnly?: boolean;
   hideIsolated?: boolean;
   foldHubEdgesEnabled?: boolean;
@@ -46,10 +52,10 @@ export interface UseElkLayoutOptions {
   searchKeyword?: string;
   savedPositions?: Record<string, SavedNodePosition> | null;
   pinnedNodeIds?: Set<string>;
+  highlightedNodeId?: string | null;
   onFocusScope?: (nodeId: string) => void;
   onTogglePin?: (nodeId: string) => void;
   onExpandHub?: (nodeId: string) => void;
-  onPositionsComputed?: (positions: Record<string, SavedNodePosition>) => void;
   containerSearchMatchCounts?: Record<string, number>;
   lodMode?: LodMode;
   showRealization?: boolean;
@@ -67,98 +73,73 @@ export interface UseElkLayoutReturn {
 }
 
 /**
- * 递归构建 ELK 复合图输入结构（仅将 visibleNodes 注入 ELK，复杂度由 O(|V_visible|) 决定）
+ * M21-P2: 构建单层扁平 ELK 正交排版图
+ * - 不再构造嵌套子容器，所有当前作用域可见节点平铺在同一层次；
+ * - 配置 110px 层间水平净空与 48px/36px/24px 节点/边间隔；
+ * - 为上游/下游外部上下文传送门卡附加 FIRST / LAST 贴边层级约束。
  */
 export function buildElkGraph(
   visibleNodes: GraphNode[],
   edges: Array<{ id: string; source: string; target: string }>,
-  expandState: ExpandStateMap
+  expandState?: ExpandStateMap
 ): ElkNode {
-  const nodeMap = new Map(visibleNodes.map((n) => [n.id, n]));
-  const childMap = new Map<string, GraphNode[]>();
+  void expandState;
+  const visibleIdSet = new Set(visibleNodes.map((n) => n.id));
+  const validEdges = edges.filter((e) => visibleIdSet.has(e.source) && visibleIdSet.has(e.target));
 
-  for (const n of visibleNodes) {
-    if (n.parent_id && nodeMap.has(n.parent_id)) {
-      if (!childMap.has(n.parent_id)) {
-        childMap.set(n.parent_id, []);
-      }
-      childMap.get(n.parent_id)!.push(n);
-    }
+  // 统计外部上下文节点的入/出边数（当存在双向标识时决定贴左还是贴右）
+  const inCountMap = new Map<string, number>();
+  const outCountMap = new Map<string, number>();
+  for (const e of validEdges) {
+    outCountMap.set(e.source, (outCountMap.get(e.source) ?? 0) + 1);
+    inCountMap.set(e.target, (inCountMap.get(e.target) ?? 0) + 1);
   }
 
-  function convertNode(gn: GraphNode): ElkNode {
-    const isExpanded = Boolean(expandState[gn.id]);
-    const children = isExpanded ? childMap.get(gn.id) || [] : [];
-
-    const isLeaf = children.length === 0;
-    let width = 220;
-    let height = 74;
-
-    if (
-      gn.type === 'SUBSYSTEM' ||
-      gn.type === 'FUNCTIONAL_GROUP' ||
-      gn.type === 'PROCESS_GROUP' ||
-      gn.type === 'PROCESS' ||
-      gn.type === 'UNDEPLOYED_CONTAINER' ||
-      gn.type === 'EXTERNAL_CONTAINER'
-    ) {
-      if (!isExpanded) {
-        width = 260;
-        height = 80;
-      }
-    } else if (gn.type === 'EXTERNAL_CONTEXT') {
-      width = 240;
-      height = 112;
-    } else if (
-      gn.type === 'EXTERNAL_SYSTEM' ||
-      gn.type === 'EXTERNAL_ENDPOINT' ||
-      gn.type === 'UNREGISTERED_INTERFACE'
-    ) {
-      width = 190;
-      height = 60;
-    }
-
+  const children: ElkNode[] = visibleNodes.map((gn) => {
+    const dims = getNodeDimensions(gn);
     const elkNode: ElkNode = {
       id: gn.id,
-      layoutOptions: {
-        'elk.padding': '[top=52,left=16,bottom=16,right=16]',
-        'elk.spacing.nodeNode': '28',
-      },
+      width: dims.width,
+      height: dims.height,
     };
 
-    if (isLeaf) {
-      elkNode.width = width;
-      elkNode.height = height;
-    }
-
-    if (children.length > 0) {
-      elkNode.children = children.map(convertNode);
+    if (gn.type === 'EXTERNAL_CONTEXT') {
+      const dir = gn.meta?.direction;
+      let constraint: 'FIRST' | 'LAST' = 'LAST';
+      if (dir === 'UPSTREAM') {
+        constraint = 'FIRST';
+      } else if (dir === 'DOWNSTREAM') {
+        constraint = 'LAST';
+      } else {
+        const outC = outCountMap.get(gn.id) ?? 0;
+        const inC = inCountMap.get(gn.id) ?? 0;
+        constraint = outC >= inC ? 'FIRST' : 'LAST';
+      }
+      elkNode.layoutOptions = {
+        'elk.layered.layering.layerConstraint': constraint,
+      };
     }
 
     return elkNode;
-  }
-
-  const rootNodes = visibleNodes.filter((n) => !n.parent_id || !nodeMap.has(n.parent_id));
-  const visibleIdSet = new Set(visibleNodes.map((n) => n.id));
-  const validEdges = edges.filter((e) => visibleIdSet.has(e.source) && visibleIdSet.has(e.target));
-  const isSingleSubtreeLocalLayout = rootNodes.length === 1 && childMap.size > 0;
-  const effectiveEdges = isSingleSubtreeLocalLayout
-    ? validEdges.filter((e) => nodeMap.get(e.source)?.parent_id === nodeMap.get(e.target)?.parent_id)
-    : validEdges;
+  });
 
   return {
     id: 'root',
     layoutOptions: {
       'elk.algorithm': 'layered',
       'elk.direction': 'RIGHT',
-      'elk.spacing.nodeNode': '40',
-      'elk.layered.spacing.nodeNodeBetweenLayers': '60',
-      'elk.edgeRouting': isSingleSubtreeLocalLayout ? 'POLYLINE' : 'ORTHOGONAL',
-      'elk.hierarchyHandling': 'INCLUDE_CHILDREN',
-      'elk.padding': '[top=20,left=20,bottom=20,right=20]',
+      'elk.edgeRouting': 'ORTHOGONAL',
+      'elk.layered.spacing.nodeNodeBetweenLayers': '110',
+      'elk.spacing.nodeNode': '48',
+      'elk.spacing.edgeNode': '36',
+      'elk.spacing.edgeEdge': '24',
+      'elk.layered.spacing.edgeNodeBetweenLayers': '36',
+      'elk.layered.nodePlacement.strategy': 'BRANDES_KOEPF',
+      'elk.layered.crossingMinimization.strategy': 'LAYER_SWEEP',
+      'elk.padding': '[top=24,left=24,bottom=24,right=24]',
     },
-    children: rootNodes.map(convertNode),
-    edges: effectiveEdges.map((e) => ({
+    children,
+    edges: validEdges.map((e) => ({
       id: e.id,
       sources: [e.source],
       targets: [e.target],
@@ -178,7 +159,10 @@ export function useElkLayout({
   seedNodeId = null,
   neighborhoodHop = 0,
   neighborhoodDirection = 'BOTH',
+  subsystemIds,
+  onlyMyScope = false,
   ownerId = null,
+  statusFilter = 'ALL',
   consistencyOnly = false,
   hideIsolated = false,
   foldHubEdgesEnabled = true,
@@ -186,10 +170,10 @@ export function useElkLayout({
   searchKeyword = '',
   savedPositions = null,
   pinnedNodeIds,
+  highlightedNodeId = null,
   onFocusScope,
   onTogglePin,
   onExpandHub,
-  onPositionsComputed,
   containerSearchMatchCounts,
   lodMode = 'STANDARD',
   showRealization = true,
@@ -205,16 +189,12 @@ export function useElkLayout({
   const workerRef = useRef<Worker | null>(null);
   const layoutReqIdRef = useRef<number>(0);
 
-  // 通过 Ref 读取非重排触发型属性，严格确保手动拖拽或 LOD 变化不触发 ELK Worker 重排
   const draggedNodeIdsRef = useRef<Set<string>>(draggedNodeIds);
   draggedNodeIdsRef.current = draggedNodeIds;
   const savedPositionsRef = useRef<Record<string, SavedNodePosition> | null>(savedPositions);
   savedPositionsRef.current = savedPositions;
   const pinnedNodeIdsRef = useRef<Set<string> | undefined>(pinnedNodeIds);
   pinnedNodeIdsRef.current = pinnedNodeIds;
-  const onPositionsComputedRef = useRef(onPositionsComputed);
-  onPositionsComputedRef.current = onPositionsComputed;
-  const prevExpandRef = useRef<ExpandStateMap>(expandState);
 
   useEffect(() => {
     if (typeof Worker !== 'undefined') {
@@ -237,10 +217,12 @@ export function useElkLayout({
     setFlowEdges((prev) =>
       prev.map((edge) => {
         if (draggedNodeIds.has(edge.source) || draggedNodeIds.has(edge.target)) {
-          if (edge.data?.isDraggedDegraded) return edge;
+          if (edge.data?.isDraggedDegraded && !edge.data?.bendPoints) return edge;
           return {
             ...edge,
-            data: edge.data ? { ...edge.data, isDraggedDegraded: true } : edge.data,
+            data: edge.data
+              ? { ...edge.data, isDraggedDegraded: true, bendPoints: undefined }
+              : edge.data,
           };
         }
         return edge;
@@ -248,22 +230,32 @@ export function useElkLayout({
     );
   }, [draggedNodeIds]);
 
-  // 保持现有 flowNodes 中的 isPinned 状态与外部 pinnedNodeIds / savedPositions 同步，无需触发昂贵的 ELK Worker 重排
+  // 保持现有 flowNodes 中的 isPinned 与高亮脉冲状态与外部同步，无需触发 ELK 重排
   useEffect(() => {
+    const scopeKey = normalizeScopeKey(focusScope);
     setFlowNodes((prevNodes) => {
       if (prevNodes.length === 0) return prevNodes;
       let hasChanges = false;
       const nextNodes = prevNodes.map((n) => {
+        const scopedKey = toScopedPositionKey(scopeKey, n.id);
         const currentlyPinned = Boolean(
-          pinnedNodeIds?.has(n.id) || savedPositions?.[n.id]?.pinned
+          pinnedNodeIds?.has(n.id) ||
+            pinnedNodeIds?.has(scopedKey) ||
+            savedPositions?.[scopedKey]?.pinned ||
+            savedPositions?.[n.id]?.pinned
         );
-        if (n.data?.isPinned !== currentlyPinned) {
+        const currentlyHighlighted = highlightedNodeId === n.id;
+        if (
+          n.data?.isPinned !== currentlyPinned ||
+          Boolean(n.data?.isSearchHighlighted) !== currentlyHighlighted
+        ) {
           hasChanges = true;
           return {
             ...n,
             data: {
               ...n.data,
               isPinned: currentlyPinned,
+              isSearchHighlighted: currentlyHighlighted,
             },
           };
         }
@@ -271,7 +263,7 @@ export function useElkLayout({
       });
       return hasChanges ? nextNodes : prevNodes;
     });
-  }, [pinnedNodeIds, savedPositions]);
+  }, [pinnedNodeIds, savedPositions, focusScope, highlightedNodeId]);
 
   const runLayout = useCallback(async () => {
     if (nodes.length === 0) {
@@ -318,13 +310,16 @@ export function useElkLayout({
     const overlay = synthesizeOverlay(nodes, currentEdges, consistencyReport, view);
     setUnattributedPendingList(overlay.unattributedPendingList);
 
-    // Stage 2: 聚焦范围裁剪、外部上下文摘要卡合成与多维降噪过滤
+    // Stage 2: 单层平铺聚焦裁剪、外部上下文传送门合成与多维降噪过滤
     const scoped = scopeAndFilter(overlay.workingNodes, overlay.workingEdges, expandState, {
       focusScope,
       seedNodeId,
       neighborhoodHop,
       neighborhoodDirection,
+      subsystemIds,
+      onlyMyScope,
       ownerId,
+      statusFilter,
       consistencyOnly,
       hideIsolated,
       searchKeyword,
@@ -332,12 +327,13 @@ export function useElkLayout({
     });
     setVisibleNodeCount(scoped.visibleIds.size);
 
-    // Stage 3: 代表节点上卷与内部徽章聚合
+    // Stage 3: 基于单层 repOverrides 的代表节点上卷与内部徽章聚合
     const aggregated = aggregateRollup(
-      scoped.scopedNodes,
+      scoped.visibleNodes,
       scoped.scopedEdges,
       expandState,
-      overlay
+      overlay,
+      scoped.repOverrides
     );
     setBadgeCounts(aggregated.badgeCounts);
 
@@ -349,8 +345,8 @@ export function useElkLayout({
     const visibleNodeIds = scoped.visibleNodes.map((n) => n.id);
     const cycleRes = detectCycles(visibleNodeIds, foldedEdges);
 
-    // Stage 5: 构建 ELK 复合输入图（仅包含 visibleNodes）
-    const elkInputGraph = buildElkGraph(scoped.visibleNodes, cycleRes.edges, expandState);
+    // Stage 5: 构建单层扁平 ELK 输入图（仅包含当前层可见节点）
+    const elkInputGraph = buildElkGraph(scoped.visibleNodes, cycleRes.edges);
 
     const fullChildrenCountMap: Record<string, number> = {};
     for (const n of nodes) {
@@ -359,119 +355,82 @@ export function useElkLayout({
       }
     }
 
-    const prevExpand = prevExpandRef.current;
-    prevExpandRef.current = expandState;
     const currentReqId = ++layoutReqIdRef.current;
+    const scopeKey = normalizeScopeKey(focusScope);
 
     const applyLayoutResult = (layoutedTree: ElkNode) => {
       if (currentReqId !== layoutReqIdRef.current) return;
 
-      const elkCoords = extractNodeCoordinates(layoutedTree, 0, 0);
       const currSaved = savedPositionsRef.current;
-      let effectivePositions: Record<string, SavedNodePosition> = {};
+      let mergedSavedPositions: Record<string, SavedNodePosition> | null = null;
       const localTouchedIds = new Set<string>(draggedNodeIdsRef.current);
 
-      // 判断是否为单容器展开/折叠触发的局部混合重排
-      const changedExpandKeys = Array.from(
-        new Set([...Object.keys(prevExpand), ...Object.keys(expandState)])
-      ).filter((k) => Boolean(prevExpand[k]) !== Boolean(expandState[k]));
-
-      if (currSaved && Object.keys(currSaved).length > 0 && changedExpandKeys.length === 1) {
-        const toggledRootId = changedExpandKeys[0];
-        const subtreeBoxes = new Map<string, NodeBox>();
-        for (const vn of scoped.visibleNodes) {
-          if (vn.id === toggledRootId || vn.ancestors.includes(toggledRootId)) {
-            const c = elkCoords.get(vn.id);
-            if (c) {
-              subtreeBoxes.set(vn.id, {
-                id: vn.id,
-                parentId: vn.parent_id ?? null,
-                x: c.x,
-                y: c.y,
-                width: c.width,
-                height: c.height,
-                pinned: pinnedNodeIdsRef.current?.has(vn.id) || currSaved[vn.id]?.pinned,
-                isExpanded: Boolean(expandState[vn.id]),
-              });
-            }
-          }
-        }
-        const merged = mergeLocalLayout({
-          subtreeRootId: toggledRootId,
-          subtreeBoxes,
-          existingPositions: currSaved,
-          nodes: scoped.visibleNodes,
-          expandState,
-        });
-        effectivePositions = merged.positions;
-        for (const tid of merged.touchedIds) {
-          localTouchedIds.add(tid);
-        }
-      } else if (currSaved && Object.keys(currSaved).length > 0) {
+      if (currSaved && Object.keys(currSaved).length > 0) {
         const boxMap = new Map<string, NodeBox>();
+        let hasAnySavedInScope = false;
+
         for (const vn of scoped.visibleNodes) {
-          const c = elkCoords.get(vn.id);
-          const sp = currSaved[vn.id];
+          const elkChild = layoutedTree.children?.find((c) => c.id === vn.id);
+          const dims = getNodeDimensions(vn);
+          const scopedKey = toScopedPositionKey(scopeKey, vn.id);
+          const sp = currSaved[scopedKey] ?? currSaved[vn.id];
+          if (sp) hasAnySavedInScope = true;
+
           boxMap.set(vn.id, {
             id: vn.id,
-            parentId: vn.parent_id ?? null,
-            x: sp ? sp.x : c?.x ?? 0,
-            y: sp ? sp.y : c?.y ?? 0,
-            width: c?.width ?? sp?.width ?? 260,
-            height: c?.height ?? sp?.height ?? 80,
-            pinned: pinnedNodeIdsRef.current?.has(vn.id) || sp?.pinned,
-            isExpanded: Boolean(expandState[vn.id]),
+            parentId: null,
+            x: sp ? sp.x : elkChild?.x ?? 0,
+            y: sp ? sp.y : elkChild?.y ?? 0,
+            width: elkChild?.width ?? dims.width,
+            height: elkChild?.height ?? dims.height,
+            pinned: Boolean(
+              pinnedNodeIdsRef.current?.has(vn.id) ||
+                pinnedNodeIdsRef.current?.has(scopedKey) ||
+                sp?.pinned
+            ),
+            isExpanded: false,
           });
         }
-        const resolved = resolveOverlapsBottomUp(boxMap, scoped.visibleNodes);
-        for (const [id, box] of resolved.boxes.entries()) {
-          effectivePositions[id] = {
-            x: box.x,
-            y: box.y,
-            parent_id: box.parentId ?? null,
-            is_expanded: Boolean(expandState[id]),
-            pinned: box.pinned,
-            width: box.width,
-            height: box.height,
-          };
-        }
-        for (const tid of resolved.touchedIds) {
-          localTouchedIds.add(tid);
-        }
-      } else {
-        for (const vn of scoped.visibleNodes) {
-          const c = elkCoords.get(vn.id);
-          effectivePositions[vn.id] = {
-            x: c?.x ?? 0,
-            y: c?.y ?? 0,
-            parent_id: vn.parent_id ?? null,
-            is_expanded: Boolean(expandState[vn.id]),
-            pinned: pinnedNodeIdsRef.current?.has(vn.id),
-            width: c?.width,
-            height: c?.height,
-          };
+
+        if (hasAnySavedInScope) {
+          const resolved = resolveOverlapsBottomUp(boxMap, scoped.visibleNodes);
+          mergedSavedPositions = {};
+          for (const [id, box] of resolved.boxes.entries()) {
+            mergedSavedPositions[toScopedPositionKey(scopeKey, id)] = {
+              x: box.x,
+              y: box.y,
+              parent_id: null,
+              is_expanded: false,
+              pinned: box.pinned,
+              width: box.width,
+              height: box.height,
+            };
+          }
+          for (const tid of resolved.touchedIds) {
+            localTouchedIds.add(tid);
+          }
         }
       }
-
-      onPositionsComputedRef.current?.(effectivePositions);
 
       const processed = processLayoutCoordinates(
         layoutedTree,
         scoped.visibleNodes,
         cycleRes.edges,
         localTouchedIds,
-        expandState,
+        {},
         aggregated.badgeCounts,
         onToggleExpand,
         fullChildrenCountMap,
         {
-          savedPositions: effectivePositions,
+          focusScope: scopeKey,
+          savedPositions: mergedSavedPositions,
           pinnedNodeIds: pinnedNodeIdsRef.current,
           onFocusScope,
           onTogglePin,
           onExpandHub,
           containerSearchMatchCounts,
           lodMode,
+          highlightedNodeId,
         }
       );
 
@@ -522,7 +481,10 @@ export function useElkLayout({
     seedNodeId,
     neighborhoodHop,
     neighborhoodDirection,
+    subsystemIds,
+    onlyMyScope,
     ownerId,
+    statusFilter,
     consistencyOnly,
     hideIsolated,
     foldHubEdgesEnabled,
@@ -535,6 +497,7 @@ export function useElkLayout({
     lodMode,
     showRealization,
     contractMode,
+    highlightedNodeId,
   ]);
 
   useEffect(() => {

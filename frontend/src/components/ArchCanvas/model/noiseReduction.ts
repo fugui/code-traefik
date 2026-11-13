@@ -19,7 +19,11 @@ export interface FoldHubEdgesOptions {
 }
 
 function isAbnormalEdge(edge: RollupEdgeModel): boolean {
-  return edge.status === 'VIOLATION' || edge.status === 'UNATTRIBUTED';
+  return (
+    edge.status === 'VIOLATION' ||
+    edge.status === 'UNATTRIBUTED' ||
+    edge.status === 'IMPL_UNRESOLVED'
+  );
 }
 
 function deduplicateServices(edges: RollupEdgeModel[]): EdgeServiceItem[] {

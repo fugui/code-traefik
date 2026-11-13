@@ -1,18 +1,26 @@
-import React from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import {
   Search,
-  RotateCcw,
+  Sparkles,
   Eye,
   Layers,
   X,
   Server,
   Bookmark,
-  ChevronRight,
-  Compass,
-  Filter,
+  SlidersHorizontal,
 } from 'lucide-react';
 import type { RecordingSession, Agent } from '../../../types';
-import type { NeighborhoodDirection } from '../../../types/topology_graph';
+import type {
+  GraphNode,
+  NeighborhoodDirection,
+  TopologyStatusFilter,
+} from '../../../types/topology_graph';
+import {
+  TopologyBreadcrumbBar,
+  type FocusBreadcrumbItem,
+} from './TopologyBreadcrumbBar';
+
+export type { FocusBreadcrumbItem };
 
 export interface ArchStats {
   subsystems: number;
@@ -25,27 +33,31 @@ export interface ArchStats {
   edgeCount: number;
 }
 
-export interface FocusBreadcrumbItem {
-  id: string;
+export interface OwnerFilterOption {
+  id: number;
   name: string;
 }
 
-export interface OwnerFilterOption {
-  id: number;
+export interface SubsystemFilterOption {
+  id: string;
   name: string;
 }
 
 export interface ArchCanvasToolbarProps {
   view: 'LOGICAL' | 'PHYSICAL';
   onViewChange: (view: 'LOGICAL' | 'PHYSICAL') => void;
-  depthLevel: number;
-  maxDepth: number;
-  onDepthLevelChange: (level: number) => void;
-  wheelAutoExpand: boolean;
-  onToggleWheelAutoExpand: (enabled: boolean) => void;
-  onResetLayout: () => void;
+  /** 保留向后兼容字段，M21 工具栏不再渲染全展滑杆与滚轮开关 */
+  depthLevel?: number;
+  maxDepth?: number;
+  onDepthLevelChange?: (level: number) => void;
+  wheelAutoExpand?: boolean;
+  onToggleWheelAutoExpand?: (enabled: boolean) => void;
+  onResetLayout?: () => void;
+  onAutoRelayout?: () => void;
   searchKeyword: string;
   onSearchChange: (keyword: string) => void;
+  searchCandidates?: GraphNode[];
+  onSelectSearchCandidate?: (node: GraphNode) => void;
   sessions: RecordingSession[];
   selectedSessionId: string | null;
   onSelectSession: (sessionId: string | null) => void;
@@ -56,6 +68,14 @@ export interface ArchCanvasToolbarProps {
   focusScope?: string;
   focusBreadcrumbs?: FocusBreadcrumbItem[];
   onFocusScopeChange?: (scope: string) => void;
+  renderBreadcrumbBar?: boolean;
+  statusFilter?: TopologyStatusFilter;
+  onStatusFilterChange?: (status: TopologyStatusFilter) => void;
+  subsystemOptions?: SubsystemFilterOption[];
+  subsystemIds?: string[];
+  onSubsystemIdsChange?: (ids: string[]) => void;
+  onlyMyScope?: boolean;
+  onToggleOnlyMyScope?: (enabled: boolean) => void;
   neighborhoodHop?: number;
   onNeighborhoodHopChange?: (hop: number) => void;
   neighborhoodDirection?: NeighborhoodDirection;
@@ -78,27 +98,43 @@ export interface ArchCanvasToolbarProps {
   onOpenBookmarkDrawer?: () => void;
 }
 
+const NODE_TYPE_SHORT_LABEL: Record<string, string> = {
+  SUBSYSTEM: '子系统',
+  FUNCTIONAL_GROUP: '功能组',
+  MODULE: '模块',
+  PROCESS_GROUP: '进程组',
+  PROCESS: '进程',
+  EXTERNAL_CONTAINER: '外部域',
+  EXTERNAL_SYSTEM: '外部系统',
+  EXTERNAL_ENDPOINT: '外部端点',
+};
+
 export const ArchCanvasToolbar: React.FC<ArchCanvasToolbarProps> = ({
   view,
   onViewChange,
-  depthLevel,
-  maxDepth,
-  onDepthLevelChange,
-  wheelAutoExpand,
-  onToggleWheelAutoExpand,
   onResetLayout,
+  onAutoRelayout,
   searchKeyword,
   onSearchChange,
+  searchCandidates = [],
+  onSelectSearchCandidate,
   sessions,
   selectedSessionId,
   onSelectSession,
   agents = [],
   selectedEnvAgentId = null,
   onSelectEnvAgentId,
-  stats,
   focusScope = 'GLOBAL',
   focusBreadcrumbs = [],
   onFocusScopeChange,
+  renderBreadcrumbBar = true,
+  statusFilter,
+  onStatusFilterChange,
+  subsystemOptions = [],
+  subsystemIds = [],
+  onSubsystemIdsChange,
+  onlyMyScope = false,
+  onToggleOnlyMyScope,
   neighborhoodHop = 0,
   onNeighborhoodHopChange,
   neighborhoodDirection = 'BOTH',
@@ -120,16 +156,189 @@ export const ArchCanvasToolbar: React.FC<ArchCanvasToolbarProps> = ({
   bookmarkQuotaText,
   onOpenBookmarkDrawer,
 }) => {
+  const [isFilterPopoverOpen, setIsFilterPopoverOpen] = useState(false);
+  const [isSearchFocused, setIsSearchFocused] = useState(false);
+  const filterPopoverRef = useRef<HTMLDivElement | null>(null);
+  const searchWrapRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const handleOutsideClick = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (filterPopoverRef.current && target && !filterPopoverRef.current.contains(target)) {
+        setIsFilterPopoverOpen(false);
+      }
+      if (searchWrapRef.current && target && !searchWrapRef.current.contains(target)) {
+        setIsSearchFocused(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutsideClick);
+    return () => document.removeEventListener('mousedown', handleOutsideClick);
+  }, []);
+
+  const effectiveStatusFilter: TopologyStatusFilter =
+    statusFilter ?? (consistencyOnly ? 'ABNORMAL' : 'ALL');
+
+  const handleStatusChange = (next: TopologyStatusFilter) => {
+    if (onStatusFilterChange) {
+      onStatusFilterChange(next);
+    }
+    if (onToggleConsistencyOnly) {
+      onToggleConsistencyOnly(next !== 'ALL');
+    }
+  };
+
+  // 计算非默认激活过滤项数量（用于 Popover 计数角标）
+  const activeFilterCount = useMemo(() => {
+    let count = 0;
+    if (subsystemIds.length > 0) count += 1;
+    if (onlyMyScope) count += 1;
+    if (neighborhoodHop > 0) count += 1;
+    if (ownerId != null) count += 1;
+    if (hideIsolated) count += 1;
+    if (!foldHubEdges) count += 1;
+    if (view === 'LOGICAL' && !showRealization) count += 1;
+    if (view === 'LOGICAL' && contractMode === 'EXPAND') count += 1;
+    return count;
+  }, [
+    subsystemIds.length,
+    onlyMyScope,
+    neighborhoodHop,
+    ownerId,
+    hideIsolated,
+    foldHubEdges,
+    view,
+    showRealization,
+    contractMode,
+  ]);
+
+  const handleToggleSubsystem = (id: string) => {
+    if (!onSubsystemIdsChange) return;
+    if (subsystemIds.includes(id)) {
+      onSubsystemIdsChange(subsystemIds.filter((s) => s !== id));
+    } else {
+      onSubsystemIdsChange([...subsystemIds, id]);
+    }
+  };
+
+  const handleRelayoutClick = () => {
+    if (onAutoRelayout) {
+      onAutoRelayout();
+    } else if (onResetLayout) {
+      onResetLayout();
+    }
+  };
+
+  const limitedCandidates = useMemo(
+    () => (searchKeyword.trim() ? searchCandidates.slice(0, 20) : []),
+    [searchKeyword, searchCandidates]
+  );
+
+  // 构建可独立叉掉的 Filter Chips
+  const filterChips = useMemo(() => {
+    const chips: Array<{ key: string; label: string; onRemove: () => void }> = [];
+
+    if (effectiveStatusFilter !== 'ALL') {
+      chips.push({
+        key: 'status',
+        label: `状态: ${effectiveStatusFilter === 'VIOLATION_ONLY' ? '仅违规' : '仅异常'}`,
+        onRemove: () => handleStatusChange('ALL'),
+      });
+    }
+
+    if (subsystemIds.length > 0 && onSubsystemIdsChange) {
+      const names = subsystemIds
+        .map((id) => subsystemOptions.find((o) => o.id === id)?.name || id)
+        .join('、');
+      chips.push({
+        key: 'subsystems',
+        label: `关注域: ${names}`,
+        onRemove: () => onSubsystemIdsChange([]),
+      });
+    }
+
+    if (onlyMyScope && onToggleOnlyMyScope) {
+      chips.push({
+        key: 'only-my',
+        label: '仅看与我相关',
+        onRemove: () => onToggleOnlyMyScope(false),
+      });
+    }
+
+    if (neighborhoodHop > 0 && onNeighborhoodHopChange) {
+      const dirLabel =
+        neighborhoodDirection === 'UPSTREAM'
+          ? '上游'
+          : neighborhoodDirection === 'DOWNSTREAM'
+          ? '下游'
+          : '双向';
+      chips.push({
+        key: 'hop',
+        label: `邻域: ${neighborhoodHop}-Hop (${dirLabel})`,
+        onRemove: () => onNeighborhoodHopChange(0),
+      });
+    }
+
+    if (ownerId != null && onOwnerIdChange) {
+      const ownerName = ownerOptions.find((o) => o.id === ownerId)?.name || `#${ownerId}`;
+      chips.push({
+        key: 'owner',
+        label: `负责人: ${ownerName}`,
+        onRemove: () => onOwnerIdChange(null),
+      });
+    }
+
+    if (hideIsolated && onToggleHideIsolated) {
+      chips.push({
+        key: 'hide-isolated',
+        label: '已隐藏孤立节点',
+        onRemove: () => onToggleHideIsolated(false),
+      });
+    }
+
+    if (view === 'LOGICAL' && !showRealization && onToggleShowRealization) {
+      chips.push({
+        key: 'hide-realization',
+        label: '已隐藏实现虚线',
+        onRemove: () => onToggleShowRealization(true),
+      });
+    }
+
+    if (view === 'LOGICAL' && contractMode === 'EXPAND' && onContractModeChange) {
+      chips.push({
+        key: 'contract-expand',
+        label: '契约: 展开到实现',
+        onRemove: () => onContractModeChange('AGG'),
+      });
+    }
+
+    return chips;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    effectiveStatusFilter,
+    subsystemIds,
+    subsystemOptions,
+    onlyMyScope,
+    neighborhoodHop,
+    neighborhoodDirection,
+    ownerId,
+    ownerOptions,
+    hideIsolated,
+    view,
+    showRealization,
+    contractMode,
+  ]);
+
   return (
     <div className="code-arch-toolbar-stack">
       <div className="code-arch-toolbar">
-        {/* 左侧控制区 */}
-        <div className="code-arch-toolbar__left">
-          {/* 视角切换 Segmented Control */}
+        {/* 组 1: 视图与数据源 */}
+        <div className="code-arch-toolbar__group" data-testid="toolbar-group-view">
           <div className="code-arch-segmented" role="tablist" data-testid="topology-view-segmented">
             <button
               type="button"
-              className={`code-arch-segmented__item ${view === 'LOGICAL' ? 'code-arch-segmented__item--active' : ''}`}
+              className={`code-arch-segmented__item ${
+                view === 'LOGICAL' ? 'code-arch-segmented__item--active' : ''
+              }`}
               onClick={() => onViewChange('LOGICAL')}
               data-testid="toggle-topo-logical"
             >
@@ -138,7 +347,9 @@ export const ArchCanvasToolbar: React.FC<ArchCanvasToolbarProps> = ({
             </button>
             <button
               type="button"
-              className={`code-arch-segmented__item ${view === 'PHYSICAL' ? 'code-arch-segmented__item--active' : ''}`}
+              className={`code-arch-segmented__item ${
+                view === 'PHYSICAL' ? 'code-arch-segmented__item--active' : ''
+              }`}
               onClick={() => onViewChange('PHYSICAL')}
               data-testid="toggle-topo-physical"
             >
@@ -147,18 +358,14 @@ export const ArchCanvasToolbar: React.FC<ArchCanvasToolbarProps> = ({
             </button>
           </div>
 
-          <div className="code-arch-toolbar__divider" />
-
-          {/* 物理部署视图下：多环境端点叠加选择器 */}
-          {view === 'PHYSICAL' && (
+          {view === 'PHYSICAL' && onSelectEnvAgentId && (
             <div className="code-arch-toolbar__session-group" data-testid="env-overlay-group">
-              <Server size={14} className="code-arch-toolbar__icon" />
-              <span className="code-arch-toolbar__label">环境叠加:</span>
               <select
                 value={selectedEnvAgentId || ''}
-                onChange={(e) => onSelectEnvAgentId?.(e.target.value || null)}
-                className="code-arch-toolbar__select"
+                onChange={(e) => onSelectEnvAgentId(e.target.value || null)}
+                className="code-arch-toolbar__select code-arch-toolbar__select--compact"
                 data-testid="env-agent-selector"
+                title="物理部署环境端点叠加"
               >
                 <option value="">纯架构蓝图 (设计态)</option>
                 {agents.map((ag) => (
@@ -167,251 +374,47 @@ export const ArchCanvasToolbar: React.FC<ArchCanvasToolbarProps> = ({
                   </option>
                 ))}
               </select>
-              {selectedEnvAgentId && (
-                <button
-                  type="button"
-                  className="code-btn code-btn--secondary code-btn--xs code-arch-toolbar__detach-btn"
-                  onClick={() => onSelectEnvAgentId?.(null)}
-                  title="清除环境叠加，恢复纯设计态"
-                  data-testid="clear-env-overlay-btn"
-                >
-                  清除
-                </button>
-              )}
             </div>
           )}
 
-          {view === 'PHYSICAL' && <div className="code-arch-toolbar__divider" />}
-
-          {/* 层级滑杆 (L0 ~ Ln) 与快捷展开 */}
-          <div className="code-arch-toolbar__slider-group" title={`当前展开层级: L${depthLevel} (0 ~ ${maxDepth})`}>
-            <Layers size={14} className="code-arch-toolbar__icon" />
-            <span className="code-arch-toolbar__label">层级:</span>
-            <span className="code-arch-toolbar__depth-pill">L{depthLevel}</span>
-            <input
-              type="range"
-              min={0}
-              max={Math.max(1, maxDepth)}
-              value={depthLevel}
-              onChange={(e) => onDepthLevelChange(Number(e.target.value))}
-              className="code-arch-toolbar__slider"
-            />
-            {maxDepth > 0 && (
-              <div className="code-arch-toolbar__quick-actions">
-                <button
-                  type="button"
-                  className="code-arch-toolbar__quick-depth-btn"
-                  onClick={() => onDepthLevelChange(0)}
-                  title="一键折叠收起到顶层容器 (L0)"
-                  disabled={depthLevel === 0}
-                >
-                  顶层
-                </button>
-                <button
-                  type="button"
-                  className="code-arch-toolbar__quick-depth-btn"
-                  onClick={() => onDepthLevelChange(maxDepth)}
-                  title={`一键平铺全展到深层微服务模块 (L${maxDepth})`}
-                  disabled={depthLevel === maxDepth}
-                >
-                  全展
-                </button>
-              </div>
-            )}
-          </div>
-
-          <label className="code-arch-toolbar__checkbox-label" title="开启后根据缩放比例自动展开容器">
-            <input
-              type="checkbox"
-              checked={wheelAutoExpand}
-              onChange={(e) => onToggleWheelAutoExpand(e.target.checked)}
-            />
-            <span>滚轮展开</span>
-          </label>
-
-          {/* 有向 N-Hop 邻域筛选器 */}
-          {onNeighborhoodHopChange && (
-            <div className="code-arch-toolbar__session-group">
-              <Filter size={13} className="code-arch-toolbar__icon" />
-              <select
-                value={String(neighborhoodHop)}
-                onChange={(e) => onNeighborhoodHopChange(Number(e.target.value))}
-                className="code-arch-toolbar__select code-arch-toolbar__select--compact"
-                data-testid="topo-hop-select"
-                title="有向 N-Hop 邻域筛选"
-              >
-                <option value="0">全邻域 (0-Hop)</option>
-                <option value="1">1-Hop 邻域</option>
-                <option value="2">2-Hop 邻域</option>
-              </select>
-              {neighborhoodHop > 0 && onNeighborhoodDirectionChange && (
-                <select
-                  value={neighborhoodDirection}
-                  onChange={(e) =>
-                    onNeighborhoodDirectionChange(e.target.value as NeighborhoodDirection)
-                  }
-                  className="code-arch-toolbar__select code-arch-toolbar__select--compact"
-                  data-testid="topo-dir-select"
-                  title="邻域追踪方向"
-                >
-                  <option value="BOTH">双向关联</option>
-                  <option value="UPSTREAM">仅看上游调用方</option>
-                  <option value="DOWNSTREAM">仅看下游被调方</option>
-                </select>
-              )}
-            </div>
-          )}
-
-          {/* 负责人过滤 */}
-          {onOwnerIdChange && ownerOptions.length > 0 && (
+          <div className="code-arch-toolbar__session-group">
+            <Eye size={14} className="code-arch-toolbar__icon" />
             <select
-              value={ownerId != null ? String(ownerId) : ''}
-              onChange={(e) =>
-                onOwnerIdChange(e.target.value ? Number(e.target.value) : null)
-              }
+              value={selectedSessionId || ''}
+              onChange={(e) => onSelectSession(e.target.value || null)}
               className="code-arch-toolbar__select code-arch-toolbar__select--compact"
-              data-testid="topo-owner-select"
-              title="按模块负责人筛选"
+              data-testid="session-overlay-select"
+              title="挂载流量比对录制批次"
             >
-              <option value="">全部负责人</option>
-              {ownerOptions.map((o) => (
-                <option key={o.id} value={String(o.id)}>
-                  {o.name}
+              <option value="">纯设计态 (未挂录制)</option>
+              {sessions.map((s) => (
+                <option key={s.id} value={s.id}>
+                  [{s.scope}] #{s.id} - {s.name} ({s.status})
                 </option>
               ))}
             </select>
-          )}
-
-          {/* 降噪快捷勾选 */}
-          {onToggleConsistencyOnly && (
-            <label className="code-arch-toolbar__checkbox-label" title="仅保留存在 VIOLATION / UNATTRIBUTED 异常调用的节点链路">
-              <input
-                type="checkbox"
-                checked={consistencyOnly}
-                onChange={(e) => onToggleConsistencyOnly(e.target.checked)}
-                data-testid="toggle-consistency-only"
-              />
-              <span>仅看异常</span>
-            </label>
-          )}
-
-          {onToggleHideIsolated && (
-            <label className="code-arch-toolbar__checkbox-label" title="自动隐藏入度=0 且出度=0 的孤立模块与空容器">
-              <input
-                type="checkbox"
-                checked={hideIsolated}
-                onChange={(e) => onToggleHideIsolated(e.target.checked)}
-                data-testid="toggle-hide-isolated"
-              />
-              <span>隐藏孤立</span>
-            </label>
-          )}
-
-          {onToggleFoldHubEdges && (
-            <label className="code-arch-toolbar__checkbox-label" title="对出/入边 > 8 的高扇出 Hub 节点自动折叠次要正常边">
-              <input
-                type="checkbox"
-                checked={foldHubEdges}
-                onChange={(e) => onToggleFoldHubEdges(e.target.checked)}
-                data-testid="toggle-fold-hub"
-              />
-              <span>折叠Hub边</span>
-            </label>
-          )}
-
-          {/* M20: 实现关系开关 (仅逻辑视图) */}
-          {view === 'LOGICAL' && onToggleShowRealization && (
-            <label className="code-arch-toolbar__checkbox-label" title="显示/隐藏接口实现关系边 (REALIZATION)">
-              <input
-                type="checkbox"
-                checked={showRealization}
-                onChange={(e) => onToggleShowRealization(e.target.checked)}
-                data-testid="toggle-realization"
-              />
-              <span>◁⋯ 实现关系</span>
-            </label>
-          )}
-
-          {/* M20: 契约调用聚合/展开模式 (仅逻辑视图) */}
-          {view === 'LOGICAL' && onContractModeChange && (
-            <div className="code-segmented code-segmented--xs" data-testid="contract-mode-toggle" title="契约调用聚合/展开模式">
-              <button
-                type="button"
-                className={`code-segmented-item ${contractMode === 'AGG' ? 'code-segmented-item--active' : ''}`}
-                onClick={() => onContractModeChange('AGG')}
-                data-testid="contract-mode-agg"
-              >
-                聚合到接口
-              </button>
-              <button
-                type="button"
-                className={`code-segmented-item ${contractMode === 'EXPAND' ? 'code-segmented-item--active' : ''}`}
-                onClick={() => onContractModeChange('EXPAND')}
-                data-testid="contract-mode-expand"
-              >
-                展开到实现
-              </button>
-            </div>
-          )}
+          </div>
         </div>
 
-        {/* 中部全景架构资产摘要 */}
-        {stats && (
-          <div className="code-arch-toolbar__center" data-testid="arch-toolbar-stats">
-            {view === 'LOGICAL' ? (
-              <>
-                <span className="code-arch-stat-badge" title="逻辑子系统总数">
-                  子系统: <strong>{stats.subsystems}</strong>
-                </span>
-                <span className="code-arch-stat-badge" title="功能组总数">
-                  功能组: <strong>{stats.functionalGroups}</strong>
-                </span>
-                <span className="code-arch-stat-badge" title="微服务模块总数">
-                  模块: <strong>{stats.modules}</strong>
-                </span>
-                <span className="code-arch-stat-badge" title="声明契约边总数">
-                  契约依赖: <strong>{stats.edgeCount}</strong>
-                </span>
-                {stats.externals > 0 && (
-                  <span className="code-arch-stat-badge" title="外部依赖系统/端点数">
-                    外部依赖: <strong>{stats.externals}</strong>
-                  </span>
-                )}
-              </>
-            ) : (
-              <>
-                <span className="code-arch-stat-badge" title="物理进程组总数">
-                  进程组: <strong>{stats.processGroups}</strong>
-                </span>
-                <span className="code-arch-stat-badge" title="纳管物理进程总数">
-                  物理进程: <strong>{stats.processes}</strong>
-                </span>
-                <span className="code-arch-stat-badge" title="承载模块总数">
-                  挂载模块: <strong>{stats.modules}</strong>
-                </span>
-                <span className="code-arch-stat-badge" title="物理通信链路数">
-                  物理链路: <strong>{stats.edgeCount}</strong>
-                </span>
-                {stats.externals > 0 && (
-                  <span className="code-arch-stat-badge" title="外部依赖端点数">
-                    外部系统: <strong>{stats.externals}</strong>
-                  </span>
-                )}
-              </>
-            )}
-          </div>
-        )}
+        <div className="code-arch-toolbar__divider" />
 
-        {/* 右侧控制区 */}
-        <div className="code-arch-toolbar__right">
-          {/* 全图搜索 */}
+        {/* 组 2: 全局定位与候选下钻搜索 */}
+        <div
+          className="code-arch-toolbar__group code-arch-toolbar__search-wrap"
+          data-testid="toolbar-group-search"
+          ref={searchWrapRef}
+        >
           <div className="code-arch-toolbar__search-box">
             <Search size={13} className="code-arch-toolbar__search-icon" />
             <input
               type="text"
-              placeholder="搜索模块 / 进程 / 子系统..."
+              placeholder="搜名称/编码，点选自动下钻定位..."
               value={searchKeyword}
-              onChange={(e) => onSearchChange(e.target.value)}
+              onFocus={() => setIsSearchFocused(true)}
+              onChange={(e) => {
+                onSearchChange(e.target.value);
+                setIsSearchFocused(true);
+              }}
               className="code-arch-toolbar__search-input"
               data-testid="topo-search-input"
             />
@@ -427,37 +430,262 @@ export const ArchCanvasToolbar: React.FC<ArchCanvasToolbarProps> = ({
             )}
           </div>
 
-          <div className="code-arch-toolbar__divider" />
-
-          {/* 录制批次与一致性叠加挂载 */}
-          <div className="code-arch-toolbar__session-group">
-            <Eye size={14} className="code-arch-toolbar__icon" />
-            <span className="code-arch-toolbar__label">比对批次:</span>
-            <select
-              value={selectedSessionId || ''}
-              onChange={(e) => onSelectSession(e.target.value || null)}
-              className="code-arch-toolbar__select"
-            >
-              <option value="">(未挂载比对)</option>
-              {sessions.map((s) => (
-                <option key={s.id} value={s.id}>
-                  [{s.scope}] #{s.id} - {s.name} ({s.status})
-                </option>
+          {isSearchFocused && limitedCandidates.length > 0 && (
+            <div className="code-arch-search-dropdown" data-testid="topo-search-dropdown">
+              {limitedCandidates.map((cand) => (
+                <button
+                  key={cand.id}
+                  type="button"
+                  className="code-arch-search-dropdown__item"
+                  data-testid={`search-candidate-${cand.id}`}
+                  onClick={() => {
+                    onSelectSearchCandidate?.(cand);
+                    setIsSearchFocused(false);
+                  }}
+                >
+                  <span>{cand.name}</span>
+                  <span className="code-arch-search-dropdown__meta">
+                    {NODE_TYPE_SHORT_LABEL[cand.type] || cand.type}
+                    {cand.code ? ` · ${cand.code}` : ''}
+                  </span>
+                </button>
               ))}
-            </select>
-            {selectedSessionId && (
-              <button
-                type="button"
-                className="code-btn code-btn--secondary code-btn--xs code-arch-toolbar__detach-btn"
-                onClick={() => onSelectSession(null)}
-                title="取消挂载该录制批次"
-              >
-                取消
-              </button>
-            )}
+            </div>
+          )}
+        </div>
+
+        <div className="code-arch-toolbar__divider" />
+
+        {/* 组 3: 异常焦点分段切换 + 高级筛选图层 Popover */}
+        <div
+          className="code-arch-toolbar__group code-arch-filter-popover-wrap"
+          data-testid="toolbar-group-filter"
+          ref={filterPopoverRef}
+        >
+          <div className="code-arch-segmented" role="group" data-testid="topo-status-segmented">
+            <button
+              type="button"
+              className={`code-arch-segmented__item ${
+                effectiveStatusFilter === 'ALL' ? 'code-arch-segmented__item--active' : ''
+              }`}
+              onClick={() => handleStatusChange('ALL')}
+              data-testid="status-filter-all"
+            >
+              全部
+            </button>
+            <button
+              type="button"
+              className={`code-arch-segmented__item ${
+                effectiveStatusFilter === 'ABNORMAL' ? 'code-arch-segmented__item--active' : ''
+              }`}
+              onClick={() => handleStatusChange('ABNORMAL')}
+              data-testid="status-filter-abnormal"
+            >
+              仅异常
+            </button>
+            <button
+              type="button"
+              className={`code-arch-segmented__item ${
+                effectiveStatusFilter === 'VIOLATION_ONLY'
+                  ? 'code-arch-segmented__item--active'
+                  : ''
+              }`}
+              onClick={() => handleStatusChange('VIOLATION_ONLY')}
+              data-testid="status-filter-violation"
+            >
+              仅违规
+            </button>
           </div>
 
-          {/* 书签与基准管理抽屉入口 */}
+          <button
+            type="button"
+            className="code-btn code-btn--secondary code-btn--sm"
+            onClick={() => setIsFilterPopoverOpen((prev) => !prev)}
+            data-testid="topo-filter-popover-btn"
+            aria-expanded={isFilterPopoverOpen}
+          >
+            <SlidersHorizontal size={13} />
+            <span>
+              {activeFilterCount > 0 ? `筛选与图层 (${activeFilterCount})` : '筛选与图层'}
+            </span>
+          </button>
+
+          {/* 始终保留 DOM 挂载，通过 CSS 类显隐，保证 SSR 与交互测试均可稳定查询 */}
+          <div
+            className={`code-arch-filter-popover ${
+              isFilterPopoverOpen ? '' : 'code-arch-filter-popover--hidden'
+            }`}
+            data-testid="topo-filter-popover"
+          >
+            {subsystemOptions.length > 0 && onSubsystemIdsChange && (
+              <div className="code-arch-filter-popover__section">
+                <span className="code-arch-filter-popover__title">关注域多选</span>
+                <div className="code-arch-filter-popover__subsystem-list">
+                  {subsystemOptions.map((sub) => (
+                    <label key={sub.id} className="code-arch-toolbar__checkbox-label">
+                      <input
+                        type="checkbox"
+                        checked={subsystemIds.includes(sub.id)}
+                        onChange={() => handleToggleSubsystem(sub.id)}
+                        data-testid={`filter-subsystem-${sub.id}`}
+                      />
+                      <span>{sub.name}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="code-arch-filter-popover__section">
+              <span className="code-arch-filter-popover__title">归属与降噪规则</span>
+              {onToggleOnlyMyScope && (
+                <label className="code-arch-toolbar__checkbox-label">
+                  <input
+                    type="checkbox"
+                    checked={onlyMyScope}
+                    onChange={(e) => onToggleOnlyMyScope(e.target.checked)}
+                    data-testid="toggle-only-my-scope"
+                  />
+                  <span>仅看与我相关</span>
+                </label>
+              )}
+
+              {onToggleHideIsolated && (
+                <label className="code-arch-toolbar__checkbox-label">
+                  <input
+                    type="checkbox"
+                    checked={hideIsolated}
+                    onChange={(e) => onToggleHideIsolated(e.target.checked)}
+                    data-testid="toggle-hide-isolated"
+                  />
+                  <span>隐藏无连线孤立节点</span>
+                </label>
+              )}
+
+              {onToggleFoldHubEdges && (
+                <label className="code-arch-toolbar__checkbox-label">
+                  <input
+                    type="checkbox"
+                    checked={foldHubEdges}
+                    onChange={(e) => onToggleFoldHubEdges(e.target.checked)}
+                    data-testid="toggle-fold-hub"
+                  />
+                  <span>自动折叠高扇出 Hub 边 (&gt;8 条)</span>
+                </label>
+              )}
+
+              {onNeighborhoodHopChange && (
+                <div className="code-arch-toolbar__session-group">
+                  <span className="code-arch-toolbar__label">邻域追踪:</span>
+                  <select
+                    value={String(neighborhoodHop)}
+                    onChange={(e) => onNeighborhoodHopChange(Number(e.target.value))}
+                    className="code-arch-toolbar__select code-arch-toolbar__select--compact"
+                    data-testid="topo-hop-select"
+                  >
+                    <option value="0">全邻域 (0-Hop)</option>
+                    <option value="1">1-Hop 邻域</option>
+                    <option value="2">2-Hop 邻域</option>
+                  </select>
+                  {neighborhoodHop > 0 && onNeighborhoodDirectionChange && (
+                    <select
+                      value={neighborhoodDirection}
+                      onChange={(e) =>
+                        onNeighborhoodDirectionChange(e.target.value as NeighborhoodDirection)
+                      }
+                      className="code-arch-toolbar__select code-arch-toolbar__select--compact"
+                      data-testid="topo-dir-select"
+                    >
+                      <option value="BOTH">双向</option>
+                      <option value="UPSTREAM">仅上游</option>
+                      <option value="DOWNSTREAM">仅下游</option>
+                    </select>
+                  )}
+                </div>
+              )}
+
+              {onOwnerIdChange && ownerOptions.length > 0 && (
+                <div className="code-arch-toolbar__session-group">
+                  <span className="code-arch-toolbar__label">负责人:</span>
+                  <select
+                    value={ownerId != null ? String(ownerId) : ''}
+                    onChange={(e) =>
+                      onOwnerIdChange(e.target.value ? Number(e.target.value) : null)
+                    }
+                    className="code-arch-toolbar__select code-arch-toolbar__select--compact"
+                    data-testid="topo-owner-select"
+                  >
+                    <option value="">全部负责人</option>
+                    {ownerOptions.map((o) => (
+                      <option key={o.id} value={String(o.id)}>
+                        {o.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+            </div>
+
+            {view === 'LOGICAL' && (onToggleShowRealization || onContractModeChange) && (
+              <div className="code-arch-filter-popover__section">
+                <span className="code-arch-filter-popover__title">接口与实现图层</span>
+                {onToggleShowRealization && (
+                  <label className="code-arch-toolbar__checkbox-label">
+                    <input
+                      type="checkbox"
+                      checked={showRealization}
+                      onChange={(e) => onToggleShowRealization(e.target.checked)}
+                      data-testid="toggle-realization"
+                    />
+                    <span>◁⋯ 显示接口实现关系</span>
+                  </label>
+                )}
+
+                {onContractModeChange && (
+                  <div className="code-segmented code-segmented--xs" data-testid="contract-mode-toggle">
+                    <button
+                      type="button"
+                      className={`code-segmented-item ${
+                        contractMode === 'AGG' ? 'code-segmented-item--active' : ''
+                      }`}
+                      onClick={() => onContractModeChange('AGG')}
+                      data-testid="contract-mode-agg"
+                    >
+                      聚合到接口
+                    </button>
+                    <button
+                      type="button"
+                      className={`code-segmented-item ${
+                        contractMode === 'EXPAND' ? 'code-segmented-item--active' : ''
+                      }`}
+                      onClick={() => onContractModeChange('EXPAND')}
+                      data-testid="contract-mode-expand"
+                    >
+                      展开到实现
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* 组 4: 布局整理与视图书签 */}
+        <div
+          className="code-arch-toolbar__group code-arch-toolbar__right"
+          data-testid="toolbar-group-layout"
+        >
+          <button
+            type="button"
+            className="code-btn code-btn--secondary code-btn--sm code-arch-toolbar__reset-btn"
+            onClick={handleRelayoutClick}
+            title="清理当前作用域未钉住节点位移并重跑 ELK 正交排版"
+            data-testid="reset-topo-layout-btn"
+          >
+            <Sparkles size={13} />
+            <span>自动整理</span>
+          </button>
+
           {onOpenBookmarkDrawer && (
             <button
               type="button"
@@ -467,68 +695,42 @@ export const ArchCanvasToolbar: React.FC<ArchCanvasToolbarProps> = ({
               data-testid="open-bookmark-drawer-btn"
             >
               <Bookmark size={13} />
-              <span>书签{bookmarkQuotaText ? ` (${bookmarkQuotaText})` : ''}</span>
+              <span>视图书签{bookmarkQuotaText ? ` (${bookmarkQuotaText})` : ''}</span>
               {hasUnsavedDraft && (
                 <span className="code-arch-badge code-arch-badge--warning">草稿</span>
               )}
             </button>
           )}
-
-          {/* 重置布局 */}
-          <button
-            type="button"
-            className="code-btn code-btn--secondary code-btn--sm code-arch-toolbar__reset-btn"
-            onClick={onResetLayout}
-            title="清除手动拖拽偏移并恢复全局最优排版"
-            data-testid="reset-topo-layout-btn"
-          >
-            <RotateCcw size={13} />
-            <span>重置布局</span>
-          </button>
         </div>
       </div>
 
-      {/* 下钻聚焦面包屑导航条 (Focus Scope Breadcrumb Bar) */}
-      {focusScope && focusScope !== 'GLOBAL' && (
-        <div className="code-arch-focus-bar" data-testid="arch-focus-bar">
-          <div className="code-arch-focus-bar__crumbs">
-            <Compass size={13} className="code-arch-focus-bar__icon" />
-            <span className="code-arch-focus-bar__label">当前聚焦子图:</span>
-            {(focusBreadcrumbs.length > 0
-              ? focusBreadcrumbs
-              : [
-                  { id: 'GLOBAL', name: '全局全景' },
-                  { id: focusScope, name: focusScope },
-                ]
-            ).map((crumb, idx, arr) => {
-              const isLast = idx === arr.length - 1;
-              return (
-                <React.Fragment key={crumb.id}>
-                  <button
-                    type="button"
-                    className={`code-arch-focus-bar__crumb ${
-                      isLast ? 'code-arch-focus-bar__crumb--active' : ''
-                    }`}
-                    onClick={() => onFocusScopeChange?.(crumb.id)}
-                    data-testid={`focus-crumb-${crumb.id}`}
-                  >
-                    {crumb.name}
-                  </button>
-                  {!isLast && <ChevronRight size={12} className="code-arch-focus-bar__sep" />}
-                </React.Fragment>
-              );
-            })}
-          </div>
-
-          <button
-            type="button"
-            className="code-btn code-btn--secondary code-btn--xs"
-            onClick={() => onFocusScopeChange?.('GLOBAL')}
-            data-testid="exit-focus-scope-btn"
-          >
-            退出聚焦
-          </button>
+      {/* 激活态过滤标签栏 (Filter Chips) */}
+      {filterChips.length > 0 && (
+        <div className="code-arch-filter-chips" data-testid="topo-filter-chips">
+          {filterChips.map((chip) => (
+            <span key={chip.key} className="code-arch-filter-chip" data-testid={`filter-chip-${chip.key}`}>
+              <span>{chip.label}</span>
+              <button
+                type="button"
+                className="code-arch-filter-chip__close"
+                onClick={chip.onRemove}
+                aria-label={`清除过滤 ${chip.label}`}
+                data-testid={`filter-chip-close-${chip.key}`}
+              >
+                ×
+              </button>
+            </span>
+          ))}
         </div>
+      )}
+
+      {/* 独立工具栏渲染场景下（未禁用 renderBreadcrumbBar 且处于聚焦态），输出面包屑栏 */}
+      {renderBreadcrumbBar && focusScope && focusScope !== 'GLOBAL' && (
+        <TopologyBreadcrumbBar
+          focusScope={focusScope}
+          breadcrumbs={focusBreadcrumbs}
+          onNavigateScope={(scope) => onFocusScopeChange?.(scope)}
+        />
       )}
     </div>
   );

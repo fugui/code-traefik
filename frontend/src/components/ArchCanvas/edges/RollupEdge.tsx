@@ -41,6 +41,7 @@ export const RollupEdge: React.FC<EdgeProps<ArchCanvasEdge>> = ({
   const isHubSummary = Boolean(data?.isHubSummary);
   const foldedPeerCount = Number(data?.foldedPeerCount || 0);
   const bendPoints = data?.bendPoints;
+  const siblingOffset = Number(data?.siblingOffset || 0);
 
   let edgePath = '';
   let labelX = (sourceX + targetX) / 2;
@@ -67,10 +68,12 @@ export const RollupEdge: React.FC<EdgeProps<ArchCanvasEdge>> = ({
       sourcePosition,
       targetPosition,
       borderRadius: 8,
+      offset: 20 + Math.abs(siblingOffset) * 0.45,
     });
     edgePath = smoothPath;
-    labelX = sLabelX;
-    labelY = sLabelY;
+    const isPrimarilyHorizontal = Math.abs(targetX - sourceX) >= Math.abs(targetY - sourceY);
+    labelX = isPrimarilyHorizontal ? sLabelX : sLabelX + siblingOffset;
+    labelY = isPrimarilyHorizontal ? sLabelY + siblingOffset : sLabelY;
   }
 
   const contractCount = data?.services?.length || 1;

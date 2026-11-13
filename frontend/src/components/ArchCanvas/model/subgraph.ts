@@ -4,18 +4,35 @@ import type {
   ExpandStateMap,
   ConsistencyEdgeStatus,
   NeighborhoodDirection,
+  TopologyStatusFilter,
 } from '../../../types/topology_graph';
+import { findTopRoot, resolveDirectChildRep } from './hierarchy';
 
 export const VISIBILITY_SOFT_THRESHOLD = 45;
 export const VISIBILITY_HARD_CAP = 120;
 export const SEARCH_AUTO_EXPAND_CAP = 30;
 
+const ABNORMAL_STATUS_SET = new Set<string>([
+  'VIOLATION',
+  'UNATTRIBUTED',
+  'IMPL_UNRESOLVED',
+  'UNCOVERED',
+  'NOT_MONITORED',
+  'DRIFT',
+  'MISSING',
+  'UNDECLARED',
+]);
+
 export interface ScopeAndFilterOptions {
   focusScope?: string;
   seedNodeId?: string | null;
+  selectedNodeId?: string | null;
   neighborhoodHop?: number;
   neighborhoodDirection?: NeighborhoodDirection;
+  subsystemIds?: string[];
+  onlyMyScope?: boolean;
   ownerId?: number | null;
+  statusFilter?: TopologyStatusFilter;
   consistencyOnly?: boolean;
   hideIsolated?: boolean;
   searchKeyword?: string;
@@ -27,6 +44,7 @@ export interface ScopeAndFilterResult {
   scopedEdges: GraphEdge[];
   visibleNodes: GraphNode[];
   visibleIds: Set<string>;
+  repOverrides: Map<string, string>;
 }
 
 function isSearchMatch(node: GraphNode, keyword: string): boolean {
@@ -40,13 +58,15 @@ function isSearchMatch(node: GraphNode, keyword: string): boolean {
 }
 
 /**
- * 裁剪入度=0 且出度=0 的孤立叶子节点与空壳容器；
- * 若孤立节点命中 searchKeyword，则强制保留该节点及其完整祖先链路。
+ * 裁剪入度=0 且出度=0 的孤立节点与空壳容器：
+ * 1. 若某容器内部后代之间存在调用/实现边（即两端映射至同一代表容器且 s != t），该容器不算孤立并予以保留；
+ * 2. 若节点或其后代命中 searchKeyword，则强制保留该节点及其完整祖先链路。
  */
 export function pruneIsolated(
   nodes: GraphNode[],
   edges: GraphEdge[],
-  searchKeyword = ''
+  searchKeyword = '',
+  repOverrides?: ReadonlyMap<string, string>
 ): GraphNode[] {
   const kw = searchKeyword.trim().toLowerCase();
   const nodeMap = new Map<string, GraphNode>();
@@ -57,6 +77,10 @@ export function pruneIsolated(
   const activeIds = new Set<string>();
 
   const markNodeAndAncestors = (id: string) => {
+    const repId = repOverrides?.get(id);
+    if (repId && nodeMap.has(repId)) {
+      activeIds.add(repId);
+    }
     const n = nodeMap.get(id);
     if (!n) return;
     activeIds.add(n.id);
@@ -68,11 +92,11 @@ export function pruneIsolated(
   };
 
   for (const e of edges) {
-    if (nodeMap.has(e.source_node_id) && nodeMap.has(e.target_node_id)) {
-      if (e.source_node_id !== e.target_node_id) {
-        markNodeAndAncestors(e.source_node_id);
-        markNodeAndAncestors(e.target_node_id);
-      }
+    const sIn = nodeMap.has(e.source_node_id) || Boolean(repOverrides?.has(e.source_node_id));
+    const tIn = nodeMap.has(e.target_node_id) || Boolean(repOverrides?.has(e.target_node_id));
+    if (sIn && tIn && e.source_node_id !== e.target_node_id) {
+      markNodeAndAncestors(e.source_node_id);
+      markNodeAndAncestors(e.target_node_id);
     }
   }
 
@@ -87,14 +111,24 @@ export function pruneIsolated(
   return nodes.filter((n) => activeIds.has(n.id));
 }
 
+function isVirtualIndependentNode(nodeId: string, nodeMap: Map<string, GraphNode>): boolean {
+  if (nodeId.startsWith('VIRTUAL_')) return true;
+  const n = nodeMap.get(nodeId);
+  return Boolean(n && n.type === 'UNREGISTERED_INTERFACE' && !n.parent_id);
+}
+
 /**
- * M19 Stage-2: 容器下钻聚焦裁剪 (Focus Scope)、跨边界外部上下文摘要卡合成、
- * 有向 N-Hop 邻域 BFS、负责人/异常过滤、孤立节点裁剪与可见集推导。
+ * M21-P1: 单层平铺聚焦裁剪与代表元映射流水线 (Step A -> B -> C -> D)
+ * - Step A: 提取 focusScope 完整后代子树，并将跨边界边按对端顶层根与方向合成为外部上下文卡；
+ * - Step B: 基于完整子树与跨界边执行有向 N-Hop BFS 过滤；
+ * - Step C: 执行 subsystemIds / ownerId / status 切片过滤；
+ * - Step D: 将存活内部节点精确投影为当前层直接子节点代表元 (relativeDepth === 1)，
+ *           禁止将 focusScope 根容器自身放入画布，并在最后延迟执行孤立裁剪。
  */
 export function scopeAndFilter(
   workingNodes: GraphNode[],
   workingEdges: GraphEdge[],
-  expandState: ExpandStateMap,
+  _expandState: ExpandStateMap,
   options: ScopeAndFilterOptions = {}
 ): ScopeAndFilterResult {
   const {
@@ -102,7 +136,10 @@ export function scopeAndFilter(
     seedNodeId = null,
     neighborhoodHop = 0,
     neighborhoodDirection = 'BOTH',
+    subsystemIds,
+    onlyMyScope = false,
     ownerId = null,
+    statusFilter = 'ALL',
     consistencyOnly = false,
     hideIsolated = false,
     searchKeyword = '',
@@ -114,13 +151,14 @@ export function scopeAndFilter(
     allNodeMap.set(n.id, n);
   }
 
+  const hasValidFocus = Boolean(focusScope && focusScope !== 'GLOBAL' && allNodeMap.has(focusScope));
+
   let candidateNodes: GraphNode[] = workingNodes;
   let candidateEdges: GraphEdge[] = workingEdges;
-  let nodesFiltered = false;
+  const virtualExternalIds = new Set<string>();
 
-  // 1. 容器下钻聚焦 (Focus Scope) + 跨边界外部上下文摘要卡合成
-  if (focusScope && focusScope !== 'GLOBAL' && allNodeMap.has(focusScope)) {
-    nodesFiltered = true;
+  // Step A: 容器下钻聚焦 -> 全后代提取 + 跨边界外部上下文摘要卡合成
+  if (hasValidFocus) {
     const focusNode = allNodeMap.get(focusScope)!;
     const focusAncestorSet = new Set<string>(focusNode.ancestors);
     const subtreeIds = new Set<string>();
@@ -159,6 +197,11 @@ export function scopeAndFilter(
       if (srcIn && dstIn) {
         nextEdges.push(e);
       } else if (srcIn && !dstIn) {
+        if (isVirtualIndependentNode(e.target_node_id, allNodeMap)) {
+          virtualExternalIds.add(e.target_node_id);
+          nextEdges.push(e);
+          continue;
+        }
         const peerRoot = resolveExternalPeerRoot(e.target_node_id);
         if (!peerRoot) continue;
         const cardId = `ext_ctx_DOWNSTREAM_${peerRoot.id}`;
@@ -183,6 +226,11 @@ export function scopeAndFilter(
           target_node_id: cardId,
         });
       } else if (!srcIn && dstIn) {
+        if (isVirtualIndependentNode(e.source_node_id, allNodeMap)) {
+          virtualExternalIds.add(e.source_node_id);
+          nextEdges.push(e);
+          continue;
+        }
         const peerRoot = resolveExternalPeerRoot(e.source_node_id);
         if (!peerRoot) continue;
         const cardId = `ext_ctx_UPSTREAM_${peerRoot.id}`;
@@ -232,7 +280,7 @@ export function scopeAndFilter(
     }
 
     candidateNodes = [
-      ...workingNodes.filter((n) => subtreeIds.has(n.id)),
+      ...workingNodes.filter((n) => subtreeIds.has(n.id) || virtualExternalIds.has(n.id)),
       ...extContextCards,
     ];
     candidateEdges = nextEdges;
@@ -246,10 +294,9 @@ export function scopeAndFilter(
     return m;
   };
 
-  // 2. 有向 N-Hop 邻域 BFS 过滤
-  const effectiveSeed = seedNodeId || (focusScope !== 'GLOBAL' ? focusScope : null);
+  // Step B: 基于完整子树与跨界边的有向 N-Hop 邻域 BFS 过滤
+  const effectiveSeed = seedNodeId || (hasValidFocus && neighborhoodHop > 0 ? focusScope : null);
   if (neighborhoodHop > 0 && effectiveSeed) {
-    nodesFiltered = true;
     const currMap = rebuildCandidateMap(candidateNodes);
     if (currMap.has(effectiveSeed)) {
       const seedSet = new Set<string>();
@@ -314,12 +361,42 @@ export function scopeAndFilter(
     }
   }
 
-  // 3. 按负责人 owner_id 过滤
-  if (ownerId != null) {
-    nodesFiltered = true;
+  // Step C1: 按顶层子系统 / 进程组 subsystemIds 多选切片
+  if (subsystemIds && subsystemIds.length > 0) {
+    const allowedSet = new Set(subsystemIds);
     const currMap = rebuildCandidateMap(candidateNodes);
     const matchedIds = new Set<string>();
-    const targetOwner = Number(ownerId);
+
+    for (const n of candidateNodes) {
+      if (n.type === 'EXTERNAL_CONTEXT') {
+        matchedIds.add(n.id);
+        continue;
+      }
+      if (isVirtualIndependentNode(n.id, currMap)) {
+        matchedIds.add(n.id);
+        continue;
+      }
+      const root = findTopRoot(n.id, currMap);
+      if (root && allowedSet.has(root.id)) {
+        matchedIds.add(n.id);
+        for (const ancId of n.ancestors) {
+          if (currMap.has(ancId)) matchedIds.add(ancId);
+        }
+      }
+    }
+
+    candidateNodes = candidateNodes.filter((n) => matchedIds.has(n.id));
+    candidateEdges = candidateEdges.filter(
+      (e) => matchedIds.has(e.source_node_id) && matchedIds.has(e.target_node_id)
+    );
+  }
+
+  // Step C2: 按负责人 owner_id 过滤
+  const effectiveOwnerFilter = ownerId != null ? ownerId : null;
+  if (effectiveOwnerFilter != null || (onlyMyScope && effectiveOwnerFilter != null)) {
+    const currMap = rebuildCandidateMap(candidateNodes);
+    const matchedIds = new Set<string>();
+    const targetOwner = Number(effectiveOwnerFilter);
 
     for (const n of candidateNodes) {
       if (n.type === 'MODULE' && Number(n.meta?.owner_id) === targetOwner) {
@@ -332,7 +409,6 @@ export function scopeAndFilter(
       }
     }
 
-    // 若图中不存在 MODULE 级 owner_id，回退检查容器自身 owner_id
     if (matchedIds.size === 0) {
       for (const n of candidateNodes) {
         if (Number(n.meta?.owner_id) === targetOwner) {
@@ -350,21 +426,26 @@ export function scopeAndFilter(
     );
   }
 
-  // 4. 按 consistency_only 过滤（仅保留 VIOLATION / UNATTRIBUTED 异常边及其两端节点与祖先）
-  if (consistencyOnly) {
-    nodesFiltered = true;
+  // Step C3: 按一致状态筛选 (ALL / ABNORMAL / VIOLATION_ONLY)
+  const effectiveStatusFilter: TopologyStatusFilter =
+    statusFilter !== 'ALL' ? statusFilter : consistencyOnly ? 'ABNORMAL' : 'ALL';
+
+  if (effectiveStatusFilter !== 'ALL') {
     const currMap = rebuildCandidateMap(candidateNodes);
     const abnormalNodeIds = new Set<string>();
     const abnormalEdges: GraphEdge[] = [];
 
     for (const e of candidateEdges) {
       const st = edgeStatusMap?.get(e.id);
-      const isAbnormal =
-        st === 'VIOLATION' ||
-        st === 'UNATTRIBUTED' ||
+      const isViolation = st === 'VIOLATION' || e.id.startsWith('dyn_viol_');
+      const isAnyAbnormal =
+        (st != null && ABNORMAL_STATUS_SET.has(st)) ||
         e.id.startsWith('dyn_viol_') ||
-        e.id.startsWith('dyn_unattr_');
-      if (isAbnormal && currMap.has(e.source_node_id) && currMap.has(e.target_node_id)) {
+        e.id.startsWith('dyn_unattr_') ||
+        e.id.startsWith('dyn_impl_unres_');
+
+      const matched = effectiveStatusFilter === 'VIOLATION_ONLY' ? isViolation : isAnyAbnormal;
+      if (matched && currMap.has(e.source_node_id) && currMap.has(e.target_node_id)) {
         abnormalEdges.push(e);
         for (const epId of [e.source_node_id, e.target_node_id]) {
           abnormalNodeIds.add(epId);
@@ -384,40 +465,109 @@ export function scopeAndFilter(
     candidateEdges = abnormalEdges;
   }
 
-  // 5. 隐藏孤立节点与空壳容器 (hideIsolated)
-  if (hideIsolated) {
-    nodesFiltered = true;
-    candidateNodes = pruneIsolated(candidateNodes, candidateEdges, searchKeyword);
-    const keptSet = new Set(candidateNodes.map((n) => n.id));
-    candidateEdges = candidateEdges.filter(
-      (e) => keptSet.has(e.source_node_id) && keptSet.has(e.target_node_id)
+  // Step D: 单层平铺代表元投影 & 延迟孤立节点裁剪
+  const survivingMap = rebuildCandidateMap(candidateNodes);
+  const repOverrides = new Map<string, string>();
+  const directRepIdSet = new Set<string>();
+  const scopedInternalNodes: GraphNode[] = [];
+
+  for (const n of candidateNodes) {
+    if (n.type === 'EXTERNAL_CONTEXT' || isVirtualIndependentNode(n.id, survivingMap)) {
+      directRepIdSet.add(n.id);
+      repOverrides.set(n.id, n.id);
+      scopedInternalNodes.push(n);
+      continue;
+    }
+
+    if (hasValidFocus && n.id === focusScope) {
+      // 聚焦根容器自身绝不投影为画布可见节点
+      continue;
+    }
+
+    const repId = resolveDirectChildRep(n.id, hasValidFocus ? focusScope : 'GLOBAL', survivingMap);
+    if (repId && survivingMap.has(repId)) {
+      directRepIdSet.add(repId);
+      repOverrides.set(n.id, repId);
+      scopedInternalNodes.push(n);
+    }
+  }
+
+  // 过滤出两端均有存活代表元的有效边
+  let projectedEdges = candidateEdges.filter(
+    (e) => repOverrides.has(e.source_node_id) && repOverrides.has(e.target_node_id)
+  );
+
+  // 对孤立节点与无关联传送门卡进行最终裁剪
+  const hasCrossOrInternalActivity = new Set<string>();
+  const hasAnyExternalEdge = new Set<string>();
+  for (const e of projectedEdges) {
+    const sRep = repOverrides.get(e.source_node_id);
+    const tRep = repOverrides.get(e.target_node_id);
+    if (!sRep || !tRep) continue;
+    if (e.source_node_id !== e.target_node_id) {
+      hasCrossOrInternalActivity.add(sRep);
+      hasCrossOrInternalActivity.add(tRep);
+    }
+    if (sRep !== tRep) {
+      hasAnyExternalEdge.add(sRep);
+      hasAnyExternalEdge.add(tRep);
+    }
+  }
+
+  const kw = searchKeyword.trim().toLowerCase();
+  const searchMatchedReps = new Set<string>();
+  if (kw) {
+    for (const n of candidateNodes) {
+      if (isSearchMatch(n, kw)) {
+        const r = repOverrides.get(n.id);
+        if (r) searchMatchedReps.add(r);
+      }
+    }
+  }
+
+  const visibleNodes: GraphNode[] = [];
+  const visibleIds = new Set<string>();
+
+  for (const repId of directRepIdSet) {
+    const node = survivingMap.get(repId);
+    if (!node) continue;
+
+    // 外部上下文卡与虚拟独立卡仅在仍有存活边连接（或命中搜索）时才保留
+    if (node.type === 'EXTERNAL_CONTEXT' || isVirtualIndependentNode(node.id, survivingMap)) {
+      if (!hasAnyExternalEdge.has(node.id) && !searchMatchedReps.has(node.id)) {
+        continue;
+      }
+    } else if (hideIsolated) {
+      if (!hasCrossOrInternalActivity.has(repId) && !searchMatchedReps.has(repId)) {
+        continue;
+      }
+    }
+
+    visibleNodes.push(node);
+    visibleIds.add(node.id);
+  }
+
+  // 移除被 hideIsolated 裁掉节点的映射关系
+  if (hideIsolated || visibleIds.size !== directRepIdSet.size) {
+    for (const [k, v] of Array.from(repOverrides.entries())) {
+      if (!visibleIds.has(v)) {
+        repOverrides.delete(k);
+      }
+    }
+    projectedEdges = projectedEdges.filter(
+      (e) => repOverrides.has(e.source_node_id) && repOverrides.has(e.target_node_id)
     );
   }
 
-  // 6. 根据当前 expandState 计算实际可见节点集合 visibleNodes / visibleIds
-  const finalMap = nodesFiltered ? rebuildCandidateMap(candidateNodes) : allNodeMap;
-  const visibleNodes: GraphNode[] = [];
-  const visibleIds = new Set<string>();
-  for (const gn of candidateNodes) {
-    let isVisible = true;
-    for (const ancId of gn.ancestors) {
-      if (nodesFiltered && !finalMap.has(ancId)) continue;
-      if (!expandState[ancId]) {
-        isVisible = false;
-        break;
-      }
-    }
-    if (isVisible) {
-      visibleNodes.push(gn);
-      visibleIds.add(gn.id);
-    }
-  }
-
   return {
-    scopedNodes: candidateNodes,
-    scopedEdges: candidateEdges,
+    scopedNodes: scopedInternalNodes.filter((n) => {
+      const rep = repOverrides.get(n.id);
+      return Boolean(rep && visibleIds.has(rep));
+    }),
+    scopedEdges: projectedEdges,
     visibleNodes,
     visibleIds,
+    repOverrides,
   };
 }
 

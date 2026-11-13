@@ -39,8 +39,8 @@ export const VisibilityGuardDialog: React.FC<VisibilityGuardDialogProps> = ({
 
         <div className="code-arch-guard-modal__body">
           <p className="code-arch-guard-modal__desc">
-            当前操作预计将同时展开渲染 <strong>{estimatedCount}</strong> 个节点，已超过单屏可读性与正交排版硬上限（
-            <strong>{hardCap}</strong> 个可见节点）。建议采用分治下钻或降噪过滤以获得清晰拓扑视图：
+            当前作用域预计将同屏渲染 <strong>{estimatedCount}</strong> 个节点，已超过单层可读性与正交排版硬上限（
+            <strong>{hardCap}</strong> 个可见节点）。建议采用逐级下钻聚焦或降噪过滤以获得清晰拓扑视图：
           </p>
 
           <div className="code-arch-guard-modal__options">
@@ -73,7 +73,7 @@ export const VisibilityGuardDialog: React.FC<VisibilityGuardDialogProps> = ({
               data-testid="guard-force-apply-btn"
             >
               <AlertTriangle size={14} />
-              <span>仍强制展开 ({estimatedCount} 节点)</span>
+              <span>仍强制渲染 ({estimatedCount} 节点)</span>
             </button>
           </div>
         </div>

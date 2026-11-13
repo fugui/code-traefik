@@ -7,17 +7,22 @@ import * as archApi from '../../api/arch';
 import * as trafficApi from '../../api/traffic';
 import * as agentApi from '../../api/agent';
 import type { Agent } from '../../types';
-import type {
-  TopologyGraphDTO,
-  GraphNode,
-  GraphEdge,
-  RollupEdgeModel,
-  ExpandStateMap,
-  NeighborhoodDirection,
-  SavedNodePosition,
-  SavedViewport,
-  TopologyLayoutListResponse,
-  TopologyLayoutDetailDTO,
+import {
+  normalizeScopeKey,
+  toScopedPositionKey,
+  type TopologyGraphDTO,
+  type GraphNode,
+  type GraphEdge,
+  type RollupEdgeModel,
+  type ExpandStateMap,
+  type NeighborhoodDirection,
+  type SavedNodePosition,
+  type SavedViewport,
+  type SavedExpandState,
+  type SavedFilterState,
+  type TopologyStatusFilter,
+  type TopologyLayoutListResponse,
+  type TopologyLayoutDetailDTO,
 } from '../../types/topology_graph';
 import type {
   ConsistencyReportDTO,
@@ -32,12 +37,17 @@ import {
   SEARCH_AUTO_EXPAND_CAP,
   type ScopeAndFilterOptions,
 } from '../../components/ArchCanvas/model/subgraph';
-import { diffLayoutAgainstGraph } from '../../components/ArchCanvas/layout/layoutMerger';
+import {
+  diffLayoutAgainstGraph,
+  clearUnpinnedInScope,
+} from '../../components/ArchCanvas/layout/layoutMerger';
 import {
   resolveInitialLayout,
   restoreExpandStateFromSaved,
   serializeExpandState,
   extractPersistablePositions,
+  normalizeSavedFilterState,
+  serializeBackendFilterState,
   saveTopologyDraft,
   loadTopologyDraft,
   clearTopologyDraft,
@@ -48,6 +58,7 @@ import {
   ArchCanvasToolbar,
   type FocusBreadcrumbItem,
   type OwnerFilterOption,
+  type SubsystemFilterOption,
 } from '../../components/ArchCanvas/panels/ArchCanvasToolbar';
 import { ArchSummaryBar } from '../../components/ArchCanvas/panels/ArchSummaryBar';
 import {
@@ -154,6 +165,10 @@ export interface ParsedTopoUrlState {
   layoutId: number | null;
   showRealization: boolean;
   contractMode: 'AGG' | 'EXPAND';
+  statusFilter: TopologyStatusFilter;
+  subsystemIds: string[];
+  onlyMyScope: boolean;
+  foldHubEdges: boolean;
 }
 
 export function parseTopoUrlParams(searchParams: URLSearchParams): ParsedTopoUrlState {
@@ -165,7 +180,15 @@ export function parseTopoUrlParams(searchParams: URLSearchParams): ParsedTopoUrl
     rawDir === 'UPSTREAM' || rawDir === 'DOWNSTREAM' ? rawDir : 'BOTH';
   const rawOwner = searchParams.get('topo_owner_id');
   const ownerId = rawOwner && !Number.isNaN(Number(rawOwner)) ? Number(rawOwner) : null;
-  const consistencyOnly = searchParams.get('topo_consistency_only') === 'true';
+  const rawStatus = (searchParams.get('topo_status') || '').toUpperCase();
+  const consistencyOnlyParam = searchParams.get('topo_consistency_only') === 'true';
+  const statusFilter: TopologyStatusFilter =
+    rawStatus === 'VIOLATION_ONLY'
+      ? 'VIOLATION_ONLY'
+      : rawStatus === 'ABNORMAL' || consistencyOnlyParam
+      ? 'ABNORMAL'
+      : 'ALL';
+  const consistencyOnly = statusFilter !== 'ALL';
   const hideIsolated = searchParams.get('topo_hide_isolated') === 'true';
   const rawLayout = searchParams.get('topo_layout_id');
   const layoutId = rawLayout && !Number.isNaN(Number(rawLayout)) ? Number(rawLayout) : null;
@@ -173,6 +196,15 @@ export function parseTopoUrlParams(searchParams: URLSearchParams): ParsedTopoUrl
   const showRealization = rawRealization !== '0';
   const rawContractMode = searchParams.get('topo_contract_mode');
   const contractMode: 'AGG' | 'EXPAND' = rawContractMode === 'EXPAND' ? 'EXPAND' : 'AGG';
+  const rawSubsystems = searchParams.get('topo_subsystems');
+  const subsystemIds = rawSubsystems
+    ? rawSubsystems
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+    : [];
+  const onlyMyScope = searchParams.get('topo_my') === 'true';
+  const foldHubEdges = searchParams.get('topo_hub_fold') !== '0';
 
   return {
     focusScope,
@@ -184,6 +216,10 @@ export function parseTopoUrlParams(searchParams: URLSearchParams): ParsedTopoUrl
     layoutId,
     showRealization,
     contractMode,
+    statusFilter,
+    subsystemIds,
+    onlyMyScope,
+    foldHubEdges,
   };
 }
 
@@ -203,8 +239,12 @@ export function buildTopoUrlParams(
   if (state.ownerId !== undefined) {
     out.topo_owner_id = state.ownerId != null ? String(state.ownerId) : null;
   }
-  if (state.consistencyOnly !== undefined) {
+  if (state.statusFilter !== undefined) {
+    out.topo_status = state.statusFilter !== 'ALL' ? state.statusFilter : null;
+    out.topo_consistency_only = state.statusFilter !== 'ALL' ? 'true' : null;
+  } else if (state.consistencyOnly !== undefined) {
     out.topo_consistency_only = state.consistencyOnly ? 'true' : null;
+    out.topo_status = state.consistencyOnly ? 'ABNORMAL' : null;
   }
   if (state.hideIsolated !== undefined) {
     out.topo_hide_isolated = state.hideIsolated ? 'true' : null;
@@ -217,6 +257,16 @@ export function buildTopoUrlParams(
   }
   if (state.contractMode !== undefined) {
     out.topo_contract_mode = state.contractMode === 'EXPAND' ? 'EXPAND' : null;
+  }
+  if (state.subsystemIds !== undefined) {
+    out.topo_subsystems =
+      state.subsystemIds.length > 0 ? state.subsystemIds.join(',') : null;
+  }
+  if (state.onlyMyScope !== undefined) {
+    out.topo_my = state.onlyMyScope ? 'true' : null;
+  }
+  if (state.foldHubEdges !== undefined) {
+    out.topo_hub_fold = state.foldHubEdges ? null : '0';
   }
   return out;
 }
@@ -254,20 +304,22 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
   const [loadingGraph, setLoadingGraph] = useState(false);
   const [expandState, setExpandState] = useState<ExpandStateMap>({});
   const [depthLevel, setDepthLevel] = useState<number>(0);
-  const [wheelAutoExpand, setWheelAutoExpand] = useState<boolean>(false);
   const [searchKeyword, setSearchKeyword] = useState<string>('');
   const [resetKey, setResetKey] = useState<number>(0);
 
-  // M19 聚焦与降噪筛选状态
+  // M19 / M21 聚焦与降噪筛选状态
   const [focusScope, setFocusScope] = useState<string>(initialUrlState.focusScope);
   const [neighborhoodHop, setNeighborhoodHop] = useState<number>(initialUrlState.neighborhoodHop);
   const [neighborhoodDirection, setNeighborhoodDirection] = useState<NeighborhoodDirection>(
     initialUrlState.neighborhoodDirection
   );
   const [ownerId, setOwnerId] = useState<number | null>(initialUrlState.ownerId);
-  const [consistencyOnly, setConsistencyOnly] = useState<boolean>(initialUrlState.consistencyOnly);
+  const [statusFilter, setStatusFilter] = useState<TopologyStatusFilter>(initialUrlState.statusFilter);
+  const consistencyOnly = statusFilter !== 'ALL';
+  const [subsystemIds, setSubsystemIds] = useState<string[]>(initialUrlState.subsystemIds);
+  const [onlyMyScope, setOnlyMyScope] = useState<boolean>(initialUrlState.onlyMyScope);
   const [hideIsolated, setHideIsolated] = useState<boolean>(initialUrlState.hideIsolated);
-  const [foldHubEdges, setFoldHubEdges] = useState<boolean>(true);
+  const [foldHubEdges, setFoldHubEdges] = useState<boolean>(initialUrlState.foldHubEdges);
   const [showRealization, setShowRealization] = useState<boolean>(initialUrlState.showRealization);
   const [contractMode, setContractMode] = useState<'AGG' | 'EXPAND'>(initialUrlState.contractMode);
   const [expandedHubNodeIds, setExpandedHubNodeIds] = useState<Set<string>>(new Set());
@@ -359,8 +411,13 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
       curr !== parsed.neighborhoodDirection ? parsed.neighborhoodDirection : curr
     );
     setOwnerId((curr) => (curr !== parsed.ownerId ? parsed.ownerId : curr));
-    setConsistencyOnly((curr) => (curr !== parsed.consistencyOnly ? parsed.consistencyOnly : curr));
+    setStatusFilter((curr) => (curr !== parsed.statusFilter ? parsed.statusFilter : curr));
+    setSubsystemIds((curr) =>
+      curr.join(',') !== parsed.subsystemIds.join(',') ? parsed.subsystemIds : curr
+    );
+    setOnlyMyScope((curr) => (curr !== parsed.onlyMyScope ? parsed.onlyMyScope : curr));
     setHideIsolated((curr) => (curr !== parsed.hideIsolated ? parsed.hideIsolated : curr));
+    setFoldHubEdges((curr) => (curr !== parsed.foldHubEdges ? parsed.foldHubEdges : curr));
     setActiveLayoutId((curr) => (curr !== parsed.layoutId ? parsed.layoutId : curr));
     setShowRealization((curr) => (curr !== parsed.showRealization ? parsed.showRealization : curr));
     setContractMode((curr) => (curr !== parsed.contractMode ? parsed.contractMode : curr));
@@ -390,7 +447,10 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
           seedNodeId: selectedNode?.id ?? null,
           neighborhoodHop,
           neighborhoodDirection,
+          subsystemIds,
+          onlyMyScope,
           ownerId,
+          statusFilter,
           consistencyOnly,
           hideIsolated: targetHideIsolated,
           searchKeyword,
@@ -432,27 +492,26 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
       neighborhoodHop,
       neighborhoodDirection,
       ownerId,
+      subsystemIds,
+      onlyMyScope,
+      statusFilter,
       consistencyOnly,
       searchKeyword,
       updateUrlParams,
     ]
   );
 
-  // 搜索命中计算与自动展开守卫 (SEARCH_AUTO_EXPAND_CAP = 30)
+  // 搜索命中计算（用于高亮与下拉候选，不再自动全展破坏单层心智模型）
   const searchDecision = useMemo(
     () => computeSearchExpandDecision(graphData?.nodes ?? [], searchKeyword),
     [graphData, searchKeyword]
   );
 
-  useEffect(() => {
-    if (!searchDecision.shouldAutoExpand) return;
-    if (Object.keys(searchDecision.ancestorsToExpand).length === 0) return;
-    applyVisibilityChange({
-      ...expandState,
-      ...searchDecision.ancestorsToExpand,
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchKeyword, searchDecision.shouldAutoExpand]);
+  const searchCandidates = useMemo(() => {
+    if (!graphData?.nodes || !searchKeyword.trim()) return [];
+    const matched = searchDecision.matchedNodeIds;
+    return graphData.nodes.filter((n) => matched.has(n.id)).slice(0, 20);
+  }, [graphData, searchKeyword, searchDecision.matchedNodeIds]);
 
   // 加载全系统复合拓扑图
   const loadGraph = useCallback(
@@ -480,15 +539,8 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
       snapshot: {
         focus_scope: string;
         node_positions: Record<string, SavedNodePosition>;
-        expand_state: { depth_level: number; expanded_node_ids: string[]; collapsed_node_ids?: string[] };
-        filter_state: {
-          neighborhood_hop: number;
-          neighborhood_direction: NeighborhoodDirection;
-          owner_id?: number | null;
-          consistency_only: boolean;
-          hide_isolated: boolean;
-          fold_hub_edges: boolean;
-        };
+        expand_state: SavedExpandState;
+        filter_state: SavedFilterState;
         viewport: SavedViewport;
       },
       nodes: GraphNode[],
@@ -511,12 +563,15 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
       setPinnedNodeIds(pinned);
 
       const restoredExpand = restoreExpandStateFromSaved(snapshot.expand_state, nodes);
-      setNeighborhoodHop(snapshot.filter_state?.neighborhood_hop ?? 0);
-      setNeighborhoodDirection(snapshot.filter_state?.neighborhood_direction ?? 'BOTH');
+      const normalizedFilter = normalizeSavedFilterState(snapshot.filter_state);
+      setNeighborhoodHop(normalizedFilter.neighborhoodHop);
+      setNeighborhoodDirection(normalizedFilter.neighborhoodDirection);
       setOwnerId(snapshot.filter_state?.owner_id ?? null);
-      setConsistencyOnly(Boolean(snapshot.filter_state?.consistency_only));
-      setHideIsolated(Boolean(snapshot.filter_state?.hide_isolated));
-      setFoldHubEdges(snapshot.filter_state?.fold_hub_edges !== false);
+      setStatusFilter(normalizedFilter.statusFilter);
+      setSubsystemIds(normalizedFilter.subsystemIds);
+      setOnlyMyScope(normalizedFilter.onlyMyScope);
+      setHideIsolated(normalizedFilter.hideIsolated);
+      setFoldHubEdges(normalizedFilter.foldHubEdges);
 
       if (snapshot.viewport && Number.isFinite(snapshot.viewport.zoom)) {
         setRestoredViewport(snapshot.viewport);
@@ -524,7 +579,7 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
       }
 
       applyVisibilityChange(restoredExpand, snapshot.focus_scope || 'GLOBAL', {
-        nextDepthLevel: snapshot.expand_state?.depth_level ?? 0,
+        nextDepthLevel: snapshot.expand_state?.level ?? snapshot.expand_state?.depth_level ?? 0,
       });
     },
     [applyVisibilityChange]
@@ -584,22 +639,26 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
   const scheduleSaveDraft = useCallback(
     (nextPositions: Record<string, SavedNodePosition> | null) => {
       if (!graphData || !nextPositions) return;
+      const validIds = new Set((graphData.nodes || []).map((n) => n.id));
       if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
       draftTimerRef.current = setTimeout(() => {
         saveTopologyDraft(currentUserId, view, {
           view,
           structure_version: graphData.structure_version || '',
           focus_scope: focusScope,
-          node_positions: extractPersistablePositions(nextPositions),
+          node_positions: extractPersistablePositions(nextPositions, { validNodeIds: validIds }),
           expand_state: serializeExpandState(expandState, depthLevel),
-          filter_state: {
-            neighborhood_hop: neighborhoodHop,
-            neighborhood_direction: neighborhoodDirection,
-            owner_id: ownerId,
-            consistency_only: consistencyOnly,
-            hide_isolated: hideIsolated,
-            fold_hub_edges: foldHubEdges,
-          },
+          filter_state: serializeBackendFilterState({
+            subsystemIds,
+            onlyMyScope,
+            statusFilter,
+            egoNodeId: selectedNode?.id ?? null,
+            neighborhoodHop,
+            neighborhoodDirection,
+            ownerId,
+            hideIsolated,
+            foldHubEdges,
+          }),
           viewport: currentViewport,
           updated_at: Date.now(),
         });
@@ -613,10 +672,13 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
       focusScope,
       expandState,
       depthLevel,
+      subsystemIds,
+      onlyMyScope,
+      statusFilter,
+      selectedNode?.id,
       neighborhoodHop,
       neighborhoodDirection,
       ownerId,
-      consistencyOnly,
       hideIsolated,
       foldHubEdges,
       currentViewport,
@@ -719,38 +781,6 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
     [updateUrlParams]
   );
 
-  const maxDepth = useMemo(() => {
-    if (!graphData || !graphData.nodes || graphData.nodes.length === 0) return 0;
-    return Math.max(0, ...graphData.nodes.map((n) => n.depth));
-  }, [graphData]);
-
-  // 层级深度滑杆调整（通过 applyVisibilityChange 统一守卫）
-  const handleDepthLevelChange = useCallback(
-    (level: number) => {
-      if (!graphData) {
-        setDepthLevel(level);
-        return;
-      }
-
-      const nextExpand: ExpandStateMap = {};
-      graphData.nodes.forEach((n) => {
-        const isContainer =
-          n.type === 'SUBSYSTEM' ||
-          n.type === 'FUNCTIONAL_GROUP' ||
-          n.type === 'PROCESS_GROUP' ||
-          n.type === 'PROCESS' ||
-          n.type === 'UNDEPLOYED_CONTAINER' ||
-          n.type === 'EXTERNAL_CONTAINER';
-
-        if (isContainer) {
-          nextExpand[n.id] = n.depth < level;
-        }
-      });
-      applyVisibilityChange(nextExpand, focusScope, { nextDepthLevel: level });
-    },
-    [graphData, focusScope, applyVisibilityChange]
-  );
-
   // 单节点展开/折叠切换（通过 applyVisibilityChange 统一守卫）
   const handleToggleExpand = useCallback(
     (nodeId: string) => {
@@ -785,15 +815,21 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
     [graphData, expandState, applyVisibilityChange]
   );
 
-  // 固定/解锁节点位置
+  // 按当前 focusScope 固定/解锁节点位置
   const handleTogglePin = useCallback(
     (nodeId: string) => {
-      const willPin = !pinnedNodeIds.has(nodeId);
+      const scopeKey = normalizeScopeKey(focusScope);
+      const scopedKey = toScopedPositionKey(scopeKey, nodeId);
+      const willPin = !(pinnedNodeIds.has(scopedKey) || pinnedNodeIds.has(nodeId));
 
       setPinnedNodeIds((prev) => {
         const next = new Set(prev);
-        if (next.has(nodeId)) next.delete(nodeId);
-        else next.add(nodeId);
+        if (willPin) {
+          next.add(scopedKey);
+        } else {
+          next.delete(scopedKey);
+          next.delete(nodeId);
+        }
         return next;
       });
 
@@ -802,32 +838,23 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
 
       setSavedPositions((prev) => {
         const base = prev || {};
-        const existing = base[nodeId];
-        let nextNodePos: SavedNodePosition;
-
-        if (existing) {
-          nextNodePos = {
-            ...existing,
-            pinned: willPin,
-          };
-        } else {
-          const parentId = gn?.parent_id ?? null;
-          const defaultW = gn?.type === 'MODULE' ? 220 : 260;
-          const defaultH = gn?.type === 'MODULE' ? 74 : (expandState[nodeId] ? 140 : 80);
-          nextNodePos = {
-            x: 0,
-            y: 0,
-            parent_id: parentId,
-            is_expanded: Boolean(expandState[nodeId]),
-            pinned: willPin,
-            width: defaultW,
-            height: defaultH,
-          };
-        }
+        const existing = base[scopedKey] ?? base[nodeId];
+        const nextNodePos: SavedNodePosition = existing
+          ? {
+              ...existing,
+              pinned: willPin,
+            }
+          : {
+              x: 0,
+              y: 0,
+              parent_id: gn?.parent_id ?? null,
+              is_expanded: false,
+              pinned: willPin,
+            };
 
         const next = {
           ...base,
-          [nodeId]: nextNodePos,
+          [scopedKey]: nextNodePos,
         };
         scheduleSaveDraft(next);
         return next;
@@ -839,49 +866,43 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
         toast.info(`已取消「${displayName}」位置固定`);
       }
     },
-    [pinnedNodeIds, graphData, expandState, scheduleSaveDraft, toast]
+    [focusScope, pinnedNodeIds, graphData, scheduleSaveDraft, toast]
   );
 
-  // 单节点拖拽停止后记录最新相对坐标并写入草稿（同时联动撑大父容器保存尺寸）
+  // 单节点拖拽停止后按作用域隔离键持久化坐标并自动置为 pinned 保护状态
   const handleNodePositionChange = useCallback(
     (nodeId: string, pos: { x: number; y: number }) => {
+      const scopeKey = normalizeScopeKey(focusScope);
+      const scopedKey = toScopedPositionKey(scopeKey, nodeId);
+
+      setPinnedNodeIds((prev) => {
+        if (prev.has(scopedKey)) return prev;
+        const next = new Set(prev);
+        next.add(scopedKey);
+        return next;
+      });
+
       setSavedPositions((prev) => {
         const base = prev || {};
-        const existing = base[nodeId];
+        const existing = base[scopedKey] ?? base[nodeId];
         const gn = graphData?.nodes?.find((n) => n.id === nodeId);
-        const parentId = existing?.parent_id ?? gn?.parent_id ?? null;
-        const childW = existing?.width ?? (gn?.type === 'MODULE' ? 220 : 260);
-        const childH = existing?.height ?? (gn?.type === 'MODULE' ? 74 : 80);
-
         const next: Record<string, SavedNodePosition> = {
           ...base,
-          [nodeId]: {
+          [scopedKey]: {
             x: pos.x,
             y: pos.y,
-            parent_id: parentId,
-            is_expanded: Boolean(expandState[nodeId]),
-            pinned: pinnedNodeIds.has(nodeId) || existing?.pinned,
+            parent_id: existing?.parent_id ?? gn?.parent_id ?? null,
+            is_expanded: false,
+            pinned: true,
             width: existing?.width,
             height: existing?.height,
           },
         };
-
-        if (parentId && next[parentId]) {
-          const parentPos = next[parentId];
-          const reqW = pos.x + childW + 16;
-          const reqH = pos.y + childH + 16;
-          next[parentId] = {
-            ...parentPos,
-            width: Math.max(parentPos.width ?? 260, reqW),
-            height: Math.max(parentPos.height ?? 140, reqH),
-          };
-        }
-
         scheduleSaveDraft(next);
         return next;
       });
     },
-    [graphData, expandState, pinnedNodeIds, scheduleSaveDraft]
+    [focusScope, graphData, scheduleSaveDraft]
   );
 
   // 展开高扇出 Hub 节点折叠边
@@ -893,7 +914,24 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
     });
   }, []);
 
-  // 重置布局并清除本地草稿
+  // 自动整理：仅清除当前作用域未钉住节点位移并重跑 ELK 正交排版（保留 pinned 与其他作用域记忆）
+  const handleAutoRelayout = useCallback(() => {
+    setSavedPositions((prev) => {
+      const cleaned = clearUnpinnedInScope(prev || {}, focusScope, pinnedNodeIds);
+      if (Object.keys(cleaned).length === 0) {
+        clearTopologyDraft(currentUserId, view);
+        setHasUnsavedDraft(false);
+        return null;
+      }
+      scheduleSaveDraft(cleaned);
+      return cleaned;
+    });
+    setExpandedHubNodeIds(new Set());
+    setResetKey((k) => k + 1);
+    toast.success('已保留固定节点并重排当前作用域正交布局');
+  }, [focusScope, pinnedNodeIds, currentUserId, view, scheduleSaveDraft, toast]);
+
+  // 完全重置布局并清除本地草稿
   const handleResetLayout = useCallback(() => {
     clearTopologyDraft(currentUserId, view);
     setHasUnsavedDraft(false);
@@ -915,18 +953,22 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
   }, [view]);
 
   const buildCurrentSnapshotPayload = useCallback(() => {
+    const validIds = new Set((graphData?.nodes || []).map((n) => n.id));
     return {
       structure_version: graphData?.structure_version || '',
-      node_positions: extractPersistablePositions(savedPositions || {}),
+      node_positions: extractPersistablePositions(savedPositions || {}, { validNodeIds: validIds }),
       expand_state: serializeExpandState(expandState, depthLevel),
-      filter_state: {
-        neighborhood_hop: neighborhoodHop,
-        neighborhood_direction: neighborhoodDirection,
-        owner_id: ownerId,
-        consistency_only: consistencyOnly,
-        hide_isolated: hideIsolated,
-        fold_hub_edges: foldHubEdges,
-      },
+      filter_state: serializeBackendFilterState({
+        subsystemIds,
+        onlyMyScope,
+        statusFilter,
+        egoNodeId: selectedNode?.id ?? null,
+        neighborhoodHop,
+        neighborhoodDirection,
+        ownerId,
+        hideIsolated,
+        foldHubEdges,
+      }),
       viewport: currentViewport,
     };
   }, [
@@ -934,10 +976,13 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
     savedPositions,
     expandState,
     depthLevel,
+    subsystemIds,
+    onlyMyScope,
+    statusFilter,
+    selectedNode?.id,
     neighborhoodHop,
     neighborhoodDirection,
     ownerId,
-    consistencyOnly,
     hideIsolated,
     foldHubEdges,
     currentViewport,
@@ -1099,13 +1144,43 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
     setIsPendingDrawerOpen(false);
   }, []);
 
-  const handleJumpToNode = useCallback((peerNode: GraphNode) => {
-    setSelectedNode(peerNode);
-    setPanToNodeRequest((prev) => ({
-      nodeId: peerNode.id,
-      seq: (prev?.seq ?? 0) + 1,
-    }));
-  }, []);
+  const handleJumpToNode = useCallback(
+    (peerNode: GraphNode) => {
+      const targetScope = peerNode.parent_id || 'GLOBAL';
+      if (normalizeScopeKey(focusScope) !== normalizeScopeKey(targetScope)) {
+        applyVisibilityChange(expandState, targetScope);
+      }
+      setSelectedNode(peerNode);
+      setPanToNodeRequest((prev) => ({
+        nodeId: peerNode.id,
+        seq: (prev?.seq ?? 0) + 1,
+      }));
+    },
+    [focusScope, expandState, applyVisibilityChange]
+  );
+
+  // 搜索候选点选后自动跨层切换 focusScope 并飞跃定位 + 2s 脉冲高亮
+  const handleSelectSearchCandidate = useCallback(
+    (candidate: GraphNode) => {
+      handleJumpToNode(candidate);
+    },
+    [handleJumpToNode]
+  );
+
+  const graphNodeMap = useMemo(() => {
+    const map = new Map<string, GraphNode>();
+    for (const n of graphData?.nodes ?? []) {
+      map.set(n.id, n);
+    }
+    return map;
+  }, [graphData?.nodes]);
+
+  const subsystemOptions: SubsystemFilterOption[] = useMemo(() => {
+    if (!graphData?.nodes) return [];
+    return graphData.nodes
+      .filter((n) => n.type === 'SUBSYSTEM' || n.type === 'PROCESS_GROUP')
+      .map((n) => ({ id: n.id, name: n.name }));
+  }, [graphData?.nodes]);
 
   const selectedNodeRelations = useMemo(
     () => computeNodeRelations(selectedNode?.id, graphData?.nodes ?? [], visibleRollupEdges),
@@ -1219,18 +1294,16 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
 
   return (
     <div className="code-arch-topology-tab-pane">
-      {/* 顶部工具栏 */}
+      {/* 顶部 4 组工具栏 */}
       <ArchCanvasToolbar
         view={view}
         onViewChange={handleViewChange}
-        depthLevel={depthLevel}
-        maxDepth={maxDepth}
-        onDepthLevelChange={handleDepthLevelChange}
-        wheelAutoExpand={wheelAutoExpand}
-        onToggleWheelAutoExpand={setWheelAutoExpand}
         onResetLayout={handleResetLayout}
+        onAutoRelayout={handleAutoRelayout}
         searchKeyword={searchKeyword}
         onSearchChange={setSearchKeyword}
+        searchCandidates={searchCandidates}
+        onSelectSearchCandidate={handleSelectSearchCandidate}
         sessions={sessions}
         selectedSessionId={selectedSessionId}
         onSelectSession={handleSelectSession}
@@ -1241,6 +1314,23 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
         focusScope={focusScope}
         focusBreadcrumbs={focusBreadcrumbs}
         onFocusScopeChange={handleFocusScopeChange}
+        renderBreadcrumbBar={false}
+        statusFilter={statusFilter}
+        onStatusFilterChange={(nextStatus) => {
+          setStatusFilter(nextStatus);
+          updateUrlParams(buildTopoUrlParams({ statusFilter: nextStatus }));
+        }}
+        subsystemOptions={subsystemOptions}
+        subsystemIds={subsystemIds}
+        onSubsystemIdsChange={(nextIds) => {
+          setSubsystemIds(nextIds);
+          updateUrlParams(buildTopoUrlParams({ subsystemIds: nextIds }));
+        }}
+        onlyMyScope={onlyMyScope}
+        onToggleOnlyMyScope={(enabled) => {
+          setOnlyMyScope(enabled);
+          updateUrlParams(buildTopoUrlParams({ onlyMyScope: enabled }));
+        }}
         neighborhoodHop={neighborhoodHop}
         onNeighborhoodHopChange={(hop) => {
           setNeighborhoodHop(hop);
@@ -1259,8 +1349,9 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
         }}
         consistencyOnly={consistencyOnly}
         onToggleConsistencyOnly={(enabled) => {
-          setConsistencyOnly(enabled);
-          updateUrlParams(buildTopoUrlParams({ consistencyOnly: enabled }));
+          const nextStatus: TopologyStatusFilter = enabled ? 'ABNORMAL' : 'ALL';
+          setStatusFilter(nextStatus);
+          updateUrlParams(buildTopoUrlParams({ statusFilter: nextStatus }));
         }}
         hideIsolated={hideIsolated}
         onToggleHideIsolated={(enabled) => {
@@ -1268,7 +1359,10 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
           updateUrlParams(buildTopoUrlParams({ hideIsolated: enabled }));
         }}
         foldHubEdges={foldHubEdges}
-        onToggleFoldHubEdges={setFoldHubEdges}
+        onToggleFoldHubEdges={(enabled) => {
+          setFoldHubEdges(enabled);
+          updateUrlParams(buildTopoUrlParams({ foldHubEdges: enabled }));
+        }}
         showRealization={showRealization}
         onToggleShowRealization={(show) => {
           setShowRealization(show);
@@ -1366,11 +1460,8 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
           view={view}
           resetKey={resetKey}
           searchKeyword={searchKeyword}
-          wheelAutoExpand={wheelAutoExpand}
-          depthLevel={depthLevel}
-          maxDepth={maxDepth}
-          onDepthLevelChange={handleDepthLevelChange}
           focusScope={focusScope}
+          breadcrumbs={focusBreadcrumbs}
           seedNodeId={selectedNode?.id ?? null}
           neighborhoodHop={neighborhoodHop}
           neighborhoodDirection={neighborhoodDirection}
@@ -1382,7 +1473,10 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
             setNeighborhoodDirection(dir);
             updateUrlParams(buildTopoUrlParams({ neighborhoodDirection: dir }));
           }}
+          subsystemIds={subsystemIds}
+          onlyMyScope={onlyMyScope}
           ownerId={ownerId}
+          statusFilter={statusFilter}
           consistencyOnly={consistencyOnly}
           hideIsolated={hideIsolated}
           showRealization={showRealization}
@@ -1395,9 +1489,6 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
           onFocusScope={handleFocusScopeChange}
           onTogglePin={handleTogglePin}
           onNodePositionChange={handleNodePositionChange}
-          onPositionsComputed={(computed) => {
-            setSavedPositions((prev) => (prev ? { ...prev, ...computed } : computed));
-          }}
           initialViewport={restoredViewport}
           onViewportChange={setCurrentViewport}
           containerSearchMatchCounts={searchDecision.containerMatchCounts}
@@ -1480,6 +1571,11 @@ export const ArchTopologyTabPane: React.FC<ArchTopologyTabPaneProps> = ({
         open={isEdgeDrawerOpen}
         onClose={() => setIsEdgeDrawerOpen(false)}
         edge={selectedEdge}
+        nodeMap={graphNodeMap}
+        onFocusScope={(targetScope) => {
+          setIsEdgeDrawerOpen(false);
+          handleFocusScopeChange(targetScope);
+        }}
         onViewTrafficRecord={handleViewTrafficRecord}
       />
 

@@ -165,35 +165,22 @@ describe('M19-P7 (AC-M19-04 & SC-11): ArchCanvasScale Performance Benchmark Suit
       };
     }
 
-    // 2. 展开单容器 sub_1 及其首个功能组 grp_1，执行局部子树 ELK + 自底向上碰撞推挤合并
-    const expandSub1: ExpandStateMap = {
-      sub_1: true,
-      grp_1: true,
-    };
-
-    const scopedSub1 = scopeAndFilter(overlay.workingNodes, overlay.workingEdges, expandSub1, {
-      focusScope: 'GLOBAL',
+    // 2. M21 单层下钻至 sub_1，验证局部单层裁剪、边上卷及正交 ELK 排版总耗时可控
+    const scopedSub1 = scopeAndFilter(overlay.workingNodes, overlay.workingEdges, {}, {
+      focusScope: 'sub_1',
       edgeStatusMap: overlay.edgeStatusMap,
     });
     const aggSub1 = aggregateRollup(
       scopedSub1.scopedNodes,
       scopedSub1.scopedEdges,
-      expandSub1,
-      overlay
+      {},
+      overlay,
+      scopedSub1.repOverrides
     );
-    const sub1Nodes = scopedSub1.visibleNodes.filter(
-      (n) => n.id === 'sub_1' || n.ancestors.includes('sub_1')
-    );
-    const sub1Edges = aggSub1.rollupEdges.filter(
-      (e) =>
-        sub1Nodes.some((n) => n.id === e.source) &&
-        sub1Nodes.some((n) => n.id === e.target)
-    );
-    // 预热一次复合容器 GWT 分支
-    await elk.layout(buildElkGraph(sub1Nodes, sub1Edges, expandSub1));
+    await elk.layout(buildElkGraph(scopedSub1.visibleNodes, aggSub1.rollupEdges, {}));
 
     const tStart = performance.now();
-    const sub1Tree = await elk.layout(buildElkGraph(sub1Nodes, sub1Edges, expandSub1));
+    const sub1Tree = await elk.layout(buildElkGraph(scopedSub1.visibleNodes, aggSub1.rollupEdges, {}));
     const sub1Coords = extractNodeCoordinates(sub1Tree, 0, 0);
     const subtreeBoxes = new Map<string, NodeBox>();
     for (const [id, c] of sub1Coords.entries()) {
@@ -205,7 +192,7 @@ describe('M19-P7 (AC-M19-04 & SC-11): ArchCanvasScale Performance Benchmark Suit
         y: c.y,
         width: c.width,
         height: c.height,
-        isExpanded: Boolean(expandSub1[id]),
+        isExpanded: false,
       });
     }
 
@@ -215,12 +202,12 @@ describe('M19-P7 (AC-M19-04 & SC-11): ArchCanvasScale Performance Benchmark Suit
       subtreeBoxes,
       existingPositions: savedL0,
       nodes: scopedSub1.visibleNodes,
-      expandState: expandSub1,
+      expandState: {},
     });
     const mergeMs = performance.now() - tMerge0;
     const degradedEdges = markDegradedEdges(
       aggSub1.rollupEdges,
-      merged.touchedIds,
+      new Set(scopedSub1.visibleNodes.map((n) => n.id)),
       scopedSub1.visibleNodes
     );
     const totalLocalExpandMs = performance.now() - tStart;
@@ -237,30 +224,36 @@ describe('M19-P7 (AC-M19-04 & SC-11): ArchCanvasScale Performance Benchmark Suit
 
   it('testPerf_300Nodes600Edges_FocusSubsystem_AndNHopFilter_Under150ms', () => {
     const { graph, report } = mediumFixture;
-    const expandFocus: ExpandStateMap = {
-      sub_1: true,
-      grp_1: true,
-      grp_2: true,
-      grp_3: true,
-    };
 
     const t0 = performance.now();
     const overlay = synthesizeOverlay(graph.nodes, graph.edges, report, 'LOGICAL');
-    const focused = scopeAndFilter(overlay.workingNodes, overlay.workingEdges, expandFocus, {
+    const focused = scopeAndFilter(overlay.workingNodes, overlay.workingEdges, {}, {
       focusScope: 'sub_1',
       edgeStatusMap: overlay.edgeStatusMap,
     });
     const aggFocus = aggregateRollup(
       focused.scopedNodes,
       focused.scopedEdges,
-      expandFocus,
-      overlay
+      {},
+      overlay,
+      focused.repOverrides
     );
-    const foldedFocus = foldHubEdges(aggFocus.rollupEdges, focused.visibleNodes, {
+    const globalScoped = scopeAndFilter(overlay.workingNodes, overlay.workingEdges, {}, {
+      focusScope: 'GLOBAL',
+      edgeStatusMap: overlay.edgeStatusMap,
+    });
+    const aggGlobal = aggregateRollup(
+      globalScoped.scopedNodes,
+      globalScoped.scopedEdges,
+      {},
+      overlay,
+      globalScoped.repOverrides
+    );
+    const foldedGlobal = foldHubEdges(aggGlobal.rollupEdges, globalScoped.visibleNodes, {
       foldHubEdges: true,
     });
 
-    const nhop = scopeAndFilter(overlay.workingNodes, overlay.workingEdges, expandFocus, {
+    const nhop = scopeAndFilter(overlay.workingNodes, overlay.workingEdges, {}, {
       focusScope: 'GLOBAL',
       seedNodeId: 'mod_1',
       neighborhoodHop: 2,
@@ -271,7 +264,8 @@ describe('M19-P7 (AC-M19-04 & SC-11): ArchCanvasScale Performance Benchmark Suit
     const elapsedMs = performance.now() - t0;
 
     expect(focused.scopedNodes.some((n) => n.type === 'EXTERNAL_CONTEXT')).toBe(true);
-    expect(foldedFocus.some((e) => e.isHubSummary)).toBe(true);
+    expect(aggFocus.rollupEdges.length).toBeGreaterThan(0);
+    expect(foldedGlobal.some((e) => e.isHubSummary)).toBe(true);
     expect(nhop.scopedNodes.length).toBeGreaterThan(1);
     expect(elapsedMs).toBeLessThan(500);
   });

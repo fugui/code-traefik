@@ -7,7 +7,7 @@
 > **里程碑编号**：`M21 — 架构拓扑单层平铺逐级下钻重构、ELK 正交布局校准与全链路易用性升级`
 > **覆盖需求范围**：`F-04`（分层结构拓扑画布）、`F-04.1`（单层平铺逐级下钻、`FIRST/LAST` 外部传送门卡与面包屑导航）、`F-04.2`（四组收敛工具栏、筛选 Popover、Filter Chips、搜索直达聚焦与可读边详情抽屉）、`F-04.3`（按作用域隔离的位置记忆、仅显式拖拽/图钉固定才锁定、`1:1 border-box`、四向智能锚点与多边标签防叠）、`SC-11`（大规模拓扑端到端验收）
 > **前置依赖**：`M19`、`M20`（✅ 已交付）、[`../05-adr/17-topology-single-layer-drilldown-and-layout-ux-adr.md`](../05-adr/17-topology-single-layer-drilldown-and-layout-ux-adr.md) (`v1.1.0`)
-> **当前状态**：⏳ **待实施 (Planned)**
+> **当前状态**：✅ **已交付 (Delivered)**
 
 ### 修订记录
 
@@ -101,25 +101,25 @@ flowchart LR
 
 M21 实施完成后，必须顺序执行并通过以下全部门禁（零失败、零 Warning）：
 
-- [ ] **AC-M21-01（单层裁剪、ELK 布局与作用域持久化纯算法 Vitest + 覆盖率门禁）**：
+- [x] **AC-M21-01（单层裁剪、ELK 布局与作用域持久化纯算法 Vitest + 覆盖率门禁）**：
   ```bash
   cd frontend && npx vitest run --coverage \
     src/__tests__/ArchCanvasScopeAndFilter.test.ts \
     src/__tests__/ArchCanvasRollup.test.ts \
     src/__tests__/ArchCanvasHybridLayout.test.ts
   ```
-- [ ] **AC-M21-02（拓扑画布组件、工作台面包屑/工具栏/抽屉全量 Vitest 单测）**：
+- [x] **AC-M21-02（拓扑画布组件、工作台面包屑/工具栏/抽屉全量 Vitest 单测）**：
   ```bash
   cd frontend && npx vitest run \
     src/components/ArchCanvas/__tests__/ArchCanvas.test.tsx \
     src/__tests__/TopologyFocusAndPersistenceWorkbench.test.tsx \
     src/__tests__/ArchCanvasScale.perf.test.ts
   ```
-- [ ] **AC-M21-03（前端全量测试、TypeScript 类型检查与 ESLint 零告警门禁）**：
+- [x] **AC-M21-03（前端全量测试、TypeScript 类型检查与 ESLint 零告警门禁）**：
   ```bash
   make lint && cd frontend && npx vitest run
   ```
-- [ ] **AC-M21-04（后端无回归 + 单二进制生产构建与环境清理门禁）**：
+- [x] **AC-M21-04（后端无回归 + 单二进制生产构建与环境清理门禁）**：
   ```bash
   make test && make build && make clean
   ```

@@ -72,3 +72,93 @@ export function findLCA(nodeIds: string[], nodeMap: Map<string, GraphNode>): str
   return commonAncestors.length > 0 ? commonAncestors[commonAncestors.length - 1] : null;
 }
 
+/**
+ * 查找节点所属的顶层根容器（depth = 0 或最顶层存在于 nodeMap 的祖先）
+ */
+export function findTopRoot(nodeId: string, nodeMap: Map<string, GraphNode>): GraphNode | null {
+  const node = nodeMap.get(nodeId);
+  if (!node) return null;
+  for (const ancId of node.ancestors) {
+    const anc = nodeMap.get(ancId);
+    if (anc) return anc;
+  }
+  return node;
+}
+
+/**
+ * M21 单层平铺代表元解析：
+ * - 全局模式 (GLOBAL / null): 返回节点自身（若是顶层根）或其顶层根节点 ID；
+ * - 聚焦模式 (focusScope = containerId):
+ *   - 聚焦根容器自身绝不作为画布节点渲染，返回 null；
+ *   - 属于聚焦容器的子孙节点，返回其在 focusScope 下的直接子节点 ID (relativeDepth === 1)；
+ *   - 不属于聚焦容器子树的节点返回 null。
+ */
+export function resolveDirectChildRep(
+  nodeId: string,
+  focusScope: string | null | undefined,
+  nodeMap: Map<string, GraphNode>
+): string | null {
+  const node = nodeMap.get(nodeId);
+  if (!node) return null;
+
+  const isGlobal = !focusScope || focusScope === 'GLOBAL' || !nodeMap.has(focusScope);
+  if (isGlobal) {
+    if (!node.parent_id || !nodeMap.has(node.parent_id)) {
+      return node.id;
+    }
+    for (const ancId of node.ancestors) {
+      if (nodeMap.has(ancId)) {
+        return ancId;
+      }
+    }
+    return node.id;
+  }
+
+  if (nodeId === focusScope) {
+    return null;
+  }
+
+  if (node.parent_id === focusScope) {
+    return node.id;
+  }
+
+  const chain = [...node.ancestors, node.id];
+  const focusIdx = chain.indexOf(focusScope);
+  if (focusIdx >= 0 && focusIdx + 1 < chain.length) {
+    const directChildId = chain[focusIdx + 1];
+    return nodeMap.has(directChildId) ? directChildId : null;
+  }
+
+  return null;
+}
+
+/**
+ * M21 单层平铺可见节点集合计算：
+ * - GLOBAL 仅返回所有顶层节点；
+ * - focusNodeId 返回该容器的直接子节点（不含 focusNodeId 自身，也不含孙子节点）。
+ */
+export function computeVisibleNodeIds(
+  nodes: GraphNode[],
+  focusNodeId?: string | null
+): Set<string> {
+  const nodeMap = new Map<string, GraphNode>();
+  for (const n of nodes) {
+    nodeMap.set(n.id, n);
+  }
+
+  const isGlobal = !focusNodeId || focusNodeId === 'GLOBAL' || !nodeMap.has(focusNodeId);
+  const visibleIds = new Set<string>();
+
+  for (const n of nodes) {
+    if (isGlobal) {
+      if (!n.parent_id || !nodeMap.has(n.parent_id)) {
+        visibleIds.add(n.id);
+      }
+    } else if (n.parent_id === focusNodeId) {
+      visibleIds.add(n.id);
+    }
+  }
+
+  return visibleIds;
+}
+

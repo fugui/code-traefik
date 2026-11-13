@@ -5,7 +5,15 @@ import { buildTreeIndex, findLCA, getFullAncestry } from '../components/ArchCanv
 import { rep, rollupEdges, aggregateRollup, mergeStatus, STATUS_PRIORITY } from '../components/ArchCanvas/model/rollup';
 import { synthesizeOverlay } from '../components/ArchCanvas/model/overlay';
 import { detectCycles } from '../components/ArchCanvas/model/metrics';
-import { processLayoutCoordinates, resolveEdgeVisualStyle } from '../components/ArchCanvas/layout/layoutProcessor';
+import {
+  processLayoutCoordinates,
+  resolveEdgeVisualStyle,
+  getNodeDimensions,
+  selectOptimalHandles,
+  computeEdgeSiblingOffsets,
+  type NodeRect,
+} from '../components/ArchCanvas/layout/layoutProcessor';
+import { buildElkGraph } from '../components/ArchCanvas/layout/useElkLayout';
 import type { ElkNode } from 'elkjs';
 
 describe('ArchCanvasRollup Model Suite', () => {
@@ -694,5 +702,173 @@ describe('ArchCanvasRollup Model Suite', () => {
     expect(viaFacade.badgeCounts).toEqual(viaSplit.badgeCounts);
     expect(viaFacade.dynamicNodes).toEqual(overlay.dynamicNodes);
     expect(viaFacade.unattributedPendingList).toEqual(overlay.unattributedPendingList);
+  });
+
+  // 9. M21-P2: 单层 ELK 扁平构图 + 110px 层间净空 + 外部传送门 FIRST/LAST 贴边约束 + 无重叠验证
+  it('testSingleLayerElkLayout_NoOverlap_LayerSpacing110_ExternalPortalFirstLast', async () => {
+    const flatNodes: GraphNode[] = [
+      { id: 'ext_ctx_UPSTREAM_sub_a', type: 'EXTERNAL_CONTEXT', depth: 0, ancestors: [], name: '上游网关域', sort_order: 1, meta: { direction: 'UPSTREAM', peer_root_id: 'sub_a' } },
+      { id: 'mod_core_1', type: 'MODULE', depth: 1, ancestors: ['sub_focus'], name: '订单处理模块', sort_order: 2 },
+      { id: 'mod_core_2', type: 'MODULE', depth: 1, ancestors: ['sub_focus'], name: '支付核心模块', sort_order: 3 },
+      { id: 'ext_ctx_DOWNSTREAM_sub_b', type: 'EXTERNAL_CONTEXT', depth: 0, ancestors: [], name: '下游账务域', sort_order: 4, meta: { direction: 'DOWNSTREAM', peer_root_id: 'sub_b' } },
+    ];
+    const flatEdges = [
+      { id: 'e1', source: 'ext_ctx_UPSTREAM_sub_a', target: 'mod_core_1' },
+      { id: 'e2', source: 'mod_core_1', target: 'mod_core_2' },
+      { id: 'e3', source: 'mod_core_2', target: 'ext_ctx_DOWNSTREAM_sub_b' },
+    ];
+
+    const elkGraph = buildElkGraph(flatNodes, flatEdges);
+    expect(elkGraph.layoutOptions?.['elk.layered.spacing.nodeNodeBetweenLayers']).toBe('110');
+    expect(elkGraph.layoutOptions?.['elk.edgeRouting']).toBe('ORTHOGONAL');
+    expect(elkGraph.children).toHaveLength(4);
+
+    const upNode = elkGraph.children?.find((c) => c.id === 'ext_ctx_UPSTREAM_sub_a');
+    const downNode = elkGraph.children?.find((c) => c.id === 'ext_ctx_DOWNSTREAM_sub_b');
+    expect(upNode?.layoutOptions?.['elk.layered.layering.layerConstraint']).toBe('FIRST');
+    expect(downNode?.layoutOptions?.['elk.layered.layering.layerConstraint']).toBe('LAST');
+
+    const { default: ELK } = await import('elkjs/lib/elk.bundled.js');
+    const elk = new ELK();
+    const layouted = await elk.layout(elkGraph);
+
+    const children = layouted.children ?? [];
+    expect(children).toHaveLength(4);
+    const upOut = children.find((c) => c.id === 'ext_ctx_UPSTREAM_sub_a')!;
+    const mod1Out = children.find((c) => c.id === 'mod_core_1')!;
+    const mod2Out = children.find((c) => c.id === 'mod_core_2')!;
+    const downOut = children.find((c) => c.id === 'ext_ctx_DOWNSTREAM_sub_b')!;
+
+    // 水平净空 >= 100px 且从左至右单调递增
+    expect((mod1Out.x ?? 0) - ((upOut.x ?? 0) + (upOut.width ?? 0))).toBeGreaterThanOrEqual(100);
+    expect((mod2Out.x ?? 0) - ((mod1Out.x ?? 0) + (mod1Out.width ?? 0))).toBeGreaterThanOrEqual(100);
+    expect((downOut.x ?? 0) - ((mod2Out.x ?? 0) + (mod2Out.width ?? 0))).toBeGreaterThanOrEqual(100);
+
+    // 任意两节点均无矩形重叠
+    for (let i = 0; i < children.length; i++) {
+      for (let j = i + 1; j < children.length; j++) {
+        const a = children[i];
+        const b = children[j];
+        const overlapX =
+          Math.min((a.x ?? 0) + (a.width ?? 0), (b.x ?? 0) + (b.width ?? 0)) >
+          Math.max(a.x ?? 0, b.x ?? 0);
+        const overlapY =
+          Math.min((a.y ?? 0) + (a.height ?? 0), (b.y ?? 0) + (b.height ?? 0)) >
+          Math.max(a.y ?? 0, b.y ?? 0);
+        expect(overlapX && overlapY).toBe(false);
+      }
+    }
+  });
+
+  // 10. M21-P2: 五类节点 1:1 border-box 固定尺寸与 ELK 严格齐平
+  it('testNodeDimensions_ExactMatchBetweenElkAndCss_FiveNodeTypes', () => {
+    expect(getNodeDimensions({ type: 'SUBSYSTEM' })).toEqual({ width: 260, height: 96 });
+    expect(getNodeDimensions({ type: 'FUNCTIONAL_GROUP' })).toEqual({ width: 260, height: 96 });
+    expect(getNodeDimensions({ type: 'PROCESS_GROUP' })).toEqual({ width: 260, height: 96 });
+    expect(getNodeDimensions({ type: 'PROCESS' })).toEqual({ width: 260, height: 96 });
+    expect(getNodeDimensions({ type: 'MODULE' })).toEqual({ width: 240, height: 88 });
+    expect(getNodeDimensions({ type: 'EXTERNAL_CONTEXT' })).toEqual({ width: 240, height: 104 });
+    expect(getNodeDimensions({ type: 'EXTERNAL_SYSTEM' })).toEqual({ width: 216, height: 72 });
+    expect(getNodeDimensions({ type: 'EXTERNAL_ENDPOINT' })).toEqual({ width: 216, height: 72 });
+    expect(getNodeDimensions({ type: 'UNREGISTERED_INTERFACE' })).toEqual({ width: 216, height: 72 });
+  });
+
+  // 11. M21-P2: 四向智能锚点选择 & 非水平正向边主动清空陈旧 bendPoints 退化 SmoothStep
+  it('testSelectOptimalHandles_VerticalRealizationUsesBottomTop_ReverseUsesLeftRight', () => {
+    // 上下排布的接口契约实现关系 (mod_impl 在 contract_lib 下方)
+    const libRect: NodeRect = { x: 100, y: 40, width: 240, height: 88 };
+    const implBelowRect: NodeRect = { x: 100, y: 220, width: 240, height: 88 };
+    expect(selectOptimalHandles(libRect, implBelowRect)).toEqual({
+      sourceHandle: 'src-bottom',
+      targetHandle: 'tgt-top',
+      isStandardHorizontal: false,
+    });
+    expect(selectOptimalHandles(implBelowRect, libRect)).toEqual({
+      sourceHandle: 'src-top',
+      targetHandle: 'tgt-bottom',
+      isStandardHorizontal: false,
+    });
+
+    // 反向水平（目标在源左侧）
+    const rightRect: NodeRect = { x: 500, y: 100, width: 240, height: 88 };
+    const leftRect: NodeRect = { x: 100, y: 100, width: 240, height: 88 };
+    expect(selectOptimalHandles(rightRect, leftRect)).toEqual({
+      sourceHandle: 'src-left',
+      targetHandle: 'tgt-right',
+      isStandardHorizontal: false,
+    });
+
+    // 通过 processLayoutCoordinates 验证非正向边清空 bendPoints 并采用 SmoothStep
+    const mockNodesVertical: GraphNode[] = [
+      { id: 'lib_1', type: 'MODULE', depth: 0, ancestors: [], name: '契约库', sort_order: 1 },
+      { id: 'impl_1', type: 'MODULE', depth: 0, ancestors: [], name: '实现模块', sort_order: 2 },
+    ];
+    const mockElkTree: ElkNode = {
+      id: 'root',
+      children: [
+        { id: 'impl_1', x: 100, y: 240, width: 240, height: 88 },
+        { id: 'lib_1', x: 100, y: 40, width: 240, height: 88 },
+      ],
+      edges: [
+        {
+          id: 'e_realize',
+          sources: ['impl_1'],
+          targets: ['lib_1'],
+          sections: [
+            {
+              id: 's1',
+              startPoint: { x: 340, y: 284 },
+              endPoint: { x: 100, y: 84 },
+              bendPoints: [{ x: 380, y: 284 }, { x: 380, y: 84 }],
+            },
+          ],
+        },
+      ],
+    };
+    const res = processLayoutCoordinates(
+      mockElkTree,
+      mockNodesVertical,
+      [{ id: 'e_realize', source: 'impl_1', target: 'lib_1', kind: 'REALIZATION', services: [], rawEdges: [] }],
+      new Set()
+    );
+    expect(res.edges[0].sourceHandle).toBe('src-top');
+    expect(res.edges[0].targetHandle).toBe('tgt-bottom');
+    expect(res.edges[0].data?.isDraggedDegraded).toBe(true);
+    expect(res.edges[0].data?.bendPoints).toBeUndefined();
+  });
+
+  // 12. M21-P2: 汇聚同一节点的平行边自动错开 26px 步进防止标签重叠
+  it('testParallelEdgeSiblingOffset_PreventsLabelCollision', () => {
+    const rects = new Map<string, NodeRect>([
+      ['src_1', { x: 0, y: 0, width: 240, height: 88 }],
+      ['src_2', { x: 0, y: 160, width: 240, height: 88 }],
+      ['dst', { x: 400, y: 80, width: 240, height: 88 }],
+    ]);
+
+    const edges = [
+      {
+        id: 'e_1',
+        source: 'src_1',
+        target: 'dst',
+        sourceHandle: 'src-right',
+        targetHandle: 'tgt-left',
+        type: 'rollupEdge' as const,
+        data: { id: 'e_1', source: 'src_1', target: 'dst', kind: 'CROSS_PROCESS', services: [], rawEdges: [], isDraggedDegraded: true },
+      },
+      {
+        id: 'e_2',
+        source: 'src_2',
+        target: 'dst',
+        sourceHandle: 'src-right',
+        targetHandle: 'tgt-left',
+        type: 'rollupEdge' as const,
+        data: { id: 'e_2', source: 'src_2', target: 'dst', kind: 'CROSS_PROCESS', services: [], rawEdges: [], isDraggedDegraded: true },
+      },
+    ];
+
+    const withOffsets = computeEdgeSiblingOffsets(edges, rects);
+    expect(withOffsets[0].data?.siblingOffset).toBe(-13);
+    expect(withOffsets[1].data?.siblingOffset).toBe(13);
+    expect(Math.abs((withOffsets[1].data?.siblingOffset ?? 0) - (withOffsets[0].data?.siblingOffset ?? 0))).toBe(26);
   });
 });

@@ -6,6 +6,7 @@ import type {
   SavedNodePosition,
   TopologyLayoutDetailDTO,
 } from '../types/topology_graph';
+import { toScopedPositionKey } from '../types/topology_graph';
 import {
   planLayout,
   mergeLocalLayout,
@@ -14,6 +15,7 @@ import {
   placeNewNodes,
   diffLayoutAgainstGraph,
   computeViewportCompensation,
+  clearUnpinnedInScope,
   type NodeBox,
 } from '../components/ArchCanvas/layout/layoutMerger';
 import { processLayoutCoordinates } from '../components/ArchCanvas/layout/layoutProcessor';
@@ -29,6 +31,8 @@ import {
   clearAllTopologyDrafts,
   restoreExpandStateFromSaved,
   serializeExpandState,
+  normalizeSavedFilterState,
+  serializeBackendFilterState,
 } from '../components/ArchCanvas/layout/layoutPersistence';
 
 describe('M19-P4: ArchCanvasHybridLayout Suite', () => {
@@ -570,5 +574,186 @@ describe('M19-P4: ArchCanvasHybridLayout Suite', () => {
     );
     // 由于 grp_12 相对 ELK 坐标发生偏移，关联边必须自动标记为 isDraggedDegraded = true (SmoothStep)
     expect(processed.edges[0].data?.isDraggedDegraded).toBe(true);
+  });
+});
+
+describe('M21-P3: Scoped Position Persistence, Pinning & Backend Contract Alignment', () => {
+  // 1. 按 focusScope 隔离位置记忆，绝不跨作用域污染
+  it('testScopedPositionMemory_IsolatedPerFocusScope_NeverLeaksAcrossContainers', () => {
+    const visibleAtGlobal: GraphNode[] = [
+      { id: 'sub_1', type: 'SUBSYSTEM', depth: 0, ancestors: [], name: '交易域', sort_order: 1 },
+      { id: 'ext_ctx_UPSTREAM_sub_2', type: 'EXTERNAL_CONTEXT', depth: 0, ancestors: [], name: '外部上游', sort_order: 2 },
+    ];
+    const visibleAtSub1: GraphNode[] = [
+      { id: 'grp_11', type: 'FUNCTIONAL_GROUP', parent_id: 'sub_1', depth: 1, ancestors: ['sub_1'], name: '订单组', sort_order: 1 },
+      { id: 'ext_ctx_UPSTREAM_sub_2', type: 'EXTERNAL_CONTEXT', depth: 0, ancestors: [], name: '外部上游', sort_order: 2 },
+    ];
+
+    const savedPositions: Record<string, SavedNodePosition> = {
+      [toScopedPositionKey('GLOBAL', 'ext_ctx_UPSTREAM_sub_2')]: {
+        x: 50,
+        y: 60,
+        is_expanded: false,
+        pinned: true,
+        width: 240,
+        height: 104,
+      },
+      [toScopedPositionKey('sub_1', 'ext_ctx_UPSTREAM_sub_2')]: {
+        x: 420,
+        y: 380,
+        is_expanded: false,
+        pinned: true,
+        width: 240,
+        height: 104,
+      },
+      [toScopedPositionKey('sub_1', 'grp_11')]: {
+        x: 320,
+        y: 120,
+        is_expanded: false,
+        pinned: true,
+        width: 260,
+        height: 96,
+      },
+    };
+
+    const elkGlobalRoot = {
+      id: 'root',
+      children: [
+        { id: 'sub_1', x: 100, y: 100, width: 260, height: 96 },
+        { id: 'ext_ctx_UPSTREAM_sub_2', x: 10, y: 10, width: 240, height: 104 },
+      ],
+    };
+    const elkSub1Root = {
+      id: 'root',
+      children: [
+        { id: 'grp_11', x: 20, y: 20, width: 260, height: 96 },
+        { id: 'ext_ctx_UPSTREAM_sub_2', x: 10, y: 10, width: 240, height: 104 },
+      ],
+    };
+
+    const processedGlobal = processLayoutCoordinates(
+      elkGlobalRoot,
+      visibleAtGlobal,
+      [],
+      new Set(),
+      {},
+      {},
+      undefined,
+      {},
+      { savedPositions, focusScope: 'GLOBAL' }
+    );
+    const processedSub1 = processLayoutCoordinates(
+      elkSub1Root,
+      visibleAtSub1,
+      [],
+      new Set(),
+      {},
+      {},
+      undefined,
+      {},
+      { savedPositions, focusScope: 'sub_1' }
+    );
+
+    const extGlobal = processedGlobal.nodes.find((n) => n.id === 'ext_ctx_UPSTREAM_sub_2')!;
+    const extSub1 = processedSub1.nodes.find((n) => n.id === 'ext_ctx_UPSTREAM_sub_2')!;
+    expect(extGlobal.position).toEqual({ x: 50, y: 60 });
+    expect(extSub1.position).toEqual({ x: 420, y: 380 });
+    expect(processedGlobal.nodes.find((n) => n.id === 'grp_11')).toBeUndefined();
+    expect(processedSub1.nodes.find((n) => n.id === 'grp_11')?.position).toEqual({ x: 320, y: 120 });
+  });
+
+  // 2. 仅显式拖拽或锁定才固化坐标，ELK 初始坐标保持自由态
+  it('testDragAndPin_OnlyExplicitUserActionLocksPosition_ElkOutputStaysFluid', () => {
+    const rawSaved: Record<string, SavedNodePosition> = {
+      'GLOBAL::sub_1': { x: 120, y: 80, is_expanded: false, pinned: false },
+      'GLOBAL::sub_2': { x: 480, y: 140, is_expanded: false, pinned: true },
+    };
+
+    const persisted = extractPersistablePositions(rawSaved, { onlyPinned: true });
+    expect(persisted['GLOBAL::sub_1']).toBeUndefined();
+    expect(persisted['GLOBAL::sub_2']).toEqual(expect.objectContaining({ x: 480, y: 140, pinned: true }));
+  });
+
+  // 3. 自动整理按钮仅清理当前 scope 下未钉住节点，保留 pinned 及其他 scope 数据
+  it('testAutoRelayoutButton_ClearsUnpinnedAndKeepsPinnedNodesInCurrentScope', () => {
+    const savedPositions: Record<string, SavedNodePosition> = {
+      'GLOBAL::sub_1': { x: 100, y: 100, is_expanded: false, pinned: false },
+      'GLOBAL::sub_2': { x: 420, y: 100, is_expanded: false, pinned: true },
+      'GLOBAL::sub_3': { x: 740, y: 100, is_expanded: false, pinned: false },
+      'sub_1::grp_11': { x: 200, y: 200, is_expanded: false, pinned: false },
+      'sub_1::grp_12': { x: 500, y: 200, is_expanded: false, pinned: true },
+    };
+
+    const next = clearUnpinnedInScope(savedPositions, 'GLOBAL', new Set(['sub_2']));
+    expect(next['GLOBAL::sub_1']).toBeUndefined();
+    expect(next['GLOBAL::sub_3']).toBeUndefined();
+    expect(next['GLOBAL::sub_2']).toEqual({ x: 420, y: 100, is_expanded: false, pinned: true });
+    // 其他 scope 保持完全不动
+    expect(next['sub_1::grp_11']).toEqual({ x: 200, y: 200, is_expanded: false, pinned: false });
+    expect(next['sub_1::grp_12']).toEqual({ x: 500, y: 200, is_expanded: false, pinned: true });
+  });
+
+  // 4. 支持带作用域前缀的外部上下文卡片持久化，并与后端 filter_state 契约 1:1 对齐
+  it('testLayoutPersistence_SupportsScopedExternalContextIds_AndAlignsFilterStateContract', () => {
+    const persisted = extractPersistablePositions(
+      {
+        'sub_1::ext_ctx_UPSTREAM_sub_2': { x: 40, y: 80, is_expanded: false, pinned: true },
+        ext_ctx_DOWNSTREAM_sub_3: { x: 90, y: 90, is_expanded: false, pinned: true }, // 历史无作用域前缀，应继续被过滤
+        'GLOBAL::sub_1': { x: 300, y: 200, is_expanded: false, pinned: true },
+        'GLOBAL::ghost_node': { x: 999, y: 999, is_expanded: false, pinned: true },
+      },
+      { validNodeIds: new Set(['sub_1', 'sub_2', 'sub_3']) }
+    );
+
+    expect(persisted['sub_1::ext_ctx_UPSTREAM_sub_2']).toBeDefined();
+    expect(persisted['ext_ctx_DOWNSTREAM_sub_3']).toBeUndefined();
+    expect(persisted['GLOBAL::sub_1']).toBeDefined();
+    expect(persisted['GLOBAL::ghost_node']).toBeUndefined();
+
+    const diff = diffLayoutAgainstGraph(
+      persisted,
+      [
+        { id: 'sub_1', type: 'SUBSYSTEM', depth: 0, ancestors: [], name: 'sub1', sort_order: 1 },
+        { id: 'sub_2', type: 'SUBSYSTEM', depth: 0, ancestors: [], name: 'sub2', sort_order: 2 },
+        { id: 'sub_3', type: 'SUBSYSTEM', depth: 0, ancestors: [], name: 'sub3', sort_order: 3 },
+      ],
+      []
+    );
+    expect(diff.staleIds).toEqual([]);
+    expect(diff.reconciledPositions['sub_1::ext_ctx_UPSTREAM_sub_2']).toBeDefined();
+
+    const serializedFilter = serializeBackendFilterState({
+      subsystemIds: ['sub_1', 'sub_2'],
+      onlyMyScope: true,
+      statusFilter: 'ABNORMAL',
+      egoNodeId: 'mod_101',
+      neighborhoodHop: 2,
+      hideIsolated: true,
+      foldHubEdges: true,
+      ownerId: 42,
+    });
+    expect(serializedFilter).toEqual({
+      subsystem_ids: ['sub_1', 'sub_2'],
+      only_my_scope: true,
+      status: 'ABNORMAL',
+      ego_node_id: 'mod_101',
+      ego_hops: 2,
+      hide_isolated: true,
+      hub_fold: true,
+      owner_id: 42,
+      consistency_only: true,
+      fold_hub_edges: true,
+      neighborhood_direction: 'BOTH',
+      neighborhood_hop: 2,
+    });
+
+    const normalized = normalizeSavedFilterState(serializedFilter);
+    expect(normalized.subsystemIds).toEqual(['sub_1', 'sub_2']);
+    expect(normalized.onlyMyScope).toBe(true);
+    expect(normalized.statusFilter).toBe('ABNORMAL');
+    expect(normalized.egoNodeId).toBe('mod_101');
+    expect(normalized.neighborhoodHop).toBe(2);
+    expect(normalized.hideIsolated).toBe(true);
+    expect(normalized.foldHubEdges).toBe(true);
   });
 });
