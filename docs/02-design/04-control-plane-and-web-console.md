@@ -1,11 +1,11 @@
 # 架构与活体契约治理 (`code-traefik`) 管理面服务、微前端控制台与回归断言设计
 
 - **文档编号**：`04-control-plane-and-web-console.md`
-- **文档版本**：v1.9.0
+- **文档版本**：v1.9.1
 - **更新日期**：2026-11-13
 - **归属阶段**：阶段二：系统架构与数据模型设计 (`02-design`)
 - **状态**：M1~M20 已交付；M21 已批准待实施 (Approved for M21)
-- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.16.0)、[`01-system-architecture.md`](./01-system-architecture.md)、[`02-data-plane-and-cros-rpc-engine.md`](./02-data-plane-and-cros-rpc-engine.md)、[`03-architecture-elements-and-topology.md`](./03-architecture-elements-and-topology.md) (v1.7.0)、[`07-console-ia-restructuring-and-workflow-workbench-adr.md`](../05-adr/07-console-ia-restructuring-and-workflow-workbench-adr.md) (ADR-07)、[`08-recording-drawer-and-process-tree-selection-adr.md`](../05-adr/08-recording-drawer-and-process-tree-selection-adr.md) (ADR-08)、[`09-arch-process-ssot-and-ebpf-premount-standby-adr.md`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md) (ADR-09 v1.1.0)、[`10-enhanced-proto-schema-file-management-adr.md`](../05-adr/10-enhanced-proto-schema-file-management-adr.md) (ADR-10 v1.1.0)、[`11-single-process-bidirectional-capture-and-recording-ux-adr.md`](../05-adr/11-single-process-bidirectional-capture-and-recording-ux-adr.md) (ADR-11 v1.0.0)、[`12-packet-causality-call-tree-and-sequence-ux-adr.md`](../05-adr/12-packet-causality-call-tree-and-sequence-ux-adr.md) (ADR-12 v1.0.0)、[`15-scalable-topology-focus-and-layout-persistence-adr.md`](../05-adr/15-scalable-topology-focus-and-layout-persistence-adr.md) (ADR-15 v1.3.0)、[`16-multi-implementation-service-contract-adr.md`](../05-adr/16-multi-implementation-service-contract-adr.md) (ADR-16 v2.0.0)、[`17-topology-single-layer-drilldown-and-layout-ux-adr.md`](../05-adr/17-topology-single-layer-drilldown-and-layout-ux-adr.md) (ADR-17 v1.0.0)
+- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.16.0)、[`01-system-architecture.md`](./01-system-architecture.md)、[`02-data-plane-and-cros-rpc-engine.md`](./02-data-plane-and-cros-rpc-engine.md)、[`03-architecture-elements-and-topology.md`](./03-architecture-elements-and-topology.md) (v1.7.1)、[`07-console-ia-restructuring-and-workflow-workbench-adr.md`](../05-adr/07-console-ia-restructuring-and-workflow-workbench-adr.md) (ADR-07)、[`08-recording-drawer-and-process-tree-selection-adr.md`](../05-adr/08-recording-drawer-and-process-tree-selection-adr.md) (ADR-08)、[`09-arch-process-ssot-and-ebpf-premount-standby-adr.md`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md) (ADR-09 v1.1.0)、[`10-enhanced-proto-schema-file-management-adr.md`](../05-adr/10-enhanced-proto-schema-file-management-adr.md) (ADR-10 v1.1.0)、[`11-single-process-bidirectional-capture-and-recording-ux-adr.md`](../05-adr/11-single-process-bidirectional-capture-and-recording-ux-adr.md) (ADR-11 v1.0.0)、[`12-packet-causality-call-tree-and-sequence-ux-adr.md`](../05-adr/12-packet-causality-call-tree-and-sequence-ux-adr.md) (ADR-12 v1.0.0)、[`15-scalable-topology-focus-and-layout-persistence-adr.md`](../05-adr/15-scalable-topology-focus-and-layout-persistence-adr.md) (ADR-15 v1.3.0)、[`16-multi-implementation-service-contract-adr.md`](../05-adr/16-multi-implementation-service-contract-adr.md) (ADR-16 v2.0.0)、[`17-topology-single-layer-drilldown-and-layout-ux-adr.md`](../05-adr/17-topology-single-layer-drilldown-and-layout-ux-adr.md) (ADR-17 v1.1.0)
 
 ### 修订记录
 
@@ -13,6 +13,7 @@
 | :--- | :--- | :--- | :--- |
 | `v1.8.0` | `2026-11-11` | Architecture Team | 同步 ADR-16 (`v1.0.0`)：补充录制期 `endpoint_snapshots` 固化、多实现契约重放兼容性与 `dst_tag` 隔离；新增 §4.8 详细定义 `/architecture` 模块类型与「定义的接口」页签、`PROVIDE` 自动切换实现契约与 `impl_key`、`DEPEND` 分发/具体实现区分、`/topology` `«interface»` 库卡、`REALIZATION` 图层开关、`topo_contract_mode=AGG\|EXPAND`、第八类一致性状态 `IMPL_UNRESOLVED`（复用 `--color-warning`）与「实现待定」虚拟节点及 `/dashboard` 契约实现覆盖率 |
 | `v1.9.0` | `2026-11-13` | Architecture Team | 同步 [`ADR-17`](../05-adr/17-topology-single-layer-drilldown-and-layout-ux-adr.md) (`v1.0.0` / `M21`)：更新 §4.1 `/topology` URL 状态参数、§4.2 `ArchCanvas` 组件树职责，并新增 §4.9 详细规范单层平铺逐级下钻面包屑导航、工具栏 4 组收纳 + `[⚙️ 筛选与图层]` Popover、三类 `1:1 border-box` 卡片、四向智能锚点路由、按作用域隔离的位置记忆与 `EdgeDetailDrawer` 节点中文名渲染 |
+| `v1.9.1` | `2026-11-13` | Architecture Team | 依据 [`ADR-17` (`v1.1.0`)](../05-adr/17-topology-single-layer-drilldown-and-layout-ux-adr.md) 架构检视意见加固 §4.2 与 §4.9：1. §4.2 补齐 `UnregisteredInterfaceNode.tsx` 与状态宿主 `ArchTopologyTabPane.tsx`；2. §4.9 明确节点悬浮动作条（`arch-node-action-bar`）与 `Enter` 快捷键同步切换单层下钻、跨层搜索 `fitView` 后置等待 ELK 排版完成、五类节点四向双向 `<Handle>` 挂载以及非 `right->left` 走线丢弃 ELK `bendPoints` 切换 `SmoothStep` |
 
 ---
 
@@ -320,10 +321,11 @@ src/
 │   │   │   ├── noiseReduction.ts           # [M19] Hub 插头折叠 (违规边豁免) 与 1-Hop 聚光灯集合
 │   │   │   └── metrics.ts                  # Tarjan SCC 循环依赖分析与扇入扇出统计 (排除 REALIZATION 实现关系边)
 │   │   ├── nodes/
-│   │   │   ├── ContainerNode.tsx           # 单层容器卡 (260x96 border-box、4向Handle、双击/[进入 ▸] 下钻、📌 图钉、Hub 插头徽章)
-│   │   │   ├── ModuleNode.tsx              # 功能模块与 «interface» 库卡 (240x88 border-box、4向Handle、📌 图钉、✨ 新增徽标)
-│   │   │   ├── ExternalContextNode.tsx     # [M19/M21] 聚焦视图外部传送门卡 (240x104 border-box、4向Handle、FIRST/LAST 方向修饰与跳转聚焦)
-│   │   │   └── ExternalNode.tsx            # 外部系统/外部端点/未登记接口/「实现待定」虚拟终端卡 (216x72 border-box、4向Handle)
+│   │   │   ├── ContainerNode.tsx           # 单层容器卡 (260x96 border-box、4向双向Handle、双击/[进入 ▸] 下钻、📌 图钉、Hub 插头徽章)
+│   │   │   ├── ModuleNode.tsx              # 功能模块与 «interface» 库卡 (240x88 border-box、4向双向Handle、📌 图钉、✨ 新增徽标)
+│   │   │   ├── ExternalContextNode.tsx     # [M19/M21] 聚焦视图外部传送门卡 (240x104 border-box、4向双向Handle、FIRST/LAST 方向修饰与跳转聚焦)
+│   │   │   ├── ExternalNode.tsx            # 外部系统/外部端点终端卡 (216x72 border-box、4向双向Handle)
+│   │   │   └── UnregisteredInterfaceNode.tsx # 未登记接口与「实现待定 (IMPL_UNRESOLVED)」虚拟终端卡 (216x72 border-box、4向双向Handle)
 │   │   ├── edges/
 │   │   │   └── RollupEdge.tsx              # 四向智能锚点正交折线/SmoothStep 汇总边 (多边同锚点偏移、八分类着色、REALIZATION UML 虚线)
 │   │   └── panels/
@@ -363,9 +365,10 @@ src/
 │   │   ├── ReplayTaskCreatorModal.tsx      # 批量同构重放创建弹窗 (支持 URL ?session_id=X&auto_create=1 自动预选唤起)
 │   │   ├── ReplayTaskTable.tsx             # 重放任务台账表 (PASS/FAILED/MOCK_MISS/TIMEOUT/ERROR 全序裁决)
 │   │   └── ReplayReportDrawer/             # 双层回归 Diff 报告抽屉 (HeaderAssertionCard + ProtoFieldDiffTable + MockHitMissTimeline)
-│   ├── TopologyWorkbenchPage/              # 4. [架构与契约] 架构拓扑工作台 (/topology - 全屏独立画布)
-│   │   └── TopologyWorkbenchPage.tsx       # 零外层胶囊 Tab，全视口高度承载逻辑/物理复合拓扑画布与录制批次一致性比对叠加层
+│   ├── TopologyWorkbenchPage/              # 4. [架构与契约] 架构拓扑工作台 (/topology - 全屏独立画布外壳)
+│   │   └── TopologyWorkbenchPage.tsx       # 零外层胶囊 Tab，挂载 ArchTopologyTabPane 全视口高度承载逻辑/物理拓扑画布
 │   ├── ArchitectureWorkbenchPage/          # 5. [架构与契约] 架构元素工作台 (/architecture - 左树顶部 [逻辑架构 | 物理进程] 双视图 SSOT)
+│   │   ├── ArchTopologyTabPane.tsx         # [M19/M21] 拓扑画布核心状态编排宿主 (URL 同步、五段式管线、按 (view, focus_scope) 位置记忆与基准/书签管理)
 │   │   ├── SubsystemGroupTreePanel.tsx     # [逻辑架构 ?tree=logical]: 子系统 ➔ 8级功能组 ➔ 功能模块/«interface»契约库模块定位与跨层搜索
 │   │   ├── ModuleContractDetailPane.tsx    # 业务模块 PROVIDE(自动切实现契约+impl_key)/DEPEND(分发/具体实现)双表 & CONTRACT_LIB「定义的接口」页签(契约登记/实现矩阵/分发调用方)
 │   │   ├── ArchProcessTreePanel.tsx        # [物理进程 ?tree=physical]: 标准进程组 (ArchProcessGroup) ➔ 标准业务进程 (ArchProcess) 树与搜索/CRUD
@@ -1041,12 +1044,12 @@ export interface ServiceContractDTO {
 }
 ```
 
-### 4.9 架构拓扑「单层平铺逐级下钻」交互、四组工具栏与智能连线 UX 设计 (`F-04.1`~`F-04.3`, [`ADR-17`](../05-adr/17-topology-single-layer-drilldown-and-layout-ux-adr.md) / `M21`)
+### 4.9 架构拓扑「单层平铺逐级下钻」交互、四组工具栏与智能连线 UX 设计 (`F-04.1`~`F-04.3`, [`ADR-17` (v1.1.0)](../05-adr/17-topology-single-layer-drilldown-and-layout-ux-adr.md) / `M21`)
 
-#### 4.9.1 单层平铺逐级下钻流程与面包屑导航栏 (`TopologyBreadcrumbBar`)
-1. **画布信息层级纯化**：
+#### 4.9.1 单层平铺逐级下钻流程、节点悬浮动作条与面包屑导航栏 (`TopologyBreadcrumbBar`)
+1. **画布信息层级纯化与统一容器下钻动作**：
    - 全局初始态 (`focusScope = 'GLOBAL'`) 仅渲染顶层节点卡片（子系统或物理进程组 + 外部域）；
-   - 双击任意容器卡片或点击其右上角主动作 `[进入 ▸]` 直接下钻进入该容器作用域（`focusNodeId = container.id`）：**画布不渲染聚焦根自身的外层虚线包裹框**，内部仅平铺该容器的**直接子节点**（`relativeDepth === 1`）与左/右跨界外部传送门卡；
+   - 双击任意容器卡片、点击其右上角主动作 `[进入 ▸]`、点击选中容器浮动动作条（`arch-node-action-bar`）的 **`[进入容器 ▸]`** 或对选中容器按 **`Enter` 键**，统一直接下钻进入该容器作用域（`focusNodeId = container.id`）：**画布不渲染聚焦根自身的外层虚线包裹框**，内部仅平铺该容器的**直接子节点**（`relativeDepth === 1`）与左/右跨界外部传送门卡；同时移除 `ArchCanvas.tsx` 浮动动作条中旧版的 `展开一层` / `展开全部` / `收起容器` 按钮；
    - 按 `Esc` / `Backspace`（无选中且不在输入框聚焦时）或双击画布空白处，直接返回上一级聚焦域。
 2. **顶栏面包屑导航条 (`.code-arch-breadcrumb`)**：
    - **左端控制**：`[← 返回上一级]`（在 `GLOBAL` 态下禁用置灰） + 层次链接链 `🌐 全系统全景 (L0)` `>` `💳 支付与结算子系统 (L1 · 子系统)` `>` `📦 支付通道与接口契约组 (L2 · 功能组)`（支持点击任一上级胶囊直接回跳）；
@@ -1058,19 +1061,20 @@ export interface ServiceContractDTO {
 | 组别 | 核心控件 | 交互与 URL 状态同步语义 |
 | :---: | :--- | :--- |
 | **① 视角与环境** | `[逻辑架构 \| 物理部署]` 分段切换；物理环境 `env_agent_id` 下拉；一致性录制批次 `session_id` 下拉 | 切换视角保留通用过滤项并重置 `focus` 至 `GLOBAL`；选择录制批次后下方滑入 `ArchSummaryBar` 八分类摘要条 |
-| **② 搜索与异常快筛** | `🔍 搜索节点` 候选下拉（`<= 20` 项分组）；`[全部 \| 仅异常 \| 仅违规]` 分段控件 | 搜索支持模糊匹配名称/编码：选中后若目标不在当前聚焦层，**自动切换 `focus` 至其直接父容器**，居中高亮脉冲 `2s`；状态快筛在未选中录制批次时禁用 |
+| **② 搜索与异常快筛** | `🔍 搜索节点` 候选下拉（`<= 20` 项分组）；`[全部 \| 仅异常 \| 仅违规]` 分段控件 | 搜索支持模糊匹配名称/编码：选中后若目标不在当前聚焦层，**自动切换 `focus` 至其直接父容器**，并在新作用域 ELK 布局完成（`!isLayouting` 且目标节点已出现在 `flowNodes`）后执行 `fitView({ nodes: [{ id }], maxZoom: 1.15, duration: 360 })` 及居中高亮脉冲 `2s`；状态快筛在未选中录制批次时禁用 |
 | **③ 筛选与图层 Popover** | `[⚙️ 筛选与图层 (N)]` 弹层按钮（显示激活条件计数徽章）+ 工具栏末端可单点关闭 Filter Chips | 弹层内部有序分组收纳：<br>• **契约视图（逻辑视图专属）**：契约调用 `[聚合到接口 AGG \| 展开到实现 EXPAND]` (`topo_contract_mode`)、`[☑ 显示实现关系边 REALIZATION]` (`topo_realization`)；<br>• **范围与降噪**：`[☑ 仅看我负责的]` (`topo_my`)、`[☑ 隐藏孤立节点]` (`topo_hide_isolated`)、`[☑ 高扇入 Hub 插头折叠]` (`topo_hub_fold`)、顶层容器多选 (`topo_subsystems`) 与 `1跳/2跳上下游邻域` 快捷控制 |
 | **④ 布局与视图** | `[✨ 自动整理]`、`[🎯 居中]`、`[📑 视图书签]`、（`traefik_admin`）`[🏛️ 发布基准]` | 点击 `[✨ 自动整理]` 清除临时非固定位移，保留所有显式 `📌` 固定节点后对当前单层重新执行 ELK 正交布局并执行 `fitView` |
 
 #### 4.9.3 `1:1 border-box` 极简节点卡片、四向智能锚点与可读边详情抽屉
-1. **节点卡片内信息密度治理（`1:1 border-box`，禁止内容撑破 ELK 尺寸）**：
+1. **五类节点卡片内信息密度治理（`1:1 border-box; overflow: hidden`，禁止内容撑破 ELK 尺寸）**：
    - `ContainerNode` (`260 × 96`)：首行 `[类型徽章] Code + 名称 (单行省略 + title Tooltip) + [📌] [进入 ▸]`；次行展示子节点数量、内部依赖/进程内调用计数与状态点；
    - `ModuleNode` (`240 × 88`)：首行 `[模块徽章] Code + 名称 (单行省略 + title Tooltip) + [📌]`（`CONTRACT_LIB` 带虚线框与 `«interface»` 角标）；次行精简展示供给/实现契约数量胶囊；
-   - `ExternalContextNode` (`240 × 104`)：展示方向标 `⬅️ 上游调用方` / `➡️ 下游依赖方` / `↔️ 双向关联`、域名称、`跨边界边: N` 与 `[↗ 跳转至该域]` 主按钮。
-2. **四向 `<Handle>` 与 `selectOptimalHandles` 路由策略**：
-   - 四类节点四周均挂载唯一固定 ID 锚点（`top` / `right` / `bottom` / `left`）；
-   - 未触发用户位移且存在 ELK `bendPoints` 时沿用 ELK 计算出的正交入口出口与拐点；
-   - 当节点发生拖拽/固定或同锚点走 `SmoothStep` 时，`selectOptimalHandles(srcRect, tgtRect)` 根据中心距优先选择纵向直线（`bottom -> top` / `top -> bottom`）或水平直线（`right -> left` / `left -> right`），并由 `RollupEdge` 对汇聚同一锚点的多条边施加确定性垂直/水平偏移，确保 `"1 契约"` 标签胶囊清晰可读、互不压盖。
+   - `ExternalContextNode` (`240 × 104`)：展示方向标 `⬅️ 上游调用方` / `➡️ 下游依赖方` / `↔️ 双向关联`、域名称、`跨边界边: N` 与 `[↗ 跳转至该域]` 主按钮；
+   - `ExternalNode` 与 `UnregisteredInterfaceNode` (`216 × 72`)：统一 `box-sizing: border-box; width: 216px; height: 72px; overflow: hidden;`，覆盖外部系统、外部端点、未登记接口与 `IMPL_UNRESOLVED`（「实现待定」）虚拟卡。
+2. **四向双向 `<Handle>` 与 `selectOptimalHandles` 路由策略**：
+   - 上述五类节点四周均挂载支持双向连接（`source` + `target`）的固定方位锚点（成对 `src-top/tgt-top`... 或 `ConnectionMode.Loose` 下的 `top` / `right` / `bottom` / `left`）；
+   - 当边未标记 `isDegraded` 且 `selectOptimalHandles(srcRect, tgtRect)` 返回默认水平正向 `right -> left` 时，沿用 ELK 计算出的正交入口出口与 `bendPoints`；
+   - 当 `selectOptimalHandles(srcRect, tgtRect)` 判定为纵向直线（`bottom -> top` / `top -> bottom`，如上下排布的 `REALIZATION` 实现边）或反向水平（`left -> right`），或节点发生拖拽/固定位移（`isDegraded`）时，主动清空该边的 ELK `bendPoints` 并交由 `RollupEdge` 调用 `getSmoothStepPath` 正交绘制，并对汇聚同一锚点的多条边施加确定性偏移 $\text{offset} = (\text{idx} - (K - 1) / 2) \times 26\text{px}$，确保 `"1 契约"` 标签胶囊清晰可读、互不压盖。
 3. **`EdgeDetailDrawer` 可读化升级**：
    - 通过 `nodeMap.get(edge.source)` 与 `nodeMap.get(edge.target)` 解析业务节点元数据，在抽屉头部渲染 **`[类型中文徽章] 节点中文名称 (Code)` ➔ `[类型中文徽章] 节点中文名称 (Code)`**，彻底隐藏原始 `mod_101` / `ext_ctx_sub_2` 内部 ID；并提供 `[🎯 进入源域]` / `[🎯 进入目标域]` 快捷穿透导航。
 
