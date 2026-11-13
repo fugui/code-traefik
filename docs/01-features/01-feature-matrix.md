@@ -1,10 +1,10 @@
 # 架构与活体契约治理 (`code-traefik`) 特性清单与需求范围界定规范 (Feature Matrix & Scope)
 
 - **文档编号**：`01-feature-matrix.md`
-- **文档版本**：v2.17.0
+- **文档版本**：v2.18.0
 - **更新日期**：2026-11-13
-- **当前阶段**：阶段一：特性清单与边界明确
-- **状态**：已批准待实施 (Approved for M10~M21；M22+ 规划见 ADR-18)
+- **当前阶段**：阶段一：特性清单与边界明确（同步阶段二/三/四 SDD 定稿）
+- **状态**：已批准待实施 (M1~M21 已交付；M22~M25 已完成 SDD 设计与任务拆解，详见 ADR-18)
 - **协议依据**：详见项目内置参考文档 [`docs/07-references/01-cros-rpc-protocol-spec.md`](../07-references/01-cros-rpc-protocol-spec.md)（文档编号：`01-cros-rpc-protocol-spec.md` v1.0.0，基于 DOPHI 平台 `cros_rpccore.ph` / `cros_rpctcp` 规范，本文所有字段名、偏移与取值均以该规范原文为准）
 
 ### 修订记录
@@ -35,6 +35,7 @@
 | v2.15.0 | 2026-11-11 | **多实现服务契约、接口库建模与按目的进程实现定位 (ADR-16 / M20)**：面向「接口库 `FM A` 定义 + 多进程模块 `B/C/D` 实现 + 调度中心 `X` 按注册表分发」业务形态（详见 [`docs/05-adr/16-multi-implementation-service-contract-adr.md`](../05-adr/16-multi-implementation-service-contract-adr.md) 与作战卡 [`docs/04-tasks/21-m20-multi-implementation-service-contract.md`](../04-tasks/21-m20-multi-implementation-service-contract.md)），扩展 `F-02.1`、`F-04.4`、`F-05.1`：1. **关键假设演进**：修订 `A-05`（收窄为独占契约 `EXCLUSIVE` 全局唯一；多实现契约 `MULTI_IMPL` 按 `(contract_id, impl_key)` 与 `(contract_id, module_id)` 唯一），新增 `A-09`（同一多实现契约的实现模块两两分属不同 `ArchProcess`），明确 `A-03` 对 `CONTRACT_LIB` 接口库模块的豁免；2. **多实现服务契约与接口库建模 (`F-02.1`)**：`traefik_modules` 新增 `module_kind ∈ {BUSINESS, CONTRACT_LIB}`，新增第 19 张核心业务表 `traefik_service_contracts`，`traefik_module_services` 扩展 `contract_id + impl_key` 并统一执行 `A-09` 进程互斥守卫，`traefik_module_dependencies` 支持 `contract_id` 分发依赖 (`DISPATCH`)；3. **多实现契约拓扑表达 (`F-04.4`)**：逻辑视图渲染 `«interface»` 库卡与独立可开关的 `REALIZATION` 实现边图层，默认采用「按接口聚合 (`topo_contract_mode=AGG`)」并支持切换「按实现展开 (`EXPAND`)」，物理视图按实现展开且不渲染库模块；4. **多实现目的实现定位与第八类一致性状态 `IMPL_UNRESOLVED` (`F-05.1`)**：录制批次固化 `endpoint_snapshots` 端点字典快照，按目的进程消歧定位实现模块并回填 `traffic_records.dst_contract_id`，新增第八类一致性状态 `IMPL_UNRESOLVED`（实现待定，不计入 `UNCOVERED` 分母），重放下游 Mock 方法键扩展 `@dst_tag` 防止多实现应答串用；新增 `SC-12` 验收场景与 Non-Goal 11 |
 | v2.16.0 | 2026-11-13 | **架构拓扑单层平铺逐级下钻重构、ELK 正交布局校准与全链路易用性升级 (ADR-17 / M21)**：依据 [`ADR-17`](../05-adr/17-topology-single-layer-drilldown-and-layout-ux-adr.md) 演进更新 `F-04`、`F-04.1`、`F-04.2`、`F-04.3` 与 `SC-11`：1. **单层平铺逐级下钻**：废除同屏多级「框中框」复合嵌套展开、全局层级滑杆 (`L0~Ln`)、`全展` 与滚轮语义展开；双击容器或点击 `[进入 ▸]` 直接下钻进入该作用域的单层平铺画布（不渲染聚焦根外层虚线包裹框，仅展示 `relativeDepth === 1` 直接子节点与左右 `FIRST/LAST` 外部传送门卡），顶栏提供层级面包屑、统计胶囊与 `Esc/Backspace` 返回上层；2. **ELK 单层参数与 `1:1 border-box` 对齐**：层间水平净空升至 `110px`、同层垂直 `48px`、`edgeNode 36px`，所有节点强约束 `box-sizing: border-box` 并像素级对齐 ELK 宽高；3. **四向智能锚点与多边错位防叠**：根据源/目标相对几何坐标自动优选 `Right->Left` / `Bottom->Top` / `Top->Bottom` / `Left->Right`，消除纵向回环；同锚点汇聚 `SmoothStep` 边自动施加标签偏移；4. **作用域隔离位置记忆与工具栏/抽屉提纯**：按 `(view, focus_scope)` 分桶记忆坐标且仅用户拖拽/`📌` 图钉节点锁定坐标；工具栏收敛为 4 个高频控制组 + `[⚙️ 筛选与图层]` Popover；`EdgeDetailDrawer` 显示节点中文名与类型徽章 |
 | v2.17.0 | 2026-11-13 | **Proto 全生命周期治理收口与 Git-Only 参考文档/MR 协同边界修订 (ADR-18 v1.1.0 / M22~M25 Proposed)**：鉴于外部兄弟项目 `code-proto` 与原型项目 `protohub` 已正式废弃，依据 [`ADR-18`](../05-adr/18-proto-full-lifecycle-and-git-mr-governance-adr.md) 修订边界：1. 撤销 `Non-Goal 4` 中“接口变更 MR 追踪与 `.proto` 源码管理归属 `code-proto`”旧约束，更新 §2.3 SSOT 说明、`F-18`（升维为全注释驱动的「活体接口参考文档中心 (Reference Docs)」）与 `Non-Goal 7`；2. 将 `F-21` 由“已取消”重定义为“Git-Only `.proto` 源码全生命周期、Git/MR 门禁与统一编译入池”；3. 规划新增 `F-28`~`F-32`（确立 Git-Only 唯一写入口并取消 Web 在线编辑与悲观锁，涵盖纯 Go `protocompile` 编译底座、轻量只读 `.proto` 源码与 Commit Diff 视图、Git 无状态 API 同步与 MR 四合一静态门禁、可配置命名/词汇/带护栏重复消息抽取/分层校验、豁免审批与持久化通知及依赖图前端挂载/导出） |
+| v2.18.0 | 2026-11-13 | **ADR-18 端到端验收场景与 NFR 安全基线补全**：新增 **4 个端到端验收场景（`SC-13` ~ `SC-16`）** 分别对应 M22~M25（纯 Go `protocompile` + `layer_level` 分层依赖拦截 + `F-32` 依赖图/导出、`F-18` 活体接口参考文档 + 只读源码溯源与 Markdown 导出、多段命名/词库迁移/带护栏 AST 重复消息 + LLM 3s 超时降级、无状态 Git 同步 + 含删减文件的 MR 四合一虚拟树门禁 + `Approve with Override` + `traefik_notifications`/`code-notifier` 通知及 `F-24` 静态合标卡片），并补齐 Git SSRF/AES-256-GCM/前端 `< 1.5MB` 增量红线 |
 
 
 ---
@@ -332,7 +333,7 @@ erDiagram
 
 ## 4. 核心业务验收场景矩阵 (Verification Scenarios)
 
-为阶段四 TDD 提供端到端验收基线，定义以下 **12 个核心场景（`SC-01` ~ `SC-12`）**：
+为阶段四 TDD 提供端到端验收基线，定义以下 **16 个核心场景（`SC-01` ~ `SC-16`）**：
 
 | 场景编号 | 场景名称 | 触发条件与输入 | 预期行为与断言 |
 | :--- | :--- | :--- | :--- |
@@ -348,6 +349,10 @@ erDiagram
 | **SC-10** | **CI/CD 质量门禁端到端评估、并发锁排队与自动化红阻** | 流水线携带 `X-Traefik-CI-Token` 调用 `POST /api/gates/evaluate`：① 重放期被测进程发出未声明 `DEPEND` 调用（`ObservedEgressCalls` 含 `Violation`）；② 回包破坏黄金套件预期（`FAILED Diff`）；③ 两路流水线并发请求同一共享 Agent 合规进程 | ① 单次重放即检出未报备出站调用，返回 `422 GATED_VIOLATION`；② 返回 `422 GATED_BREAKING_DIFF` 并附带破坏性字段 Diff；③ 两路并发请求经 `wait_lease_seconds` 有序排队均返回 `200 PASSED`（零 `409` 误杀）并输出格式化 Markdown 门禁报告 |
 | **SC-11** | **大规模架构拓扑单层下钻聚焦、ELK 正交布局与持久化端到端验收**（`ADR-15 / ADR-17`） | 使用种子脚本写入 25 子系统 × 10 功能组 × 10 模块（含被 12 个子系统依赖的公共底座、外部系统与一份含违规调用的录制批次）：① 打开拓扑页确认默认 `L0` 渲染与超大节点守卫；② 双击进入 `sub_1` 并进一步下钻到含多实现接口库的 `grp_1`、开启 `mod_101` 2 跳邻域、在 `[⚙️ 筛选与图层]` Popover 中开启 Hub 折叠与「仅异常」；③ 手动拖拽/固定节点后管理员发布团队基准、普通用户另存个人书签并刷新，再点击 `[✨ 自动整理]` 与切换 `AGG/EXPAND`；④ 管理员新增 1 个直属模块后重新打开拓扑页 | ① 默认 `L0` 秒级平铺渲染，超阈值场景（如大范围邻域）受守卫拦截；② 下钻后画布无外层虚线包裹框、仅渲染直接子节点与左右 `FIRST/LAST` 外部传送门卡，ELK 层间净空 `110px` 零挤压、`border-box` 1:1 对齐、纵向连线切换垂直锚点无回头弯，`EdgeDetailDrawer` 显示中文名；③ 拖拽/固定不触发全局 `fitView` 与全量 ELK，按 `(view, focus_scope)` 隔离持久化并无损恢复，`[✨ 自动整理]` 仅对未固定节点重排；④ 存量固定节点原位、新模块带 `✨ 新增` 标记；管线计算满足性能预算 |
 | **SC-12** | **多实现契约端到端验收**（`ADR-16 / M20`） | 管理员创建 `CONTRACT_LIB` 接口库模块 `A` 并登记多实现契约 `pkg.IfaceSvc`，在分属不同标准进程 `PB / PC / PD` 的模块 `B / C / D` 上分别以 `impl_key = b / c / d` 声明实现，在调度中心模块 `X`（进程 `PX`）声明对契约的分发依赖：① 尝试将 `B` 与 `C` 绑到同一进程；② 录制 `PX` 与 `PB / PD`（`PC` 不纳入监控），触发 `X` 分发调用 `B`、`C`（地址在 `endpoint_snapshots` 内），不触发 `D`，并构造 1 条 `X` 向地址不匹配端点发起的 `pkg.IfaceSvc` 调用；③ 重放 `PX`（单笔入口事务内顺序调用 `B` 与 `C` 且各自返回不同业务应答） | ① 违反 `A-09` 进程互斥返回 `409 Conflict`；② 录制后三条实现边分别判定为 `X ➔ B [b]` `VERIFIED`、`X ➔ C [c]` `OUTBOUND_VERIFIED`、`X ➔ D [d]` `UNCOVERED`，地址不匹配调用产生第八类一致性状态 `IMPL_UNRESOLVED`（`dst_contract_id` 非空、`dst_module_id = NULL`，不计入 `UNCOVERED` 分母）；逻辑视图默认按接口聚合展示 `X ➔ A (×3 实现)` 并支持 `topo_contract_mode=EXPAND` 展开，物理视图按实现展开且不渲染库 `A`；③ 重放 `PX` 时 Agent 按 `service:operation@dst_tag` 匹配对应实现进程，`B` 与 `C` 的 Mock 应答精确隔离不串用，回归结果为 `PASS` |
+| **SC-13** | **纯 Go `protocompile` 编译、分层架构拦截与依赖图导出**（`ADR-18 / M22`） | ① 通过 `POST /api/proto-schemas/compile` 提交带多层 `import`（引用已生效 `BASE_LIB` + WKT `google/protobuf/*` + 同包相对路径）与完整注释的虚拟 `.proto` 源文件包（无需宿主机 `protoc`），随后将其与 `CompileTrialPool` / `F-26` 联动；② 将子系统 `SubSys_Infra` 设为 `layer_level=10`、子系统 `SubSys_Biz` 设为 `layer_level=20`、接口库模块设为 `layer_level=10`，尝试建立 `SubSys_Infra` 模块向下依赖 `SubSys_Biz` 模块，以及建立模块间循环依赖，并在更高分层实现低层接口库或尝试反向倒挂；③ 在 `/schemas?tab=graph` 与 `/topology` 执行依赖图定位、PNG/SVG 导出 | ① 纯 Go `protocompile` 成功生成含完整 `SourceCodeInfo` 的 `FileDescriptorSet` 并无缝接入统一编译池与运行时解包；② 下层调上层及环形依赖均被 `409 Conflict` 精确拦截，接口库实现校验遵循 `impl.layer_level >= contract_lib.layer_level`，`layer_level=0` 未分层模块自由放行；③ `/schemas?tab=graph` 完整渲染跨 Schema 依赖图（点击跳转 `?tab=assets&schema_id=`），`/topology` 可零网络请求导出高分 PNG/SVG 图片 |
+| **SC-14** | **活体接口参考文档中心与 Git 只读源码溯源**（`ADR-18 / M23`） | 同步或编译含完整注释与标签（`@deprecated`、`@owner`、`@error_code`）的 `dophi.order.v1` 服务 `.proto` 并绑定黄金用例（`F-25`）及多实现契约（`ADR-16`）：① 访问 `/schemas?tab=docs` 检索服务与方法并查看参考文档、枚举全量字典、结构化错误码表与黄金样本 / 缺省 JSON 样例；② 点击 `order.proto#L42` 行号锚点跳转；③ 导出服务级/版本级 Markdown 文档并核对前端包体增量 | ① 参考文档中心精确聚合服务/方法元信息、请求/响应递归嵌套字段注释与行号、`@deprecated` 废弃横幅、Enum 字典与「定义方 + 全部实现方」关联链接；② 跳链直达 `/schemas?tab=sources` 轻量只读代码页对应高亮行及只读双栏 Commit Diff（Web 全栈零编辑器与 `file_lock` 控件）；③ 导出自包含 Markdown API 说明书且前端新增静态资产打包增量严格 `< 1.5 MB` |
+| **SC-15** | **可配置静态检查、词汇标准化迁移与带护栏重复结构检测**（`ADR-18 / M24`） | ① 从 `protohub` 迁移 `vocabulary_terms` 词库至 `traefik_vocabulary_terms` 并校验幂等重跑；② 对包含多段包名 `dophi.order.v1`、缺注释 Enum、`amnt` 等未标准化字段名及多处结构雷同消息（含 `< 3` 字段短包装、`BASE_LIB` 公共库、同包 `v1/v2` 演进版本与真跨服务重复结构体）的文件集执行扫描；③ 模拟外部大模型接口 3s 超时/不可用 | ① 迁移脚本幂等无报错，既支持单/多段包名规则可配置豁免又正确切分复合字段词根；② `COMMENT_REQUIRED` 默认 `WARNING`（不误杀 MR），`< 3` 字段/`BASE_LIB`/同包多版本严格豁免，跨服务真重复 Message 经倒排桶预筛选与规范 AST 指纹精确聚簇提醒；③ LLM 超时（> 3s）或未配置时自动降级为纯确定性词库+规则报告（零阻塞）并命中相同词根本地缓存 |
+| **SC-16** | **无状态 Git 同步、MR 四合一静态门禁、`Override` 审计与持久化通知**（`ADR-18 / M25`） | ① 管理员配置采用私有 Tokens 的 `GitRepo`（映射 `target_schema_name`、`target_category`、`proto_include_dirs`）与内网地址 SSRF 黑洞单测；② 先触发全量只读同步，随后推送含「修改 A + 新增 B + 彻底删除既有被依赖 `.proto`」的 Git MR Webhook；③ 对失败且仅含破坏性冲突的重构 MR，管理员执行 `Approve with Override`（含理由）；④ 模拟 MR 合并触发 `merge` 事件与 `code-notifier`/SMTP 降级测试 | ① 凭据以 AES-256-GCM 密文落库且 API 返回全程脱敏，`SafeDialer` 拒绝 `127.0.0.1/169.254.*` 私有地址（非测试白名单下），Webhook 密钥常量时间校验，重复 `(repo_id, head_commit_sha)` 幂等返回 `202` 不重跑；② 基线+补丁虚拟目录树精确移除被删 `.proto` 文件，四合一异步门禁精确拦截并向 Git 平台回写失败状态/评论且落库 `traefik_notifications` + SSE 推送 + `code-notifier` 投递；③ `Override` 生成 `P1` 高危审计并更新门禁状态；④ 合并触发自动 `protocompile` 写入新版本 `ProtoSchema`（且静态规范合标率独立展示于 `/dashboard` 合标卡片，不掺入旧 40+30+30 健康分） |
 
 ---
 
@@ -371,9 +376,9 @@ erDiagram
 
 ## 6. 非功能性需求与安全防护红线 (NFR & Security Guardrails)
 
-1. **报文边界与防内存耗尽**：
+1. **报文边界、编译与出站安全红线**：
    - 分帧器执行 F-10 的长度契约校验，畸形长度立即丢弃并重置该连接的缓存；单帧采集阈值可配置（默认 4MB），防止整数溢出与超大包 OOM；
-   - `.pb` 上传限制 `<= 16MB` 并做 `protodesc` 校验；所有 API 入参白名单校验，只用 GORM 参数化查询，禁止 SQL 拼接与未校验的系统命令调用；CI 机器 Token 仅以 SHA-256 哈希持久化并通过 `subtle.ConstantTimeCompare` 常量时间校验，严禁源码硬编码、URL 传参或明文打印日志。
+   - `.pb` 上传与在线/Git `protocompile` bundle 限制 `<= 16MB` 并做 `protodesc` / 纯 Go `protocompile` 安全沙箱校验（严格禁止外部 `protoc` 进程执行、禁止宿主机文件系统路径穿越 `..`）；所有 API 入参白名单校验，只用 GORM 参数化查询，禁止 SQL 拼接与未校验的系统命令调用；CI 机器 Token 仅以 SHA-256 哈希持久化，Git 凭据 / Webhook 密钥必须通过主密钥 **AES-256-GCM** 加密存储并在响应体脱敏（仅返回布尔配置态/脱敏提示），Webhook 签名/Token 及 CI Token 统一使用 `subtle.ConstantTimeCompare` 常量时间比对；所有出站 HTTP/Git/Webhook/LLM/Notifier 请求强制经 `SafeDialer` 防 SSRF 拨号器拦截回环/私网/链路本地（`169.254.0.0/16`）与未授权重定向（本地单元测试白名单隔离）；严禁源码硬编码、URL 传参或明文打印日志。
 2. **性能基线（首期目标值，阶段二压测校准）**：
 
    | 指标 | 目标 |
@@ -386,6 +391,9 @@ erDiagram
    | 拓扑前端裁剪管线（叠加合成 + 作用域裁剪 + 边上卷，2,775 节点 / 1 万边，P95） | ≤ 30 ms（CI ≤ 60 ms） |
    | 拓扑单层聚焦与局部排版（可见 ≤ 120 节点，P95） | ≤ 150 ms |
    | 拓扑全局 ELK 排版（可见 ≤ 150 节点，Worker 异步，P95） | ≤ 400 ms |
+   | `protocompile` 虚拟目录树编译与注释萃取（单仓 ≤ 100 `.proto` 文件，P95） | ≤ 800 ms |
+   | MR 四合一静态门禁（异步 Worker 单次全检含可选 LLM 3s 硬超时熔断，P95） | ≤ 5 s（无 LLM 场景 ≤ 1.5 s） |
+   | 前端 M22~M25 新增静态构建产物体积增量（含只读代码高亮/Diff/导出，Gzip 前） | ＜ 1.5 MB |
 
 3. **数据存储与保留**：原始帧与解析结果存入主控 PostgreSQL 分区表；录制批次受时长 / 帧数上限约束（F-11）；流量数据默认保留 30 天（可配置），由主控定时任务执行子分区 `DROP TABLE` 物理释放（毫秒级、零锁表、零 WAL 膨胀），清理动作写审计。
 4. **最小特权与测试绑定**：

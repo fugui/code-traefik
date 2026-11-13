@@ -1,11 +1,11 @@
 # 架构与活体契约治理 (`code-traefik`) 管理面服务、微前端控制台与回归断言设计
 
 - **文档编号**：`04-control-plane-and-web-console.md`
-- **文档版本**：v1.9.1
+- **文档版本**：v1.10.0
 - **更新日期**：2026-11-13
 - **归属阶段**：阶段二：系统架构与数据模型设计 (`02-design`)
-- **状态**：M1~M20 已交付；M21 已批准待实施 (Approved for M21)
-- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.16.0)、[`01-system-architecture.md`](./01-system-architecture.md)、[`02-data-plane-and-cros-rpc-engine.md`](./02-data-plane-and-cros-rpc-engine.md)、[`03-architecture-elements-and-topology.md`](./03-architecture-elements-and-topology.md) (v1.7.1)、[`07-console-ia-restructuring-and-workflow-workbench-adr.md`](../05-adr/07-console-ia-restructuring-and-workflow-workbench-adr.md) (ADR-07)、[`08-recording-drawer-and-process-tree-selection-adr.md`](../05-adr/08-recording-drawer-and-process-tree-selection-adr.md) (ADR-08)、[`09-arch-process-ssot-and-ebpf-premount-standby-adr.md`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md) (ADR-09 v1.1.0)、[`10-enhanced-proto-schema-file-management-adr.md`](../05-adr/10-enhanced-proto-schema-file-management-adr.md) (ADR-10 v1.1.0)、[`11-single-process-bidirectional-capture-and-recording-ux-adr.md`](../05-adr/11-single-process-bidirectional-capture-and-recording-ux-adr.md) (ADR-11 v1.0.0)、[`12-packet-causality-call-tree-and-sequence-ux-adr.md`](../05-adr/12-packet-causality-call-tree-and-sequence-ux-adr.md) (ADR-12 v1.0.0)、[`15-scalable-topology-focus-and-layout-persistence-adr.md`](../05-adr/15-scalable-topology-focus-and-layout-persistence-adr.md) (ADR-15 v1.3.0)、[`16-multi-implementation-service-contract-adr.md`](../05-adr/16-multi-implementation-service-contract-adr.md) (ADR-16 v2.0.0)、[`17-topology-single-layer-drilldown-and-layout-ux-adr.md`](../05-adr/17-topology-single-layer-drilldown-and-layout-ux-adr.md) (ADR-17 v1.1.0)
+- **状态**：M1~M21 已交付；M22~M25 已完成设计待实施 (Approved for M22~M25)
+- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.18.0)、[`01-system-architecture.md`](./01-system-architecture.md) (v1.7.0)、[`02-data-plane-and-cros-rpc-engine.md`](./02-data-plane-and-cros-rpc-engine.md)、[`03-architecture-elements-and-topology.md`](./03-architecture-elements-and-topology.md) (v1.8.0)、[`07-console-ia-restructuring-and-workflow-workbench-adr.md`](../05-adr/07-console-ia-restructuring-and-workflow-workbench-adr.md) (ADR-07)、[`08-recording-drawer-and-process-tree-selection-adr.md`](../05-adr/08-recording-drawer-and-process-tree-selection-adr.md) (ADR-08)、[`09-arch-process-ssot-and-ebpf-premount-standby-adr.md`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md) (ADR-09 v1.1.0)、[`10-enhanced-proto-schema-file-management-adr.md`](../05-adr/10-enhanced-proto-schema-file-management-adr.md) (ADR-10 v1.1.0)、[`11-single-process-bidirectional-capture-and-recording-ux-adr.md`](../05-adr/11-single-process-bidirectional-capture-and-recording-ux-adr.md) (ADR-11 v1.0.0)、[`12-packet-causality-call-tree-and-sequence-ux-adr.md`](../05-adr/12-packet-causality-call-tree-and-sequence-ux-adr.md) (ADR-12 v1.0.0)、[`15-scalable-topology-focus-and-layout-persistence-adr.md`](../05-adr/15-scalable-topology-focus-and-layout-persistence-adr.md) (ADR-15 v1.3.0)、[`16-multi-implementation-service-contract-adr.md`](../05-adr/16-multi-implementation-service-contract-adr.md) (ADR-16 v2.0.0)、[`17-topology-single-layer-drilldown-and-layout-ux-adr.md`](../05-adr/17-topology-single-layer-drilldown-and-layout-ux-adr.md) (ADR-17 v1.1.0)、[`18-proto-full-lifecycle-and-git-mr-governance-adr.md`](../05-adr/18-proto-full-lifecycle-and-git-mr-governance-adr.md) (ADR-18 v1.1.0)
 
 ### 修订记录
 
@@ -14,6 +14,7 @@
 | `v1.8.0` | `2026-11-11` | Architecture Team | 同步 ADR-16 (`v1.0.0`)：补充录制期 `endpoint_snapshots` 固化、多实现契约重放兼容性与 `dst_tag` 隔离；新增 §4.8 详细定义 `/architecture` 模块类型与「定义的接口」页签、`PROVIDE` 自动切换实现契约与 `impl_key`、`DEPEND` 分发/具体实现区分、`/topology` `«interface»` 库卡、`REALIZATION` 图层开关、`topo_contract_mode=AGG\|EXPAND`、第八类一致性状态 `IMPL_UNRESOLVED`（复用 `--color-warning`）与「实现待定」虚拟节点及 `/dashboard` 契约实现覆盖率 |
 | `v1.9.0` | `2026-11-13` | Architecture Team | 同步 [`ADR-17`](../05-adr/17-topology-single-layer-drilldown-and-layout-ux-adr.md) (`v1.0.0` / `M21`)：更新 §4.1 `/topology` URL 状态参数、§4.2 `ArchCanvas` 组件树职责，并新增 §4.9 详细规范单层平铺逐级下钻面包屑导航、工具栏 4 组收纳 + `[⚙️ 筛选与图层]` Popover、三类 `1:1 border-box` 卡片、四向智能锚点路由、按作用域隔离的位置记忆与 `EdgeDetailDrawer` 节点中文名渲染 |
 | `v1.9.1` | `2026-11-13` | Architecture Team | 依据 [`ADR-17` (`v1.1.0`)](../05-adr/17-topology-single-layer-drilldown-and-layout-ux-adr.md) 架构检视意见加固 §4.2 与 §4.9：1. §4.2 补齐 `UnregisteredInterfaceNode.tsx` 与状态宿主 `ArchTopologyTabPane.tsx`；2. §4.9 明确节点悬浮动作条（`arch-node-action-bar`）与 `Enter` 快捷键同步切换单层下钻、跨层搜索 `fitView` 后置等待 ELK 排版完成、五类节点四向双向 `<Handle>` 挂载以及非 `right->left` 走线丢弃 ELK `bendPoints` 切换 `SmoothStep` |
+| `v1.10.0` | `2026-11-13` | Architecture Team | 依据 [`ADR-18` (`v1.1.0`)](../05-adr/18-proto-full-lifecycle-and-git-mr-governance-adr.md) (`M22~M25`) 全面补齐 Proto 全生命周期治理与 Git/MR 门禁设计：1. 新增 §1.6~§1.9（`gitclient` 无状态同步/对账/删改虚拟树四合一 MR 门禁与 Override、可配置多段命名/`protohub` 词库/3s 熔断 LLM/三护栏倒排桶 AST 重复探测 `linter`、持久站内通知+`code-notifier`/SMTP 引擎、`F-24` 大盘独立静态合标卡片）；2. 新增 §2.5~§2.6（纯 Go `protocompile` 4 层虚拟 `Resolver` 与 `F-18` 活体接口参考文档中心）；3. 对齐 §4.1 现行 **4 组 10 项** 菜单路由基线并新增 §4.10（`/schemas` 五 Tab 扩展、轻量 `<1.5MB` 只读源码与双栏 Diff、顶部通知铃铛与零 `any` TS DTO）；4. 补全 §5 RBAC 与 `commonAudit` 字典 |
 
 ---
 
@@ -23,16 +24,24 @@
 flowchart TB
     subgraph Handlers["Gin HTTP / SSE 控制器层 (handlers/)"]
         H_Arch["架构与拓扑 API"]
-        H_Proto["Proto 描述集 API"]
+        H_Proto["Proto 编译 / 文档 / 源码 API"]
+        H_Git["Git 同步 / MR Webhook / 规则 API"]
         H_Agent["Agent 纳管 API"]
         H_Rec["录制与流量查询 API"]
         H_Replay["重放与 Diff 报告 API"]
+        H_Notif["持久化通知中心 API"]
         H_SSE["SSE 实时推送 (/api/events)"]
     end
 
     subgraph CoreServices["控制面领域引擎层 (internal/server/)"]
-        TopoSvc["topology.Engine (架构树 / 静态推导 / 一致性验证)"]
-        DecoderSvc["decoder.Registry (atomic 编译缓存 / dynamicpb 编解码)"]
+        SecSvc["security (AES-256-GCM / SafeDialer SSRF / 常量验签)"]
+        TopoSvc["topology.Engine (架构树 / layer_level / 静态推导 / 一致性验证)"]
+        DecoderSvc["decoder.Registry (protocompile / atomic 缓存 / dynamicpb / Breaking AST)"]
+        DocSvc["protodoc.Extractor (SourceCodeInfo / @标签 / 黄金&缺省样例 / Markdown)"]
+        LinterSvc["linter.Engine (规则矩阵 / 词库 / 3s LLM / 倒排桶重复 AST)"]
+        GitSvc["gitclient.SyncAndGate (无状态 REST/memfs / MR 虚拟树 / Merge 自动编译)"]
+        NotifySvc["notify.Dispatcher (站内持久通知 / code-notifier / SMTP)"]
+        DashSvc["dashboard.Overview (三维健康分 + F-24 静态合标率)"]
         HubSvc["hub.Manager (10s 心跳 / WS 接收池 / SSE 广播总线)"]
         RecSvc["recorder.Orchestrator (多进程协同编排 / 发起序 SeqNo + SNO 配对 / 批量落盘)"]
         CallGraphSvc["callgraph.Engine (DOTR 调用树 / 跨跳缝合 / 参数与实体血缘)"]
@@ -43,6 +52,15 @@ flowchart TB
 
     H_Arch --> TopoSvc
     H_Proto --> DecoderSvc
+    H_Proto --> DocSvc
+    H_Git --> GitSvc --> DecoderSvc
+    GitSvc --> LinterSvc
+    GitSvc --> NotifySvc
+    GitSvc --> SecSvc
+    LinterSvc --> SecSvc
+    NotifySvc --> SecSvc
+    NotifySvc --> HubSvc
+    H_Notif --> NotifySvc
     H_Agent --> HubSvc
     H_Rec --> RecSvc
     H_Rec --> CallGraphSvc
@@ -53,6 +71,9 @@ flowchart TB
     HubSvc -- "重放结果帧" --> ReplaySvc
     RecSvc --> DecoderSvc
     RecSvc --> TopoSvc
+    DocSvc --> DecoderSvc
+    DashSvc --> TopoSvc
+    DashSvc --> LinterSvc
     DiffSvc --> DecoderSvc
 ```
 
@@ -164,6 +185,66 @@ flowchart LR
    - 基于批次各根事务 `headers_json.meta`（历史无 `meta` 小批次受控回退扫描顶层载荷）：当某根事务在 `rsp` 中首次产出某业务主键（`req` 未携带而 `rsp` 出现，如 `CreateOrder.rsp.order_id = "ORD_9981"`，角色 `PRODUCER`），后续根事务在 `req` 中携带同一键值（如 `GetOrderDetail / CancelOrder`，角色 `CONSUMER`），自动串联为跨事务实体生命线；
    - 当用户对任一 `CONSUMER` 入口记录请求 `GET /api/traffic-records/:id/replay-closure` 时，除返回其专属 `ScopedEgressMocks` 预览清单外，自动附带前置 `PRODUCER`（及中间状态变更事务）有序依赖链与一键连带回放推荐 `recommended_record_ids`。
 
+### 1.6 Git 无状态客户端、对账引擎与 MR 四合一虚拟目录树门禁 (`internal/server/gitclient`, `F-21` / `F-29` / `F-31` / M25)
+
+1. **凭据加密、SSRF 隔离与双模无状态读取适配器**：
+   - `GitRepo` 凭据（`PersonalAccessToken` / `BasicAuth` / `DeployKey`）与 `WebhookSecret` 经 `internal/server/security.AESGCM` 使用主密钥（`TRAEFIK_MASTER_KEY` 环境变量或 KMS 配置，测试期支持显式测试密钥）加密存库，响应体彻底隐藏密文并仅返回 `has_credentials` / `has_webhook_secret` / 脱敏掩码；
+   - 出站 HTTP/Git/Webhook 通信强制注入 `security.SafeDialer` 拦截回环、内网与云元数据地址；优先通过托管平台 **REST API**（GitLab v4 `/repository/tree` + `/files/:path/raw` + `/merge_requests/:iid/changes`，GitHub `/git/trees` + `/pulls/:num/files`，Gitea `/git/trees`）拉取树与文件流，对于通用 Git URL (`GENERIC`) 回退使用 `go-git` `memfs` (`memory.NewStorage()` + `memfs.New()`, `Depth: 1`) **纯内存浅克隆**，**宿主机磁盘零工作树残留**。
+2. **全量只读同步与内容一致性对账 (`SyncGitRepo` / `ReconcileRepoConsistency`)**：
+   - 全量同步遍历远端默认分支下位于 `ProtoRootDir` 与 `ProtoIncludeDirs`（均经 `path.Clean` 防 `..` 穿越）内的全部 `.proto` 文件：对比各相对路径 SHA256 与 DB 现有 `traefik_proto_files`：新增或 SHA256 变更则写入新版本 `traefik_proto_file_versions`（记录 `CommitSHA`、`AuthorName`、`CommitMessage`、`CommittedAt`），远端已删除的路径从当前快照表清理（保留只读历史追溯或标记下线），随后触发 `protocompile` Compilation Bundle 编译写入新版 `ProtoSchema (source_type='GIT_SYNC')` 并提取 `ProtoDocSymbol` 与静态检查报告，最终通过 SSE (`git_sync.completed`) 与通知引擎广播完成；
+   - 一致性对账接口为纯只读校验：实时拉取远端树与 SHA256 列表，比对 DB `traefik_proto_files` 输出 `{in_sync, modified_on_remote, missing_in_db, extra_in_db}`，用于定位 Webhook 漏投或手工干预处理。
+3. **MR Webhook 常量时间验签、幂等入队与基线+补丁虚拟目录树合成 (`EvaluateMRCheckRun`)**：
+   - `POST /api/webhooks/git-mr` 从 Payload 解析仓库标识/项目 URL 匹配 `GitRepo`，使用 `subtle.ConstantTimeCompare` 校验 `X-Gitlab-Token` 或 HMAC-SHA256 签名（`X-Hub-Signature-256` / `X-Gitea-Signature`）；通过 `INSERT ... ON CONFLICT (git_repo_id, head_commit_sha) DO NOTHING` 实现精确幂等，相同 SHA 重试直接返回 `202 Accepted` 且不重复占用 Worker；
+   - **MR 虚拟目录树合成算法（根治「删除既有文件残留幽灵引用」缺陷）**：
+     ```text
+     BaseTree := FetchRepoTreeAtBranch(repo, mr.TargetBranch) // 目标分支全部 .proto 文本映射 map[relPath][]byte
+     DiffItems := FetchMRChangedFiles(repo, mr.MRIID)         // [{path, old_path, change_type: ADDED|MODIFIED|DELETED|RENAMED}]
+     for item in DiffItems:
+         cleanOld := CleanSafeRelPath(item.OldPath)
+         cleanNew := CleanSafeRelPath(item.Path)
+         if item.ChangeType == DELETED:
+             delete(BaseTree, cleanNew)                       // 强制剔除已删文件，若其它文件仍 import 之，protocompile 必报错！
+         else if item.ChangeType == RENAMED:
+             delete(BaseTree, cleanOld)
+             BaseTree[cleanNew] = FetchBlobAtCommit(repo, cleanNew, mr.HeadCommitSHA)
+         else: // ADDED | MODIFIED
+             BaseTree[cleanNew] = FetchBlobAtCommit(repo, cleanNew, mr.HeadCommitSHA)
+     ```
+   - **四合一门禁流水线顺序执行**：① `protocompile` 虚拟树全量编译（`compile_passed`）；② `linter` 命名/注释/词库检测（无 `ERROR` 为 `lint_passed`）；③ 带护栏 AST 重复结构检测（默认产生 `WARNING`/`INFO` 提醒）；④ 若 `TargetSchemaName` 在生效池已存在基准版本，提取两边自有 `FileDescriptorProto` 执行 `decoder.DetectBreakingChanges` + `FindAffectedDependents`（无 `FATAL` 变更则 `breaking_passed`）；
+   - **状态回写、`Approve with Override` 与 Merge 自动入池**：
+     - 当 `merge_blocking_enabled=true` 时，向托管平台回写 commit status（`success`/`failed`）与带违规行号/依赖影响方的 Markdown 评论；
+     - 管理员对 `FAILED` 记录执行 `POST /api/mr-check-runs/:id/override` 时，**强制校验 `compile_passed == true`**（编译语法错误严禁绕过），必须提供 `override_reason`，更新 `Status=OVERRIDDEN`、生成 **`AuditLevelP1`** 审计日志、向 Git 平台回写通过状态并发送 `MR_GATE_OVERRIDDEN` 通知；
+     - 当 Webhook 携带 `event_action == "merge"` 时，若开启 `AutoCompileOnMerge`，自动执行默认分支最新树全量同步并调用 `protocompile` 写入 `ProtoSchema (source_type='GIT_MR_AUTO', source_mr_iid=mr.MRIID)`；若同时开启 `AutoActivateOnMerge`，则复用 `CompileTrialPool` 无 Breaking 门禁安全激活并刷新 `ProtoDocSymbol`。
+
+### 1.7 可配置静态规范检查、多段包名规则、词库迁移与带护栏重复结构引擎 (`internal/server/linter`, `F-30` / M24)
+
+1. **可配置规则引擎与合理默认值 (`traefik_check_rules`)**：
+   - 按 `RuleType`（`NAMING | COMMENT | VOCABULARY | STRUCTURE | DUPLICATE`）逐文件扫描 AST 与 `SourceCodeInfo`；支持基于 `ExemptionRule` 剔除 `google/protobuf/*`、`third_party/*` 或指定 `BASE_LIB` 路径；
+   - **多段包名兼容规则 (`PACKAGE_NAMING`)**：默认正则 `^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*(\.v[0-9]+((alpha|beta|rc)[0-9]*)?)?$` 完整兼容 `dophi.order.v1` 多段语义版本包名与单段包名（彻底纠正原 `protohub` 硬编码只支持单段包名的历史缺陷）；
+   - **`COMMENT_REQUIRED` 默认 `WARNING`**：缺失 Service/RPC/Message/Enum 注释默认记录 `WARNING` 并在合规报告统计，**不直接阻断 MR**，管理员可在规则配置中显式切换级别或豁免旧目录。
+2. **复合词根切分、`protohub` 迁移词典与 3s 熔断可选 LLM 建议器**：
+   - 将字段名（如 `cust_ord_amnt` / `tradeTsMs`）拆分为规范小写词元切片 `[cust, ord, amnt]`；首先查 `traefik_vocabulary_terms` 标准词 `term` 与 `aliases` 映射表（若命中 `amnt -> amt`，立即生成精确规范化替换建议）；
+   - 未命中的生僻缩写词元先查询本地进程内 TTL 缓存（避免同仓跨文件重复调用）；若系统设置启用了 `llm_enabled=true` 且配置有效，通过受 `SafeDialer` 保护的 HTTP 客户端发起 **3 秒硬超时**（`context.WithTimeout(ctx, 3*time.Second)`）异步或有限并发批请求获取英文词根释义建议，将结果写入本地缓存并可选写回 `traefik_vocabulary_terms(is_approved=false, source='LLM_SUGGESTED')` 供架构师审核；**超时、HTTP 错误或未配置 LLM 时 100% 静默降级为纯确定性报告（`LLMStatus=TIMEOUT_FALLBACK|ERROR_FALLBACK|SKIPPED`），绝不拖垮或失败静态检查任务**。
+3. **带三重护栏与倒排桶预筛选的跨文件 AST 重复结构体探测 (`DetectDuplicateMessages`)**：
+   - **护栏 ① 短包装豁免**：统计有效非保留字段数，凡 **`effective_field_count < 3`** 的小型消息（如仅含 `{id, name}`、`PageReq`、`Empty`）直接跳过不参与重复比对；
+   - **护栏 ② `BASE_LIB` 与配置路径豁免**：排除 `TargetCategory == 'BASE_LIB'` 及命中 `ExemptionRule` 的公共底座消息，鼓励正常引用公共结构而不误报；
+   - **护栏 ③ 同包多版本演进豁免**：对包名提取去版本前缀键（正则剥离末尾 `.v\d+((alpha|beta|rc)\d*)?$`，如 `dophi.order.v1` ➔ `dophi.order`），同一归一化包键下的 `v1.CreateOrderReq` 与 `v2.CreateOrderReq` 视为正常契约版本演进，**严禁报重复**；
+   - **倒排桶预筛选 + 规范 AST 结构指纹（零 $O(N^2)$ 复杂度爆炸）**：
+     1. 对每条通过护栏的 Message，剥离字段 Tag 序号与注释，提取规范化签名集合 `Tokens = {(normalizedType, normalizeFieldStem(name), cardinality)}`（按字母序排列计算精确同构哈希 `ExactASTHash`）；
+     2. 建立倒排桶索引 `Bucket[token] -> []MessageID`：仅与同一 `Bucket` 中共享 `>= 2` 个字段特征的候选消息比较精确哈希或高重叠度相似度（`Jaccard >= 0.85` 近似重复 或 `ExactASTHash` 100% 同构），按聚类簇输出 `CheckViolation(RuleCode="DUPLICATE_MESSAGE_AST", Severity="WARNING", DuplicateClusterHash=hash)`，附带各副本精确 `file:line` 与「抽离下沉至公共 `BASE_LIB`」重构建议。
+
+### 1.8 持久化站内通知中心与多渠道异步分发 (`internal/server/notify`, M25)
+
+1. **受众解析与站内持久化**：MR Gate 失败/豁免、Git 同步失败、Merge 自动入池成功、破坏性影响警告事件触发时，引擎按 `MRAuthorEmail/Username`、`AffectedDependents` 所属模块/子系统 `OwnerID` 及兜底 `traefik_admin` 解析接收人集合（去重），批量持久化写入 `traefik_notifications` 并立即调用 `SSEBroker.BroadcastEvent` 推送 `notification.created` 事件（按 `recipient_user_id` 过滤前端提醒角标）。
+2. **可选外发通道（`code-notifier` Webhook 与 SMTP，失败不阻断）**：
+   - 若配置了 `code_notifier_url`（对接工作区 `code-notifier` 的 `POST /api/notify/email`，契约字段：`task_id`, `task_type`, `task_display_name`, `repo_name`, `branch`, `recipients: {to, cc}`, `subject`, `summary`, `markdown_content`, `report_url`）或设置了可用 SMTP 服务器，由异步分发协程经 `SafeDialer` 投递后更新 `external_dispatch_status`（`SENT | FAILED`）及失败摘要；未配置外部通道时自动保持 `WEB_ONLY / SKIPPED`。
+
+### 1.9 治理大盘静态规范合标率独立指标卡片 (`internal/server/dashboard`, `F-24` / M25)
+
+为遵循 [`ADR-18`](../05-adr/18-proto-full-lifecycle-and-git-mr-governance-adr.md) §1.8 保持既定 `HealthScore`（`40 + 30 + 30 = 100` 三支柱分数模型与现有回归单测基线）不被稀释，在 `DashboardOverviewDTO` 中以向后兼容新增独立聚合结构 **`StaticComplianceDTO`**（前端 `/dashboard` 呈现独立「Proto 静态规范合标率」卡片，与三维运行期健康分清晰分区）：
+- `ComplianceRatePct`：跨全部纳管 Git 仓最近一次有效 `CheckReport.ComplianceScore` 加权均值（或无 Git 仓时为 `null`/未启用引导态）；
+- `EvaluatedRepoCount`、`OpenErrorViolations`、`OpenWarningViolations`、`DuplicateMessageGroups`、`MRGates30d`、`MRGatePassRate30d`。
+
 ---
 
 ## 2. IDL 描述集引擎、跨集依赖闭包与 `dynamicpb` 动态编解码 (`internal/server/decoder`)
@@ -229,6 +310,36 @@ flowchart LR
    - **L2 方法级精准忽略 (`ProtoOperation.DiffIgnorePaths`)**：在契约工作台字段树上可视化勾选、并持久化至 `traefik_proto_operations` 的方法级专属规则；
    - **L3 服务级全局默认 (`ModuleService.DiffIgnorePaths`)**：在架构中心供给服务上配置的服务级通用忽略规则（如公共网关头 `header.*`）。
 
+### 2.5 纯 Go `protocompile` 编译底座与 4 层虚拟 `Resolver` (`F-21`, `ADR-18` / M22)
+
+为彻底消除对宿主机外部 `protoc` 二进制及临时文件系统的依赖，在 `internal/server/decoder` 中引入纯 Go 编译器 **`github.com/bufbuild/protocompile`**（启用 `compiler.Compiler{Resolver: ..., SourceInfoMode: protocompile.SourceInfoStandard}`）：
+
+1. **输入安全规范与 `proto_include_dirs` 路径消毒**：
+   - 接收虚拟目录树 `map[relPath][]byte` 与可选 `proto_include_dirs`（默认 `["."]`），对全部路径执行 `path.Clean` 并强制校验为**非空安全 POSIX 相对路径**，拒绝任何前导 `/`、`..` 上级路径穿越或包含 `\0` 的畸形路径；单次编译总源码体积强制受 `<= 16MB` 限制。
+2. **四层优先级虚拟 `Resolver` (`LayeredVirtualResolver`)**：
+   1. **第一优先级（当次编译虚拟目录树）**：按 `proto_include_dirs` 组合候选相对路径匹配本轮提交的 `.proto` 源文件集；
+   2. **第二优先级（当前生效 `BASE_LIB` 池）**：从已生效 `category='BASE_LIB'` 的 `ProtoSchema` 描述集检索匹配路径（当 `auto_activate=false` 仅草稿编译或 MR 试编译时，允许回退至同仓最新未激活 `BASE_LIB`）；
+   3. **第三优先级（其他已生效描述集）**：从当前生效池其余 `BUSINESS`/`GATEWAY` 的 `ProtoSchema` 按文件全路径匹配外部跨仓引用；
+   4. **第四优先级（标准 WKT 内置库）**：Go `protocompile.WithStandardImports()` 内置 `google/protobuf/*.proto`。
+3. **产物封装与既有防线无缝对接**：
+   - 将编译返回的 `linker.Files` 转换为标准 `descriptorpb.FileDescriptorSet`（完整保留 `SourceCodeInfo` 注释与源码行号 `Span`），校验总字节数 `<= 16MB` 后，直接复用 §2.1 的 **`UploadSchema` / `CompileTrialPool` / `F-26` AST 破坏性变更雷达** 与 `atomic.Pointer[CompiledRegistry]` 原子热切换流水线；任何编译失败行精确映射为结构化 `CompileDiagnosticDTO{File, Line, Column, Message}`。
+
+### 2.6 活体接口参考文档中心与 `SourceCodeInfo` 萃取引擎 (`internal/server/protodoc`, `F-18`, `ADR-18` / M23)
+
+依托 `protocompile`（`SourceInfoStandard`）或带有 `--include_source_info` 的 `.pb` 描述集，`protodoc` 在描述集编译或激活时同步增量萃取全注释驱动结构并持久化至 `traefik_proto_doc_symbols`：
+
+1. **`SourceCodeInfo` 行号跨度与结构化标签萃取 (`ExtractDocSymbols`)**：
+   - 遍历 `FileDescriptorProto.SourceCodeInfo.Location`，按 `Path` 索引解析 `Service`、`Method`、`Message`、`Field`、`Enum` 与 `EnumValue` 的 `StartLine` / `EndLine`（1-based）、`LeadingComments`、`TrailingComments`；
+   - 结构化标签解析器识别注释中的三类规范标记：
+     - **`@deprecated`（或字段/方法/服务 Option `deprecated = true`）**：提取废弃原因并在接口页渲染高危淘汰警示横幅；
+     - **`@owner <team_or_user>`**：标注接口维护负责人；
+     - **`@error_code <code> <http_or_cros_code> <description>`**：逐行萃取为结构化错误码明细表 `error_codes_json`。
+2. **Enum 全量字典、架构多实现血缘、黄金真实样本与缺省 JSON 样例**：
+   - **Enum 值字典**：提取全部枚举项名称、整数值、注释及行号；
+   - **黄金用例优先 + 缺省样本生成**：查询 `traefik_golden_suite_items` 中匹配 `(service_name, operation)` 的最新精选报文反序列化 JSON 作为「真实推荐调用样例」；若无黄金样本，基于 `protoreflect.MessageDescriptor` 递归构造类型安全的缺省 JSON Request/Response 模板（内置循环引用检测与 `max_depth <= 12` 护栏，64 位整数输出字符串示例）；
+   - **多实现契约血缘聚合（`ADR-16` 联动）**：查询 `traefik_service_contracts` 与 `traefik_module_services` 关联输出 `Service` 所属「定义契约库 (`CONTRACT_LIB`)」、「独占实现模块」或「全部多实现模块 (`impl_key + ArchProcess`)」，附带跳转 `/topology` / `/architecture` 锚点；
+   - **Markdown 一键导出 (`ExportMarkdown`)**：生成包含服务摘要、方法入参/出参嵌套表格、枚举字典、错误码说明、血缘与示例 JSON 的自包含标准 Markdown 手册（所有 `.proto` 注释在入库/导出前强制纯净转义，Web 渲染严禁 `dangerouslySetInnerHTML`）。
+
 ---
 
 ## 3. 协议头级 + Protobuf 语义字段级双层回归 Diff 引擎 (`internal/server/diff`)
@@ -277,25 +388,28 @@ type FieldDiff struct {
 
 ## 4. 微前端控制台架构与组件设计 (`frontend/src/`)
 
-### 4.1 模块联邦导出契约、三层频次菜单与路由矩阵 (`ADR-07`)
+### 4.1 模块联邦导出契约、四组十项菜单与路由矩阵 (`ADR-07`, `ADR-14`, `ADR-18`)
 
-前端通过 `vite.config.ts` 固定 `base: '/traefik/'`，向外暴露 `./App` 与 `./menu`（`traefikMenuConfig`）。菜单体系严格按**操作频次金字塔**与**动态作业 / 静态基线 / 环境治理解耦原则**划分为 **3 个菜单组、8 个精炼菜单项**（默认落地页为 `/record`），`StandaloneShell` 独立调试侧边栏直接消费 `traefikMenuConfig` 渲染以保持单一真实源：
+前端通过 `vite.config.ts` 固定 `base: '/traefik/'`，向外暴露 `./App` 与 `./menu`（`traefikMenuConfig`）。依据 [`ADR-14`](../05-adr/14-governance-dashboard-golden-suite-and-ci-gate-adr.md) 菜单演进至 **4 组 10 项（`全局概览 ➔ 契约核验与回归 ➔ 架构与契约 ➔ 环境与治理`）** 并在 [`ADR-18`](../05-adr/18-proto-full-lifecycle-and-git-mr-governance-adr.md) 中严格保持**不新增一级菜单项**（所有 Proto 文档/源码/MR 门禁收口于 `/schemas` 五视窗，站内持久化通知挂载在页面右上角全局铃铛气泡与详情抽屉），`StandaloneShell` 直接消费 `traefikMenuConfig` 保持单一真实源：
 
 | 菜单分组 | 菜单名称 | 子路由路径 (`MODULE_BASE_PATH = '/traefik'`) | 页面组件 | 可见角色 | URL Search Params 状态同步项 |
 | :--- | :--- | :--- | :--- | :---: | :--- |
-| **流量作业** *(置顶高频)* | **流量录制** *(默认首页)* | `/record` | `RecordingWorkbenchPage` | 全体登录用户 | `scope` (`SHARED` \| `PRIVATE`), `status`, `search`, `auto_start` (`1`), `agent_id`, `page`, `page_size` |
-| **流量作业** | **流量调试** | `/debug` | `TrafficDebugWorkbenchPage` | 全体登录用户 | `session_id`, `view` (`tree` \| `flat`, 默认 `tree`), `live` (`1`), `direction`, `exchange_type`, `service_name`, `operation`, `sno`, `trace_id`, `entity_key`, `has_error` (`true`), `is_replayable`, `keyword`, `seq_root_id`, `page`, `page_size` |
-| **流量作业** | **流量重放** | `/replay` | `ReplayWorkbenchPage` | 全体登录用户 | `session_id`, `auto_create` (`1`), `target_process_id`, `status`, `page`, `page_size` |
-| **架构与契约** *(静态基线)* | **架构拓扑** | `/topology` | `TopologyWorkbenchPage` | 全体登录用户 | `view` (`LOGICAL` \| `PHYSICAL`), `env_agent_id`, `session_id`, `focus` / `topo_focus`, `topo_ego`, `topo_ego_hops`, `topo_subsystems`, `topo_my`, `topo_status`, `topo_hide_isolated`, `topo_hub_fold`, `topo_contract_mode` (`AGG` \| `EXPAND`), `topo_realization` (`1` \| `0`), `topo_layout_id` |
+| **全局概览** *(默认首页)* | **治理大盘** | `/dashboard` | `DashboardWorkbenchPage` | 全体登录用户 | `subsystem_id`（含三维健康分 + **`F-24` 静态规范合标率独立卡片**） |
+| **契约核验与回归** | **契约采集** | `/record` | `RecordingWorkbenchPage` | 全体登录用户 | `scope` (`SHARED` \| `PRIVATE`), `status`, `search`, `auto_start` (`1`), `agent_id`, `page`, `page_size` |
+| **契约核验与回归** | **事务分析** | `/debug` | `TrafficDebugWorkbenchPage` | 全体登录用户 | `session_id`, `view` (`tree` \| `flat`, 默认 `tree`), `live` (`1`), `direction`, `exchange_type`, `service_name`, `operation`, `sno`, `trace_id`, `entity_key`, `has_error` (`true`), `is_replayable`, `keyword`, `seq_root_id`, `page`, `page_size` |
+| **契约核验与回归** | **防劣化回归** | `/replay` | `ReplayWorkbenchPage` | 全体登录用户 | `session_id`, `auto_create` (`1`), `target_process_id`, `status`, `page`, `page_size` |
+| **契约核验与回归** | **黄金用例库** | `/golden-suites` | `GoldenSuitesWorkbenchPage` | 全体登录用户 | `arch_process_id`, `suite_id`, `search`, `page`, `page_size` |
+| **架构与契约** *(静态基线)* | **架构拓扑** | `/topology` | `TopologyWorkbenchPage` | 全体登录用户 | `view` (`LOGICAL` \| `PHYSICAL`), `env_agent_id`, `session_id`, `focus` / `topo_focus`, `topo_ego`, `topo_ego_hops`, `topo_subsystems`, `topo_my`, `topo_status`, `topo_hide_isolated`, `topo_hub_fold`, `topo_contract_mode` (`AGG` \| `EXPAND`), `topo_realization` (`1` \| `0`), `topo_layout_id`（支持高清 `PNG/SVG` 导出） |
 | **架构与契约** | **架构元素** | `/architecture` | `ArchitectureWorkbenchPage` | 全体登录用户 | `tree` (`logical` \| `physical`), `subsystem_id`, `group_id`, `module_id`, `proc_group_id`, `arch_process_id` |
-| **架构与契约** | **Proto 契约** | `/schemas` | `ProtoSchemaWorkbenchPage` | 全体登录用户 | `tab` (`assets` \| `catalog`), `schema_id`, `category` (`BASE_LIB` \| `BUSINESS` \| `GATEWAY`), `latest_only` (`true` \| `false`), `active_only`, `claimed_status` (`ALL` \| `CLAIMED` \| `UNCLAIMED`), `service_name`, `search`, `sort_by`, `sort_dir`, `page`, `page_size` |
+| **架构与契约** | **Proto 契约** | `/schemas` | `ProtoSchemaWorkbenchPage` | 全体登录用户 | `tab` (`docs` \| `sources` \| `mr-gates` \| `assets` \| `graph`；无损兼容旧值 `catalog` $\rightarrow$ `docs`), `schema_id`, `service_name`, `file_id`, `line`, `repo_id`, `run_id`, `category`, `latest_only`, `active_only`, `claimed_status`, `search`, `sort_by`, `sort_dir`, `page`, `page_size` |
 | **环境与治理** *(沉底低频)* | **Agent 与进程** | `/agents` | `AgentManagementPage` | 全体登录用户 | `scope` (`SHARED` \| `PRIVATE`), `agent_id`, `process_id`, `open_mount` (`1`), `lease_state`, `status`, `page`, `page_size` |
-| **环境与治理** | **模块参数配置** | `/admin/settings` | `AdminSettingsPage` | `traefik_admin` (`adminOnly`) | - |
+| **环境与治理** | **模块参数配置** | `/admin/settings` | `AdminSettingsPage` | `traefik_admin` (`adminOnly`) | -（含 CI Token、LLM 建议与 `code-notifier`/SMTP 通知参数脱敏配置） |
 
-* **历史深链平滑重定向契约（100% 无损保留 Query 参数）**：
-  - `/`、`/traefik`、`/traefik/`、`/sessions` $\rightarrow$ `replace` 重定向至 `/record`；
+* **历史深链与默认落地页平滑重定向契约（100% 无损保留 Query 参数）**：
+  - `/`、`/traefik`、`/traefik/` $\rightarrow$ `replace` 重定向至 `/dashboard`；`/sessions` $\rightarrow$ `replace` 重定向至 `/record`；
   - `/traffic?...` $\rightarrow$ `replace` 重定向至 `/debug?...`（完整继承 `session_id`、`trace_id`、`sno` 等检索参数）；
-  - `/architecture?tab=topology|verify&...` $\rightarrow$ `replace` 重定向至 `/topology?...`；`/architecture?tab=physical&...` $\rightarrow$ `replace` 重定向至 `/topology?view=PHYSICAL&...`。
+  - `/architecture?tab=topology|verify&...` $\rightarrow$ `replace` 重定向至 `/topology?...`；`/architecture?tab=physical&...` $\rightarrow$ `replace` 重定向至 `/topology?view=PHYSICAL&...`；
+  - `/schemas?tab=catalog&...` $\rightarrow$ 由 `ProtoSchemaWorkbenchPage` 自动平滑映射定位至 `?tab=docs&...`（参考文档中心，保留原 `service_name` / `schema_id` 深链定位）。
 
 > **通用分页硬约束**：所有分页列表统一复用 `@code/common` 的 `Pagination` 与 `usePaginationState`（同步至 `useSearchParams`），每页条数选项固定为 **`15 / 25 / 50 / 100`（默认 `25`）**，控件布局严格为 `[首页] [上一页] [5页连续数字滑动窗口] [下一页] [末页] [条/页下拉框]`。
 
@@ -304,7 +418,10 @@ type FieldDiff struct {
 ```text
 src/
 ├── components/
-│   ├── ArchCanvas/                         # 通用单层平铺逐级下钻架构拓扑引擎 (React Flow v12 + ELK Inline Worker, ADR-15/17)
+│   ├── NotificationBell/                   # [M25/ADR-18] 顶栏全局站内通知铃铛、未读计数徽章与抽屉/Popover 收件箱
+│   │   ├── NotificationBellPopover.tsx     # 未读角标、SSE notification.created 实时增量刷新、单条/一键已读及跳链直达
+│   │   └── NotificationInboxDrawer.tsx     # 全量分页历史通知检索（15/25/50/100）
+│   ├── ArchCanvas/                         # 通用单层平铺逐级下钻架构拓扑引擎 (React Flow v12 + ELK Inline Worker, ADR-15/17/18)
 │   │   ├── ArchCanvas.tsx                  # 视口底座 (.code-arch-canvas 作用域 / 平移缩放 / 小地图 / Esc返回上一级 / LOD 类名)
 │   │   ├── ArchCanvas.css                  # 100% --color-* Token 样式、box-sizing:border-box 1:1 尺寸契约及 4 组工具栏/Popover 样式
 │   │   ├── layout/
@@ -347,7 +464,10 @@ src/
 │       ├── ExtendHeadTraceCard.tsx         # ③ DOTR 扩展头 TLV 原始段与时间戳 (折叠区子组件)
 │       └── PayloadJsonHexSplitView.tsx     # ④ 16B 对齐 Raw Hex 与底层报文对照视窗 (折叠区子组件)
 ├── pages/
-│   ├── RecordingWorkbenchPage/             # 1. [流量作业] 流量录制工作台 (/record - 默认落地页)
+│   ├── DashboardWorkbenchPage/             # 0. [全局概览] 契约治理全景大盘 (/dashboard - F-24)
+│   │   ├── DashboardWorkbenchPage.tsx      # 三维健康指数总分 (40+30+30)、漂移雷达、契约认领看板、回归防线
+│   │   └── StaticComplianceCard.tsx        # [M25/F-24] 独立 Proto 静态规范合标率指标卡（Git 合标均值、ERROR/WARNING 分布、MR 门禁率与跳转 /schemas?tab=mr-gates）
+│   ├── RecordingWorkbenchPage/             # 1. [契约核验与回归] 契约采集工作台 (/record)
 │   │   ├── ActiveRecordingBanner.tsx       # 活跃录制状态卡: 实时帧计数、A-01 存量长连接重连告警、一键停录与【实时跟流调试】
 │   │   ├── RecordingStartDrawer.tsx        # 发起协同录制抽屉(680px Drawer): 卡片式作用域、Agent 在线/租约防呆与预挂就绪分组进程树
 │   │   └── RecordingSessionTable.tsx       # 录制素材分页台账表: 展示进程/帧数/归属，内置 [去调试] [发起重放] [架构验证] [发布共享] [删除]
@@ -365,7 +485,10 @@ src/
 │   │   ├── ReplayTaskCreatorModal.tsx      # 批量同构重放创建弹窗 (支持 URL ?session_id=X&auto_create=1 自动预选唤起)
 │   │   ├── ReplayTaskTable.tsx             # 重放任务台账表 (PASS/FAILED/MOCK_MISS/TIMEOUT/ERROR 全序裁决)
 │   │   └── ReplayReportDrawer/             # 双层回归 Diff 报告抽屉 (HeaderAssertionCard + ProtoFieldDiffTable + MockHitMissTimeline)
-│   ├── TopologyWorkbenchPage/              # 4. [架构与契约] 架构拓扑工作台 (/topology - 全屏独立画布外壳)
+│   ├── GoldenSuitesWorkbenchPage/          # 4. [契约核验与回归] 黄金契约套件库 (/golden-suites - F-25)
+│   │   ├── GoldenSuitesWorkbenchPage.tsx   # 按标准架构进程组织的自包含黄金套件台账、回归执行与明细管理
+│   │   └── GoldenSuiteDetailDrawer.tsx     # 套件明细、入/出站报文样本与关联断言检查
+│   ├── TopologyWorkbenchPage/              # 5. [架构与契约] 架构拓扑工作台 (/topology - 全屏独立画布外壳，含 SVG/PNG 导出)
 │   │   └── TopologyWorkbenchPage.tsx       # 零外层胶囊 Tab，挂载 ArchTopologyTabPane 全视口高度承载逻辑/物理拓扑画布
 │   ├── ArchitectureWorkbenchPage/          # 5. [架构与契约] 架构元素工作台 (/architecture - 左树顶部 [逻辑架构 | 物理进程] 双视图 SSOT)
 │   │   ├── ArchTopologyTabPane.tsx         # [M19/M21] 拓扑画布核心状态编排宿主 (URL 同步、五段式管线、按 (view, focus_scope) 位置记忆与基准/书签管理)
@@ -373,15 +496,23 @@ src/
 │   │   ├── ModuleContractDetailPane.tsx    # 业务模块 PROVIDE(自动切实现契约+impl_key)/DEPEND(分发/具体实现)双表 & CONTRACT_LIB「定义的接口」页签(契约登记/实现矩阵/分发调用方)
 │   │   ├── ArchProcessTreePanel.tsx        # [物理进程 ?tree=physical]: 标准进程组 (ArchProcessGroup) ➔ 标准业务进程 (ArchProcess) 树与搜索/CRUD
 │   │   └── ArchProcessDetailPane.tsx       # 标准架构进程详情: 默认端口(含0纯客户端)/启动特征、组装承载的 FM 模块、汇总服务契约与宿主机挂载就绪血缘
-│   ├── ProtoSchemaWorkbenchPage/           # 6. [架构与契约] Proto 契约双模工作台 (/schemas - ADR-06 & ADR-10)
+│   ├── ProtoSchemaWorkbenchPage/           # 6. [架构与契约] Proto 全生命周期五视窗工作台 (/schemas - ADR-06/10/18)
 │   │   ├── SchemaPoolSummaryBar.tsx        # 顶部全局生效池健康摘要栏: 生效制品数(含BASE_LIB)/服务数/方法数/架构认领率与孤儿快捷过滤
-│   │   ├── SchemaAssetLedgerTable.tsx      # [视窗一 ?tab=assets] 制品资产全景宽表: 默认按制品名聚合、分类徽章、依赖血缘、认领率、批量激活与行内[⬆️新版本]
-│   │   ├── SchemaAssetInspectDrawer.tsx    # 制品详情与历史抽屉(680px Drawer): 自有 .proto/外部 import 来源、服务认领明细与同名全版本时间线回滚/停用/清理
-│   │   ├── SchemaUploadModal.tsx           # .pb 上传弹窗（<=16MB 预检、BASE_LIB/BUSINESS/GATEWAY 分类、预填锁定同名升级、自动激活开关）
+│   │   ├── LivingProtoDocsPane.tsx         # [视窗一 ?tab=docs, F-18] 活体接口参考文档中心（兼容 ?tab=catalog）: 左树包/服务分组导航 + 右侧文档视图、Markdown 导出
+│   │   ├── ServiceReferenceDocView.tsx     # 服务级文档详情: 所属架构(定义方+全量实现方)、RPC 方法折叠卡片、@deprecated/@owner/@error_code、Enum 字典、黄金/缺省 JSON、file.proto#L42 跳链
+│   │   ├── GitSourcesWorkbenchPane.tsx     # [视窗二 ?tab=sources, F-21/F-28/F-29] Git 契约仓绑定（AES 凭据脱敏表单、一键同步、一致性对账）、文件树与规则/词库配置抽屉
+│   │   ├── ProtoReadOnlyCodeViewer.tsx     # 轻量级自研只读语法着色器（行号锚点 #L42 高亮、100% --color-* Token，无 Monaco 体积膨胀）
+│   │   ├── ProtoCommitDiffView.tsx         # 基于 --color-* Token 的双栏/行内只读 Git 提交历史对比视图
+│   │   ├── LintRuleAndVocabDrawer.tsx      # [F-30] 可配置静态检查规则矩阵 + 标准词根词典 (`traefik_vocabulary_terms`) CRUD 抽屉
+│   │   ├── MRGateWorkbenchPane.tsx         # [视窗三 ?tab=mr-gates, F-29/F-31] Git MR 四合一门禁台账、变更文件虚拟树摘要、违规行号明细、Breaking 影响面与管理员 Override 审批弹窗
+│   │   ├── SchemaAssetLedgerTable.tsx      # [视窗四 ?tab=assets] 制品资产全景宽表: 默认按制品名聚合、source_type 来源徽章、在线源码 compile、批量激活与行内[⬆️新版本]
+│   │   ├── SchemaAssetInspectDrawer.tsx    # 制品详情与历史抽屉(680px Drawer): 自有 .proto/外部 import/Git Commit 溯源、服务认领明细与同名全版本时间线回滚/停用/清理
+│   │   ├── ProtoDependenciesGraphPane.tsx  # [视窗五 ?tab=graph, F-32] 基于 @xyflow/react + elkjs 复用的跨 Schema import 依赖图与 PNG/SVG 导出
+│   │   ├── SchemaUploadModal.tsx           # .pb 上传 & 在线纯 Go protocompile 源码包提交双模弹窗
 │   │   ├── SchemaConflictModal.tsx         # 409 冲突与反向依赖阻断受控弹窗（结构化呈现方法冲突表 conflicts 或受影响下游制品表 broken_dependents）
-│   │   ├── OperationMappingTable.tsx       # [视窗二 ?tab=catalog] 服务级分页两级折叠契约目录树: 外层服务主行(含来源 .pb 徽章与认领深链) ➔ 内层 RPC 方法子表
-│   │   ├── ServiceSummaryRow.tsx           # 外层服务行组件: 服务全名、来源 .pb 制品、源 Proto、认领模块、RPC 计数、一键全部折叠/展开
-│   │   ├── OperationDocDrawer.tsx          # 契约详情与消息体参数定义抽屉 (双栏/Tab 切换查看 Req/Rsp Message，支持生效与未生效版本跨集依赖反射)
+│   │   ├── OperationMappingTable.tsx       # （下沉嵌入或供断言配置复用）服务与 RPC 方法表
+│   │   ├── ServiceSummaryRow.tsx           # 外层服务行组件: 服务全名、来源 .pb 制品、源 Proto、认领模块、RPC 计数
+│   │   ├── OperationDocDrawer.tsx          # 方法级参数字典树与回归 Diff 忽略路径配置抽屉
 │   │   ├── MessageSchemaInspectorTree.tsx  # 消息体参数定义字典树组件 (多层递归展开、Tag、类型高亮、注释透视)
 │   │   └── DiffIgnoreFieldToggle.tsx       # 字段级 Diff 忽略复选框与路径自动生成控制器
 │   ├── AgentManagementPage/                # 7. [环境与治理] Agent 与进程工作台 (/agents - 1:1 架构进程挂载、本地覆盖与预挂就绪看板)
@@ -1078,6 +1209,205 @@ export interface ServiceContractDTO {
 3. **`EdgeDetailDrawer` 可读化升级**：
    - 通过 `nodeMap.get(edge.source)` 与 `nodeMap.get(edge.target)` 解析业务节点元数据，在抽屉头部渲染 **`[类型中文徽章] 节点中文名称 (Code)` ➔ `[类型中文徽章] 节点中文名称 (Code)`**，彻底隐藏原始 `mod_101` / `ext_ctx_sub_2` 内部 ID；并提供 `[🎯 进入源域]` / `[🎯 进入目标域]` 快捷穿透导航。
 
+### 4.10 Proto 契约五视窗、活体参考文档、只读 Git 源码与强类型 DTO 设计 (`ADR-18` / M22~M25)
+
+1. **五视窗平滑布局与零编辑铁律（`/schemas`）**：
+   - 顶部保留 `SchemaPoolSummaryBar` 全局契约池概览，主体切换为 **5 枚扁平 Tab**（严格遵循 `useSearchParams` 同步 `tab` 参数，兼容旧 `?tab=catalog` 自动切入 `docs`）：
+     1. **📖 接口文档 (`?tab=docs`, `F-18`)**：左侧按 `Package / Subsystem` 分组的轻量虚拟搜索树（支持关键词检索服务名、方法名、注释与错误码），右侧展示服务端完整文档（服务定位徽章、多实现契约「定义方 + 全部实现方 (`impl_key / ArchProcess`)」、方法卡片列表、`@deprecated` 红色警告横幅、`@owner` 负责徽章、结构化错误码表、Req/Rsp 嵌套字段注释与 `DiffIgnorePaths` 开关、Enum 值全量词典、优先命中 `F-25` 黄金样本 / 缺省构造 JSON 示例、以及 `[📋 导出 Markdown]` 按钮）；点击任何符号行号链接（如 `order.proto#L42`）通过 URL 跳转 `?tab=sources&file_id=...&line=42`；
+     2. **🗂️ Git 源码库 (`?tab=sources`, `F-21` / `F-28` / `F-29` / `F-30`)**：左栏展示绑定的 `GitRepo` 下拉与目录树（右上角对管理员开放 `[⚙️ 规则与词库配置]`、`[🔄 立即同步]`、`[⚖️ 一致性对账]`），主区**仅提供全只读代码浏览 (`ProtoReadOnlyCodeViewer`)、只读双栏历史提交对比 (`ProtoCommitDiffView`) 与当文件最近静态合规报告 (`CheckViolation`) 侧栏**——**严禁任何 Web 编辑器、保存草稿按钮或编辑锁 UI**；对大仓大文件按行分页或切片虚拟渲染；
+     3. **🚦 MR 门禁 (`?tab=mr-gates`, `F-29` / `F-31`)**：遵循标准 **`15 / 25 / 50 / 100`（默认 `25`）** 分页契约呈现全部 `MRCheckRun` 记录，四枚徽章列清晰区分「编译 (`protocompile`) / 规范 (`Lint`) / 重复结构 (`AST Dup`) / 破坏性 (`F-26 Breaking`)」，点击进入宽屏详情抽屉查看变更文件补丁摘要（含 `DELETED`）、违规明细跳链、`AffectedDependents` 下游受影响模块列表与管理员 `[🛡️ 批准豁免 (Approve with Override)]`（仅 `compile_passed=true` 且非编译失败记录可用，弹窗强制填写豁免理由并提示生成 P1 高危审计）；
+     4. **📦 描述集台账 (`?tab=assets`)**：保留原制品多版本历史、依赖状态与激活回滚闭环，新增 `source_type` 来源徽章（`UPLOAD_PB` / `ONLINE_COMPILE` / `GIT_SYNC` / `GIT_MR_AUTO`）、Git Commit SHA 短链接与 `[⚡ 在线源码编译]` 入口；
+     5. **🕸️ 依赖关系图 (`?tab=graph`, `F-32`)**：直接复用既有 `@xyflow/react` + `elkjs` 轻量化底座（按 `PROTO_SCHEMA` / `BASE_LIB` 节点与 `import` 有向边渲染，**完全复用现成图库与 `--color-*` Token，零重复引入第三方图形库**），支持按 `BASE_LIB`/`BUSINESS`/`GATEWAY` 着色、点击节点跳转 `?tab=assets&schema_id=X` 及高清 `PNG/SVG` 导出。
+2. **轻量化 `< 1.5MB` 构建体积红线与主题双模契约**：
+   - 严禁引入 `@monaco-editor/react` 或 `monaco-editor`（避免数 MB Web Worker 与离线静态包膨胀），`ProtoReadOnlyCodeViewer` 与 `ProtoCommitDiffView` 必须采用**纯 React + 轻量线性分词高亮器**实现（`< 25KB` Gzip 前），关键字/类型/注释/行号高亮/增删 Diff 背景严格消费 `theme.css` `--color-*` 语义 Token，彻底禁止 `#fff`/`#000` 硬编码。
+3. **前后端交互强类型 TypeScript DTO 契约（`frontend/src/types/`，严禁使用 `any`）**：
+
+```typescript
+// frontend/src/types/proto_lifecycle.ts (M22~M25 新增模块严格类型定义，uint64 均以 string 或 number 安全传输)
+
+export type ProtoSourceType = 'UPLOAD_PB' | 'ONLINE_COMPILE' | 'GIT_SYNC' | 'GIT_MR_AUTO';
+export type MRGateStatus = 'PENDING' | 'RUNNING' | 'PASSED' | 'FAILED' | 'OVERRIDDEN' | 'ERROR';
+export type CheckSeverity = 'ERROR' | 'WARNING' | 'INFO';
+
+export interface DocErrorCodeItem {
+  code: string;
+  http_or_cros_code?: string;
+  description: string;
+}
+
+export interface DocEnumValueItem {
+  name: string;
+  number: number;
+  description: string;
+  deprecated: boolean;
+  line: number;
+}
+
+export interface DocFieldMetaItem {
+  name: string;
+  json_name: string;
+  tag_number: number;
+  type_display: string;
+  cardinality: 'OPTIONAL' | 'REQUIRED' | 'REPEATED';
+  is_map: boolean;
+  comments: string;
+  deprecated: boolean;
+  line: number;
+  children?: DocFieldMetaItem[];
+}
+
+export interface ServiceContractLineageDTO {
+  provide_mode: 'EXCLUSIVE' | 'MULTI_IMPL' | 'UNCLAIMED';
+  definer_module_name?: string;
+  implementations: Array<{
+    module_id: string;
+    module_code: string;
+    module_name: string;
+    impl_key?: string;
+    arch_process_code?: string;
+    service_name: string;
+  }>;
+}
+
+export interface ProtoMethodDocDTO {
+  operation_id?: string;
+  service_name: string;
+  operation: string;
+  proto_file: string;
+  start_line: number;
+  summary: string;
+  leading_comments: string;
+  deprecated: boolean;
+  deprecation_reason?: string;
+  owner_tag?: string;
+  error_codes: DocErrorCodeItem[];
+  req_message_full_name: string;
+  rsp_message_full_name: string;
+  req_fields: DocFieldMetaItem[];
+  rsp_fields: DocFieldMetaItem[];
+  golden_sample?: {
+    suite_id: string;
+    suite_name: string;
+    req_json: Record<string, unknown>;
+    rsp_json: Record<string, unknown>;
+  } | null;
+  default_request_json?: Record<string, unknown>;
+  default_response_json?: Record<string, unknown>;
+  diff_ignore_paths: string[];
+}
+
+export interface ProtoServiceDocDetailDTO {
+  schema_id: string;
+  schema_name: string;
+  schema_version: number;
+  service_name: string;
+  proto_file: string;
+  start_line: number;
+  file_id?: string;
+  summary: string;
+  deprecated: boolean;
+  owner_tag?: string;
+  lineage: ServiceContractLineageDTO;
+  methods: ProtoMethodDocDTO[];
+  enums: Array<{
+    full_name: string;
+    short_name: string;
+    proto_file: string;
+    start_line: number;
+    summary: string;
+    values: DocEnumValueItem[];
+  }>;
+}
+
+export interface GitRepoDTO {
+  id: string;
+  name: string;
+  provider: 'GITLAB' | 'GITHUB' | 'GITEA' | 'GENERIC';
+  repo_url: string;
+  web_base_url: string;
+  default_branch: string;
+  proto_root_dir: string;
+  proto_include_dirs: string[];
+  target_schema_name: string;
+  target_category: 'BASE_LIB' | 'BUSINESS' | 'GATEWAY';
+  subsystem_id?: string;
+  auth_type: 'NONE' | 'TOKEN' | 'BASIC' | 'SSH_KEY';
+  has_credentials: boolean;      // 脱敏状态位，永不返回密文或明文
+  credential_hint?: string;      // 如 "glpat-****"
+  has_webhook_secret: boolean;
+  auto_compile_on_merge: boolean;
+  auto_activate_on_merge: boolean;
+  merge_blocking_enabled: boolean;
+  last_synced_commit_sha: string;
+  last_sync_status: 'NEVER' | 'RUNNING' | 'SUCCESS' | 'FAILED';
+  last_sync_error?: string;
+  last_sync_at?: string;
+}
+
+export interface MRCheckRunDTO {
+  id: string;
+  git_repo_id: string;
+  git_repo_name: string;
+  mr_iid: number;
+  mr_title: string;
+  source_branch: string;
+  target_branch: string;
+  author_name: string;
+  head_commit_sha: string;
+  attempt_count: number;
+  event_action: string;
+  status: MRGateStatus;
+  compile_passed: boolean;
+  lint_passed: boolean;
+  duplicate_passed: boolean;
+  breaking_passed: boolean;
+  compile_errors: Array<{ file: string; line: number; column: number; message: string }>;
+  check_report_id?: string;
+  breaking_report?: {
+    breaking_rules: Array<{ rule: string; proto_file: string; symbol: string; message: string; service_name?: string }>;
+    affected_dependents: Array<{ module_id: string; module_code: string; module_name: string; arch_process_code: string; owner_name: string }>;
+  };
+  duplicate_findings: Array<{
+    cluster_hash: string;
+    similarity: number;
+    suggestion: string;
+    members: Array<{ message_full_name: string; proto_file: string; start_line: number; field_count: number }>;
+  }>;
+  changed_files: Array<{ path: string; old_path?: string; change_type: 'ADDED' | 'MODIFIED' | 'DELETED' | 'RENAMED' }>;
+  can_override: boolean; // 仅当 status === 'FAILED' 且 compile_passed === true 时为 true
+  overridden_by_name?: string;
+  override_reason?: string;
+  overridden_at?: string;
+  compiled_schema_id?: string;
+  finished_at?: string;
+  created_at: string;
+}
+
+export interface NotificationItemDTO {
+  id: string;
+  event_type: string;
+  severity: 'CRITICAL' | 'WARNING' | 'INFO';
+  title: string;
+  body_markdown: string;
+  link_url: string;
+  resource_type: string;
+  resource_id: string;
+  is_read: boolean;
+  external_dispatch_status: 'SKIPPED' | 'PENDING' | 'SENT' | 'FAILED';
+  created_at: string;
+}
+
+export interface StaticComplianceDTO {
+  compliance_rate_pct: number | null;
+  evaluated_repo_count: number;
+  open_error_violations: number;
+  open_warning_violations: number;
+  duplicate_message_groups: number;
+  mr_gates_30d: number;
+  mr_gate_pass_rate_30d: number;
+}
+```
+
 ---
 
 ## 5. RBAC 权限矩阵与操作审计接入规范 (RBAC & Audit Governance)
@@ -1090,7 +1420,12 @@ export interface ServiceContractDTO {
 | :--- | :---: | :---: | :---: |
 | 健康检查 (`/api/health`) 与认证配置 (`/api/auth/*`) | 允许 | 允许 | 允许 |
 | 查看公共三级逻辑架构、**物理进程蓝图 (`ArchProcessGroup / ArchProcess`)**、**多实现服务契约 (`ServiceContract`)**、模块契约、静态拓扑与 `.pb` 映射 | `401` | **允许** | **允许** |
-| 新增 / 修改 / 移动 / 删除公共逻辑架构元素、**接口契约库与多实现服务契约登记/独占升级**、**物理进程组与标准架构进程蓝图**、`.pb` 描述集管理 | `401` | `403` | **允许** |
+| 新增 / 修改 / 移动 / 删除公共逻辑架构元素（含 `layer_level` 分层调整）、**接口契约库与多实现服务契约登记/独占升级**、**物理进程组与标准架构进程蓝图**、`.pb` 描述集与在线源码编译入池 | `401` | `403` | **允许** |
+| **活体接口参考文档中心 / 只读 Git 源码与 Diff / MR 门禁列表 / 依赖图查看与文档/图片导出** (`F-18`, `F-28`, `F-29`, `F-32`) | `401` | **允许**（只读浏览、导出 Markdown 与 SVG/PNG） | **允许** |
+| **Git 仓库集成 CRUD、手动全量同步、规则矩阵 (`CheckRule`) 与词库 (`VocabularyTerm`) 配置、MR 门禁 `Override` 人工豁免** | `401` | `403` | **允许**（MR 门禁列表查验与触发 `rerun` 按配置允许开发者使用，涉及秘钥/豁免仅限管理员） |
+| **手动静态扫描 (`POST /api/check-reports/scan`)** 与 **个人持久化通知收件箱** (`/api/notifications*`) | `401` | **允许**（通知严格按 `recipient_user_id == currentUser.ID` 防横向越权隔离） | **允许** |
+| **Git 平台 Webhook 回调** (`POST /api/webhooks/git-mr`) | 经 Webhook Secret (`X-Gitlab-Token` / `X-Hub-Signature-256` / `X-Gitea-Signature`) 常量时间验签放行（无有效签名为 `401/403`） | — | — |
+| **CI/CD 质量门禁** (`POST /api/gates/evaluate`) | `X-Traefik-CI-Token` 常量时间验证放行（无效返回 `401`） | `403` | **允许** |
 | 查看公共 `SHARED` Agent、挂载进程就绪灯态并刷新就绪诊断；创建并全权管理**本人 `PRIVATE` Agent**（`1:1` 勾选挂载架构进程、本地覆盖、预挂/暂停探针） | `401` | **允许**（访问或开关他人 `PRIVATE` Agent 探针返 `403`；修改 `SHARED` Agent 挂载配置返 `403`） | **允许**（全团队 `SHARED` 与各用户 `PRIVATE` Agent 均可见；负责管理 `SHARED` Agent 挂载/探针及强制释放异常租约） |
 | 租用空闲的 `SHARED` Agent 或本人的 `PRIVATE` Agent **启动/停止录制** | `401` | **允许**（若目标 Agent 已被占用返 `409 Conflict`） | **允许**（同样遵守动态排他租约 `409` 互斥） |
 | 查看 `SHARED` 录制素材及**本人的 `PRIVATE` 录制素材**；将本人 `PRIVATE` 素材发布为 `SHARED` 或删除本人 `PRIVATE` 素材 | `401` | **允许**（访问或删除他人 `PRIVATE` 素材返 `403`；删除公共 `SHARED` 素材返 `403`） | **允许**（全团队 `SHARED` 与所有用户的 `PRIVATE` 录制素材均可见与审计；可治理并删除无引用的素材） |
@@ -1105,7 +1440,10 @@ export interface ServiceContractDTO {
 | :--- | :--- | :---: | :--- |
 | `traefik_arch` | `create` / `update` / `move` / `delete` / `convert_contract` | `P1` (删除/转换) / `P2` | 传入变更前后的 `Subsystem` / `FunctionalGroup` / `Module` / `ServiceContract` / `ModuleService` / `ModuleDependency` / `ArchProcessGroup` / `ArchProcess` 结构体快照 |
 | `traefik_agent` | `create` / `update` / `delete` / `sync_mounts` / `toggle_probe` / `force_unlock_lease` | `P1` | 传入 `Agent`（含 `scope`、`owner_id`、`endpoint`）或 `Process` 挂载实例（含 `arch_process_id`、`override_listen_port`、`override_cmd_pattern`、`probe_desired_state`）快照；管理员强制解锁记录原持锁人及原因 |
-| `traefik_schema` | `upload` / `activate` / `delete` / `update_op_ignores` | `P1` | 记录描述集 `name`、`version`、`file_sha256`、`is_active` 切换前后版本对比及方法级 `diff_ignore_paths` 变更（剔除大体积 `descriptor_bytes` 二进制字段） |
+| `traefik_schema` | `upload` / `compile` / `activate` / `delete` / `update_op_ignores` | `P1` | 记录描述集 `name`、`version`、`source_type`、`file_sha256`、`is_active` 切换前后版本对比及方法级 `diff_ignore_paths` 变更（剔除大体积 `descriptor_bytes` 二进制字段与编译源码内容） |
+| `traefik_git` | `create_repo` / `update_repo` / `delete_repo` / `manual_sync` | `P1` (删除/修改) / `P2` | 记录仓库 `name`、`provider`、`repo_url`、`target_schema_name`、`default_branch`；**严禁在审计前后快照中写入 `credentials_encrypted` 或明文凭据/WebhookSecret** |
+| `traefik_mr_gate` | `override_mr_gate` / `rerun_mr_gate` | **`P1`** (Override) / `P2` | 记录 `git_repo_id`、`mr_iid`、`head_commit_sha`、原状态与 `override_reason`；`Webhook` 自动执行显式调用 `commonAudit.Skip(c)` 避免非人工事件刷爆表 |
+| `traefik_linter` | `create_rule` / `update_rule` / `delete_rule` / `upsert_vocab` / `delete_vocab` / `run_scan` | `P2` | 记录静态规则编码/正则/启用态、词根增删改或手动扫描范围 |
 | `traefik_record` | `start_session` / `stop_session` / `publish_session` / `delete_session` | `P1` | 操作事件审计：记录操作人、`session_no`、`scope`（`SHARED`/`PRIVATE`）、加锁的 `agent_id` 与 `process_id` 列表、停止原因 |
 | `traefik_replay` | `execute_replay` / `cancel_replay` | `P2` | 操作事件审计：记录操作人、`task_no`、来源 `(session_id, source_process_id)`、目标 `(agent_id, target_process_id)` 与 `extra_ignore_paths` |
 | `traefik_system` | `retention_cleanup` | `P2` | 后台定时任务直接调用 `commonAudit.Push` 记录清理过期批次数量与释放流量行数 |

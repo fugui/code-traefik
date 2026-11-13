@@ -1,12 +1,12 @@
 # 架构与活体契约治理 (`code-traefik`) 架构元素建模与拓扑一致性验证设计
 
 - **文档编号**：`03-architecture-elements-and-topology.md`
-- **文档版本**：v1.7.1
+- **文档版本**：v1.8.0
 - **更新日期**：2026-11-13
 - **归属阶段**：阶段二：系统架构与数据模型设计 (`02-design`)
-- **状态**：M1~M20 已交付；M21 已批准待实施 (Approved for M21)
-- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.16.0)、[`01-system-architecture.md`](./01-system-architecture.md)、[`09-arch-process-ssot-and-ebpf-premount-standby-adr.md`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md) (ADR-09 v1.1.0)、[`15-scalable-topology-focus-and-layout-persistence-adr.md`](../05-adr/15-scalable-topology-focus-and-layout-persistence-adr.md) (ADR-15 v1.3.0)、[`16-multi-implementation-service-contract-adr.md`](../05-adr/16-multi-implementation-service-contract-adr.md) (ADR-16 v2.0.0)、[`17-topology-single-layer-drilldown-and-layout-ux-adr.md`](../05-adr/17-topology-single-layer-drilldown-and-layout-ux-adr.md) (ADR-17 v1.1.0)
-- **关联工程作战卡**：[`docs/04-tasks/21-m20-multi-implementation-service-contract.md`](../04-tasks/21-m20-multi-implementation-service-contract.md) (M20)、[`docs/04-tasks/22-m21-topology-single-layer-drilldown-and-layout-ux.md`](../04-tasks/22-m21-topology-single-layer-drilldown-and-layout-ux.md) (M21)
+- **状态**：M1~M21 已交付；M22 已完成设计待实施 (Approved for M22~M25)
+- **上位基线**：[`01-feature-matrix.md`](../01-features/01-feature-matrix.md) (v2.18.0)、[`01-system-architecture.md`](./01-system-architecture.md)、[`09-arch-process-ssot-and-ebpf-premount-standby-adr.md`](../05-adr/09-arch-process-ssot-and-ebpf-premount-standby-adr.md) (ADR-09 v1.1.0)、[`15-scalable-topology-focus-and-layout-persistence-adr.md`](../05-adr/15-scalable-topology-focus-and-layout-persistence-adr.md) (ADR-15 v1.3.0)、[`16-multi-implementation-service-contract-adr.md`](../05-adr/16-multi-implementation-service-contract-adr.md) (ADR-16 v2.0.0)、[`17-topology-single-layer-drilldown-and-layout-ux-adr.md`](../05-adr/17-topology-single-layer-drilldown-and-layout-ux-adr.md) (ADR-17 v1.1.0)、[`18-proto-full-lifecycle-and-git-mr-governance-adr.md`](../05-adr/18-proto-full-lifecycle-and-git-mr-governance-adr.md) (ADR-18 v1.1.0)
+- **关联工程作战卡**：[`docs/04-tasks/21-m20-multi-implementation-service-contract.md`](../04-tasks/21-m20-multi-implementation-service-contract.md) (M20)、[`docs/04-tasks/22-m21-topology-single-layer-drilldown-and-layout-ux.md`](../04-tasks/22-m21-topology-single-layer-drilldown-and-layout-ux.md) (M21)、[`docs/04-tasks/23-m22-protocompile-layering-and-dependency-graph.md`](../04-tasks/23-m22-protocompile-layering-and-dependency-graph.md) (M22)
 
 ### 修订记录
 
@@ -16,6 +16,7 @@
 | v1.6.0 | 2026-11-11 | 依据 ADR-16 (v1.0.0 / M20) 同步多实现服务契约建模与拓扑验证设计：1. §1.1/§1.3 补充 `module_kind ∈ {BUSINESS, CONTRACT_LIB}` 与库模块/契约删除与改类型保护；2. §2 修订 `A-05` 为分模式唯一并新增 §2.2 多实现服务契约（`traefik_service_contracts`、`impl_key`、`A-09` 进程互斥双入口守卫、分发依赖 `DISPATCH` 与存量迁移）；3. §3 补充 `A-03` 对 `CONTRACT_LIB` 的豁免、分发依赖下游推导、`endpoint_snapshots` 端点字典快照及重放兼容校验；4. §4 增补 `«interface»` 库卡、`REALIZATION` 边图层、逻辑视图默认按接口聚合 (`topo_contract_mode=AGG\|EXPAND`)、物理视图库模块豁免与 DTO 增量；5. §5 升级 `ResolveDestinationModule` v2 按目的进程消歧定位，将一致性比对从七分类扩展为八分类（新增第八类 `IMPL_UNRESOLVED` 实现待定），并补充双视图叠加挂载规则 |
 | v1.7.0 | 2026-11-13 | 依据 [`ADR-17`](../05-adr/17-topology-single-layer-drilldown-and-layout-ux-adr.md) (v1.0.0 / M21) 同步拓扑单层平铺逐级下钻与 ELK 正交布局校准设计：1. §4.2 更新前端实时边汇总与单层代表节点规则（内部直属子容器代表 $R_{\text{in}}(u)$ 与跨界外部传送门卡 $R_{\text{ext}}(u)$，聚焦根自身不渲染外层包裹框）；2. §6 重构作用域裁剪与布局规范——ELK 统一单层 `layered` 参数（`nodeNodeBetweenLayers=110`、`FIRST/LAST` 约束）、CSS `border-box` 与 ELK `1:1` 尺寸契约、四向智能锚点 `selectOptimalHandles` 与多边标签偏移、按 `(view, focus_scope)` 分桶隔离且仅显式拖拽/图钉才锁定的位置记忆策略，以及 `${focusScope}::${extId}` 零 DDL 持久化兼容约定 |
 | v1.7.1 | 2026-11-13 | 依据 [`ADR-17` (v1.1.0)](../05-adr/17-topology-single-layer-drilldown-and-layout-ux-adr.md) 架构检视意见加固 §4.2 与 §6：1. `scopeAndFilter` 固定「全子树过滤在前、单层投影在后」；2. 外部传送门卡强制 `FIRST/LAST` 贴边并在 `detectCycles` 中豁免 `EXTERNAL_CONTEXT` 假阳性环路；3. `pruneIsolated` 受控于 `hideIsolated === true` 且保留 `internalEdgeCount > 0` 的容器；4. 五类节点组件（补齐 `UnregisteredInterfaceNode.tsx`）`overflow: hidden`、四向双向 `<Handle>` 绑定及非 `right->left` 走线丢弃 ELK `bendPoints` 切换 `SmoothStep`；5. `${focusScope}::${extId}` 在 `extractPersistablePositions` 与 `diffLayoutAgainstGraph` 中的白名单兼容及 `SavedFilterState` 字段对齐 |
+| v1.8.0 | 2026-11-13 | 依据 [`ADR-18` (v1.1.0)](../05-adr/18-proto-full-lifecycle-and-git-mr-governance-adr.md) (`M22`) 增补：1. §2.3 可配置架构层级 (`layer_level`) 校验规则（`DEPEND` 非向上依赖、`REALIZATION` `impl >= contract_lib`）与模块间有向环路检测守卫；2. §4.4 `GraphNode.Meta` 补充有效层级元数据；3. §6.5 `/topology` 零网络客户端高清 SVG / PNG 导出设计 (`F-32`) |
 
 ---
 
@@ -187,6 +188,21 @@ $$\text{ascServiceName} = \begin{cases} \text{package} + \text{"."} + \text{serv
    - 新增可空外键 `contract_id bigint NULL`（FK `traefik_service_contracts(id) ON DELETE RESTRICT`），语义为「调度方运行期可调用该多实现契约下的任意已登记实现」，新增或下线实现模块时无需修改调度方 `X` 的依赖声明；
    - 施加三选一排他约束：`CHECK (num_nonnulls(service_id, contract_id) + (is_external::int) = 1)`（内部具体实现 `service_id`、多实现契约分发 `contract_id`、外部系统 `is_external` 严格三选一）；
    - 同一消费方对同一契约同时声明分发依赖（`contract_id`）与具体实现依赖（指向该契约下某 `service_id`）时返回 `409 Conflict`（语义重复）。
+
+### 2.3 可配置分层架构约束 (`layer_level`) 与循环依赖守卫 (`ADR-18` / M22)
+
+为防止底层基础设施模块反向调用上层编排/网关模块造成架构腐化，同时**100% 兼容不配置分层的存量模块**，在 `traefik_subsystems` 与 `traefik_modules` 中引入可选整型字段 `layer_level ∈ [0, 99]`：
+
+1. **有效层级计算规则 (`EffectiveLayerLevel`)**：
+   - `0` 表示「未分层 / 不限制」（存量默认全为 `0`）；`> 0` 时数值越小代表越底层基础（示例：`10` 基础设施/底座、`20` 核心域服务、`30` 聚合编排、`40` 接入网关）；
+   - 模块有效层级：若 `module.LayerLevel > 0` 则取 `module.LayerLevel`，否则继承所属 `subsystem.LayerLevel`。
+2. **双场景层级约束守卫 (`AssertLayerDependencyValid`)**：
+   - **普通调用依赖 (`DEPEND`，涵盖独占 `service_id` 与多实现分发 `contract_id`)**：仅当 `EffectiveLayer(consumer) > 0 && EffectiveLayer(targetProvider) > 0` 时触发校验，要求 **`EffectiveLayer(consumer) >= EffectiveLayer(targetProvider)`**（允许同层互调与上层调下层，**严禁下层模块向上层模块发起依赖**；对 `DISPATCH` 依赖同时校验接口库定义方及已知实现方，或在无实现时校验 `contract_lib` 定义方），违例返回 `409 Conflict` (`ERR_LAYER_VIOLATION`)；
+   - **契约实现关系 (`REALIZATION`，`CONTRACT_LIB` ➔ 实现该 `ServiceContract` 的 `Module`)**：在新增/修改多实现 `ModuleService` 时，若 `EffectiveLayer(implModule) > 0 && EffectiveLayer(definerContractLib) > 0`，强制校验 **`EffectiveLayer(implModule) >= EffectiveLayer(definerContractLib)`**（防核心基础模块越权反向依赖上层契约或导致层级倒挂），违例返回 `409 Conflict` (`ERR_REALIZATION_LAYER_INVERSION`)；
+   - **存量修改双向回溯保护**：管理员通过 `PUT /api/arch/subsystems/:id` 或 `PUT /api/arch/modules/:id` 调整 `layer_level` 时，在同一数据库事务内扫描受影响模块作为调用方/提供方/实现方的全部存量边；若变更导致已有依赖或契约实现层级倒挂，拒绝更新并返回 `409 Conflict` 附带冲突边列表。
+3. **模块级循环依赖检测 (`AssertNoCyclicDependency`)**：
+   - 在 `CreateModuleDependency` 创建内部依赖时（含 `service_id` 指向单个 `providerModuleID`，以及 `contract_id` 展开指向 `CONTRACT_LIB` 及其全部当前实现模块集合），从目标节点集出发沿既有 `traefik_module_dependencies` 出边执行有界 BFS/DFS 可达性搜索；
+   - 若可达回 `consumerModuleID`，判定形成模块依赖闭环，立即阻断创建并返回 `409 Conflict` (`ERR_CYCLIC_DEPENDENCY`) 及完整环路路径（如 `MOD_A -> MOD_B -> MOD_A`）。外部未登记依赖 (`is_external=true`) 天然不构成内部回环。
 
 ---
 
@@ -502,7 +518,7 @@ type GraphNode struct {
 	Code      string         `json:"code,omitempty"`       // 业务编码 (如 "TRADE_SYS", "MOD_ORDER")
 	Name      string         `json:"name"`                 // 展示名称
 	SortOrder int            `json:"sort_order"`           // 排序权重，供 ELK considerModelOrder 保持排版稳定
-	Meta      map[string]any `json:"meta,omitempty"`       // 视图专有元数据 (如 module_kind, implements: []ModuleContractImplItem, contract_count, impl_count, endpoint, listen_port, provide_count, owner_id, owner_name；SUBSYSTEM 与 MODULE 节点均输出 owner_id 供「我负责的」过滤；严禁含 agent_id)
+	Meta      map[string]any `json:"meta,omitempty"`       // 视图专有元数据 (如 layer_level, effective_layer_level, module_kind, implements: []ModuleContractImplItem, contract_count, impl_count, endpoint, listen_port, provide_count, owner_id, owner_name；SUBSYSTEM 与 MODULE 节点均输出 owner_id 供「我负责的」过滤；严禁含 agent_id)
 }
 
 // EdgeServiceItem 底层服务契约明细
@@ -804,3 +820,11 @@ export interface ScopedGraph {
 1. **内部节点坐标天然对齐**：在树模型中每个内部子节点（`sub_x`、`grp_x`、`mod_x`、`pgrp_x`、`proc_x`）仅属于唯一父容器（`GLOBAL` 或 `parent_id`），其单层平铺下的 `(x, y)` 仍以原节点 ID 作为键持久化至 `traefik_topology_layouts.node_positions`，与团队基准（`SHARED`）完全同构，**无需改动后端表结构或 API 字段**。
 2. **作用域限定外部传送门卡键 (`scopedPositionKey`)**：若用户在某个下钻视图 `focusScope` 内拖拽固定了外部传送门卡 `extId`，写入个人书签/草稿时使用复合键 **`${focusScope}::${extId}`**（如 `sub_1::sub_2` 或 `grp_10::ext_sys_WeChatPay`，长度远低于后端校验上限 `128`）；`extractPersistablePositions` 放行已固定（`pinned: true`）的 `${focusScope}::${extId}` 键，保证外部卡在不同聚焦域中的左右排布位置各自独立、互不覆盖。
 3. **书签 `filter_state` 前后端 Schema 对齐与加载优先级**：前端 `SavedFilterState` 序列化严格对齐后端 `models.SavedFilterState` JSON 字段（`subsystem_ids`, `only_my_scope`, `status`, `ego_node_id`, `ego_hops`, `hide_isolated`, `hub_fold`）；按 `URL 书签 ≻ 当前 (view, focus_scope) 默认书签 ≻ 团队基准 ≻ ELK` 加载；`localStorage` 草稿键扩展为按 `focusScope` 隔离（`traefik:topo:draft:${userId}:${view}:${focusScope}`），基准版本不一致时安全丢弃并提示。
+
+### 6.5 客户端架构拓扑高清导出架构 (`F-32`, [`ADR-18`](../05-adr/18-proto-full-lifecycle-and-git-mr-governance-adr.md) / M22)
+
+针对架构评审、方案汇报与文档归档场景，`/topology` 工具栏提供纯客户端「导出高清图 (`PNG` / `SVG`)」能力（与 `/schemas?tab=graph` 同源）：
+
+1. **零后端依赖与主题保真导出**：不向服务端发起额外截图渲染请求，直接基于当前 ReactFlow 画布激活子图边界框 (`getNodesBounds`) 计算完整视口包围盒与内边距（`padding = 32px`）；
+2. **CSS Semantic Token 静态内联解析**：在导出离屏 SVG 克隆体时，读取当前 `document.documentElement` 激活的亮/暗色 `--color-*` 计算样式，将节点背景、边框、文字色、一致性高亮色解析为内联属性值（确保导出文件在脱离浏览器 CSS 上下文独立打开时与当前主题视觉 100% 一致，且严禁在主页面注入 `dangerouslySetInnerHTML`）；
+3. **高清光栅化与 CSP 安全下载**：`SVG` 导出直接生成 UTF-8 Blob；`PNG` 导出采用 `2x` 高分辨率离屏 `<canvas>` 光栅化生成 `image/png` Blob，通过 `URL.createObjectURL` 触发下载并立即 `revokeObjectURL` 释放内存；服务端 CSP 头 `img-src` 同步允许 `data: blob:`，文件命名遵循 `traefik-topology-{view}-{focus_scope}-{YYYYMMDD_HHmm}.svg|png`。

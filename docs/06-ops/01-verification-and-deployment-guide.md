@@ -1,8 +1,9 @@
 # 架构与活体契约治理 (`code-traefik`) 联调验证与生产部署手册
 
 - **文档编号**：`01-verification-and-deployment-guide.md`
-- **文档版本**：v1.1.0
+- **文档版本**：v1.2.0
 - **编制日期**：2026-10-29
+- **更新日期**：2026-11-13
 - **归属阶段**：阶段四：交付验证与运维指南
 
 ---
@@ -60,7 +61,7 @@ gateways:
 - [x] 所有写操作接口均已接入 `commonAudit` 操作审计，管理员接口均已挂载 `RequireAdmin("traefik_admin")`；
 - [x] 前端所有新增页面在亮色（Light）与暗色（Dark）主题下均无视觉黑块或文字融底，无硬编码色值，无 `any` 类型；
 - [x] `make test && make lint && make build && make clean` 全量零错误通过；
-- [x] SC-01~SC-08 全链路端到端场景回归测试 100% 绿灯。
+- [x] SC-01~SC-12 已交付场景全链路端到端回归测试 100% 绿灯（M22~M25 完成后同步纳入 `SC-13~SC-16` 与前端 `< 1.5MB` 产物体积门禁）。
 
 ---
 
@@ -97,3 +98,29 @@ go run ./scripts/seed-large-topology \
 | 全局 ELK 排版（可见 ≤ 150 节点，Worker 异步） | ≤ 400 ms | 86.2 ms | ✅ 达标 |
 | 快轨直出（可见 ≤ 150 节点，免 ELK） | ≤ 100 ms | 14.6 ms | ✅ 达标 |
 | `GET /api/arch/topology/graph` 传输体积（gzip 前 / 后） | 启用压缩 | 4,078,638 B (3.89 MB) / 218,878 B (213.7 KB, 压缩率 94.6%) | ✅ 达标 |
+
+---
+
+## 5. Proto 全生命周期与 Git/MR 治理运维与验证基线 (`SC-13`~`SC-16`, `M22~M25` / [`ADR-18`](../05-adr/18-proto-full-lifecycle-and-git-mr-governance-adr.md))
+
+> [!NOTE]
+> 本节参数与命令行指引随 M22~M25 推进分阶段启用；其中 `protohub` SQLite 词汇表一次性迁移严格通过独立 CLI 执行，严禁向 `code-traefik-server` 主进程引入 SQLite 运行时依赖。
+
+### 5.1 关键环境变量与安全配置
+1. **`TRAEFIK_CRYPTO_KEY`（32 字节 Base64 / Hex AES-256-GCM 主密钥）**：用于加密持久化 Git 访问令牌、Webhook Secret、LLM API Key 及 SMTP 密码；生产环境由 KMS/环境变量注入，严禁硬编码于 `config.yaml` 或源码中；
+2. **`protohub` 词汇表一次性无损迁移 (`M24`)**：
+   ```bash
+   # 先 --dry-run 预检 SQLite vocabulary_terms 解析，确认无误后再幂等写入目标 PG 库（ON CONFLICT DO NOTHING）
+   go run ./scripts/migrate_protohub_vocab --sqlite-path ../protohub/storage/protohub.db --dry-run
+   go run ./scripts/migrate_protohub_vocab \
+     --sqlite-path ../protohub/storage/protohub.db \
+     --pg-dsn "host=127.0.0.1 port=5432 user=postgres password=CodeShield618! dbname=code_traefik_dev sslmode=disable"
+   ```
+3. **可选外部通道（`M24~M25` 管理后台 `/admin/settings` 配置）**：
+   - 外部 LLM 词根建议服务：通过 `llm_enabled` 控制，强制 3s 超时熔断降级且受 `SafeDialer` SSRF 校验；
+   - 工作区 **`code-notifier`** 对接：配置 `code_notifier_enabled=true` 与 `code_notifier_url`（默认 `http://127.0.0.1:8081/api/notify/email` 或配置白名单宿主地址）；外部邮件离线不影响 PostgreSQL `traefik_notifications` 站内通知持久落库。
+
+### 5.2 上线前追加验证门禁 (`M22~M25`)
+- **二进制依赖隔离**：`go list -deps ./cmd/agent` 不含 `protocompile`、`go-git`、`gorm`、`dynamicpb`、`sqlite`；`go list -deps ./cmd/server` 不含 `sqlite`；全仓 `grep` 零 `os/exec` 调用外部 `protoc`/`git`；
+- **只读无锁与体积红线**：`frontend/package.json` 不含 `monaco-editor`、`traefik_proto_files` 不含 `locked`/`locked_by` 字段；`M23~M25` 前端静态资源编译增量严格 `< 1.5MB`；
+- **`SC-13` ~ `SC-16` 全链路验收**：逐项覆盖纯 Go 编译 + `layer_level` / 成环 `409`、活体参考文档 + `#L` 行定位 + Markdown 导出、多段式包名 + 三护栏去重 + LLM 3s 降级、Mock Git/MR 含删除文件四合一预检 + `Override` P1 审计 + `traefik_notifications` 与大盘静默合标卡片。
