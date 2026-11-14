@@ -236,6 +236,47 @@ func RebuildDuplicateGroupsFromViolations(violations []models.CheckViolation) []
 }
 
 func loadSourcesFromDB(req ScanRequest) ([]SourceInput, error) {
+	// 优先读取 M25 持久化 Git 源文件表 traefik_proto_files (当显式传入 GitRepoID / BundleID 或匹配实际 ProtoFileID 时)
+	if req.GitRepoID != nil || req.BundleID != nil || (req.ProtoFileID != nil && *req.ProtoFileID > 0) {
+		type dbFileRow struct {
+			ID          uint64
+			FilePath    string
+			Category    string
+			SchemaID    *uint64
+			ContentText string
+		}
+		var rows []dbFileRow
+		q := req.DB.Table("traefik_proto_files AS f").
+			Select("f.id AS id, f.file_path AS file_path, f.category AS category, v.schema_id AS schema_id, v.content_text AS content_text").
+			Joins("JOIN traefik_proto_file_versions AS v ON v.id = f.latest_version_id").
+			Where("f.is_deleted = false")
+		if req.GitRepoID != nil && *req.GitRepoID > 0 {
+			q = q.Where("f.git_repo_id = ?", *req.GitRepoID)
+		}
+		if req.BundleID != nil && *req.BundleID > 0 {
+			q = q.Where("f.bundle_id = ?", *req.BundleID)
+		}
+		if req.ProtoFileID != nil && *req.ProtoFileID > 0 {
+			q = q.Where("f.id = ?", *req.ProtoFileID)
+		}
+		if err := q.Order("f.file_path ASC").Find(&rows).Error; err == nil && len(rows) > 0 {
+			sources := make([]SourceInput, 0, len(rows))
+			for _, row := range rows {
+				var scID uint64
+				if row.SchemaID != nil {
+					scID = *row.SchemaID
+				}
+				sources = append(sources, SourceInput{
+					ProtoFile: row.FilePath,
+					Content:   row.ContentText,
+					Category:  row.Category,
+					SchemaID:  scID,
+				})
+			}
+			return sources, nil
+		}
+	}
+
 	var targetSchemas []models.ProtoSchema
 	targetIDs := make([]uint64, 0, len(req.SchemaIDs)+1)
 	if req.SchemaID != nil && *req.SchemaID > 0 {

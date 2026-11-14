@@ -28,6 +28,26 @@ function resolvePortalAwarePath(subPath: string): string {
   return subPath;
 }
 
+const SourceWorkbenchDeepLink: React.FC<{ fileId?: number; line: number }> = ({
+  fileId,
+  line,
+}) => {
+  if (!fileId || fileId <= 0) {
+    return null;
+  }
+  const hash = line > 0 ? `#L${line}` : '';
+  return (
+    <Link
+      to={resolvePortalAwarePath(`/schemas?tab=sources&file_id=${fileId}${hash}`)}
+      className="pdoc-source-link pdoc-source-link--workbench"
+      title="在源码工作台打开并定位行号"
+    >
+      <ExternalLink size={12} />
+      工作台源码
+    </Link>
+  );
+};
+
 function formatJsonBlock(val: unknown): string {
   if (val === undefined || val === null) {
     return '{}';
@@ -174,14 +194,20 @@ const MethodReferenceCard: React.FC<{
         </div>
 
         {method.proto_file && (
-          <button
-            type="button"
-            className="pdoc-source-link"
-            onClick={() => onJumpToSource(schemaId, method.proto_file, method.start_line || 1)}
-          >
-            <Code2 size={13} />
-            {`${method.proto_file}${lineSuffix}`}
-          </button>
+          <div className="pdoc-meta-row">
+            <button
+              type="button"
+              className="pdoc-source-link"
+              onClick={() => onJumpToSource(schemaId, method.proto_file, method.start_line || 1)}
+            >
+              <Code2 size={13} />
+              {`${method.proto_file}${lineSuffix}`}
+            </button>
+            <SourceWorkbenchDeepLink
+              fileId={method.source_file_id}
+              line={method.start_line || 1}
+            />
+          </div>
         )}
       </div>
 
@@ -347,14 +373,20 @@ export const ServiceReferenceDocView: React.FC<ServiceReferenceDocViewProps> = (
 
           <div className="pdoc-meta-row">
             {detail.proto_file && (
-              <button
-                type="button"
-                className="pdoc-source-link"
-                onClick={() => onJumpToSource(detail.schema_id, detail.proto_file, detail.start_line || 1)}
-              >
-                <Code2 size={14} />
-                {`${detail.proto_file}${serviceLineSuffix}`}
-              </button>
+              <>
+                <button
+                  type="button"
+                  className="pdoc-source-link"
+                  onClick={() => onJumpToSource(detail.schema_id, detail.proto_file, detail.start_line || 1)}
+                >
+                  <Code2 size={14} />
+                  {`${detail.proto_file}${serviceLineSuffix}`}
+                </button>
+                <SourceWorkbenchDeepLink
+                  fileId={detail.source_file_id}
+                  line={detail.start_line || 1}
+                />
+              </>
             )}
             <button
               type="button"
@@ -505,14 +537,20 @@ export const ServiceReferenceDocView: React.FC<ServiceReferenceDocViewProps> = (
               <div className="pdoc-meta-row">
                 <strong>{ed.full_name}</strong>
                 {ed.proto_file && (
-                  <button
-                    type="button"
-                    className="pdoc-source-link"
-                    onClick={() => onJumpToSource(detail.schema_id, ed.proto_file, ed.start_line || 1)}
-                  >
-                    <Code2 size={12} />
-                    {`${ed.proto_file}${ed.start_line > 0 ? `#L${ed.start_line}` : ''}`}
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      className="pdoc-source-link"
+                      onClick={() => onJumpToSource(detail.schema_id, ed.proto_file, ed.start_line || 1)}
+                    >
+                      <Code2 size={12} />
+                      {`${ed.proto_file}${ed.start_line > 0 ? `#L${ed.start_line}` : ''}`}
+                    </button>
+                    <SourceWorkbenchDeepLink
+                      fileId={ed.source_file_id ?? detail.source_file_id}
+                      line={ed.start_line || 1}
+                    />
+                  </>
                 )}
                 {ed.comment && <span className="pdoc-card__subtitle">{ed.comment}</span>}
               </div>

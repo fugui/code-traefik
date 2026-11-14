@@ -1,19 +1,20 @@
 # M25 实施任务卡：Git 无状态同步、Monorepo 1:N Bundles 与只读源码浏览器 (`F-21`, `F-28`, `F-29`)
 
-> **文档版本**：`v1.0.0`
+> **文档版本**：`v1.1.0`
 > **创建日期**：`2026-11-13`
-> **最后更新**：`2026-11-13`
+> **最后更新**：`2026-11-14`
 > **所属阶段**：阶段四 — 研发实施与 TDD 门禁 (Implementation & TDD Gate)
 > **里程碑编号**：`M25 — Git 仓库纳管、Monorepo 1:N Compilation Bundles、无状态同步对账与只读源码浏览器`
 > **覆盖需求范围**：`F-21`（Git 全量同步触发 `.proto` 编译入池）、`F-28`（Git-Only 无写锁只读快照表、`ProtoReadOnlyCodeViewer` 真实连线与历史 Commit Diff）、`F-29`（Git 仓 1:N Compilation Bundle 建模、REST / `go-git memfs` 无状态增量拉取与只读 SHA256 对账）、`SC-16`（同步与 Monorepo 交付部分）
 > **前置依赖**：`M22~M24`、[`../05-adr/18-proto-full-lifecycle-and-git-mr-governance-adr.md`](../05-adr/18-proto-full-lifecycle-and-git-mr-governance-adr.md) (`v1.2.0`)
-> **当前状态**：📋 **已定稿待实施 (Planned)**
+> **当前状态**：✅ **已交付 (Delivered)**
 
 ### 修订记录
 
 | 版本 | 日期 | 作者 | 变更说明 |
 | :--- | :--- | :--- | :--- |
 | `v1.0.0` | `2026-11-13` | Architecture Team | 初版发布：依据 ADR-18 (`v1.2.0`) 将原超重 M25 拆分为 M25（Git 同步、Monorepo 1:N Bundles 与只读源码工作台）与 M26（MR 门禁、通知与合规大盘）两个可独立验收闭环的里程碑 |
+| `v1.1.0` | `2026-11-14` | Development Team | 完成 M25-P1~P3 全部 TDD 实施与验收门禁：四表迁移与 AES-GCM 脱敏、Tier-2 `DBProtoSourceProvider`、无状态 REST/`go-git memfs` Monorepo `SyncRepo`/`SyncBundle`/`ComputeConsistency`、`protodoc` `SourceFileID` 深链、`/api/git-repos*` 与 `/api/proto-files*`、SSE `git_sync.completed`、前端 `GitSourcesWorkbenchPane` / `GitRepoConfigDrawer` / `GitConsistencyDrawer` / 来源徽章与 `?tab=sources&file_id=<id>#L<line>` 深链；通过全量 `-race`、`cmd/agent` 依赖隔离、零外部 `protoc/git`、`make test && make lint && make build` 验收 |
 
 ---
 

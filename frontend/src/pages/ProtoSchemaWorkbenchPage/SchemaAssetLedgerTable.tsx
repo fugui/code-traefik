@@ -463,6 +463,14 @@ export const SchemaAssetLedgerTable: React.FC<SchemaAssetLedgerTableProps> = ({
                             v{s.version}
                           </span>
                           {renderSourceTypeBadge(s.source_type)}
+                          {s.source_commit_sha && (
+                            <code
+                              className="pgit-commit-pill"
+                              title={`Git Commit SHA: ${s.source_commit_sha}`}
+                            >
+                              {s.source_commit_sha.slice(0, 7)}
+                            </code>
+                          )}
                           {s.version_count > 1 && (
                             <span
                               style={{

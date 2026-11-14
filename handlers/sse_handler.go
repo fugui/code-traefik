@@ -155,6 +155,17 @@ func (b *SSEBroker) BroadcastAgentLeaseChanged(agentID uint64, data interface{})
 	})
 }
 
+// BroadcastGitSyncCompleted 广播 Git 契约同步与编译完成通知
+func (b *SSEBroker) BroadcastGitSyncCompleted(data interface{}) {
+	if b == nil {
+		return
+	}
+	b.BroadcastEvent(SSEEvent{
+		Event: "git_sync.completed",
+		Data:  data,
+	})
+}
+
 // BroadcastReplayItemDone 广播单条重放请求执行断言完成
 func (b *SSEBroker) BroadcastReplayItemDone(taskID, itemID, recordID uint64, resultStatus string, latencyUs int64) {
 	b.BroadcastEvent(SSEEvent{

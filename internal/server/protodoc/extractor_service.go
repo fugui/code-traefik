@@ -578,6 +578,7 @@ func GetServiceDocDetail(db *gorm.DB, serviceName string, schemaID *uint64) (*Pr
 
 	extraFiles := LoadExtraActiveFiles(db, schema.ID)
 	reg, _, _ := buildRegistryFromSchema(&schema, extraFiles)
+	resolveSourceFileID := buildSourceFileIDResolver(db, &schema, allSchemaSyms)
 
 	var svcMeta serviceMetaStored
 	_ = json.Unmarshal(svcSymbol.FieldsMetaJSON, &svcMeta)
@@ -605,6 +606,7 @@ func GetServiceDocDetail(db *gorm.DB, serviceName string, schemaID *uint64) (*Pr
 		case models.DocSymbolMessage:
 			var mm MessageDocMeta
 			if err := json.Unmarshal(sym.FieldsMetaJSON, &mm); err == nil {
+				mm.SourceFileID = resolveSourceFileID(mm.ProtoFile)
 				msgMetaByFull[sym.FullName] = mm
 			}
 		case models.DocSymbolEnum:
@@ -617,6 +619,7 @@ func GetServiceDocDetail(db *gorm.DB, serviceName string, schemaID *uint64) (*Pr
 				FullName:          sym.FullName,
 				ShortName:         sym.ShortName,
 				ProtoFile:         sym.ProtoFile,
+				SourceFileID:      resolveSourceFileID(sym.ProtoFile),
 				StartLine:         sym.StartLine,
 				EndLine:           sym.EndLine,
 				Comment:           combineLeadingTrailing(sym.LeadingComments, sym.TrailingComments),
@@ -674,6 +677,7 @@ func GetServiceDocDetail(db *gorm.DB, serviceName string, schemaID *uint64) (*Pr
 			Operation:          ms.ShortName,
 			FullName:           ms.FullName,
 			ProtoFile:          ms.ProtoFile,
+			SourceFileID:       resolveSourceFileID(ms.ProtoFile),
 			StartLine:          ms.StartLine,
 			EndLine:            ms.EndLine,
 			Summary:            ms.Summary,
@@ -733,6 +737,7 @@ func GetServiceDocDetail(db *gorm.DB, serviceName string, schemaID *uint64) (*Pr
 		ServiceName:       svcSymbol.FullName,
 		ShortName:         svcSymbol.ShortName,
 		ProtoFile:         svcSymbol.ProtoFile,
+		SourceFileID:      resolveSourceFileID(svcSymbol.ProtoFile),
 		StartLine:         svcSymbol.StartLine,
 		EndLine:           svcSymbol.EndLine,
 		FileComments:      svcMeta.FileComments,
@@ -748,6 +753,56 @@ func GetServiceDocDetail(db *gorm.DB, serviceName string, schemaID *uint64) (*Pr
 		ReferencedTypes:   refMsgsList,
 		Lineage:           lineage,
 	}, nil
+}
+
+func buildSourceFileIDResolver(db *gorm.DB, schema *models.ProtoSchema, syms []models.ProtoDocSymbol) func(string) *uint64 {
+	byExact := make(map[string]uint64)
+	if db != nil && schema != nil {
+		var files []models.ProtoFile
+		q := db.Model(&models.ProtoFile{})
+		switch {
+		case schema.SourceBundleID != nil && *schema.SourceBundleID > 0:
+			q = q.Where("bundle_id = ?", *schema.SourceBundleID)
+		case schema.GitRepoID != nil && *schema.GitRepoID > 0:
+			q = q.Where("git_repo_id = ?", *schema.GitRepoID)
+		default:
+			q = q.Where("target_schema_name = ?", schema.Name)
+		}
+		if err := q.Order("is_deleted ASC, id DESC").Find(&files).Error; err == nil {
+			for _, f := range files {
+				if f.FilePath != "" {
+					if _, ok := byExact[f.FilePath]; !ok {
+						byExact[f.FilePath] = f.ID
+					}
+				}
+				if f.RepoFilePath != "" {
+					if _, ok := byExact[f.RepoFilePath]; !ok {
+						byExact[f.RepoFilePath] = f.ID
+					}
+				}
+			}
+		}
+	}
+	if len(byExact) == 0 && schema != nil && (schema.SourceBundleID == nil && schema.GitRepoID == nil) {
+		if reconstructed, err := ReconstructProtoSources(schema, syms); err == nil {
+			for _, rf := range reconstructed {
+				if rf.FilePath != "" {
+					byExact[rf.FilePath] = rf.FileID
+				}
+			}
+		}
+	}
+	return func(protoFile string) *uint64 {
+		trimmed := strings.TrimSpace(strings.TrimPrefix(protoFile, "/"))
+		if trimmed == "" {
+			return nil
+		}
+		if id, ok := byExact[trimmed]; ok && id > 0 {
+			copyID := id
+			return &copyID
+		}
+		return nil
+	}
 }
 
 func findMsgDescriptor(reg *protoregistry.Files, fullName string) protoreflect.MessageDescriptor {

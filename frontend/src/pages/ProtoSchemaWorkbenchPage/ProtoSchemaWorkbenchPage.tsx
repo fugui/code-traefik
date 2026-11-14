@@ -26,7 +26,7 @@ import { OperationMappingTable } from './OperationMappingTable';
 import { OperationDocDrawer } from './OperationDocDrawer';
 import { ProtoDependenciesGraphPane } from './ProtoDependenciesGraphPane';
 import { LivingProtoDocsPane } from './LivingProtoDocsPane';
-import { ProtoSourcesBrowserPane } from './ProtoSourcesBrowserPane';
+import { GitSourcesWorkbenchPane } from './GitSourcesWorkbenchPane';
 import { ProtoReadOnlyCodeViewer } from './ProtoReadOnlyCodeViewer';
 import LintRuleAndVocabDrawer, { type LintDrawerSubTab } from './LintRuleAndVocabDrawer';
 import './ProtoDocsAndCodeViewer.css';
@@ -640,9 +640,9 @@ export const ProtoSchemaWorkbenchPage: React.FC = () => {
         />
       )}
 
-      {/* 主视图 2: 轻量级只读源码浏览与历史 Diff */}
+      {/* 主视图 2: Git 同步源码、Monorepo 多包与只读 Commit Diff 工作台 */}
       {activeTab === 'sources' && (
-        <ProtoSourcesBrowserPane initialSchemaName={searchQueryParam} />
+        <GitSourcesWorkbenchPane isAdmin={isAdmin} initialSchemaName={searchQueryParam} />
       )}
 
       {/* 主视图 3: Git MR 四合一门禁检查雷达（M26 完整接入前置工作台） */}

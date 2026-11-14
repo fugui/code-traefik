@@ -35,7 +35,7 @@ func SetupWithDB(db *gorm.DB) error {
 		return fmt.Errorf("检测并清理旧版表结构失败: %w", err)
 	}
 
-	// 1. 自动迁移标准实体表（19 张核心 traefik_* 表 + 平台公共审计/用户表，ADR-14, ADR-15, ADR-16）
+	// 1. 自动迁移标准实体表（核心 traefik_* 表 + 平台公共审计/用户表，ADR-14 ~ ADR-18）
 	if err := DB.AutoMigrate(
 		&Department{},
 		&User{},
@@ -51,6 +51,10 @@ func SetupWithDB(db *gorm.DB) error {
 		&ModuleDependency{},
 		&Agent{},
 		&Process{},
+		&GitRepo{},
+		&GitProtoBundle{},
+		&ProtoFile{},
+		&ProtoFileVersion{},
 		&ProtoSchema{},
 		&ProtoOperation{},
 		&RecordingSession{},
@@ -260,6 +264,47 @@ END $$;`
 		`CREATE INDEX IF NOT EXISTS idx_traefik_pdoc_fts ON traefik_proto_doc_symbols USING gin (to_tsvector('simple', coalesce(full_name,'') || ' ' || coalesce(summary,'') || ' ' || coalesce(leading_comments,'') || ' ' || coalesce(trailing_comments,'') || ' ' || coalesce(owner_tag,'')));`,
 		`CREATE INDEX IF NOT EXISTS idx_traefik_pdoc_fields_gin ON traefik_proto_doc_symbols USING gin (fields_meta_json);`,
 		`CREATE INDEX IF NOT EXISTS idx_traefik_pdoc_err_gin ON traefik_proto_doc_symbols USING gin (error_codes_json);`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uk_traefik_pfile_bundle_path ON traefik_proto_files (bundle_id, file_path) WHERE is_deleted = false;`,
+		`CREATE INDEX IF NOT EXISTS idx_traefik_pfile_active_cat_path ON traefik_proto_files (file_path, category) WHERE is_deleted = false;`,
+		`DO $$
+BEGIN
+	IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_traefik_git_repo_provider') THEN
+		ALTER TABLE traefik_git_repos ADD CONSTRAINT chk_traefik_git_repo_provider CHECK (provider IN ('GITLAB','GITHUB','GITEA','GENERIC'));
+	END IF;
+	IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_traefik_git_repo_auth_type') THEN
+		ALTER TABLE traefik_git_repos ADD CONSTRAINT chk_traefik_git_repo_auth_type CHECK (auth_type IN ('NONE','TOKEN','SSH_KEY'));
+	END IF;
+	IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_traefik_git_repo_sync_mode') THEN
+		ALTER TABLE traefik_git_repos ADD CONSTRAINT chk_traefik_git_repo_sync_mode CHECK (sync_mode IN ('WEBHOOK','POLL','MANUAL'));
+	END IF;
+	IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_traefik_git_bundle_category') THEN
+		ALTER TABLE traefik_git_proto_bundles ADD CONSTRAINT chk_traefik_git_bundle_category CHECK (category IN ('BASE_LIB','BUSINESS','GATEWAY'));
+	END IF;
+	IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_traefik_git_bundle_mr_publish') THEN
+		ALTER TABLE traefik_git_proto_bundles ADD CONSTRAINT chk_traefik_git_bundle_mr_publish CHECK (mr_auto_publish IN ('DISABLED','DRAFT_ONLY','AUTO_ACTIVATE'));
+	END IF;
+	IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_traefik_git_bundles_repo') THEN
+		ALTER TABLE traefik_git_proto_bundles ADD CONSTRAINT fk_traefik_git_bundles_repo FOREIGN KEY (git_repo_id) REFERENCES traefik_git_repos(id) ON DELETE CASCADE;
+	END IF;
+	IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_traefik_proto_files_repo') THEN
+		ALTER TABLE traefik_proto_files ADD CONSTRAINT fk_traefik_proto_files_repo FOREIGN KEY (git_repo_id) REFERENCES traefik_git_repos(id) ON DELETE CASCADE;
+	END IF;
+	IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_traefik_proto_files_bundle') THEN
+		ALTER TABLE traefik_proto_files ADD CONSTRAINT fk_traefik_proto_files_bundle FOREIGN KEY (bundle_id) REFERENCES traefik_git_proto_bundles(id) ON DELETE CASCADE;
+	END IF;
+	IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_traefik_proto_file_versions_file') THEN
+		ALTER TABLE traefik_proto_file_versions ADD CONSTRAINT fk_traefik_proto_file_versions_file FOREIGN KEY (proto_file_id) REFERENCES traefik_proto_files(id) ON DELETE CASCADE;
+	END IF;
+	IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_traefik_proto_files_latest_ver') THEN
+		ALTER TABLE traefik_proto_files ADD CONSTRAINT fk_traefik_proto_files_latest_ver FOREIGN KEY (latest_version_id) REFERENCES traefik_proto_file_versions(id) ON DELETE SET NULL;
+	END IF;
+	IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_traefik_proto_schemas_git_repo') THEN
+		ALTER TABLE traefik_proto_schemas ADD CONSTRAINT fk_traefik_proto_schemas_git_repo FOREIGN KEY (git_repo_id) REFERENCES traefik_git_repos(id) ON DELETE SET NULL;
+	END IF;
+	IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_traefik_proto_schemas_source_bundle') THEN
+		ALTER TABLE traefik_proto_schemas ADD CONSTRAINT fk_traefik_proto_schemas_source_bundle FOREIGN KEY (source_bundle_id) REFERENCES traefik_git_proto_bundles(id) ON DELETE SET NULL;
+	END IF;
+END $$;`,
 	}
 	for _, idxSQL := range partialIndexes {
 		if err := DB.Exec(idxSQL).Error; err != nil {

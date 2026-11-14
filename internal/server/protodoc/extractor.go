@@ -55,6 +55,7 @@ type EnumDocDTO struct {
 	FullName          string         `json:"full_name"`
 	ShortName         string         `json:"short_name"`
 	ProtoFile         string         `json:"proto_file"`
+	SourceFileID      *uint64        `json:"source_file_id,omitempty"`
 	StartLine         int            `json:"start_line"`
 	EndLine           int            `json:"end_line"`
 	Comment           string         `json:"comment"`
@@ -89,13 +90,14 @@ type FieldDocNode struct {
 
 // MessageDocMeta 持久化在 MESSAGE 符号 fields_meta_json 中的结构元数据
 type MessageDocMeta struct {
-	FullName  string         `json:"full_name"`
-	ProtoFile string         `json:"proto_file"`
-	StartLine int            `json:"start_line"`
-	EndLine   int            `json:"end_line"`
-	Comment   string         `json:"comment"`
-	Fields    []FieldDocNode `json:"fields"`
-	Truncated bool           `json:"truncated,omitempty"`
+	FullName     string         `json:"full_name"`
+	ProtoFile    string         `json:"proto_file"`
+	SourceFileID *uint64        `json:"source_file_id,omitempty"`
+	StartLine    int            `json:"start_line"`
+	EndLine      int            `json:"end_line"`
+	Comment      string         `json:"comment"`
+	Fields       []FieldDocNode `json:"fields"`
+	Truncated    bool           `json:"truncated,omitempty"`
 }
 
 // methodMetaStored 持久化在 METHOD 符号 fields_meta_json 中的签名摘要
@@ -177,6 +179,7 @@ type MethodDocDTO struct {
 	Operation          string            `json:"operation"`
 	FullName           string            `json:"full_name"`
 	ProtoFile          string            `json:"proto_file"`
+	SourceFileID       *uint64           `json:"source_file_id,omitempty"`
 	StartLine          int               `json:"start_line"`
 	EndLine            int               `json:"end_line"`
 	Summary            string            `json:"summary"`
@@ -236,6 +239,7 @@ type ProtoServiceDocDetailDTO struct {
 	ServiceName       string                    `json:"service_name"`
 	ShortName         string                    `json:"short_name"`
 	ProtoFile         string                    `json:"proto_file"`
+	SourceFileID      *uint64                   `json:"source_file_id,omitempty"`
 	StartLine         int                       `json:"start_line"`
 	EndLine           int                       `json:"end_line"`
 	FileComments      string                    `json:"file_comments"`

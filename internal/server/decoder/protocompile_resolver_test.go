@@ -459,3 +459,164 @@ message CommonHeader {
 		t.Errorf("直接调用 FindAffectedDependents 应穿透 BASE_LIB 闭包命中 MOD_ORDER 与 MOD_GATEWAY，实测: %+v", directAffected)
 	}
 }
+
+func TestDBProtoSourceProvider_ResolvesBaseLibAndIgnoresSoftDeleted(t *testing.T) {
+	db := setupIsolatedDecoderDB(t)
+	reg, err := NewRegistry(db)
+	if err != nil {
+		t.Fatalf("NewRegistry 失败: %v", err)
+	}
+
+	// 1. 构造 GitRepo 与 3 组 Bundle（同路径分别位于 BUSINESS 与 BASE_LIB，且另一条已被软删除）
+	repo := models.GitRepo{
+		Name:          "proto-monorepo",
+		Provider:      models.GitProviderGitLab,
+		RepoURL:       "http://127.0.0.1:8080/org/monorepo.git",
+		DefaultBranch: "main",
+		AuthType:      models.GitAuthNone,
+		SyncMode:      models.GitSyncManual,
+	}
+	if err := db.Create(&repo).Error; err != nil {
+		t.Fatalf("创建 GitRepo 失败: %v", err)
+	}
+
+	bBiz := models.GitProtoBundle{
+		GitRepoID:        repo.ID,
+		BundleName:       "biz-copy",
+		TargetSchemaName: "biz-copy-schema",
+		Category:         models.ProtoCategoryBusiness,
+		SubdirPath:       "biz",
+	}
+	bBase := models.GitProtoBundle{
+		GitRepoID:        repo.ID,
+		BundleName:       "base-lib",
+		TargetSchemaName: "common-base-schema",
+		Category:         models.ProtoCategoryBaseLib,
+		SubdirPath:       "common",
+	}
+	bDeleted := models.GitProtoBundle{
+		GitRepoID:        repo.ID,
+		BundleName:       "deleted-lib",
+		TargetSchemaName: "deleted-schema",
+		Category:         models.ProtoCategoryBaseLib,
+		SubdirPath:       "deleted",
+	}
+	for _, b := range []*models.GitProtoBundle{&bBiz, &bBase, &bDeleted} {
+		if err := db.Create(b).Error; err != nil {
+			t.Fatalf("创建 Bundle %s 失败: %v", b.BundleName, err)
+		}
+	}
+
+	insertProtoFile := func(b models.GitProtoBundle, relPath, content string, deleted bool) {
+		pf := models.ProtoFile{
+			GitRepoID:        repo.ID,
+			BundleID:         b.ID,
+			TargetSchemaName: b.TargetSchemaName,
+			Category:         b.Category,
+			FilePath:         relPath,
+			RepoFilePath:     b.SubdirPath + "/" + relPath,
+			ContentSHA256:    "sha256",
+			LatestVersionNum: 1,
+			IsDeleted:        deleted,
+		}
+		if err := db.Create(&pf).Error; err != nil {
+			t.Fatalf("创建 ProtoFile 失败: %v", err)
+		}
+		ver := models.ProtoFileVersion{
+			ProtoFileID:   pf.ID,
+			Version:       1,
+			SourceType:    models.ProtoSourceGitSync,
+			CommitSHA:     "abcdef1",
+			ContentText:   content,
+			ContentSHA256: "sha256",
+			LineCount:     3,
+		}
+		if err := db.Create(&ver).Error; err != nil {
+			t.Fatalf("创建 ProtoFileVersion 失败: %v", err)
+		}
+		if err := db.Model(&pf).Update("latest_version_id", ver.ID).Error; err != nil {
+			t.Fatalf("绑定 latest_version_id 失败: %v", err)
+		}
+	}
+
+	// 同路径 BUSINESS 副本（不应被选中）
+	insertProtoFile(bBiz, "common/types.proto", `syntax = "proto3";
+package common.v1;
+message BaseMeta { string from_biz_stale = 1; }
+`, false)
+
+	// 已被软删除的 BASE_LIB 独占文件（绝不能命中）
+	insertProtoFile(bDeleted, "common/deleted_only.proto", `syntax = "proto3";
+package common.v1;
+message DeletedOnly { string gone = 1; }
+`, true)
+
+	// 活跃 BASE_LIB 优先文件（必须命中）
+	insertProtoFile(bBase, "common/types.proto", `syntax = "proto3";
+package common.v1;
+// BaseMeta 公共元信息
+message BaseMeta {
+  string trace_id = 1;
+  string tenant_code = 2;
+}
+`, false)
+
+	provider := NewDBProtoSourceProvider(db)
+	entry, err := provider.ResolveProtoSource(context.Background(), "common/types.proto")
+	if err != nil || entry == nil {
+		t.Fatalf("ResolveProtoSource(common/types.proto) 失败: entry=%v err=%v", entry, err)
+	}
+	if entry.Category != models.ProtoCategoryBaseLib || !strings.Contains(string(entry.Content), "tenant_code") {
+		t.Fatalf("未优先命中 BASE_LIB 快照: category=%s content=%s", entry.Category, string(entry.Content))
+	}
+
+	deletedEntry, err := provider.ResolveProtoSource(context.Background(), "common/deleted_only.proto")
+	if err != nil {
+		t.Fatalf("ResolveProtoSource 对已软删除文件不应报错: %v", err)
+	}
+	if deletedEntry != nil {
+		t.Fatalf("已软删除的 ProtoFile (is_deleted=true) 不应被 Tier 2 返回")
+	}
+
+	// 2. 通过 Registry.CompileAndSaveSchema 验证自动接驳 DBProtoSourceProvider（无需显式传 SourceProvider）
+	draftSchema, _, _, err := reg.CompileAndSaveSchema(context.Background(), CompileProtoBundleInput{
+		Name:     "db-tier2-consumer",
+		Category: models.ProtoCategoryBusiness,
+		Files: map[string]string{
+			"biz/consumer.proto": `syntax = "proto3";
+package biz.v1;
+import "common/types.proto";
+message PingReq { common.v1.BaseMeta meta = 1; }
+message PingRsp { string ok = 1; }
+service EchoService { rpc Ping(PingReq) returns (PingRsp); }
+`,
+		},
+		AutoActivate: false,
+		OperatorID:   1,
+	})
+	if err != nil {
+		t.Fatalf("CompileAndSaveSchema 默认接驳 Tier-2 DBProtoSourceProvider 编译失败: %v", err)
+	}
+	if draftSchema == nil || draftSchema.OperationCount != 1 {
+		t.Fatalf("预期编译产生 1 个 Operation，实际: %+v", draftSchema)
+	}
+
+	// 3. 若引入被软删除的文件，则应报 MISSING_IMPORTS
+	_, _, _, err = reg.CompileAndSaveSchema(context.Background(), CompileProtoBundleInput{
+		Name:     "db-tier2-deleted-consumer",
+		Category: models.ProtoCategoryBusiness,
+		Files: map[string]string{
+			"biz/bad.proto": `syntax = "proto3";
+package biz.v1;
+import "common/deleted_only.proto";
+message BadReq { common.v1.DeletedOnly d = 1; }
+`,
+		},
+		AutoActivate: false,
+		OperatorID:   1,
+	})
+	var ce *CompileError
+	if !errors.As(err, &ce) || ce.Code != "MISSING_IMPORTS" {
+		t.Fatalf("引入已软删除文件应返回 MISSING_IMPORTS，实测: %v", err)
+	}
+}

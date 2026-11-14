@@ -141,6 +141,50 @@ func (p *InMemoryProtoSourceProvider) ResolveProtoSource(_ context.Context, clea
 	return nil, nil
 }
 
+// DBProtoSourceProvider M25 Tier 2 数据库 .proto 源码跨包解析器（查询 traefik_proto_files JOIN versions，忽略软删，BASE_LIB 优先）
+type DBProtoSourceProvider struct {
+	db *gorm.DB
+}
+
+// NewDBProtoSourceProvider 创建基于 PostgreSQL traefik_proto_files 的 Tier 2 源码提供者
+func NewDBProtoSourceProvider(db *gorm.DB) *DBProtoSourceProvider {
+	return &DBProtoSourceProvider{db: db}
+}
+
+// ResolveProtoSource 按规范相对路径检索未被软删的最新只读 .proto 快照（优先 BASE_LIB）
+func (p *DBProtoSourceProvider) ResolveProtoSource(ctx context.Context, cleanPath string) (*ProtoSourceEntry, error) {
+	if p == nil || p.db == nil {
+		return nil, nil
+	}
+	cleaned, err := SanitizeProtoRelPath(cleanPath, false)
+	if err != nil {
+		return nil, err
+	}
+	type dbProtoSourceRow struct {
+		Category    string
+		ContentText string
+	}
+	var row dbProtoSourceRow
+	tx := p.db.WithContext(ctx).
+		Table("traefik_proto_files AS f").
+		Select("f.category AS category, v.content_text AS content_text").
+		Joins("JOIN traefik_proto_file_versions AS v ON v.id = f.latest_version_id").
+		Where("f.is_deleted = false AND f.file_path = ?", cleaned).
+		Order("CASE WHEN f.category = 'BASE_LIB' THEN 0 ELSE 1 END, f.updated_at DESC, f.id DESC").
+		Limit(1).
+		Find(&row)
+	if tx.Error != nil {
+		return nil, tx.Error
+	}
+	if tx.RowsAffected == 0 {
+		return nil, nil
+	}
+	return &ProtoSourceEntry{
+		Category: row.Category,
+		Content:  []byte(row.ContentText),
+	}, nil
+}
+
 // CompileProtoBundleInput 纯 Go protocompile 在线编译入参
 type CompileProtoBundleInput struct {
 	Name             string
@@ -712,6 +756,9 @@ func (r *Registry) CompileAndSaveSchema(ctx context.Context, in CompileProtoBund
 	}
 
 	in.Category = category
+	if in.SourceProvider == nil {
+		in.SourceProvider = NewDBProtoSourceProvider(r.db)
+	}
 	compiled, err := CompileProtoBundle(ctx, regFiles, in)
 	if err != nil {
 		return nil, nil, 0, err

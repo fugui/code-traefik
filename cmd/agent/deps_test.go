@@ -23,6 +23,10 @@ func TestAgentDependencies_NoGormNoDynamicPBNoServer(t *testing.T) {
 		"protoregistry",
 		"code-traefik/internal/server",
 		"code-traefik/models",
+		"github.com/go-git/go-git",
+		"github.com/go-git/go-billy",
+		"github.com/bufbuild/protocompile",
+		"sqlite",
 	}
 
 	lines := strings.Split(string(out), "\n")

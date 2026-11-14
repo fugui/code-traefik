@@ -20,17 +20,25 @@ import (
 	"gorm.io/gorm"
 )
 
-// ProtoFileDTO M23 虚拟只读 Proto 文件清单 DTO（严格无 locked/locked_by 悲观锁字段；M25 无缝切换至 Git 持久化表）
+// ProtoFileDTO 只读 Proto 文件清单 DTO（严格无 locked/locked_by 悲观锁字段；兼容真实 Git 库与 M23 虚拟适配）
 type ProtoFileDTO struct {
 	ID               uint64    `json:"id"`
 	SchemaID         uint64    `json:"schema_id"`
+	GitRepoID        *uint64   `json:"git_repo_id,omitempty"`
+	GitRepoName      string    `json:"git_repo_name,omitempty"`
+	BundleID         *uint64   `json:"bundle_id,omitempty"`
+	BundleName       string    `json:"bundle_name,omitempty"`
 	TargetSchemaName string    `json:"target_schema_name"`
 	Category         string    `json:"category"`
 	FilePath         string    `json:"file_path"`
+	RepoFilePath     string    `json:"repo_file_path,omitempty"`
 	PackageName      string    `json:"package_name"`
 	LatestVersion    int       `json:"latest_version"`
+	LatestCommitSHA  string    `json:"latest_commit_sha,omitempty"`
+	ContentSHA256    string    `json:"content_sha256,omitempty"`
 	IsActiveSchema   bool      `json:"is_active_schema"`
 	HasSourceInfo    bool      `json:"has_source_info"`
+	IsDeleted        bool      `json:"is_deleted"`
 	SourceOrigin     string    `json:"source_origin"`
 	LineCount        int       `json:"line_count"`
 	UpdatedAt        time.Time `json:"updated_at"`
@@ -38,31 +46,42 @@ type ProtoFileDTO struct {
 
 // ProtoFileVersionDTO 只读文件单版本内容元数据 DTO
 type ProtoFileVersionDTO struct {
-	SchemaID    uint64    `json:"schema_id"`
-	Version     int       `json:"version"`
-	VersionTag  string    `json:"version_tag"`
-	CommitSHA   string    `json:"commit_sha"`
-	ContentSHA  string    `json:"content_sha256"`
-	SourceType  string    `json:"source_type"`
-	AuthorName  string    `json:"author_name"`
-	Summary     string    `json:"summary"`
-	CreatedAt   time.Time `json:"created_at"`
-	LineCount   int       `json:"line_count"`
-	IsActiveVer bool      `json:"is_active"`
+	ID            uint64    `json:"id,omitempty"`
+	ProtoFileID   uint64    `json:"proto_file_id,omitempty"`
+	SchemaID      uint64    `json:"schema_id"`
+	Version       int       `json:"version"`
+	VersionTag    string    `json:"version_tag"`
+	CommitSHA     string    `json:"commit_sha"`
+	CommitMessage string    `json:"commit_message,omitempty"`
+	ContentSHA    string    `json:"content_sha256"`
+	SourceType    string    `json:"source_type"`
+	AuthorName    string    `json:"author_name"`
+	AuthorEmail   string    `json:"author_email,omitempty"`
+	Summary       string    `json:"summary"`
+	CommittedAt   time.Time `json:"committed_at,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+	LineCount     int       `json:"line_count"`
+	IsActiveVer   bool      `json:"is_active"`
 }
 
 // ProtoFileVersionSummaryDTO 版本历史摘要列表 DTO（不含源码正文）
 type ProtoFileVersionSummaryDTO struct {
-	SchemaID    uint64    `json:"schema_id"`
-	Version     int       `json:"version"`
-	VersionTag  string    `json:"version_tag"`
-	CommitSHA   string    `json:"commit_sha"`
-	ContentSHA  string    `json:"content_sha256"`
-	SourceType  string    `json:"source_type"`
-	AuthorName  string    `json:"author_name"`
-	Summary     string    `json:"summary"`
-	IsActiveVer bool      `json:"is_active"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID            uint64    `json:"id,omitempty"`
+	ProtoFileID   uint64    `json:"proto_file_id,omitempty"`
+	SchemaID      uint64    `json:"schema_id"`
+	Version       int       `json:"version"`
+	VersionTag    string    `json:"version_tag"`
+	CommitSHA     string    `json:"commit_sha"`
+	CommitMessage string    `json:"commit_message,omitempty"`
+	ContentSHA    string    `json:"content_sha256"`
+	SourceType    string    `json:"source_type"`
+	AuthorName    string    `json:"author_name"`
+	AuthorEmail   string    `json:"author_email,omitempty"`
+	Summary       string    `json:"summary"`
+	LineCount     int       `json:"line_count"`
+	IsActiveVer   bool      `json:"is_active"`
+	CommittedAt   time.Time `json:"committed_at,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
 }
 
 func parseOptionalUint64Query(c *gin.Context, key string) (*uint64, bool) {
@@ -86,11 +105,11 @@ func parseStandardPagination(c *gin.Context) (int, int) {
 	}
 	pageSize := 25
 	if psRaw := strings.TrimSpace(c.Query("page_size")); psRaw != "" {
-		if parsed, err := strconv.Atoi(psRaw); err == nil && parsed > 0 {
-			if parsed > 100 {
-				parsed = 100
+		if parsed, err := strconv.Atoi(psRaw); err == nil {
+			switch parsed {
+			case 15, 25, 50, 100:
+				pageSize = parsed
 			}
-			pageSize = parsed
 		}
 	}
 	return page, pageSize
@@ -404,23 +423,23 @@ func buildVersionDTO(sc models.ProtoSchema, f protodoc.ReconstructedProtoFile, a
 	}
 }
 
-// ListProtoFiles GET /api/proto-files
-// M23 只读过渡列表：聚合已编译/上传 Schema 源树文件（严格按 target_schema_name, file_path 排序，无任何锁字段）
-func ListProtoFiles(c *gin.Context) {
-	page, pageSize := parseStandardPagination(c)
-	targetSchema := strings.TrimSpace(c.Query("target_schema_name"))
-	packageFilter := strings.TrimSpace(c.Query("package_name"))
-	search := strings.ToLower(strings.TrimSpace(c.Query("search")))
-
-	schemas, err := selectDisplaySchemas(models.DB, targetSchema)
+// listVirtualProtoFileDTOs 返回非 Git 归属 Schema 的 M23 虚拟只读源文件列表供并入列表展示
+func listVirtualProtoFileDTOs(db *gorm.DB, targetSchema, packageFilter, search string, excludeSchemaNames map[string]struct{}) ([]ProtoFileDTO, error) {
+	schemas, err := selectDisplaySchemas(db, targetSchema)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
+		return nil, err
 	}
 
-	allItems := make([]ProtoFileDTO, 0)
+	out := make([]ProtoFileDTO, 0)
 	for i := range schemas {
-		files, err := loadVirtualFilesForSchema(models.DB, &schemas[i])
+		sc := schemas[i]
+		if sc.SourceBundleID != nil || sc.GitRepoID != nil {
+			continue
+		}
+		if _, covered := excludeSchemaNames[sc.Name]; covered {
+			continue
+		}
+		files, err := loadVirtualFilesForSchema(db, &sc)
 		if err != nil {
 			continue
 		}
@@ -429,49 +448,19 @@ func ListProtoFiles(c *gin.Context) {
 				continue
 			}
 			if search != "" {
-				haystack := strings.ToLower(schemas[i].Name + " " + f.FilePath + " " + f.PackageName)
+				haystack := strings.ToLower(sc.Name + " " + f.FilePath + " " + f.PackageName)
 				if !strings.Contains(haystack, search) {
 					continue
 				}
 			}
-			allItems = append(allItems, buildFileDTO(schemas[i], f))
+			out = append(out, buildFileDTO(sc, f))
 		}
 	}
-
-	sort.Slice(allItems, func(i, j int) bool {
-		if allItems[i].TargetSchemaName != allItems[j].TargetSchemaName {
-			return allItems[i].TargetSchemaName < allItems[j].TargetSchemaName
-		}
-		return allItems[i].FilePath < allItems[j].FilePath
-	})
-
-	total := len(allItems)
-	start := (page - 1) * pageSize
-	if start > total {
-		start = total
-	}
-	end := start + pageSize
-	if end > total {
-		end = total
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"items":        allItems[start:end],
-		"total":        total,
-		"page":         page,
-		"page_size":    pageSize,
-		"storage_mode": "M23_DESCRIPTOR_VIRTUAL",
-	})
+	return out, nil
 }
 
-// GetProtoFileContent GET /api/proto-files/:id/content
-func GetProtoFileContent(c *gin.Context) {
-	fileID, err := strconv.ParseUint(c.Param("id"), 10, 64)
-	if err != nil || fileID == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "非法的 proto file ID"})
-		return
-	}
-
+// getVirtualProtoFileContent 虚拟 Schema 只读文件正文适配器
+func getVirtualProtoFileContent(c *gin.Context, fileID uint64) {
 	baseSchema, baseFile, err := resolveVirtualFileByID(models.DB, fileID)
 	if err != nil {
 		if errors.Is(err, protodoc.ErrServiceDocNotFound) {
@@ -555,15 +544,8 @@ func loadAllVersionsForVirtualFile(db *gorm.DB, baseSchema *models.ProtoSchema, 
 	return out, nil
 }
 
-// ListProtoFileVersions GET /api/proto-files/:id/versions
-func ListProtoFileVersions(c *gin.Context) {
-	fileID, err := strconv.ParseUint(c.Param("id"), 10, 64)
-	if err != nil || fileID == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "非法的 proto file ID"})
-		return
-	}
-	page, pageSize := parseStandardPagination(c)
-
+// listVirtualProtoFileVersions 虚拟 Schema 只读版本列表适配器
+func listVirtualProtoFileVersions(c *gin.Context, fileID uint64, page, pageSize int) {
 	baseSchema, baseFile, err := resolveVirtualFileByID(models.DB, fileID)
 	if err != nil {
 		if errors.Is(err, protodoc.ErrServiceDocNotFound) {
@@ -620,20 +602,8 @@ func ListProtoFileVersions(c *gin.Context) {
 	})
 }
 
-// GetProtoFileDiff GET /api/proto-files/:id/diff
-func GetProtoFileDiff(c *gin.Context) {
-	fileID, err := strconv.ParseUint(c.Param("id"), 10, 64)
-	if err != nil || fileID == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "非法的 proto file ID"})
-		return
-	}
-	fromParam := strings.TrimSpace(c.Query("from_version"))
-	if fromParam == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "必须指定 from_version 参数 (整数版本号或 prev)"})
-		return
-	}
-	toParam := strings.TrimSpace(c.DefaultQuery("to_version", "latest"))
-
+// getVirtualProtoFileDiff 虚拟 Schema 只读 Diff 适配器
+func getVirtualProtoFileDiff(c *gin.Context, fileID uint64, fromParam, toParam string) {
 	baseSchema, baseFile, err := resolveVirtualFileByID(models.DB, fileID)
 	if err != nil {
 		if errors.Is(err, protodoc.ErrServiceDocNotFound) {

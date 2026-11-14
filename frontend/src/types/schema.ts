@@ -222,6 +222,7 @@ export interface EnumDocDTO {
   full_name: string;
   short_name: string;
   proto_file: string;
+  source_file_id?: number;
   start_line: number;
   end_line: number;
   comment: string;
@@ -279,6 +280,7 @@ export interface MethodDocDTO {
   operation: string;
   full_name: string;
   proto_file: string;
+  source_file_id?: number;
   start_line: number;
   end_line: number;
   summary: string;
@@ -378,6 +380,7 @@ export interface ProtoServiceDocDetailDTO {
   service_name: string;
   short_name: string;
   proto_file: string;
+  source_file_id?: number;
   start_line: number;
   end_line: number;
   file_comments: string;
@@ -430,48 +433,67 @@ export interface ProtoSourceViolationDTO {
   severity: 'ERROR' | 'WARNING' | 'INFO' | string;
   message: string;
   line: number;
+  file_line?: number;
   column?: number;
 }
 
 export interface ProtoFileDTO {
   id: number;
   schema_id: number;
+  git_repo_id?: number;
+  git_repo_name?: string;
+  bundle_id?: number;
+  bundle_name?: string;
   target_schema_name: string;
   category: string;
   file_path: string;
+  repo_file_path?: string;
   package_name: string;
   latest_version: number;
+  latest_commit_sha?: string;
+  content_sha256?: string;
   is_active_schema: boolean;
   has_source_info: boolean;
+  is_deleted?: boolean;
   source_origin: string;
   line_count: number;
   updated_at: string;
 }
 
 export interface ProtoFileVersionDTO {
+  id?: number;
+  proto_file_id?: number;
   schema_id: number;
   version: number;
   version_tag: string;
   commit_sha: string;
+  commit_message?: string;
   content_sha256: string;
   source_type: string;
   author_name: string;
+  author_email?: string;
   summary: string;
+  committed_at?: string;
   created_at: string;
   line_count: number;
   is_active: boolean;
 }
 
 export interface ProtoFileVersionSummaryDTO {
+  id?: number;
+  proto_file_id?: number;
   schema_id: number;
   version: number;
   version_tag: string;
   commit_sha: string;
+  commit_message?: string;
   content_sha256: string;
   source_type: string;
   author_name: string;
+  author_email?: string;
   summary: string;
   is_active: boolean;
+  committed_at?: string;
   created_at: string;
 }
 
@@ -668,4 +690,175 @@ export interface TriggerCheckScanPayload {
   proto_file_ids?: number[];
   include_duplicates?: boolean;
   include_llm?: boolean;
+}
+
+// =====================================================================
+// M25: Git 仓库、Monorepo 多包 (Bundles) 与只读一致性对账契约类型
+// =====================================================================
+
+export type GitProviderType = 'GITLAB' | 'GITHUB' | 'GITEA' | 'CUSTOM_GIT';
+export type GitAuthType = 'NONE' | 'TOKEN' | 'BASIC' | 'SSH_KEY';
+export type GitSyncMode = 'WEBHOOK' | 'POLLING' | 'MANUAL';
+export type GitSyncStatus = 'IDLE' | 'RUNNING' | 'SUCCESS' | 'FAILED';
+export type MRAutoPublishMode = 'OFF' | 'DRAFT_ONLY' | 'AUTO_ACTIVATE';
+
+export interface GitProtoBundleDTO {
+  id: number;
+  git_repo_id: number;
+  bundle_name: string;
+  target_schema_name: string;
+  category: ProtoCategory | string;
+  subdir_path: string;
+  include_dirs: string[];
+  entry_files: string[];
+  file_globs: string[];
+  exclude_globs: string[];
+  auto_compile: boolean;
+  auto_activate: boolean;
+  mr_auto_publish: MRAutoPublishMode | string;
+  lint_on_sync: boolean;
+  last_sync_commit: string;
+  last_sync_at?: string;
+  last_schema_id?: number | null;
+  description: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface GitRepoDTO {
+  id: number;
+  name: string;
+  provider: GitProviderType | string;
+  repo_url: string;
+  api_base_url: string;
+  default_branch: string;
+  auth_type: GitAuthType | string;
+  has_credentials: boolean;
+  credential_hint: string;
+  has_webhook_secret: boolean;
+  sync_mode: GitSyncMode | string;
+  poll_interval_sec: number;
+  auto_compile: boolean;
+  auto_activate: boolean;
+  lint_on_sync: boolean;
+  last_sync_at?: string;
+  last_sync_commit: string;
+  last_sync_status: GitSyncStatus | string;
+  last_sync_error: string;
+  description: string;
+  created_by: number;
+  created_at: string;
+  updated_at: string;
+  bundles: GitProtoBundleDTO[];
+}
+
+export interface GitRepoBundleInput {
+  bundle_name: string;
+  target_schema_name: string;
+  category?: ProtoCategory;
+  subdir_path?: string;
+  include_dirs?: string[];
+  entry_files?: string[];
+  file_globs?: string[];
+  exclude_globs?: string[];
+  auto_compile?: boolean;
+  auto_activate?: boolean;
+  mr_auto_publish?: MRAutoPublishMode;
+  lint_on_sync?: boolean;
+  description?: string;
+}
+
+export interface CreateGitRepoPayload {
+  name: string;
+  provider: GitProviderType;
+  repo_url: string;
+  api_base_url?: string;
+  default_branch?: string;
+  auth_type?: GitAuthType;
+  credential_plain?: string;
+  webhook_secret_plain?: string;
+  sync_mode?: GitSyncMode;
+  poll_interval_sec?: number;
+  auto_compile?: boolean;
+  auto_activate?: boolean;
+  lint_on_sync?: boolean;
+  description?: string;
+  default_bundle?: GitRepoBundleInput;
+  bundles?: GitRepoBundleInput[];
+}
+
+export interface UpdateGitRepoPayload {
+  name?: string;
+  provider?: GitProviderType;
+  repo_url?: string;
+  api_base_url?: string;
+  default_branch?: string;
+  auth_type?: GitAuthType;
+  credential_plain?: string;
+  webhook_secret_plain?: string;
+  sync_mode?: GitSyncMode;
+  poll_interval_sec?: number;
+  auto_compile?: boolean;
+  auto_activate?: boolean;
+  lint_on_sync?: boolean;
+  description?: string;
+}
+
+export type GitConsistencyItemStatus = 'in_sync' | 'modified' | 'remote_only' | 'db_only';
+
+export interface GitConsistencyItemDTO {
+  bundle_id: number;
+  bundle_name: string;
+  target_schema_name: string;
+  file_path: string;
+  status: GitConsistencyItemStatus | string;
+  remote_sha256?: string;
+  db_sha256?: string;
+  db_version?: number;
+}
+
+export interface GitConsistencySummaryDTO {
+  in_sync: number;
+  modified: number;
+  remote_only: number;
+  db_only: number;
+}
+
+export interface GitConsistencyReportDTO {
+  repo_id: number;
+  repo_name: string;
+  bundle_id?: number | null;
+  branch: string;
+  commit_sha: string;
+  head_commit_sha?: string;
+  in_sync: boolean;
+  remote_only_files: string[];
+  db_only_files: string[];
+  modified_files: string[];
+  summary: GitConsistencySummaryDTO;
+  items: GitConsistencyItemDTO[];
+  checked_at: string;
+}
+
+export interface TriggerGitSyncResponse {
+  repo_id: number;
+  bundle_id?: number;
+  branch: string;
+  status: GitSyncStatus | string;
+}
+
+export interface GitRepoBranchesResponse {
+  default_branch: string;
+  branches: string[];
+}
+
+export interface GitSyncCompletedEventPayload {
+  repo_id: number;
+  repo_name?: string;
+  branch?: string;
+  commit_sha?: string;
+  status: GitSyncStatus | string;
+  files_updated?: number;
+  compiled_schema_id?: number;
+  message?: string;
 }

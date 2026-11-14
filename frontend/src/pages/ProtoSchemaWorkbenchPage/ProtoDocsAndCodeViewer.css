@@ -968,3 +968,258 @@
   gap: 8px;
 }
 
+/* M25: Git 同步工作台与 Monorepo 多包抽屉样式（严格使用 --color-* 语义 Token） */
+.pgit-workbench {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.pgit-repo-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.pgit-toolbar-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.pgit-toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.pgit-inline-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.pgit-inline-field > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.pgit-bundle-strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-top: 8px;
+  border-top: 1px solid var(--color-border-primary);
+}
+
+.pgit-bundle-strip__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+
+.pgit-bundle-chip-sub {
+  font-size: 11px;
+  opacity: 0.78;
+}
+
+.pgit-search-box {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid var(--color-border-primary);
+  background: var(--color-bg-input);
+  color: var(--color-text-secondary);
+}
+
+.pgit-search-box .pdoc-tree-search {
+  border: none;
+  background: transparent;
+  padding: 6px 0;
+}
+
+.pgit-file-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pgit-file-meta {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.pgit-pagination-box {
+  padding: 8px 10px;
+  border-top: 1px solid var(--color-border-primary);
+  background: var(--color-bg-surface);
+}
+
+.pgit-input {
+  min-height: 32px;
+  padding: 5px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--color-border-primary);
+  background: var(--color-bg-input);
+  color: var(--color-text-primary);
+  font-size: 12px;
+}
+
+.pgit-input:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+
+.pgit-drawer-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.pgit-form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.pgit-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.pgit-field--wide {
+  grid-column: 1 / -1;
+}
+
+.pgit-field__label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+}
+
+.pgit-checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.pgit-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.pgit-subpanel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px dashed var(--color-border-primary);
+  background: var(--color-bg-muted);
+}
+
+.pgit-drawer-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding-top: 6px;
+}
+
+.pgit-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(120px, 1fr));
+  gap: 10px;
+}
+
+.pgit-stat-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--color-border-primary);
+  background: var(--color-bg-muted);
+}
+
+.pgit-stat-card__label {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+
+.pgit-stat-card__value {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+}
+
+.pgit-stat-card__value--warn {
+  color: var(--color-warning);
+}
+
+.pgit-stat-card__value--info {
+  color: var(--color-info);
+}
+
+.pgit-stat-card__value--danger {
+  color: var(--color-danger);
+}
+
+.pgit-commit-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-family: var(--font-mono, monospace);
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--color-border-primary);
+  background: var(--color-bg-muted);
+  color: var(--color-text-secondary);
+}
+
+.pgit-muted {
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.pdoc-source-link--workbench {
+  border-color: var(--color-border-primary);
+  background: var(--color-bg-muted);
+}
+
+.pgit-spin {
+  animation: pgit-spin-keyframes 1s linear infinite;
+}
+
+@keyframes pgit-spin-keyframes {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+

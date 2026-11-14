@@ -710,9 +710,15 @@ func TriggerCheckReportScan(c *gin.Context) {
 	}
 
 	schemaIDs := append([]uint64{}, req.SchemaIDs...)
-	for _, fid := range req.ProtoFileIDs {
-		if fid >= 1000 {
-			schemaIDs = append(schemaIDs, fid/1000)
+	realProtoFileCount := int64(0)
+	if len(req.ProtoFileIDs) > 0 && models.DB != nil {
+		_ = models.DB.Model(&models.ProtoFile{}).Where("id IN ?", req.ProtoFileIDs).Count(&realProtoFileCount).Error
+	}
+	if realProtoFileCount == 0 {
+		for _, fid := range req.ProtoFileIDs {
+			if fid >= 1000 {
+				schemaIDs = append(schemaIDs, fid/1000)
+			}
 		}
 	}
 	protoFileID := req.ProtoFileID

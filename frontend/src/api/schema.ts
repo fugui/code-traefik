@@ -27,6 +27,14 @@ import type {
   ProtoFileContentResponse,
   ProtoFileVersionSummaryDTO,
   ProtoFileDiffResponse,
+  GitRepoDTO,
+  GitProtoBundleDTO,
+  CreateGitRepoPayload,
+  UpdateGitRepoPayload,
+  GitRepoBundleInput,
+  TriggerGitSyncResponse,
+  GitConsistencyReportDTO,
+  GitRepoBranchesResponse,
 } from '../types';
 
 export async function listProtoSchemas(params?: {
@@ -354,15 +362,23 @@ export async function getProtoSchemaSources(schemaId: number | string, filePath?
 }
 
 export async function listProtoFiles(params?: {
+  git_repo_id?: number;
+  bundle_id?: number;
   target_schema_name?: string;
   package_name?: string;
+  include_deleted?: boolean;
   search?: string;
   page?: number;
   page_size?: number;
 }) {
   const qs = new URLSearchParams();
+  if (params?.git_repo_id) qs.set('git_repo_id', String(params.git_repo_id));
+  if (params?.bundle_id) qs.set('bundle_id', String(params.bundle_id));
   if (params?.target_schema_name) qs.set('target_schema_name', params.target_schema_name);
   if (params?.package_name) qs.set('package_name', params.package_name);
+  if (params?.include_deleted !== undefined) {
+    qs.set('include_deleted', params.include_deleted ? 'true' : 'false');
+  }
   if (params?.search) qs.set('search', params.search);
   if (params?.page) qs.set('page', String(params.page));
   if (params?.page_size) qs.set('page_size', String(params.page_size));
@@ -509,4 +525,103 @@ export async function listCheckReports(params?: {
 
 export async function getCheckReportDetail(id: number) {
   return apiRequest<CheckReportDTO>(`/check-reports/${id}`);
+}
+
+// =====================================================================
+// M25: Git 仓库、Monorepo 多包 (Bundles) 与只读一致性对账 API
+// =====================================================================
+
+export async function listGitRepos(params?: {
+  provider?: string;
+  last_sync_status?: string;
+  search?: string;
+  page?: number;
+  page_size?: number;
+}) {
+  const qs = new URLSearchParams();
+  if (params?.provider) qs.set('provider', params.provider);
+  if (params?.last_sync_status) qs.set('last_sync_status', params.last_sync_status);
+  if (params?.search) qs.set('search', params.search);
+  if (params?.page) qs.set('page', String(params.page));
+  if (params?.page_size) qs.set('page_size', String(params.page_size));
+  const query = qs.toString();
+  return apiRequest<PaginatedResponse<GitRepoDTO>>(`/git-repos${query ? `?${query}` : ''}`);
+}
+
+export async function getGitRepoDetail(id: number | string) {
+  return apiRequest<GitRepoDTO>(`/git-repos/${id}`);
+}
+
+export async function createGitRepo(payload: CreateGitRepoPayload) {
+  return apiRequest<GitRepoDTO>('/git-repos', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateGitRepo(id: number | string, payload: UpdateGitRepoPayload) {
+  return apiRequest<GitRepoDTO>(`/git-repos/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deleteGitRepo(id: number | string) {
+  return apiRequest<{ deleted: boolean; id: number }>(`/git-repos/${id}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function createGitRepoBundle(repoId: number | string, payload: GitRepoBundleInput) {
+  return apiRequest<GitProtoBundleDTO>(`/git-repos/${repoId}/bundles`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateGitRepoBundle(
+  repoId: number | string,
+  bundleId: number | string,
+  payload: Partial<GitRepoBundleInput>
+) {
+  return apiRequest<GitProtoBundleDTO>(`/git-repos/${repoId}/bundles/${bundleId}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deleteGitRepoBundle(repoId: number | string, bundleId: number | string) {
+  return apiRequest<{ deleted: boolean; bundle_id: number }>(
+    `/git-repos/${repoId}/bundles/${bundleId}`,
+    {
+      method: 'DELETE',
+    }
+  );
+}
+
+export async function triggerGitRepoSync(
+  repoId: number | string,
+  payload?: { bundle_id?: number; branch?: string; force_recompile?: boolean }
+) {
+  return apiRequest<TriggerGitSyncResponse>(`/git-repos/${repoId}/sync`, {
+    method: 'POST',
+    body: JSON.stringify(payload ?? {}),
+  });
+}
+
+export async function getGitRepoConsistency(
+  repoId: number | string,
+  params?: { bundle_id?: number; branch?: string }
+) {
+  const qs = new URLSearchParams();
+  if (params?.bundle_id) qs.set('bundle_id', String(params.bundle_id));
+  if (params?.branch) qs.set('branch', params.branch);
+  const query = qs.toString();
+  return apiRequest<GitConsistencyReportDTO>(
+    `/git-repos/${repoId}/consistency${query ? `?${query}` : ''}`
+  );
+}
+
+export async function getGitRepoBranches(repoId: number | string) {
+  return apiRequest<GitRepoBranchesResponse>(`/git-repos/${repoId}/branches`);
 }
