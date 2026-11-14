@@ -2,8 +2,8 @@
 
 - **文档编号**：`18-proto-full-lifecycle-and-git-mr-governance-adr.md`
 - **文档版本**：v1.3.0（依据「`code-proto` 与 `protohub` 均未开发完成且从未真正投入运行，不存在历史数据迁移需求」的明确事实收敛修订：彻底移除 `scripts/migrate_protohub_vocab` SQLite/JSON 迁移工具、`modernc.org/sqlite` 依赖与 `PROTOHUB_IMPORT` 枚举，保留零 SQLite 红线并将领域词汇表与静态检查规则全面收敛为 `code-traefik` 原生 `BUILTIN_SEED` 初始化 + Web CRUD + LLM 辅助审核；前置 v1.2.0 检视确立 `GitRepo (1) -> GitProtoBundle (N)`、`uk_traefik_mr_dedup`、`LayeredVirtualResolver`、`SafeDialer` `outbound_trusted_cidrs` 信任白名单放行内网 GitLab/LLM 与跨机 `code-notifier`、统一 `TRAEFIK_CRYPTO_KEY`、`Jaccard >= 0.85`、`SSEBroker(userID)`、`<= 150KB gzip` 增量红线及 M25/M26 拆分）
-- **日期**：2026-11-13
-- **状态**：已检视定稿待排期 (Accepted for M22~M26)
+- **日期**：2026-11-14
+- **状态**：✅ 已全部实施交付 (Delivered across M22~M26)
 - **关联特性**：升维兑现 `F-18`（活体接口参考文档中心 Reference Docs），重定义 `F-21`（`.proto` 源码全生命周期、Git/MR 门禁与统一编译入池），扩展 `F-03`~`F-03.7`、`F-24`、`F-26`；规划新增 `F-28`~`F-32`
 - **演进与替代关系**：
   - 鉴于独立兄弟项目 **`code-proto`** 与原型项目 **`protohub`** 已正式废弃，**正式撤销 `01-feature-matrix.md` 中 `Non-Goal 4` 关于“接口变更 MR 追踪与 `.proto` 源码管理归属 `code-proto`”的旧边界约束**；

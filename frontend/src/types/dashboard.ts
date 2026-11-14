@@ -48,9 +48,20 @@ export interface RegressionDefenseDTO {
   unhealthy_suite_processes_7d: number;
 }
 
+export interface StaticComplianceDTO {
+  compliance_score: number;
+  comment_coverage_rate: number;
+  naming_pass_rate: number;
+  duplicate_group_count: number;
+  pending_vocab_terms: number;
+  recent_mr_blocked_count: number;
+  total_proto_files: number;
+}
+
 export interface DashboardOverviewDTO {
   health_score: HealthScoreDTO;
   drift_radar: DriftRadarDTO;
   contract_assets: ContractAssetsDTO;
   regression_defense: RegressionDefenseDTO;
+  static_compliance?: StaticComplianceDTO;
 }

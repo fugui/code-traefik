@@ -36,6 +36,10 @@ func setupGoldenSuiteTestServer(t *testing.T, db *gorm.DB) (*gin.Engine, *diff.R
 	}
 
 	reg, _ := decoder.NewRegistry(db)
+	handlers.ResetGlobalDecoderRegistry(reg)
+	t.Cleanup(func() {
+		handlers.ResetGlobalDecoderRegistry(nil)
+	})
 	sched := diff.NewReplayScheduler(db, reg)
 	handlers.InitGlobalReplayScheduler(sched)
 

@@ -356,3 +356,24 @@
 .dashboard-link-btn:hover {
   color: var(--color-primary-hover);
 }
+
+.dashboard-card--full {
+  grid-column: 1 / -1;
+}
+
+.dashboard-stat-tile__value--warning {
+  color: var(--color-warning);
+}
+
+.dashboard-compliance-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1rem;
+}
+
+.dashboard-compliance-actions .dashboard-link-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}

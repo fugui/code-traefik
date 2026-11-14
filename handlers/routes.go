@@ -42,6 +42,9 @@ func RegisterAPIRoutes(r *gin.Engine) {
 		openAPI.GET("/oauth2/authorize", StartOAuth2Flow)
 		openAPI.GET("/oauth2/callback", OAuth2Callback)
 		openAPI.GET("/agent/download", DownloadAgentBinary)
+		// M26: GitLab / GitHub MR Webhook 回调入口（常量时间 Secret 验签）
+		openAPI.POST("/webhooks/git-mr/:repoId", HandleGitMRWebhook)
+		openAPI.POST("/webhooks/git-mr", HandleGitMRWebhook)
 	}
 
 	// 2. 受保护业务路由 (Protected - 需携带合法平台 JWT)
@@ -185,6 +188,17 @@ func RegisterAPIRoutes(r *gin.Engine) {
 		protected.POST("/check-reports/scan", TriggerCheckReportScan)
 		protected.GET("/check-reports", ListCheckReports)
 		protected.GET("/check-reports/:id", GetCheckReportDetail)
+
+		// 5.2 Git MR / PR 自动化契约门禁与站内收件箱域 (F-31, F-32, M26)
+		protected.GET("/mr-check-runs", ListMRCheckRuns)
+		protected.GET("/mr-check-runs/:id", GetMRCheckRunDetail)
+		protected.POST("/mr-check-runs/:id/override", requireAdmin, OverrideMRCheckRun)
+		protected.POST("/mr-check-runs/:id/rerun", requireAdmin, RerunMRCheckRun)
+
+		protected.GET("/notifications", ListNotifications)
+		protected.GET("/notifications/unread-count", GetUnreadNotificationCount)
+		protected.POST("/notifications/:id/read", MarkNotificationRead)
+		protected.POST("/notifications/read-all", MarkAllNotificationsRead)
 
 		// 6. 公私域 Agent 纳管与排他租约管控域 (F-06, F-08)
 		protected.GET("/agents", ListAgents)

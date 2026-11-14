@@ -69,12 +69,24 @@ type RegressionDefenseDTO struct {
 	UnhealthySuiteProcesses7d int     `json:"unhealthy_suite_processes_7d"`
 }
 
+// StaticComplianceDTO F-24 静态合规与 MR 门禁独立聚合卡片 DTO（保持 40+30+30 HealthScore 绝对不变）
+type StaticComplianceDTO struct {
+	ComplianceScore      float64 `json:"compliance_score"`        // 0.0 ~ 100.0
+	CommentCoverageRate  float64 `json:"comment_coverage_rate"`   // 0.0 ~ 100.0
+	NamingPassRate       float64 `json:"naming_pass_rate"`        // 0.0 ~ 100.0
+	DuplicateGroupCount  int     `json:"duplicate_group_count"`   // AST 结构体重复簇数
+	PendingVocabTerms    int     `json:"pending_vocab_terms"`     // 待审批 LLM/手工词条数
+	RecentMRBlockedCount int     `json:"recent_mr_blocked_count"` // 近 7 天 MR 门禁阻断次数
+	TotalProtoFiles      int     `json:"total_proto_files"`       // 纳入统计的活跃 .proto 文件数
+}
+
 // DashboardOverviewDTO 全景治理大盘响应 DTO
 type DashboardOverviewDTO struct {
 	HealthScore       HealthScoreDTO       `json:"health_score"`
 	DriftRadar        DriftRadarDTO        `json:"drift_radar"`
 	ContractAssets    ContractAssetsDTO    `json:"contract_assets"`
 	RegressionDefense RegressionDefenseDTO `json:"regression_defense"`
+	StaticCompliance  StaticComplianceDTO  `json:"static_compliance"`
 }
 
 type hintItem struct {
@@ -110,6 +122,11 @@ func GetOverview(ctx context.Context, db *gorm.DB, subsystemID *uint64) (*Dashbo
 			BlockedCount30d:           0,
 			PassRate30d:               1.0,
 			UnhealthySuiteProcesses7d: 0,
+		},
+		StaticCompliance: StaticComplianceDTO{
+			ComplianceScore:     100.0,
+			CommentCoverageRate: 100.0,
+			NamingPassRate:      100.0,
 		},
 	}
 
@@ -562,7 +579,96 @@ func GetOverview(ctx context.Context, db *gorm.DB, subsystemID *uint64) (*Dashbo
 	}
 	overview.HealthScore.ActionHints = actionHints
 
+	// 7. F-24 静态合规与 MR 质量门禁指标聚合（独立卡片展示，不改动上方 40+30+30 HealthScore）
+	overview.StaticCompliance = computeStaticCompliance(ctx, db, since7d)
+
 	return overview, nil
+}
+
+func computeStaticCompliance(ctx context.Context, db *gorm.DB, since7d time.Time) StaticComplianceDTO {
+	out := StaticComplianceDTO{
+		ComplianceScore:     100.0,
+		CommentCoverageRate: 100.0,
+		NamingPassRate:      100.0,
+	}
+	if db == nil {
+		return out
+	}
+
+	// (a) 活跃 .proto 文件数（优先统计 traefik_proto_files，若尚未同步 Git 则回退活跃 ProtoSchema 的 proto_file_count 之和）
+	var activeFileCnt int64
+	if err := db.WithContext(ctx).Model(&models.ProtoFile{}).Where("is_deleted = false").Count(&activeFileCnt).Error; err == nil && activeFileCnt > 0 {
+		out.TotalProtoFiles = int(activeFileCnt)
+	} else {
+		var sumFiles int64
+		if sErr := db.WithContext(ctx).Model(&models.ProtoSchema{}).
+			Where("is_active = true").
+			Select("COALESCE(SUM(proto_file_count), 0)").
+			Scan(&sumFiles).Error; sErr == nil {
+			out.TotalProtoFiles = int(sumFiles)
+		}
+	}
+
+	// (b) 待审批词汇数与近 7 天 MR 门禁阻断次数
+	var pendingVocab int64
+	if err := db.WithContext(ctx).Model(&models.VocabularyTerm{}).Where("is_approved = false").Count(&pendingVocab).Error; err == nil {
+		out.PendingVocabTerms = int(pendingVocab)
+	}
+	var mrBlocked7d int64
+	if err := db.WithContext(ctx).Model(&models.MRCheckRun{}).
+		Where("status = ? AND created_at >= ?", models.MRCheckStatusFailed, since7d).
+		Count(&mrBlocked7d).Error; err == nil {
+		out.RecentMRBlockedCount = int(mrBlocked7d)
+	}
+
+	// (c) 基于 ProtoDocSymbol 与最新 CheckReport 计算注释覆盖率、命名合规率与重复结构体簇数
+	var totalSymbols int64
+	var commentedSymbols int64
+	if err := db.WithContext(ctx).Model(&models.ProtoDocSymbol{}).Count(&totalSymbols).Error; err == nil && totalSymbols > 0 {
+		if cErr := db.WithContext(ctx).Model(&models.ProtoDocSymbol{}).
+			Where("TRIM(COALESCE(summary, '')) <> '' OR TRIM(COALESCE(leading_comments, '')) <> ''").
+			Count(&commentedSymbols).Error; cErr == nil {
+			out.CommentCoverageRate = roundOneDecimal(float64(commentedSymbols) * 100.0 / float64(totalSymbols))
+		}
+	}
+
+	var latestReport models.CheckReport
+	if err := db.WithContext(ctx).Order("id DESC").Limit(1).Find(&latestReport).Error; err == nil && latestReport.ID > 0 {
+		out.DuplicateGroupCount = latestReport.DuplicateGroupCount
+
+		var commentViolations int64
+		var namingViolations int64
+		if err := db.WithContext(ctx).Model(&models.CheckViolation{}).
+			Where("report_id = ? AND rule_code LIKE 'COMMENT_%'", latestReport.ID).
+			Count(&commentViolations).Error; err != nil {
+			commentViolations = 0
+		}
+		if err := db.WithContext(ctx).Model(&models.CheckViolation{}).
+			Where("report_id = ? AND (rule_code LIKE 'NAMING_%' OR rule_code LIKE 'VOCAB_%' OR rule_code LIKE 'PACKAGE_%')", latestReport.ID).
+			Count(&namingViolations).Error; err != nil {
+			namingViolations = 0
+		}
+
+		denom := float64(totalSymbols)
+		if denom < 20 {
+			denom = 20
+		}
+		if totalSymbols == 0 && commentViolations > 0 {
+			out.CommentCoverageRate = roundOneDecimal(math.Max(0, 100.0-float64(commentViolations)*100.0/denom))
+		}
+		if namingViolations > 0 {
+			out.NamingPassRate = roundOneDecimal(math.Max(0, 100.0-float64(namingViolations)*100.0/denom))
+		}
+	}
+
+	dupScore := math.Max(0, 100.0-float64(out.DuplicateGroupCount)*10.0)
+	score := 0.4*out.CommentCoverageRate + 0.4*out.NamingPassRate + 0.2*dupScore
+	out.ComplianceScore = roundOneDecimal(math.Max(0, math.Min(100.0, score)))
+	return out
+}
+
+func roundOneDecimal(v float64) float64 {
+	return math.Round(v*10) / 10
 }
 
 func ptrUint64Val(v *uint64) uint64 {

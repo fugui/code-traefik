@@ -35,6 +35,9 @@ import type {
   TriggerGitSyncResponse,
   GitConsistencyReportDTO,
   GitRepoBranchesResponse,
+  MRCheckRunDTO,
+  MRCheckRunDetailDTO,
+  MRCheckRunListResponse,
 } from '../types';
 
 export async function listProtoSchemas(params?: {
@@ -624,4 +627,48 @@ export async function getGitRepoConsistency(
 
 export async function getGitRepoBranches(repoId: number | string) {
   return apiRequest<GitRepoBranchesResponse>(`/git-repos/${repoId}/branches`);
+}
+
+// =====================================================================
+// M26: Git MR / PR 四合一契约门禁 API
+// =====================================================================
+
+export async function listMRCheckRuns(params?: {
+  git_repo_id?: number;
+  bundle_id?: number;
+  status?: string;
+  event_phase?: string;
+  mr_iid?: number;
+  q?: string;
+  page?: number;
+  page_size?: number;
+}) {
+  const qs = new URLSearchParams();
+  if (params?.git_repo_id) qs.set('git_repo_id', String(params.git_repo_id));
+  if (params?.bundle_id) qs.set('bundle_id', String(params.bundle_id));
+  if (params?.status) qs.set('status', params.status);
+  if (params?.event_phase) qs.set('event_phase', params.event_phase);
+  if (params?.mr_iid) qs.set('mr_iid', String(params.mr_iid));
+  if (params?.q) qs.set('q', params.q);
+  if (params?.page) qs.set('page', String(params.page));
+  if (params?.page_size) qs.set('page_size', String(params.page_size));
+  const query = qs.toString();
+  return apiRequest<MRCheckRunListResponse>(`/mr-check-runs${query ? `?${query}` : ''}`);
+}
+
+export async function getMRCheckRunDetail(id: number | string) {
+  return apiRequest<MRCheckRunDetailDTO>(`/mr-check-runs/${id}`);
+}
+
+export async function overrideMRCheckRun(id: number | string, overrideReason: string) {
+  return apiRequest<MRCheckRunDTO>(`/mr-check-runs/${id}/override`, {
+    method: 'POST',
+    bodyData: { override_reason: overrideReason },
+  });
+}
+
+export async function rerunMRCheckRun(id: number | string) {
+  return apiRequest<MRCheckRunDTO>(`/mr-check-runs/${id}/rerun`, {
+    method: 'POST',
+  });
 }

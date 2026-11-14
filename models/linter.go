@@ -599,6 +599,42 @@ func ensureM24DefaultSettings(db *gorm.DB) error {
 			Description: "LLM 单次请求超时毫秒数（硬上限 3000ms）",
 			UpdatedBy:   "system",
 		},
+		{
+			SettingKey:  "code_notifier_enabled",
+			SettingVal:  "false",
+			Description: "是否启用跨机 LAN code-notifier 统一邮件通知通道",
+			UpdatedBy:   "system",
+		},
+		{
+			SettingKey:  "code_notifier_url",
+			SettingVal:  "",
+			Description: "code-notifier 服务地址（如 http://192.168.56.18:8090，经 SafeDialer 校验）",
+			UpdatedBy:   "system",
+		},
+		{
+			SettingKey:  "smtp_host",
+			SettingVal:  "",
+			Description: "备用 SMTP 邮件网关主机名",
+			UpdatedBy:   "system",
+		},
+		{
+			SettingKey:  "smtp_port",
+			SettingVal:  "587",
+			Description: "备用 SMTP 邮件网关端口",
+			UpdatedBy:   "system",
+		},
+		{
+			SettingKey:  "smtp_username",
+			SettingVal:  "",
+			Description: "备用 SMTP 认证用户名",
+			UpdatedBy:   "system",
+		},
+		{
+			SettingKey:  "smtp_from",
+			SettingVal:  "",
+			Description: "备用 SMTP 发件人邮箱地址",
+			UpdatedBy:   "system",
+		},
 	}
 	for _, item := range defaults {
 		var existing TraefikSetting

@@ -11,6 +11,7 @@ export * from './ServiceReferenceDocView';
 export * from './LivingProtoDocsPane';
 export * from './ProtoSourcesBrowserPane';
 export * from './GitSourcesWorkbenchPane';
+export * from './MRGateWorkbenchPane';
 export * from './GitRepoConfigDrawer';
 export * from './GitConsistencyDrawer';
 export * from '../ProtoSchemasPage/BreakingChangeAlertDrawer';

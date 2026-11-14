@@ -22,6 +22,7 @@ import type {
   ContractAssetsDTO,
   RegressionDefenseDTO,
 } from '../../types/dashboard';
+import { StaticComplianceCard } from './StaticComplianceCard';
 import './dashboard.css';
 
 const GRADE_MAP: Record<HealthGrade, { label: string; className: string }> = {
@@ -476,6 +477,14 @@ export const DashboardWorkbenchPage: React.FC<DashboardWorkbenchPageProps> = ({
     navigate(resolvePath('/schemas?tab=catalog&claimed_status=UNCLAIMED'));
   };
 
+  const handleNavigateMrGates = () => {
+    navigate(resolvePath('/schemas?tab=mr-gates'));
+  };
+
+  const handleNavigateProtoSources = () => {
+    navigate(resolvePath('/schemas?tab=sources'));
+  };
+
   return (
     <div className="dashboard-workbench">
       <header className="dashboard-workbench__header">
@@ -553,6 +562,15 @@ export const DashboardWorkbenchPage: React.FC<DashboardWorkbenchPageProps> = ({
 
           {/* 视窗四：防劣化回归防线 */}
           <RegressionDefenseCard regressionDefense={data.regression_defense} />
+
+          {/* 视窗五 (F-24): .proto 静态治理合规大盘（独立展示，不改动 40+30+30 健康总分公式） */}
+          {data.static_compliance && (
+            <StaticComplianceCard
+              staticCompliance={data.static_compliance}
+              onNavigateMrGates={handleNavigateMrGates}
+              onNavigateProtoSources={handleNavigateProtoSources}
+            />
+          )}
         </div>
       )}
     </div>

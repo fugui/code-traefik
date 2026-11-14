@@ -27,6 +27,7 @@ import { OperationDocDrawer } from './OperationDocDrawer';
 import { ProtoDependenciesGraphPane } from './ProtoDependenciesGraphPane';
 import { LivingProtoDocsPane } from './LivingProtoDocsPane';
 import { GitSourcesWorkbenchPane } from './GitSourcesWorkbenchPane';
+import { MRGateWorkbenchPane } from './MRGateWorkbenchPane';
 import { ProtoReadOnlyCodeViewer } from './ProtoReadOnlyCodeViewer';
 import LintRuleAndVocabDrawer, { type LintDrawerSubTab } from './LintRuleAndVocabDrawer';
 import './ProtoDocsAndCodeViewer.css';
@@ -645,37 +646,16 @@ export const ProtoSchemaWorkbenchPage: React.FC = () => {
         <GitSourcesWorkbenchPane isAdmin={isAdmin} initialSchemaName={searchQueryParam} />
       )}
 
-      {/* 主视图 3: Git MR 四合一门禁检查雷达（M26 完整接入前置工作台） */}
+      {/* 主视图 3: Git MR 四合一门禁检查雷达（M26 全链路接入） */}
       {activeTab === 'mr-gates' && (
-        <div className="pdoc-card" data-testid="proto-mr-gates-placeholder">
-          <div className="pdoc-card__header">
-            <div>
-              <h3 className="pdoc-card__title">Git MR 四合一门禁与防重查重控制台</h3>
-              <p className="pdoc-card__subtitle">
-                M23 已完成底层 AST 文档符号索引与只读 Diff 阅读组件就绪；M25/M26 将接通 GitLab/GitHub/Gitea Webhook、静态词汇检查、Jaccard AST 防重检测与合规回写门禁。
-              </p>
-            </div>
-            <span className="code-badge code-badge-info">M26 全链路接入中</span>
-          </div>
-          <div className="pdoc-meta-row">
-            <button
-              type="button"
-              className="btn btn-primary"
-              onClick={() => {
-                setLintDrawerSubTab('report');
-                setLintDrawerOpen(true);
-              }}
-            >
-              打开静态检查与 AST 去重体检台
-            </button>
-            <button type="button" className="btn btn-secondary" onClick={() => setTab('sources')}>
-              前往只读源码与 Diff 浏览器
-            </button>
-            <button type="button" className="btn btn-secondary" onClick={() => setTab('docs')}>
-              返回活体接口参考文档
-            </button>
-          </div>
-        </div>
+        <MRGateWorkbenchPane
+          isAdmin={isAdmin}
+          onOpenSourcesTab={() => setTab('sources')}
+          onOpenLintCenter={() => {
+            setLintDrawerSubTab('report');
+            setLintDrawerOpen(true);
+          }}
+        />
       )}
 
       {/* 主视图 4: 描述集资产台账 */}

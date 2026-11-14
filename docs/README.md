@@ -51,10 +51,10 @@ docs/
 │   ├── 21-m20-multi-implementation-service-contract.md               # 【M20 作战卡】多实现服务契约（接口库定义 + 多进程实现 + 调度中心分发）建模、拓扑与验证
 │   ├── 22-m21-topology-single-layer-drilldown-and-layout-ux.md       # 【M21 作战卡】架构拓扑单层平铺逐级下钻重构、ELK 正交布局校准与全链路易用性升级
 │   ├── 23-m22-protocompile-layering-and-dependency-graph.md          # 【M22 作战卡 | ✅ 已交付】纯 Go protocompile 四级虚拟解析器、layer_level 正反向拦截与 BASE_LIB 影响及依赖图/矢量导出 (F-32)
-│   ├── 24-m23-living-proto-docs-and-readonly-sources.md              # 【M23 作战卡 | 待实施】全注释活体参考文档中心 (F-18) 与轻量无锁只读源码视图 (增量 <=150KB gzip)
-│   ├── 25-m24-static-lint-vocabulary-and-duplicate-ast.md            # 【M24 作战卡 | 待实施】安全底座 (TRAEFIK_CRYPTO_KEY / SafeDialer 信任白名单)、设置脱敏、规范引擎、原生词库 Seed/CRUD、3s LLM 与 Jaccard>=0.85 三护栏重复检测
+│   ├── 24-m23-living-proto-docs-and-readonly-sources.md              # 【M23 作战卡 | ✅ 已交付】全注释活体参考文档中心 (F-18) 与轻量无锁只读源码视图 (增量 <=150KB gzip)
+│   ├── 25-m24-static-lint-vocabulary-and-duplicate-ast.md            # 【M24 作战卡 | ✅ 已交付】安全底座 (TRAEFIK_CRYPTO_KEY / SafeDialer 信任白名单)、设置脱敏、规范引擎、原生词库 Seed/CRUD、3s LLM 与 Jaccard>=0.85 三护栏重复检测
 │   ├── 26-m25-git-sync-and-monorepo-bundles.md                       # 【M25 作战卡 | ✅ 已交付】Git 无状态同步、GitRepo 1:N GitProtoBundle 多包对账、Tier-2 DB Resolver 与只读历史 Diff
-│   └── 27-m26-mr-gates-notifications-and-compliance-dashboard.md     # 【M26 作战卡 | 待实施】MR 四合一门禁 (FF 去重/原位评论/Override P1)、SSE 按 userID 定向、持久化通知 (LAN code-notifier/SMTP) 与 F-24 合标卡片
+│   └── 27-m26-mr-gates-notifications-and-compliance-dashboard.md     # 【M26 作战卡 | ✅ 已交付】MR 四合一门禁 (FF 去重/原位评论/Override P1)、SSE 按 userID 定向、持久化通知 (LAN code-notifier/SMTP) 与 F-24 合标卡片
 ├── 05-adr/          # 架构决策记录 (ADR)：重大技术选型与权衡记录 (Architecture Decision Records)
 │   ├── 01-microfrontend-and-table-prefix-isolation.md                  # ADR-01：微前端集成、共享库表前缀隔离与 TDD 测试策略
 │   ├── 02-ebpf-hook-and-dual-subsystem-adr.md                          # ADR-02：eBPF 入站旁路钩子、Cookie 原目的还原与无 Schema 数据面解耦

@@ -1,19 +1,20 @@
 # M26 实施任务卡：Git MR 四合一门禁、Override 审计、定向持久通知与合规大盘 (`F-21`, `F-24`, `F-29`, `F-31`)
 
-> **文档版本**：`v1.0.0`
+> **文档版本**：`v1.1.0`
 > **创建日期**：`2026-11-13`
-> **最后更新**：`2026-11-13`
+> **最后更新**：`2026-11-14`
 > **所属阶段**：阶段四 — 研发实施与 TDD 门禁 (Implementation & TDD Gate)
 > **里程碑编号**：`M26 — Git MR 虚拟树四合一门禁、Override P1 审计、SSE 定向持久通知、跨机 code-notifier 与大盘合规扩展`
 > **覆盖需求范围**：`F-21`（MR 合并自动编译入池与可选激活）、`F-24`（大盘新增独立静态合标扩展卡片，严格保持 `40+30+30` 健康分公式不变）、`F-29`（Webhook 验签/幂等去重、受影响 Bundle MR 虚拟文件树四合一门禁、Bot 评论原位更新、`BASE_LIB` 传递影响扩散与 Merge 入库）、`F-31`（MR 门禁审批台、`Approve with Override` 强阻断护栏、`traefik_notifications` 持久收件箱 + `SSEBroker(userID)` 定向推送 + 同内网跨机 `code-notifier`/SMTP 邮件）、`SC-16`（MR 门禁与通知闭环部分）
-> **前置依赖**：`M22~M25`、[`../05-adr/18-proto-full-lifecycle-and-git-mr-governance-adr.md`](../05-adr/18-proto-full-lifecycle-and-git-mr-governance-adr.md) (`v1.2.0`)
-> **当前状态**：📋 **已定稿待实施 (Planned)**
+> **前置依赖**：`M22~M25`、[`../05-adr/18-proto-full-lifecycle-and-git-mr-governance-adr.md`](../05-adr/18-proto-full-lifecycle-and-git-mr-governance-adr.md) (`v1.3.0`)
+> **当前状态**：✅ **已交付 (Delivered)**
 
 ### 修订记录
 
 | 版本 | 日期 | 作者 | 变更说明 |
 | :--- | :--- | :--- | :--- |
 | `v1.0.0` | `2026-11-13` | Architecture Team | 初版发布：承接原 M25 拆出的 MR 门禁、通知引擎、双模顶栏通知铃铛与大盘静态合标收官阶段；完成 `30` 张核心业务表 + `traefik_settings`（共 `31` 张表）闭环；落地按 `:repoId` Webhook、防 Fast-Forward 同 SHA 误丢 `uk_traefik_mr_dedup`、`remote_comment_id` 原位更新、`SSEBroker(userID)` 定向推送及**跨机部署 `code-notifier` LAN 邮件投递契约** |
+| `v1.1.0` | `2026-11-14` | Development Team | 完成 M26-P1~P4 全链路 TDD 实施与终验交付：`traefik_mr_check_runs`（#29 含 `uk_traefik_mr_dedup`）与 `traefik_notifications`（#30）达成 30+1 表基线；`:repoId` 常量时间验签、`virtual_tree` 虚拟树合并、`MRGateRunner` 四合一门禁 + Bot 原位评论、`Override` 编译错误 409 拦截与 `P1` 审计、`MAIN_MERGE` `GIT_MR_AUTO` 自动入池；`SSEBroker(userID)` 定向推送与 `notify`（跨机 LAN `code-notifier` 非空 `markdown_content` + 真实邮箱解析 + SMTP 降级）；前端 `/schemas?tab=mr-gates`、`WorkspaceUtilityHeader`/`StandaloneShell` 双模 `NotificationBell`、`StaticComplianceCard`（保持 `40+30+30` 不变）与 `AdminSettingsPage` 通知设置；全量 `go test -race ./...`（全包全绿）、Vitest（36 files / 169 tests 全绿）、`tsc + eslint` 零告警、`M25->M26` 前端包体增量 `+11.41KB gzip`（`M21->M26` 累计 `+48.74KB gzip` / `+204.90KB` raw 远低于 `<=150KB gzip` 门禁）及 `SC-16` 全链路闭环通过 |
 
 ---
 

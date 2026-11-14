@@ -68,6 +68,8 @@ func SetupWithDB(db *gorm.DB) error {
 		&VocabularyTerm{},
 		&CheckReport{},
 		&CheckViolation{},
+		&MRCheckRun{},
+		&Notification{},
 	); err != nil {
 		return fmt.Errorf("迁移数据表结构失败: %w", err)
 	}
@@ -508,6 +510,9 @@ END $$;
 
 	if err := ensureLinterConstraints(DB); err != nil {
 		return fmt.Errorf("初始化静态检查约束失败: %w", err)
+	}
+	if err := ensureM26MRGateAndNotificationConstraints(DB); err != nil {
+		return fmt.Errorf("初始化 M26 MR 门禁与通知约束失败: %w", err)
 	}
 	if err := EnsureBuiltinCheckRules(DB); err != nil {
 		return fmt.Errorf("初始化内置静态检查规则失败: %w", err)

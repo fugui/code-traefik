@@ -55,6 +55,15 @@ type DashboardOverviewResponse struct {
 		PassRate30d               float64 `json:"pass_rate_30d"`
 		UnhealthySuiteProcesses7d int     `json:"unhealthy_suite_processes_7d"`
 	} `json:"regression_defense"`
+	StaticCompliance struct {
+		ComplianceScore      float64 `json:"compliance_score"`
+		CommentCoverageRate  float64 `json:"comment_coverage_rate"`
+		NamingPassRate       float64 `json:"naming_pass_rate"`
+		DuplicateGroupCount  int     `json:"duplicate_group_count"`
+		PendingVocabTerms    int     `json:"pending_vocab_terms"`
+		RecentMRBlockedCount int     `json:"recent_mr_blocked_count"`
+		TotalProtoFiles      int     `json:"total_proto_files"`
+	} `json:"static_compliance"`
 }
 
 // TestGetDashboardOverview_PerfectScore100_AndEmptyState
@@ -499,4 +508,151 @@ func TestGetDashboardOverview_DeduplicatesViolationEdges_AndSubsystemFilter(t *t
 			t.Errorf("期望违规进程为 PROC_A (%d)，实际: %d", procA.ID, resp.DriftRadar.TopViolatedProcesses[0].ArchProcessID)
 		}
 	}
+}
+
+// TestGetDashboardOverview_M26_StaticComplianceAndUnchangedHealthScore
+// 验证 M26 新增 static_compliance 聚合指标准确性，同时验证 HealthScore 40+30+30 公式保持 100% 不变
+func TestGetDashboardOverview_M26_StaticComplianceAndUnchangedHealthScore(t *testing.T) {
+	r, db := setupRouterAndDB(t)
+
+	admin := createTestUserInDB(t, db, "admin_m26_dash", config.AdminRole)
+	adminToken := generateTestJWT(t, admin)
+
+	repo := models.GitRepo{
+		Name:          "order-contracts",
+		Provider:      models.GitProviderGitLab,
+		RepoURL:       "https://git.internal.corp/arch/order-contracts.git",
+		DefaultBranch: "main",
+		AuthType:      models.GitAuthNone,
+		SyncMode:      models.GitSyncWebhook,
+		CreatedBy:     admin.ID,
+	}
+	if err := db.Create(&repo).Error; err != nil {
+		t.Fatalf("create repo: %v", err)
+	}
+
+	bundle := models.GitProtoBundle{
+		GitRepoID:        repo.ID,
+		BundleName:       "order-bundle",
+		TargetSchemaName: "order_contracts",
+		Category:         models.ProtoCategoryBusiness,
+		SubdirPath:       ".",
+	}
+	if err := db.Create(&bundle).Error; err != nil {
+		t.Fatalf("create bundle: %v", err)
+	}
+
+	protoFile := models.ProtoFile{
+		GitRepoID:        repo.ID,
+		BundleID:         bundle.ID,
+		TargetSchemaName: "order_contracts",
+		FilePath:         "order/v1/order.proto",
+		RepoFilePath:     "order/v1/order.proto",
+		PackageName:      "dophi.order.v1",
+		IsDeleted:        false,
+	}
+	if err := db.Create(&protoFile).Error; err != nil {
+		t.Fatalf("create protoFile: %v", err)
+	}
+
+	pendingVocab := models.VocabularyTerm{
+		Term:          "sku_code",
+		DescriptionZh: "商品 SKU 编码",
+		Domain:        "ORDER",
+		Source:        "LLM_SUGGESTED",
+		IsApproved:    false,
+		CreatedBy:     admin.ID,
+	}
+	if err := db.Create(&pendingVocab).Error; err != nil {
+		t.Fatalf("create pendingVocab: %v", err)
+	}
+	if err := db.Model(&pendingVocab).Update("is_approved", false).Error; err != nil {
+		t.Fatalf("update pendingVocab: %v", err)
+	}
+
+	report := models.CheckReport{
+		GitRepoID:           &repo.ID,
+		TriggerSource:       "MR_WEBHOOK",
+		Status:              "FAILED",
+		ErrorCount:          2,
+		WarningCount:        1,
+		DuplicateGroupCount: 2,
+	}
+	if err := db.Create(&report).Error; err != nil {
+		t.Fatalf("create report: %v", err)
+	}
+
+	now := time.Now().UTC()
+	mrPassed := models.MRCheckRun{
+		GitRepoID:     repo.ID,
+		MRIID:         10,
+		MRTitle:       "feat: add field",
+		SourceBranch:  "feat/a",
+		TargetBranch:  "main",
+		HeadCommitSHA: "1111111111111111111111111111111111111111",
+		TargetHeadSHA: "2222222222222222222222222222222222222222",
+		EventPhase:    models.MREventPhaseGate,
+		Status:        models.MRCheckStatusPassed,
+		CompletedAt:   &now,
+	}
+	mrFailed := models.MRCheckRun{
+		GitRepoID:           repo.ID,
+		MRIID:               11,
+		MRTitle:             "feat: break field",
+		SourceBranch:        "feat/b",
+		TargetBranch:        "main",
+		HeadCommitSHA:       "3333333333333333333333333333333333333333",
+		TargetHeadSHA:       "2222222222222222222222222222222222222222",
+		EventPhase:          models.MREventPhaseGate,
+		Status:              models.MRCheckStatusFailed,
+		BreakingChangeCount: 1,
+		CompletedAt:         &now,
+	}
+	if err := db.Create(&mrPassed).Error; err != nil {
+		t.Fatalf("create mrPassed: %v", err)
+	}
+	if err := db.Create(&mrFailed).Error; err != nil {
+		t.Fatalf("create mrFailed: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/dashboard/overview", nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("期望 200，实际: %d (%s)", w.Code, w.Body.String())
+	}
+
+	var resp DashboardOverviewResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	// 验证 HealthScore 40+30+30 公式不受静态合规失败影响
+	if resp.HealthScore.Total != 100 || resp.HealthScore.ArchSubScore != 40 || resp.HealthScore.AssetSubScore != 30 || resp.HealthScore.RegressionSubScore != 30 {
+		t.Fatalf("HealthScore 40+30+30 公式不应受 StaticCompliance 影响，实际: %+v", resp.HealthScore)
+	}
+
+	// 验证 StaticCompliance 指标
+	if resp.StaticCompliance.TotalProtoFiles != 1 {
+		t.Errorf("期望 TotalProtoFiles=1，实际: %d", resp.StaticCompliance.TotalProtoFiles)
+	}
+	if resp.StaticCompliance.PendingVocabTerms != 1 {
+		t.Errorf("期望 PendingVocabTerms=1，实际: %d", resp.StaticCompliance.PendingVocabTerms)
+	}
+	if resp.StaticCompliance.DuplicateGroupCount != 2 {
+		t.Errorf("期望 DuplicateGroupCount=2，实际: %d", resp.StaticCompliance.DuplicateGroupCount)
+	}
+	if resp.StaticCompliance.RecentMRBlockedCount != 1 {
+		t.Errorf("期望 RecentMRBlockedCount=1，实际: %d", resp.StaticCompliance.RecentMRBlockedCount)
+	}
+	// DuplicateGroupCount=2 -> dupScore=80 -> ComplianceScore = 0.4*100 + 0.4*100 + 0.2*80 = 96.0
+	if resp.StaticCompliance.ComplianceScore != 96.0 {
+		t.Errorf("期望 ComplianceScore=96.0，实际: %f", resp.StaticCompliance.ComplianceScore)
+	}
+}
+
+func TestGetDashboardOverview_StaticComplianceCard_UnchangedMainScoreFormula(t *testing.T) {
+	TestGetDashboardOverview_M26_StaticComplianceAndUnchangedHealthScore(t)
 }

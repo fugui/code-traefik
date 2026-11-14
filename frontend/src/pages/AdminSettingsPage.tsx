@@ -62,6 +62,12 @@ export const AdminSettingsPage: React.FC = () => {
     'llm_base_url',
     'llm_model',
     'llm_timeout_ms',
+    'code_notifier_enabled',
+    'code_notifier_url',
+    'smtp_host',
+    'smtp_port',
+    'smtp_username',
+    'smtp_from',
   ]);
 
   const applySettingsResponse = useCallback((data: ModuleSettingsResponse) => {
@@ -402,6 +408,41 @@ export const AdminSettingsPage: React.FC = () => {
 
           <div className="admin-sec-field">
             <div className="admin-sec-field__head">
+              <code className="code-tpl-code-inline">code_notifier_enabled</code>
+              <span className="text-secondary">启用跨机 LAN code-notifier 异步外发</span>
+            </div>
+            <select
+              className="code-input"
+              aria-label="code_notifier_enabled"
+              value={getSettingVal('code_notifier_enabled', 'false')}
+              onChange={(e) =>
+                handleValueChange('code_notifier_enabled', e.target.value, '是否启用跨机 code-notifier HTTP 外发')
+              }
+            >
+              <option value="false">false（仅站内通知或走 SMTP）</option>
+              <option value="true">true（优先走 code-notifier）</option>
+            </select>
+          </div>
+
+          <div className="admin-sec-field">
+            <div className="admin-sec-field__head">
+              <code className="code-tpl-code-inline">code_notifier_url</code>
+              <span className="text-secondary">LAN 通知网关服务基址</span>
+            </div>
+            <input
+              type="text"
+              className="code-input"
+              aria-label="code_notifier_url"
+              placeholder="http://192.168.56.10:8088"
+              value={getSettingVal('code_notifier_url')}
+              onChange={(e) =>
+                handleValueChange('code_notifier_url', e.target.value, '跨机 code-notifier 基础 URL')
+              }
+            />
+          </div>
+
+          <div className="admin-sec-field">
+            <div className="admin-sec-field__head">
               <code className="code-tpl-code-inline">code_notifier_token</code>
               <span
                 className={`code-badge ${codeNotifierTokenConfigured ? 'code-badge-success' : 'code-badge-neutral'}`}
@@ -419,6 +460,66 @@ export const AdminSettingsPage: React.FC = () => {
               }
               value={draftNotifierToken}
               onChange={(e) => setDraftNotifierToken(e.target.value)}
+            />
+          </div>
+
+          <div className="admin-sec-field">
+            <div className="admin-sec-field__head">
+              <code className="code-tpl-code-inline">smtp_host</code>
+              <span className="text-secondary">SMTP 服务器域名或内网 IP</span>
+            </div>
+            <input
+              type="text"
+              className="code-input"
+              aria-label="smtp_host"
+              placeholder="smtp.corp.local"
+              value={getSettingVal('smtp_host')}
+              onChange={(e) => handleValueChange('smtp_host', e.target.value, 'SMTP 邮件服务器主机地址')}
+            />
+          </div>
+
+          <div className="admin-sec-field">
+            <div className="admin-sec-field__head">
+              <code className="code-tpl-code-inline">smtp_port</code>
+              <span className="text-secondary">SMTP 服务端口（常见 25 / 465 / 587）</span>
+            </div>
+            <input
+              type="text"
+              className="code-input"
+              aria-label="smtp_port"
+              placeholder="587"
+              value={getSettingVal('smtp_port', '587')}
+              onChange={(e) => handleValueChange('smtp_port', e.target.value, 'SMTP 服务端口')}
+            />
+          </div>
+
+          <div className="admin-sec-field">
+            <div className="admin-sec-field__head">
+              <code className="code-tpl-code-inline">smtp_username</code>
+              <span className="text-secondary">SMTP 认证账号</span>
+            </div>
+            <input
+              type="text"
+              className="code-input"
+              aria-label="smtp_username"
+              placeholder="noreply@corp.local"
+              value={getSettingVal('smtp_username')}
+              onChange={(e) => handleValueChange('smtp_username', e.target.value, 'SMTP 认证用户名')}
+            />
+          </div>
+
+          <div className="admin-sec-field">
+            <div className="admin-sec-field__head">
+              <code className="code-tpl-code-inline">smtp_from</code>
+              <span className="text-secondary">默认发件人显示邮箱</span>
+            </div>
+            <input
+              type="text"
+              className="code-input"
+              aria-label="smtp_from"
+              placeholder="code-traefik@corp.local"
+              value={getSettingVal('smtp_from')}
+              onChange={(e) => handleValueChange('smtp_from', e.target.value, 'SMTP 发件人地址')}
             />
           </div>
 

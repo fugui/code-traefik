@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { renderToString } from 'react-dom/server';
+import { renderToStaticMarkup, renderToString } from 'react-dom/server';
 import { MemoryRouter } from 'react-router-dom';
 import { DashboardWorkbenchPage } from '../DashboardWorkbenchPage';
 import type { DashboardOverviewDTO } from '../../../types/dashboard';
@@ -102,8 +102,46 @@ export function testDashboard_RendersHealthSubScores_DriftRadar_AndOrphanDeepLin
   expect(html).toContain('近 7 天亚健康进程');
 }
 
+export function testDashboard_F24_RendersStaticComplianceCardWithoutAlteringMainScore(): void {
+  const overviewWithStatic: DashboardOverviewDTO = {
+    ...mockOverview,
+    static_compliance: {
+      compliance_score: 88,
+      comment_coverage_rate: 76.5,
+      naming_pass_rate: 94.0,
+      duplicate_group_count: 2,
+      pending_vocab_terms: 4,
+      recent_mr_blocked_count: 1,
+      total_proto_files: 19,
+    },
+  };
+
+  const html = renderToStaticMarkup(
+    <MemoryRouter initialEntries={['/dashboard']}>
+      <DashboardWorkbenchPage initialData={overviewWithStatic} initialSubsystems={[]} />
+    </MemoryRouter>
+  );
+
+  // 主健康分公式（40 + 0 + 30 = 70）保持严格不变
+  expect(html).toContain('微服务契约健康指数');
+  expect(html).toContain('70');
+
+  // F-24 独立静态合规卡片指标正确渲染
+  expect(html).toContain('static-compliance-card');
+  expect(html).toContain('视窗五 · .proto 静态治理合规大盘');
+  expect(html).toContain('88');
+  expect(html).toContain('76.5%');
+  expect(html).toContain('94.0%');
+  expect(html).toContain('前往 Git MR 四合一门禁');
+  expect(html).toContain('纳入治理源文件：19 份');
+}
+
 describe('DashboardWorkbenchPage Test Suite', () => {
   it('TC-DASH-01: 大盘健康分、漂移雷达与孤儿契约深链渲染测试', () => {
     testDashboard_RendersHealthSubScores_DriftRadar_AndOrphanDeepLinks();
+  });
+
+  it('TC-DASH-02 (F-24): 静态治理合规卡片独立渲染且不改动 40+30+30 主健康分总分', () => {
+    testDashboard_F24_RendersStaticComplianceCardWithoutAlteringMainScore();
   });
 });

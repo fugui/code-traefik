@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -195,6 +196,20 @@ func UpdateModuleSettings(c *gin.Context) {
 				return
 			}
 		}
+		if key == "code_notifier_url" && val != "" {
+			parsedURL, uErr := url.Parse(val)
+			if uErr != nil || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") || parsedURL.Host == "" {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "code_notifier_url 必须为合法的 http/https 地址"})
+				return
+			}
+		}
+		if key == "smtp_port" && val != "" {
+			port, pErr := strconv.Atoi(val)
+			if pErr != nil || port < 1 || port > 65535 {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "smtp_port 必须为 1 至 65535 之间的合法端口号"})
+				return
+			}
+		}
 
 		targetKey := key
 		targetVal := val
@@ -365,7 +380,11 @@ func RevokeCIToken(c *gin.Context) {
 		operator = uc.Username
 	}
 
-	_ = models.DB.Where("setting_key = ?", SettingKeyCIGateTokenSHA256).Delete(&models.TraefikSetting{}).Error
+	if delErr := models.DB.Where("setting_key = ?", SettingKeyCIGateTokenSHA256).Delete(&models.TraefikSetting{}).Error; delErr != nil {
+		log.Printf("[%s] 吊销 CI 门禁 Token 失败: %v", config.ServiceName, delErr)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "吊销 CI 门禁凭据失败"})
+		return
+	}
 
 	commonAudit.SetAuditContext(
 		c,

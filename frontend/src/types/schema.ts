@@ -862,3 +862,107 @@ export interface GitSyncCompletedEventPayload {
   compiled_schema_id?: number;
   message?: string;
 }
+
+// =====================================================================
+// M26: Git MR / PR 四合一契约门禁与站内收件箱类型契约
+// =====================================================================
+
+export type MREventPhase = 'MR_GATE' | 'MAIN_MERGE';
+export type MRCheckStatus = 'PENDING' | 'RUNNING' | 'PASSED' | 'WARN' | 'FAILED' | 'OVERRIDDEN';
+
+export interface MRCheckRunDTO {
+  id: number;
+  git_repo_id: number;
+  git_repo_name?: string;
+  provider?: string;
+  bundle_id?: number | null;
+  bundle_name?: string;
+  target_schema_name?: string;
+  category?: ProtoCategory | string;
+  mr_iid: number;
+  event_phase: MREventPhase | string;
+  mr_title: string;
+  mr_url: string;
+  source_branch: string;
+  target_branch: string;
+  head_commit_sha: string;
+  target_head_sha: string;
+  author_username: string;
+  author_email: string;
+  status: MRCheckStatus | string;
+  compile_passed: boolean;
+  lint_error_count: number;
+  lint_warning_count: number;
+  duplicate_group_count: number;
+  breaking_change_count: number;
+  affected_modules_count: number;
+  changed_proto_files: string[];
+  compile_error_text: string;
+  breaking_details: BreakingRuleViolation[];
+  affected_modules: AffectedDependent[];
+  check_report_id?: number | null;
+  remote_comment_id: string;
+  attempt_count: number;
+  overridden_by?: number | null;
+  overridden_by_name?: string;
+  override_reason: string;
+  overridden_at?: string | null;
+  duration_ms: number;
+  started_at?: string | null;
+  completed_at?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MRCheckRunDetailDTO extends MRCheckRunDTO {
+  violations: CheckViolationDTO[];
+  duplicate_groups: DuplicateGroupDTO[];
+}
+
+export interface MRCheckRunListResponse {
+  items: MRCheckRunDTO[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export type NotificationCategory =
+  | 'BREAKING_ALERT'
+  | 'MR_GATE_BLOCKED'
+  | 'MR_GATE_PASSED'
+  | 'DUPLICATE_WARN'
+  | 'BASE_LIB_IMPACT'
+  | 'SCHEMA_PUBLISHED';
+
+export type NotificationSeverity = 'INFO' | 'WARNING' | 'CRITICAL';
+
+export interface NotificationDTO {
+  id: number;
+  recipient_user_id: number;
+  category: NotificationCategory | string;
+  severity: NotificationSeverity | string;
+  title: string;
+  body_markdown: string;
+  link_url: string;
+  source_type: string;
+  source_id: number;
+  metadata_json?: Record<string, unknown>;
+  is_read: boolean;
+  read_at?: string | null;
+  external_channel: string;
+  email_status: string;
+  email_error: string;
+  created_at: string;
+}
+
+export interface NotificationListResponse {
+  items: NotificationDTO[];
+  total: number;
+  unread_count: number;
+  page: number;
+  page_size: number;
+}
+
+export interface UnreadCountResponse {
+  unread_count: number;
+}

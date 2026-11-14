@@ -34,6 +34,8 @@ import {
 } from './constants';
 import { ModuleUserProvider, useModuleUser } from './context/ModuleUserContext';
 import { resolveModulePath } from './hooks/useModulePath';
+import { NotificationBell } from './components/NotificationBell';
+import { WorkspaceUtilityHeader } from './components/WorkspaceUtilityHeader';
 import { traefikMenuConfig } from './menu';
 import DashboardWorkbenchPage from './pages/DashboardWorkbenchPage';
 import RecordingWorkbenchPage from './pages/RecordingWorkbenchPage';
@@ -136,7 +138,9 @@ const renderNavIcon = (path: string) => {
 export const EmbeddedRoutes: React.FC = () => {
   const defaultTarget = `${MODULE_BASE_PATH}/dashboard`;
   return (
-    <Routes>
+    <div className="code-traefik-embedded-shell">
+      <WorkspaceUtilityHeader />
+      <Routes>
       <Route path="/" element={<LegacyRouteRedirect to={defaultTarget} />} />
       <Route path={MODULE_BASE_PATH} element={<LegacyRouteRedirect to={defaultTarget} />} />
       <Route path={`${MODULE_BASE_PATH}/`} element={<LegacyRouteRedirect to={defaultTarget} />} />
@@ -172,7 +176,8 @@ export const EmbeddedRoutes: React.FC = () => {
       <Route path={`${MODULE_BASE_PATH}/admin/settings`} element={<AdminSettingsPage />} />
 
       <Route path="*" element={<Navigate to={defaultTarget} replace />} />
-    </Routes>
+      </Routes>
+    </div>
   );
 };
 
@@ -285,6 +290,9 @@ export const StandaloneShell: React.FC<{ onLogout: () => void }> = ({ onLogout }
             <span className="code-tpl-breadcrumb-current">
               {currentMenuItem?.label || '治理大盘'}
             </span>
+          </div>
+          <div className="code-tpl-topbar-actions">
+            <NotificationBell />
           </div>
         </header>
 

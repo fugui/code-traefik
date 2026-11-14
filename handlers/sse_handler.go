@@ -6,29 +6,23 @@ import (
 	"net/http"
 	"strconv"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	commonAuth "code-common/backend/auth"
+	"code-traefik/internal/server/hub"
 	"code-traefik/models"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
 
-// SSEEvent SSE 事件载荷
-type SSEEvent struct {
-	Event     string      `json:"event"`
-	Data      interface{} `json:"data"`
-	SessionID uint64      `json:"-"`
-	TaskID    uint64      `json:"-"`
-}
+// SSEEvent SSE 事件载荷（向后兼容别名）
+type SSEEvent = hub.UserSSEEvent
 
-// SSEBroker 负责管理 SSE 订阅客户端与事件广播
+// SSEBroker 负责管理 SSE 订阅客户端（绑定 userID）与事件广播
 type SSEBroker struct {
-	db          *gorm.DB
-	subscribers sync.Map // uint64 -> chan SSEEvent
-	subCounter  atomic.Uint64
+	db   *gorm.DB
+	core *hub.SSEBroker
 }
 
 var (
@@ -36,12 +30,15 @@ var (
 	globalSSEBrokerMu sync.RWMutex
 )
 
-// InitGlobalSSEBroker 初始化全局 SSE Broker
+// InitGlobalSSEBroker 初始化全局 SSE Broker 并同步注入 hub 单例
 func InitGlobalSSEBroker(db *gorm.DB) *SSEBroker {
 	globalSSEBrokerMu.Lock()
 	defer globalSSEBrokerMu.Unlock()
+	core := hub.NewSSEBroker()
+	hub.SetGlobalSSEBroker(core)
 	globalSSEBroker = &SSEBroker{
-		db: db,
+		db:   db,
+		core: core,
 	}
 	return globalSSEBroker
 }
@@ -58,37 +55,79 @@ func ResetGlobalSSEBroker(b *SSEBroker) {
 	globalSSEBrokerMu.Lock()
 	defer globalSSEBrokerMu.Unlock()
 	globalSSEBroker = b
+	if b != nil && b.core != nil {
+		hub.SetGlobalSSEBroker(b.core)
+	}
 }
 
-// Subscribe 注册订阅客户端
+func (b *SSEBroker) ensureCore() *hub.SSEBroker {
+	if b.core == nil {
+		b.core = hub.NewSSEBroker()
+	}
+	return b.core
+}
+
+// Subscribe 注册通用订阅客户端 (userID = 0)
 func (b *SSEBroker) Subscribe() (uint64, <-chan SSEEvent) {
-	id := b.subCounter.Add(1)
-	ch := make(chan SSEEvent, 128)
-	b.subscribers.Store(id, ch)
-	return id, ch
+	return b.SubscribeForUser(0)
+}
+
+// SubscribeForUser 注册绑定指定认证用户 userID 的订阅客户端
+func (b *SSEBroker) SubscribeForUser(userID uint) (uint64, <-chan SSEEvent) {
+	return b.ensureCore().SubscribeForUser(userID)
 }
 
 // Unsubscribe 注销订阅客户端
 func (b *SSEBroker) Unsubscribe(id uint64) {
-	if val, ok := b.subscribers.LoadAndDelete(id); ok {
-		if ch, ok := val.(chan SSEEvent); ok {
-			close(ch)
-		}
+	if b == nil {
+		return
 	}
+	b.ensureCore().Unsubscribe(id)
 }
 
-// BroadcastEvent 广播事件给所有订阅客户端
+// BroadcastEvent 广播或按 RecipientUserIDs 定向推送事件
 func (b *SSEBroker) BroadcastEvent(evt SSEEvent) {
-	b.subscribers.Range(func(key, value any) bool {
-		if ch, ok := value.(chan SSEEvent); ok {
-			select {
-			case ch <- evt:
-			default:
-				// 丢弃慢客户端堆积帧，避免阻塞全局
-			}
-		}
-		return true
-	})
+	if b == nil {
+		return
+	}
+	b.ensureCore().Dispatch(evt)
+}
+
+// Broadcast 向全体在线客户端广播公共事件
+func (b *SSEBroker) Broadcast(eventType string, data any) {
+	if b == nil {
+		return
+	}
+	b.ensureCore().Broadcast(eventType, data)
+}
+
+// BroadcastToUsers 严格仅向指定 userID 集合在线连接定向推送个人事件（如 notification.created）
+func (b *SSEBroker) BroadcastToUsers(userIDs []uint, eventType string, data any) {
+	if b == nil {
+		return
+	}
+	b.ensureCore().BroadcastToUsers(userIDs, eventType, data)
+}
+
+// BroadcastNotificationCreated 定向推送新收件箱消息至目标用户连接
+func (b *SSEBroker) BroadcastNotificationCreated(userIDs []uint, data interface{}) {
+	b.BroadcastToUsers(userIDs, "notification.created", data)
+}
+
+// BroadcastMRGateUpdated 广播 MR 质量门禁流水状态更新
+func (b *SSEBroker) BroadcastMRGateUpdated(data interface{}) {
+	if b == nil {
+		return
+	}
+	b.Broadcast("mr_gate.updated", data)
+}
+
+// BroadcastMRGateCompleted 广播 MR 质量门禁检查完成通知
+func (b *SSEBroker) BroadcastMRGateCompleted(data interface{}) {
+	if b == nil {
+		return
+	}
+	b.Broadcast("mr_gate.completed", data)
 }
 
 // BroadcastPreview 实现 recorder.SSEPreviewBroadcaster 接口 (Track A 快轨预览)
@@ -267,7 +306,8 @@ func HandleEventsSSE(c *gin.Context) {
 	c.Writer.WriteHeader(http.StatusOK)
 	c.Writer.Flush()
 
-	subID, eventCh := broker.Subscribe()
+	// 严格将当前连接绑定至认证用户 userID，保障 notification.created 仅定向投递本人
+	subID, eventCh := broker.SubscribeForUser(userID)
 	defer broker.Unsubscribe(subID)
 
 	ticker := time.NewTicker(15 * time.Second)
@@ -278,14 +318,14 @@ func HandleEventsSSE(c *gin.Context) {
 		case <-c.Request.Context().Done():
 			return
 		case <-ticker.C:
-			// 发送 SSE 保持心跳行
-			_, _ = fmt.Fprint(c.Writer, ": keep-alive\n\n")
+			if _, keepAliveErr := fmt.Fprint(c.Writer, ": keep-alive\n\n"); keepAliveErr != nil {
+				return
+			}
 			c.Writer.Flush()
 		case evt, ok := <-eventCh:
 			if !ok {
 				return
 			}
-			// 过滤校验
 			if filterSessionID > 0 && evt.SessionID > 0 && evt.SessionID != filterSessionID {
 				continue
 			}
