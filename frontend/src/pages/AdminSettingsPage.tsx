@@ -27,6 +27,12 @@ export const AdminSettingsPage: React.FC = () => {
 
   const [settings, setSettings] = useState<ModuleSettingItem[]>([]);
   const [ciTokenConfigured, setCiTokenConfigured] = useState<boolean>(false);
+  const [llmKeyConfigured, setLlmKeyConfigured] = useState<boolean>(false);
+  const [codeNotifierTokenConfigured, setCodeNotifierTokenConfigured] = useState<boolean>(false);
+  const [smtpPasswordConfigured, setSmtpPasswordConfigured] = useState<boolean>(false);
+  const [draftLlmApiKey, setDraftLlmApiKey] = useState<string>('');
+  const [draftNotifierToken, setDraftNotifierToken] = useState<string>('');
+  const [draftSmtpPassword, setDraftSmtpPassword] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(true);
   const [saving, setSaving] = useState<boolean>(false);
 
@@ -40,6 +46,33 @@ export const AdminSettingsPage: React.FC = () => {
 
   const isAdmin = Boolean(user?.is_super_admin || user?.is_module_admin);
 
+  const isInternalSecretKey = (key: string) => {
+    const lower = key.trim().toLowerCase();
+    return (
+      lower === 'ci_gate_token_sha256' ||
+      lower.endsWith('_enc') ||
+      lower.endsWith('_sha256') ||
+      lower.endsWith('_secret')
+    );
+  };
+
+  const securityManagedKeys = new Set([
+    'outbound_trusted_cidrs',
+    'llm_enabled',
+    'llm_base_url',
+    'llm_model',
+    'llm_timeout_ms',
+  ]);
+
+  const applySettingsResponse = useCallback((data: ModuleSettingsResponse) => {
+    const raw = Array.isArray(data.settings) ? data.settings : [];
+    setSettings(raw.filter((item) => !isInternalSecretKey(item.setting_key)));
+    setCiTokenConfigured(Boolean(data.ci_token_configured));
+    setLlmKeyConfigured(Boolean(data.llm_key_configured));
+    setCodeNotifierTokenConfigured(Boolean(data.code_notifier_token_configured));
+    setSmtpPasswordConfigured(Boolean(data.smtp_password_configured));
+  }, []);
+
   const loadSettings = useCallback(async () => {
     if (!isAdmin) {
       setLoading(false);
@@ -48,15 +81,14 @@ export const AdminSettingsPage: React.FC = () => {
     setLoading(true);
     try {
       const data = await apiRequest<ModuleSettingsResponse>('/admin/settings');
-      setSettings(Array.isArray(data.settings) ? data.settings : []);
-      setCiTokenConfigured(Boolean(data.ci_token_configured));
+      applySettingsResponse(data);
     } catch (err) {
       const msg = err instanceof Error ? err.message : '读取模块参数失败';
       showToast(msg, 'error');
     } finally {
       setLoading(false);
     }
-  }, [isAdmin, showToast]);
+  }, [isAdmin, applySettingsResponse, showToast]);
 
   useEffect(() => {
     if (!loadingUser) {
@@ -64,24 +96,55 @@ export const AdminSettingsPage: React.FC = () => {
     }
   }, [loadingUser, loadSettings]);
 
-  const handleValueChange = (key: string, nextVal: string) => {
-    setSettings((prev) =>
-      prev.map((item) => (item.setting_key === key ? { ...item, setting_val: nextVal } : item)),
-    );
+  const getSettingVal = (key: string, fallback = '') =>
+    settings.find((item) => item.setting_key === key)?.setting_val ?? fallback;
+
+  const handleValueChange = (key: string, nextVal: string, defaultDesc = '') => {
+    setSettings((prev) => {
+      const exists = prev.some((item) => item.setting_key === key);
+      if (!exists) {
+        return [...prev, { setting_key: key, setting_val: nextVal, description: defaultDesc }];
+      }
+      return prev.map((item) => (item.setting_key === key ? { ...item, setting_val: nextVal } : item));
+    });
   };
 
   const handleSaveAll = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
     try {
+      const itemsToSave: ModuleSettingItem[] = settings.filter((item) => !isInternalSecretKey(item.setting_key));
+      if (draftLlmApiKey.trim() !== '') {
+        itemsToSave.push({
+          setting_key: 'llm_api_key',
+          setting_val: draftLlmApiKey.trim(),
+          description: 'LLM 接口鉴权密钥（服务端 AES-256-GCM 加密托管）',
+        });
+      }
+      if (draftNotifierToken.trim() !== '') {
+        itemsToSave.push({
+          setting_key: 'code_notifier_token',
+          setting_val: draftNotifierToken.trim(),
+          description: '跨机 code-notifier API Token（服务端 AES-256-GCM 加密托管）',
+        });
+      }
+      if (draftSmtpPassword.trim() !== '') {
+        itemsToSave.push({
+          setting_key: 'smtp_password',
+          setting_val: draftSmtpPassword.trim(),
+          description: 'SMTP 通知凭据（服务端 AES-256-GCM 加密托管）',
+        });
+      }
+
       const resp = await apiRequest<ModuleSettingsResponse>('/admin/settings', {
         method: 'PUT',
-        bodyData: { items: settings },
+        bodyData: { items: itemsToSave },
       });
-      if (Array.isArray(resp.settings)) {
-        setSettings(resp.settings);
-      }
-      showToast('模块运行参数已保存并记入审计日志', 'success');
+      applySettingsResponse(resp);
+      setDraftLlmApiKey('');
+      setDraftNotifierToken('');
+      setDraftSmtpPassword('');
+      showToast('模块运行参数已保存并记入审计日志（敏感字段已 AES-GCM 加密与审计脱敏）', 'success');
     } catch (err) {
       const msg = err instanceof Error ? err.message : '保存模块参数失败';
       showToast(msg, 'error');
@@ -224,42 +287,187 @@ export const AdminSettingsPage: React.FC = () => {
         </div>
       </div>
 
-      {/* 卡片 2: 运行时动态配置项 */}
+      {/* 卡片 2: 安全出向白名单、3s 熔断 LLM 与加密凭据托管 (TRAEFIK_CRYPTO_KEY AES-256-GCM) */}
       <form className="code-card code-tpl-panel" onSubmit={(e) => void handleSaveAll(e)}>
         <div className="flex-between">
-          <h2 className="code-tpl-panel-title">
-            <ShieldAlert size={18} />
-            <span>运行时动态配置项</span>
-          </h2>
-          <button type="submit" className="btn btn-primary" disabled={loading || saving || settings.length === 0}>
+          <div>
+            <h2 className="code-tpl-panel-title">
+              <ShieldAlert size={18} />
+              <span>出向 SSRF 白名单、LLM 与运行时参数治理</span>
+            </h2>
+            <p className="text-secondary">
+              云元数据（169.254.0.0/16、100.100.100.200/32）及链路本地地址永久硬阻断；跨机 GitLab / LLM / code-notifier 私网地址需加入白名单方可拨号。敏感凭据仅加密落库与脱敏审计，界面永不回显明文或密文。
+            </p>
+          </div>
+          <button type="submit" className="btn btn-primary" disabled={loading || saving}>
             <Save size={15} />
             <span>{saving ? '保存中...' : '保存全部修改'}</span>
           </button>
         </div>
 
+        <div className="admin-sec-grid">
+          <div className="admin-sec-field admin-sec-field--full">
+            <div className="admin-sec-field__head">
+              <code className="code-tpl-code-inline">outbound_trusted_cidrs</code>
+              <span className="text-secondary">支持逗号分隔 CIDR 网段、单 IP 或 host:port（最高 4096 字符）</span>
+            </div>
+            <textarea
+              className="code-input admin-trusted-cidrs-textarea"
+              aria-label="outbound_trusted_cidrs"
+              placeholder="例如：192.168.56.0/24, 10.20.0.0/16, gitlab.corp.local:8443"
+              value={getSettingVal('outbound_trusted_cidrs')}
+              onChange={(e) =>
+                handleValueChange('outbound_trusted_cidrs', e.target.value, '出向 SSRF 受信网段白名单')
+              }
+            />
+          </div>
+
+          <div className="admin-sec-field">
+            <div className="admin-sec-field__head">
+              <code className="code-tpl-code-inline">llm_enabled</code>
+              <span className="text-secondary">启用 3s 超时熔断 LLM 辅助识别</span>
+            </div>
+            <select
+              className="code-input"
+              aria-label="llm_enabled"
+              value={getSettingVal('llm_enabled', 'false')}
+              onChange={(e) => handleValueChange('llm_enabled', e.target.value, '是否启用 LLM 辅助词根识别')}
+            >
+              <option value="false">false（仅本地规则与词库）</option>
+              <option value="true">true（开启并受 SafeDialer 保护）</option>
+            </select>
+          </div>
+
+          <div className="admin-sec-field">
+            <div className="admin-sec-field__head">
+              <code className="code-tpl-code-inline">llm_base_url</code>
+              <span className="text-secondary">OpenAI 兼容接口地址</span>
+            </div>
+            <input
+              type="text"
+              className="code-input"
+              aria-label="llm_base_url"
+              placeholder="https://llm.example.com/v1"
+              value={getSettingVal('llm_base_url')}
+              onChange={(e) => handleValueChange('llm_base_url', e.target.value, 'OpenAI 兼容 LLM Base URL')}
+            />
+          </div>
+
+          <div className="admin-sec-field">
+            <div className="admin-sec-field__head">
+              <code className="code-tpl-code-inline">llm_model</code>
+              <span className="text-secondary">推理模型标识</span>
+            </div>
+            <input
+              type="text"
+              className="code-input"
+              aria-label="llm_model"
+              placeholder="gpt-4o-mini"
+              value={getSettingVal('llm_model', 'gpt-4o-mini')}
+              onChange={(e) => handleValueChange('llm_model', e.target.value, 'LLM 模型名称')}
+            />
+          </div>
+
+          <div className="admin-sec-field">
+            <div className="admin-sec-field__head">
+              <code className="code-tpl-code-inline">llm_timeout_ms</code>
+              <span className="text-secondary">单次调用硬超时 (100~3000ms)</span>
+            </div>
+            <input
+              type="text"
+              className="code-input"
+              aria-label="llm_timeout_ms"
+              value={getSettingVal('llm_timeout_ms', '3000')}
+              onChange={(e) => handleValueChange('llm_timeout_ms', e.target.value, 'LLM 超时毫秒数')}
+            />
+          </div>
+
+          <div className="admin-sec-field">
+            <div className="admin-sec-field__head">
+              <code className="code-tpl-code-inline">llm_api_key</code>
+              <span className={`code-badge ${llmKeyConfigured ? 'code-badge-success' : 'code-badge-neutral'}`}>
+                {llmKeyConfigured ? '已加密托管' : '未配置'}
+              </span>
+            </div>
+            <input
+              type="password"
+              autoComplete="new-password"
+              className="code-input"
+              aria-label="llm_api_key"
+              placeholder={llmKeyConfigured ? '已加密托管（留空保留当前密钥）' : '输入明文密钥，服务端 AES-GCM 加密落库'}
+              value={draftLlmApiKey}
+              onChange={(e) => setDraftLlmApiKey(e.target.value)}
+            />
+          </div>
+
+          <div className="admin-sec-field">
+            <div className="admin-sec-field__head">
+              <code className="code-tpl-code-inline">code_notifier_token</code>
+              <span
+                className={`code-badge ${codeNotifierTokenConfigured ? 'code-badge-success' : 'code-badge-neutral'}`}
+              >
+                {codeNotifierTokenConfigured ? '已加密托管' : '未配置'}
+              </span>
+            </div>
+            <input
+              type="password"
+              autoComplete="new-password"
+              className="code-input"
+              aria-label="code_notifier_token"
+              placeholder={
+                codeNotifierTokenConfigured ? '已加密托管（留空保留当前凭据）' : '输入 code-notifier 认证 Token'
+              }
+              value={draftNotifierToken}
+              onChange={(e) => setDraftNotifierToken(e.target.value)}
+            />
+          </div>
+
+          <div className="admin-sec-field">
+            <div className="admin-sec-field__head">
+              <code className="code-tpl-code-inline">smtp_password</code>
+              <span className={`code-badge ${smtpPasswordConfigured ? 'code-badge-success' : 'code-badge-neutral'}`}>
+                {smtpPasswordConfigured ? '已加密托管' : '未配置'}
+              </span>
+            </div>
+            <input
+              type="password"
+              autoComplete="new-password"
+              className="code-input"
+              aria-label="smtp_password"
+              placeholder={smtpPasswordConfigured ? '已加密托管（留空保留当前密码）' : '输入 SMTP 发件密码'}
+              value={draftSmtpPassword}
+              onChange={(e) => setDraftSmtpPassword(e.target.value)}
+            />
+          </div>
+        </div>
+
+        <h3 className="code-tpl-panel-title code-mt-md">
+          <span>运行时动态配置项</span>
+        </h3>
+
         {loading ? (
           <EmptyState compact title="正在读取模块配置..." />
-        ) : settings.length === 0 ? (
-          <EmptyState compact title="暂无可配置参数" />
         ) : (
           <div className="code-tpl-setting-list">
-            {(settings ?? []).map((item) => (
-              <div key={item.setting_key} className="code-tpl-setting-row">
-                <div className="code-tpl-setting-meta">
-                  <div>
-                    <code className="code-tpl-code-inline">{item.setting_key}</code>
+            {(settings ?? [])
+              .filter((item) => !isInternalSecretKey(item.setting_key) && !securityManagedKeys.has(item.setting_key))
+              .map((item) => (
+                <div key={item.setting_key} className="code-tpl-setting-row">
+                  <div className="code-tpl-setting-meta">
+                    <div>
+                      <code className="code-tpl-code-inline">{item.setting_key}</code>
+                    </div>
+                    <span className="text-secondary">{item.description || '模块运行参数'}</span>
                   </div>
-                  <span className="text-secondary">{item.description || '模块运行参数'}</span>
+                  <input
+                    type="text"
+                    className="code-input code-tpl-setting-input"
+                    value={item.setting_val}
+                    onChange={(e) => handleValueChange(item.setting_key, e.target.value)}
+                    aria-label={item.setting_key}
+                  />
                 </div>
-                <input
-                  type="text"
-                  className="code-input code-tpl-setting-input"
-                  value={item.setting_val}
-                  onChange={(e) => handleValueChange(item.setting_key, e.target.value)}
-                  aria-label={item.setting_key}
-                />
-              </div>
-            ))}
+              ))}
           </div>
         )}
       </form>

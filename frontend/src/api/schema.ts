@@ -2,6 +2,17 @@ import { AUTH_TOKEN_KEY } from '@code/common';
 import { apiRequest } from './client';
 import { MODULE_BASE_PATH } from '../constants';
 import type {
+  CheckReportDTO,
+  CheckReportListResponse,
+  CheckRuleDTO,
+  CheckRuleListResponse,
+  CreateCheckRulePayload,
+  CreateVocabularyTermPayload,
+  TriggerCheckScanPayload,
+  UpdateCheckRulePayload,
+  UpdateVocabularyTermPayload,
+  VocabularyTermDTO,
+  VocabularyTermListResponse,
   ProtoSchemaLedgerItemDTO,
   ProtoSchemaLedgerListResponse,
   ProtoOperation,
@@ -392,4 +403,110 @@ export async function getProtoFileDiff(
   qs.set('from_version', String(fromVersion));
   qs.set('to_version', String(toVersion));
   return apiRequest<ProtoFileDiffResponse>(`/proto-files/${fileId}/diff?${qs.toString()}`);
+}
+
+export async function listCheckRules(params?: {
+  page?: number;
+  page_size?: number;
+  category?: string;
+  severity?: string;
+  is_enabled?: string;
+  search?: string;
+}) {
+  const qs = new URLSearchParams();
+  if (params?.page) qs.set('page', String(params.page));
+  if (params?.page_size) qs.set('page_size', String(params.page_size));
+  if (params?.category) qs.set('category', params.category);
+  if (params?.severity) qs.set('severity', params.severity);
+  if (params?.is_enabled) qs.set('is_enabled', params.is_enabled);
+  if (params?.search) qs.set('search', params.search);
+  const query = qs.toString();
+  return apiRequest<CheckRuleListResponse>(`/check-rules${query ? `?${query}` : ''}`);
+}
+
+export async function createCheckRule(payload: CreateCheckRulePayload) {
+  return apiRequest<CheckRuleDTO>('/check-rules', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateCheckRule(id: number, payload: UpdateCheckRulePayload) {
+  return apiRequest<CheckRuleDTO>(`/check-rules/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deleteCheckRule(id: number) {
+  return apiRequest<{ message: string; id: number }>(`/check-rules/${id}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function listVocabularyTerms(params?: {
+  page?: number;
+  page_size?: number;
+  domain?: string;
+  source?: string;
+  is_approved?: string;
+  search?: string;
+}) {
+  const qs = new URLSearchParams();
+  if (params?.page) qs.set('page', String(params.page));
+  if (params?.page_size) qs.set('page_size', String(params.page_size));
+  if (params?.domain) qs.set('domain', params.domain);
+  if (params?.source) qs.set('source', params.source);
+  if (params?.is_approved) qs.set('is_approved', params.is_approved);
+  if (params?.search) qs.set('search', params.search);
+  const query = qs.toString();
+  return apiRequest<VocabularyTermListResponse>(`/vocabulary-terms${query ? `?${query}` : ''}`);
+}
+
+export async function createVocabularyTerm(payload: CreateVocabularyTermPayload) {
+  return apiRequest<VocabularyTermDTO>('/vocabulary-terms', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateVocabularyTerm(id: number, payload: UpdateVocabularyTermPayload) {
+  return apiRequest<VocabularyTermDTO>(`/vocabulary-terms/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deleteVocabularyTerm(id: number) {
+  return apiRequest<{ message: string; id: number }>(`/vocabulary-terms/${id}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function triggerCheckReportScan(payload: TriggerCheckScanPayload) {
+  return apiRequest<CheckReportDTO>('/check-reports/scan', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function listCheckReports(params?: {
+  page?: number;
+  page_size?: number;
+  schema_id?: number;
+  status?: string;
+  trigger_source?: string;
+}) {
+  const qs = new URLSearchParams();
+  if (params?.page) qs.set('page', String(params.page));
+  if (params?.page_size) qs.set('page_size', String(params.page_size));
+  if (params?.schema_id) qs.set('schema_id', String(params.schema_id));
+  if (params?.status) qs.set('status', params.status);
+  if (params?.trigger_source) qs.set('trigger_source', params.trigger_source);
+  const query = qs.toString();
+  return apiRequest<CheckReportListResponse>(`/check-reports${query ? `?${query}` : ''}`);
+}
+
+export async function getCheckReportDetail(id: number) {
+  return apiRequest<CheckReportDTO>(`/check-reports/${id}`);
 }

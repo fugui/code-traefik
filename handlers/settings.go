@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -16,12 +17,89 @@ import (
 	commonAuth "code-common/backend/auth"
 	commonModels "code-common/backend/models"
 	"code-traefik/config"
+	"code-traefik/internal/server/security"
 	"code-traefik/models"
 
 	"github.com/gin-gonic/gin"
 )
 
-const SettingKeyCIGateTokenSHA256 = "ci_gate_token_sha256"
+const (
+	SettingKeyCIGateTokenSHA256    = "ci_gate_token_sha256"
+	SettingKeyLLMAPIKeyEnc         = "llm_api_key_enc"
+	SettingKeyCodeNotifierTokenEnc = "code_notifier_token_enc"
+	SettingKeySMTPPasswordEnc      = "smtp_password_enc"
+	SettingKeyOutboundTrustedCIDRs = "outbound_trusted_cidrs"
+	auditRedactedMask              = "***REDACTED***"
+)
+
+var secretWriteKeyToEncKey = map[string]string{
+	"llm_api_key":         SettingKeyLLMAPIKeyEnc,
+	"code_notifier_token": SettingKeyCodeNotifierTokenEnc,
+	"smtp_password":       SettingKeySMTPPasswordEnc,
+}
+
+type settingSecretFlags struct {
+	CITokenConfigured           bool
+	LLMKeyConfigured            bool
+	CodeNotifierTokenConfigured bool
+	SMTPPasswordConfigured      bool
+}
+
+func isInternalSecretSettingKey(key string) bool {
+	k := strings.ToLower(strings.TrimSpace(key))
+	if k == SettingKeyCIGateTokenSHA256 || k == SettingKeyLLMAPIKeyEnc || k == SettingKeyCodeNotifierTokenEnc || k == SettingKeySMTPPasswordEnc {
+		return true
+	}
+	return strings.HasSuffix(k, "_enc") || strings.HasSuffix(k, "_sha256") || strings.HasSuffix(k, "_secret")
+}
+
+func isSensitiveSettingKeyForAudit(key string) bool {
+	if isInternalSecretSettingKey(key) {
+		return true
+	}
+	k := strings.ToLower(strings.TrimSpace(key))
+	_, isSecretWrite := secretWriteKeyToEncKey[k]
+	return isSecretWrite || strings.Contains(k, "password") || strings.Contains(k, "api_key") || strings.Contains(k, "token")
+}
+
+func sanitizeSettingsForView(allSettings []models.TraefikSetting) ([]models.TraefikSetting, settingSecretFlags) {
+	visible := make([]models.TraefikSetting, 0, len(allSettings))
+	var flags settingSecretFlags
+	for _, s := range allSettings {
+		configured := strings.TrimSpace(s.SettingVal) != ""
+		switch s.SettingKey {
+		case SettingKeyCIGateTokenSHA256:
+			flags.CITokenConfigured = configured
+			continue
+		case SettingKeyLLMAPIKeyEnc:
+			flags.LLMKeyConfigured = configured
+			continue
+		case SettingKeyCodeNotifierTokenEnc:
+			flags.CodeNotifierTokenConfigured = configured
+			continue
+		case SettingKeySMTPPasswordEnc:
+			flags.SMTPPasswordConfigured = configured
+			continue
+		}
+		if isInternalSecretSettingKey(s.SettingKey) {
+			continue
+		}
+		visible = append(visible, s)
+	}
+	return visible, flags
+}
+
+func redactSettingsForAudit(allSettings []models.TraefikSetting) []models.TraefikSetting {
+	masked := make([]models.TraefikSetting, 0, len(allSettings))
+	for _, s := range allSettings {
+		item := s
+		if isSensitiveSettingKeyForAudit(s.SettingKey) && strings.TrimSpace(s.SettingVal) != "" {
+			item.SettingVal = auditRedactedMask
+		}
+		masked = append(masked, item)
+	}
+	return masked
+}
 
 var validSettingKeyPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{1,63}$`)
 
@@ -34,25 +112,14 @@ func GetModuleSettings(c *gin.Context) {
 		return
 	}
 
-	var visibleSettings []models.TraefikSetting
-	ciTokenConfigured := false
-	for _, s := range allSettings {
-		if s.SettingKey == SettingKeyCIGateTokenSHA256 {
-			if strings.TrimSpace(s.SettingVal) != "" {
-				ciTokenConfigured = true
-			}
-			continue
-		}
-		visibleSettings = append(visibleSettings, s)
-	}
-
-	if visibleSettings == nil {
-		visibleSettings = []models.TraefikSetting{}
-	}
+	visibleSettings, flags := sanitizeSettingsForView(allSettings)
 
 	c.JSON(http.StatusOK, gin.H{
-		"settings":            visibleSettings,
-		"ci_token_configured": ciTokenConfigured,
+		"settings":                       visibleSettings,
+		"ci_token_configured":            flags.CITokenConfigured,
+		"llm_key_configured":             flags.LLMKeyConfigured,
+		"code_notifier_token_configured": flags.CodeNotifierTokenConfigured,
+		"smtp_password_configured":       flags.SMTPPasswordConfigured,
 	})
 }
 
@@ -89,10 +156,17 @@ func UpdateModuleSettings(c *gin.Context) {
 		return
 	}
 
+	type preparedSetting struct {
+		key         string
+		val         string
+		description string
+	}
+	prepared := make([]preparedSetting, 0, len(req.Items))
+
 	for _, entry := range req.Items {
 		key := strings.TrimSpace(entry.SettingKey)
-		if key == SettingKeyCIGateTokenSHA256 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "禁止通过通用配置接口修改保留键 " + SettingKeyCIGateTokenSHA256})
+		if isInternalSecretSettingKey(key) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "禁止通过通用配置接口直接写入内部安全保留键 " + key})
 			return
 		}
 		if !validSettingKeyPattern.MatchString(key) {
@@ -100,33 +174,75 @@ func UpdateModuleSettings(c *gin.Context) {
 			return
 		}
 		val := strings.TrimSpace(entry.SettingVal)
-		if utf8.RuneCountInString(val) > 512 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("配置项 [%s] 值长度超过上限", key)})
+		maxLen := 512
+		if key == SettingKeyOutboundTrustedCIDRs {
+			maxLen = 4096
+		}
+		if utf8.RuneCountInString(val) > maxLen {
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("配置项 [%s] 值长度超过上限 (%d)", key, maxLen)})
 			return
 		}
+		if key == SettingKeyOutboundTrustedCIDRs {
+			if _, parseErr := security.ParseTrustedAllowlist(val); parseErr != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": parseErr.Error()})
+				return
+			}
+		}
+		if key == "llm_timeout_ms" && val != "" {
+			ms, convErr := strconv.Atoi(val)
+			if convErr != nil || ms < 100 || ms > 3000 {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "llm_timeout_ms 必须为 100 至 3000 之间的整数"})
+				return
+			}
+		}
 
+		targetKey := key
+		targetVal := val
+		if encKey, isSecretWrite := secretWriteKeyToEncKey[key]; isSecretWrite {
+			if val == "" {
+				// 空值提交不覆盖既有加密凭据，避免页面保存误清空
+				continue
+			}
+			cipherText, encErr := security.EncryptSecret(val)
+			if encErr != nil {
+				log.Printf("[%s] 加密敏感配置 [%s] 失败: %v", config.ServiceName, key, encErr)
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "敏感凭据加密失败，请检查 TRAEFIK_CRYPTO_KEY 环境变量配置"})
+				return
+			}
+			targetKey = encKey
+			targetVal = cipherText
+		}
+
+		prepared = append(prepared, preparedSetting{
+			key:         targetKey,
+			val:         targetVal,
+			description: strings.TrimSpace(entry.Description),
+		})
+	}
+
+	for _, entry := range prepared {
 		var setting models.TraefikSetting
-		err := models.DB.Where("setting_key = ?", key).First(&setting).Error
+		err := models.DB.Where("setting_key = ?", entry.key).First(&setting).Error
 		if err != nil {
 			setting = models.TraefikSetting{
-				SettingKey:  key,
-				SettingVal:  val,
-				Description: strings.TrimSpace(entry.Description),
+				SettingKey:  entry.key,
+				SettingVal:  entry.val,
+				Description: entry.description,
 				UpdatedBy:   operator,
 			}
 			if createErr := models.DB.Create(&setting).Error; createErr != nil {
-				log.Printf("[%s] 新增配置项 [%s] 失败: %v", config.ServiceName, key, createErr)
+				log.Printf("[%s] 新增配置项 [%s] 失败: %v", config.ServiceName, entry.key, createErr)
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "保存配置失败"})
 				return
 			}
 		} else {
-			setting.SettingVal = val
-			if strings.TrimSpace(entry.Description) != "" {
-				setting.Description = strings.TrimSpace(entry.Description)
+			setting.SettingVal = entry.val
+			if entry.description != "" {
+				setting.Description = entry.description
 			}
 			setting.UpdatedBy = operator
 			if saveErr := models.DB.Save(&setting).Error; saveErr != nil {
-				log.Printf("[%s] 更新配置项 [%s] 失败: %v", config.ServiceName, key, saveErr)
+				log.Printf("[%s] 更新配置项 [%s] 失败: %v", config.ServiceName, entry.key, saveErr)
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "保存配置失败"})
 				return
 			}
@@ -138,6 +254,8 @@ func UpdateModuleSettings(c *gin.Context) {
 		log.Printf("[%s] 读取变更后配置失败: %v", config.ServiceName, err)
 	}
 
+	visibleAfter, flags := sanitizeSettingsForView(afterList)
+
 	commonAudit.SetAuditContext(
 		c,
 		"settings",
@@ -147,13 +265,17 @@ func UpdateModuleSettings(c *gin.Context) {
 		"module_settings",
 		config.ModuleKey,
 		config.ServiceName,
-		beforeList,
-		afterList,
+		redactSettingsForAudit(beforeList),
+		redactSettingsForAudit(afterList),
 	)
 
 	c.JSON(http.StatusOK, gin.H{
-		"message":  "模块配置已保存",
-		"settings": afterList,
+		"message":                        "模块配置已保存",
+		"settings":                       visibleAfter,
+		"ci_token_configured":            flags.CITokenConfigured,
+		"llm_key_configured":             flags.LLMKeyConfigured,
+		"code_notifier_token_configured": flags.CodeNotifierTokenConfigured,
+		"smtp_password_configured":       flags.SMTPPasswordConfigured,
 	})
 }
 

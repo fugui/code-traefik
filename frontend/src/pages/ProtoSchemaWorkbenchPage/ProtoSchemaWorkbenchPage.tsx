@@ -28,6 +28,7 @@ import { ProtoDependenciesGraphPane } from './ProtoDependenciesGraphPane';
 import { LivingProtoDocsPane } from './LivingProtoDocsPane';
 import { ProtoSourcesBrowserPane } from './ProtoSourcesBrowserPane';
 import { ProtoReadOnlyCodeViewer } from './ProtoReadOnlyCodeViewer';
+import LintRuleAndVocabDrawer, { type LintDrawerSubTab } from './LintRuleAndVocabDrawer';
 import './ProtoDocsAndCodeViewer.css';
 
 export type SchemaWorkbenchTab = 'docs' | 'sources' | 'mr-gates' | 'assets' | 'graph';
@@ -81,6 +82,10 @@ export const ProtoSchemaWorkbenchPage: React.FC = () => {
   const [sourceDrawerLoading, setSourceDrawerLoading] = useState(false);
   const [sourceDrawerFile, setSourceDrawerFile] = useState<ReconstructedProtoFileDTO | null>(null);
   const [sourceDrawerLine, setSourceDrawerLine] = useState<number>(1);
+
+  // M24 静态检查规则、标准词库与 AST 重复探测抽屉状态
+  const [lintDrawerOpen, setLintDrawerOpen] = useState(false);
+  const [lintDrawerSubTab, setLintDrawerSubTab] = useState<LintDrawerSubTab>('rules');
 
   // 2. 全局生效池摘要状态
   const [poolSummary, setPoolSummary] = useState<ProtoPoolSummaryDTO | null>(null);
@@ -551,24 +556,36 @@ export const ProtoSchemaWorkbenchPage: React.FC = () => {
           </button>
         </div>
 
-        {activeTab === 'docs' && (
-          <div className="code-tab-pills">
-            <button
-              type="button"
-              className={`code-pill-btn ${docsSubMode === 'reference' ? 'code-pill-btn-active' : ''}`}
-              onClick={() => setDocsSubMode('reference')}
-            >
-              全注释参考文档
-            </button>
-            <button
-              type="button"
-              className={`code-pill-btn ${docsSubMode === 'catalog-ops' ? 'code-pill-btn-active' : ''}`}
-              onClick={() => setDocsSubMode('catalog-ops')}
-            >
-              契约认领与方法目录
-            </button>
-          </div>
-        )}
+        <div className="code-tab-pills">
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => {
+              setLintDrawerSubTab('rules');
+              setLintDrawerOpen(true);
+            }}
+          >
+            静态规则与词库体检
+          </button>
+          {activeTab === 'docs' && (
+            <>
+              <button
+                type="button"
+                className={`code-pill-btn ${docsSubMode === 'reference' ? 'code-pill-btn-active' : ''}`}
+                onClick={() => setDocsSubMode('reference')}
+              >
+                全注释参考文档
+              </button>
+              <button
+                type="button"
+                className={`code-pill-btn ${docsSubMode === 'catalog-ops' ? 'code-pill-btn-active' : ''}`}
+                onClick={() => setDocsSubMode('catalog-ops')}
+              >
+                契约认领与方法目录
+              </button>
+            </>
+          )}
+        </div>
       </div>
 
       {/* 主视图 1: 活体接口参考文档中心（兼容 ?tab=catalog 与 ?claimed_status=UNCLAIMED） */}
@@ -641,6 +658,16 @@ export const ProtoSchemaWorkbenchPage: React.FC = () => {
             <span className="code-badge code-badge-info">M26 全链路接入中</span>
           </div>
           <div className="pdoc-meta-row">
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => {
+                setLintDrawerSubTab('report');
+                setLintDrawerOpen(true);
+              }}
+            >
+              打开静态检查与 AST 去重体检台
+            </button>
             <button type="button" className="btn btn-secondary" onClick={() => setTab('sources')}>
               前往只读源码与 Diff 浏览器
             </button>
@@ -818,6 +845,29 @@ export const ProtoSchemaWorkbenchPage: React.FC = () => {
           <p className="pdoc-card__subtitle">未能加载指定描述集的只读源码内容。</p>
         )}
       </Drawer>
+
+      {/* M24 静态检查规则、标准词库与 AST 重复探测抽屉 */}
+      <LintRuleAndVocabDrawer
+        open={lintDrawerOpen}
+        isAdmin={isAdmin}
+        initialSubTab={lintDrawerSubTab}
+        onClose={() => setLintDrawerOpen(false)}
+        onJumpToSource={async (protoFile, line) => {
+          try {
+            const listResp = await schemaApi.listProtoFiles({ search: protoFile, page_size: 15 });
+            const matched =
+              listResp.items.find((item) => item.file_path === protoFile) ?? listResp.items[0];
+            if (matched) {
+              void handleJumpToSourceDrawer(matched.schema_id, matched.file_path, line);
+              return;
+            }
+          } catch {
+            // 找不到虚拟文件映射时退回只读源码页搜索
+          }
+          setLintDrawerOpen(false);
+          setTab('sources');
+        }}
+      />
 
       {/* 受控删除确认弹窗 */}
       <Modal

@@ -7,7 +7,7 @@
 > **里程碑编号**：`M24 — 安全底座、静态规范引擎、原生领域词库 (`BUILTIN_SEED`)、旁路 LLM 与三护栏 AST 重复消息检测`
 > **覆盖需求范围**：`F-30`（可配置命名规则、原生领域词汇表与 `BUILTIN_SEED` 初始化、`3s` 旁路熔断 LLM、三护栏 AST 重复消息公共抽取建议）、`F-31`（规则/词库治理前端交互底座）、`SC-15`
 > **前置依赖**：`M22`（`protocompile`）、`M23`（`SourceCodeInfo`）、[`../05-adr/18-proto-full-lifecycle-and-git-mr-governance-adr.md`](../05-adr/18-proto-full-lifecycle-and-git-mr-governance-adr.md) (`v1.3.0`)
-> **当前状态**：📋 **已定稿待实施 (Planned)**
+> **当前状态**：✅ **已交付 (Delivered)**
 
 ### 修订记录
 

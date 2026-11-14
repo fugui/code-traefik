@@ -159,6 +159,21 @@ func RegisterAPIRoutes(r *gin.Engine) {
 		protected.GET("/proto-operations/:id/schema-tree", GetOperationSchemaTree)
 		protected.PUT("/proto-operations/:id/ignore-paths", requireAdmin, UpdateOperationIgnorePaths)
 
+		// 5.1 Protobuf 静态检查规则、标准词库与检查报告域 (F-16, F-30, M24)
+		protected.GET("/check-rules", ListCheckRules)
+		protected.POST("/check-rules", requireAdmin, CreateCheckRule)
+		protected.PUT("/check-rules/:id", requireAdmin, UpdateCheckRule)
+		protected.DELETE("/check-rules/:id", requireAdmin, DeleteCheckRule)
+
+		protected.GET("/vocabulary-terms", ListVocabularyTerms)
+		protected.POST("/vocabulary-terms", requireAdmin, CreateVocabularyTerm)
+		protected.PUT("/vocabulary-terms/:id", requireAdmin, UpdateVocabularyTerm)
+		protected.DELETE("/vocabulary-terms/:id", requireAdmin, DeleteVocabularyTerm)
+
+		protected.POST("/check-reports/scan", TriggerCheckReportScan)
+		protected.GET("/check-reports", ListCheckReports)
+		protected.GET("/check-reports/:id", GetCheckReportDetail)
+
 		// 6. 公私域 Agent 纳管与排他租约管控域 (F-06, F-08)
 		protected.GET("/agents", ListAgents)
 		protected.GET("/agents/:id", GetAgent)

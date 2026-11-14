@@ -491,3 +491,181 @@ export interface ProtoFileDiffResponse {
   added_lines: number;
   deleted_lines: number;
 }
+
+export type RuleSeverity = 'ERROR' | 'WARNING' | 'INFO';
+export type RuleCategory = 'NAMING' | 'COMMENT' | 'PACKAGE' | 'STYLE' | 'DUPLICATE' | 'VOCAB';
+export type RuleTargetScope = 'PACKAGE' | 'SERVICE' | 'RPC' | 'MESSAGE' | 'FIELD' | 'ENUM' | 'ENUM_VALUE' | 'ALL';
+export type RuleCheckMode = 'REGEX' | 'STRUCTURE' | 'COMMENT' | 'AST_DUPLICATE' | 'VOCAB';
+export type VocabSource = 'MANUAL' | 'BUILTIN_SEED' | 'LLM_SUGGESTED';
+export type ReportStatus = 'PASSED' | 'WARN' | 'FAILED';
+export type LLMStatus = 'SUCCEEDED' | 'HIT_CACHE' | 'TIMEOUT_FALLBACK' | 'ERROR_FALLBACK' | 'SKIPPED';
+
+export interface RuleExemptionConfig {
+  exclude_paths?: string[];
+  exclude_packages?: string[];
+  exclude_categories?: string[];
+}
+
+export interface CheckRuleDTO {
+  id: number;
+  rule_code: string;
+  name: string;
+  category: RuleCategory | string;
+  target_scope: RuleTargetScope | string;
+  severity: RuleSeverity | string;
+  check_mode: RuleCheckMode | string;
+  pattern: string;
+  description: string;
+  suggestion_template: string;
+  exemption_rule: RuleExemptionConfig;
+  is_builtin: boolean;
+  is_enabled: boolean;
+  updated_by?: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CheckRuleListResponse {
+  items: CheckRuleDTO[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface CreateCheckRulePayload {
+  rule_code: string;
+  name: string;
+  category: string;
+  target_scope: string;
+  severity?: RuleSeverity;
+  check_mode?: string;
+  pattern?: string;
+  description?: string;
+  suggestion_template?: string;
+  exemption_rule?: RuleExemptionConfig;
+  is_enabled?: boolean;
+}
+
+export interface UpdateCheckRulePayload {
+  name?: string;
+  category?: string;
+  target_scope?: string;
+  severity?: RuleSeverity;
+  check_mode?: string;
+  pattern?: string;
+  description?: string;
+  suggestion_template?: string;
+  exemption_rule?: RuleExemptionConfig;
+  is_enabled?: boolean;
+}
+
+export interface VocabularyTermDTO {
+  id: number;
+  term: string;
+  description_en: string;
+  description_zh: string;
+  aliases: string[];
+  similar_terms: string[];
+  domain: string;
+  source: VocabSource | string;
+  is_approved: boolean;
+  created_by?: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface VocabularyTermListResponse {
+  items: VocabularyTermDTO[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface CreateVocabularyTermPayload {
+  term: string;
+  description_en?: string;
+  description_zh: string;
+  aliases?: string[];
+  similar_terms?: string[];
+  domain?: string;
+  source?: 'MANUAL';
+  is_approved?: boolean;
+}
+
+export interface UpdateVocabularyTermPayload {
+  description_en?: string;
+  description_zh?: string;
+  aliases?: string[];
+  similar_terms?: string[];
+  domain?: string;
+  is_approved?: boolean;
+}
+
+export interface DuplicateMemberDTO {
+  proto_file: string;
+  package: string;
+  message: string;
+  file_line: number;
+  field_cnt: number;
+}
+
+export interface DuplicateGroupDTO {
+  cluster_hash: string;
+  similarity: number;
+  suggestion: string;
+  members: DuplicateMemberDTO[];
+}
+
+export interface CheckViolationDTO {
+  id: number;
+  report_id: number;
+  rule_id?: number;
+  rule_code: string;
+  severity: RuleSeverity | string;
+  proto_file: string;
+  symbol_path: string;
+  file_line: number;
+  file_column: number;
+  message: string;
+  suggestion: string;
+  suggestion_source: string;
+  duplicate_cluster_hash?: string;
+  duplicate_similarity?: number;
+}
+
+export interface CheckReportDTO {
+  id: number;
+  git_repo_id?: number;
+  bundle_id?: number;
+  proto_file_id?: number;
+  schema_id?: number;
+  mr_check_run_id?: number;
+  trigger_source: string;
+  status: ReportStatus | string;
+  error_count: number;
+  warning_count: number;
+  info_count: number;
+  duplicate_group_count: number;
+  llm_status: LLMStatus | string;
+  duration_ms: number;
+  triggered_by?: number;
+  created_at: string;
+  violations?: CheckViolationDTO[];
+  duplicate_groups?: DuplicateGroupDTO[];
+}
+
+export interface CheckReportListResponse {
+  items: CheckReportDTO[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface TriggerCheckScanPayload {
+  schema_id?: number;
+  schema_ids?: number[];
+  proto_file_id?: number;
+  proto_file_ids?: number[];
+  include_duplicates?: boolean;
+  include_llm?: boolean;
+}

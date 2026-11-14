@@ -60,6 +60,10 @@ func SetupWithDB(db *gorm.DB) error {
 		&GoldenSuiteItem{},
 		&TopologyLayout{},
 		&ProtoDocSymbol{},
+		&CheckRule{},
+		&VocabularyTerm{},
+		&CheckReport{},
+		&CheckViolation{},
 	); err != nil {
 		return fmt.Errorf("迁移数据表结构失败: %w", err)
 	}
@@ -455,6 +459,19 @@ END $$;
 	// 6. 初始化治理参数种子数据
 	if err := seedDefaultSettings(DB); err != nil {
 		log.Printf("[%s] 提示: 初始化模块配置参数种子未完成: %v", config.ServiceName, err)
+	}
+
+	if err := ensureLinterConstraints(DB); err != nil {
+		return fmt.Errorf("初始化静态检查约束失败: %w", err)
+	}
+	if err := EnsureBuiltinCheckRules(DB); err != nil {
+		return fmt.Errorf("初始化内置静态检查规则失败: %w", err)
+	}
+	if err := EnsureBuiltinVocabularyTerms(DB); err != nil {
+		return fmt.Errorf("初始化基础标准词库失败: %w", err)
+	}
+	if err := ensureM24DefaultSettings(DB); err != nil {
+		log.Printf("[%s] 提示: 初始化 M24 安全/LLM 默认参数未完成: %v", config.ServiceName, err)
 	}
 
 	return nil

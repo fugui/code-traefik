@@ -703,3 +703,268 @@
   color: var(--color-primary);
   border-bottom-color: var(--color-primary);
 }
+
+/* M24 静态检查规则、标准词库与 AST 重复探测抽屉样式 */
+.plint-drawer {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.plint-tabs {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border-bottom: 1px solid var(--color-border-primary);
+  padding-bottom: 8px;
+}
+
+.plint-tabs__nav {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.plint-tab {
+  border: 1px solid var(--color-border-primary);
+  background: var(--color-bg-surface);
+  color: var(--color-text-secondary);
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.plint-tab:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.plint-tab--active {
+  background: var(--color-bg-muted);
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+  font-weight: 600;
+}
+
+.plint-banner {
+  border: 1px solid var(--color-border-primary);
+  background: var(--color-bg-muted);
+  color: var(--color-text-primary);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 12px;
+}
+
+.plint-banner--error {
+  border-color: var(--color-danger);
+  color: var(--color-danger);
+}
+
+.plint-banner--warn {
+  border-color: var(--color-warning);
+  color: var(--color-text-primary);
+}
+
+.plint-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.plint-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--color-border-primary);
+  border-radius: 8px;
+  background: var(--color-bg-muted);
+}
+
+.plint-form__full {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.plint-table-wrap {
+  border: 1px solid var(--color-border-primary);
+  border-radius: 8px;
+  background: var(--color-bg-surface);
+  overflow-x: auto;
+}
+
+.plint-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.plint-table th {
+  text-align: left;
+  padding: 8px 10px;
+  background: var(--color-bg-muted);
+  color: var(--color-text-secondary);
+  border-bottom: 1px solid var(--color-border-primary);
+  font-weight: 600;
+}
+
+.plint-table td {
+  padding: 8px 10px;
+  color: var(--color-text-primary);
+  border-bottom: 1px solid var(--color-border-primary);
+  vertical-align: top;
+}
+
+.plint-table tr:last-child td {
+  border-bottom: none;
+}
+
+.plint-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 10px;
+}
+
+.plint-metric {
+  padding: 10px 12px;
+  border: 1px solid var(--color-border-primary);
+  border-radius: 8px;
+  background: var(--color-bg-muted);
+}
+
+.plint-metric__label {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+
+.plint-metric__val {
+  margin-top: 4px;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+}
+
+.plint-dup-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.plint-dup-card {
+  border: 1px solid var(--color-border-primary);
+  border-radius: 8px;
+  background: var(--color-bg-surface);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.plint-dup-card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.plint-dup-card__members {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.plint-dup-member {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--color-bg-muted);
+  font-size: 12px;
+}
+
+.plint-link-btn {
+  border: none;
+  background: transparent;
+  padding: 0;
+  color: var(--color-primary);
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.plint-link-btn:hover {
+  color: var(--color-text-primary);
+}
+
+.plint-pagination {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 4px;
+}
+
+.plint-hint {
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+.plint-inline-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.plint-actions-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.admin-trusted-cidrs-textarea {
+  width: 100%;
+  min-height: 74px;
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+}
+
+.admin-sec-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.admin-sec-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border-primary);
+  border-radius: 8px;
+  background: var(--color-bg-muted);
+}
+
+.admin-sec-field--full {
+  grid-column: 1 / -1;
+}
+
+.admin-sec-field__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+

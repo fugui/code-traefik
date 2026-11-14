@@ -38,6 +38,9 @@ export interface ModuleSettingItem {
 export interface ModuleSettingsResponse {
   settings: ModuleSettingItem[];
   ci_token_configured?: boolean;
+  llm_key_configured?: boolean;
+  code_notifier_token_configured?: boolean;
+  smtp_password_configured?: boolean;
 }
 
 export interface CITokenRotateResponse {
